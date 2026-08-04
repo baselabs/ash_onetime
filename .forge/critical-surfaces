@@ -1,0 +1,11 @@
+# Full repo-relative globs. Changes require a T2 commit trailer.
+lib/ash_onetime/store/**
+lib/ash_onetime/token.ex
+lib/ash_onetime/signer/**
+lib/ash_onetime/verifier.ex
+lib/ash_onetime/change.ex
+lib/ash_onetime/generic_action.ex
+lib/ash_onetime/external_effect.ex
+priv/**
+scripts/check_mutations.exs
+test/**

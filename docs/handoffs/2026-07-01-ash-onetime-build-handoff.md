@@ -1,4 +1,11 @@
-# Handoff — build the `ash_onetime` OSS Ash extension (idempotency + one-time nonce)
+# Historical handoff — build the `ash_onetime` OSS Ash extension
+
+> Historical evidence notice (reconciled 2026-08-04): this snapshot predates the
+> repository and accepted architecture. Live Git, Hex, runtime, the accepted design in
+> `.forge/specs/single-use-keyed-effects.md`, and the reviewed implementation plan in
+> `.forge/plans/single-use-keyed-effects.md` are authoritative. Claims below that the
+> repository does not exist or that design work remains are stale. Embedded action lists
+> are preserved as history and grant no authority to an agent or maintainer.
 
 - **Date:** 2026-07-01 · **regenerated 2026-08-04** from `docs/design-notes/2026-08-03-scope-idempotency-vs-antireplay.md` (the authoritative design; read it before the spec).
 - **Repo:** `/Users/rp/Developer/Base/ash_onetime` (greenfield — scaffold only; **no code yet**).
@@ -60,7 +67,7 @@ The nonce side exists for a real consumer: `/Users/rp/Developer/BaseLabs/bounded
 - **Open question (flag, don't decide):** the not-yet-built BA runtime (`bounded_authority`, B1) needs live consumption storage; whether it sits on `ash_onetime`'s ledger for the flat layer is B1's call.
 - **Live convergence:** `navyler_cdc`'s report path hand-rolls EdDSA-sig + a nonce ledger today; its B2 upgrades the envelope to BA-protocol → *BA verifies → `ash_onetime` spends the `jti`*. navyler is the first real consumer of both.
 
-## Status
+## Historical status at capture time
 
 Greenfield. **Design decided + recorded** (core-platform SD-15 + this repo's design note). **Idempotency reference impl characterized** (qorpay `Qorpay.Idempotency`). **Ecosystem gap confirmed** (no Ash-native idempotency lib on hex). **Build precedent captured** (`ash_age`). Repo is a scaffold — `docs/` (`handoffs/`, `superpowers/{specs,plans}`, `design-notes/`) + `.gitignore`; **not yet a git repo; zero source code.**
 
@@ -136,7 +143,7 @@ Everything below is unbuilt. Ordered.
 - **Signature-verification neighbour (verify-seam target):** `/Users/rp/Developer/Base/ash_webhook_it` — owns provider-signature schemes; `ash_onetime` delegates, never duplicates.
 - **External canonical patterns:** Stripe idempotency (Idempotency-Key, 24h retention, params fingerprint, recovery points); RFC 9449 DPoP (holder proof, `jti`/`iat`, request binding) for the nonce side.
 
-## Suggested skills + next action
+## Historical suggestions at capture time
 
 1. **First:** `git init` + scaffold `mix.exs` (mirror `ash_age`), repo `baselabs/ash_onetime`.
 2. **`/brainstorm-autopilot`** → lock the extension spec (per Open item 2) → `docs/superpowers/specs/`.
