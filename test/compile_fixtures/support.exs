@@ -54,6 +54,24 @@ defmodule AshOnetime.CompileFixture.MissingCodec do
   def encode(_value, _fields, _context), do: {:ok, <<>>}
 end
 
+defmodule AshOnetime.CompileFixture.EmptyTagCodec do
+  def format_tag, do: ""
+  def encode(_value, _contract, _opts), do: {:ok, format_tag(), <<>>}
+  def decode(_tag, _payload, _contract, _opts), do: {:ok, :ok}
+end
+
+defmodule AshOnetime.CompileFixture.ColonTagCodec do
+  def format_tag, do: "bad:tag"
+  def encode(_value, _contract, _opts), do: {:ok, format_tag(), <<>>}
+  def decode(_tag, _payload, _contract, _opts), do: {:ok, :ok}
+end
+
+defmodule AshOnetime.CompileFixture.LongTagCodec do
+  def format_tag, do: String.duplicate("a", 82)
+  def encode(_value, _contract, _opts), do: {:ok, format_tag(), <<>>}
+  def decode(_tag, _payload, _contract, _opts), do: {:ok, :ok}
+end
+
 defmodule AshOnetime.CompileFixture.Classifier do
   def classify(value, _context), do: {:store, value}
 end
@@ -515,6 +533,22 @@ defmodule AshOnetime.CompileFixture do
       attributes do
         uuid_primary_key :id
         attribute unquote(name), :string, public?: true
+      end
+    end
+  end
+
+  defp attributes_ast(:response_fields) do
+    quote do
+      attributes do
+        uuid_primary_key :id
+        attribute :account_id, :uuid, public?: true
+        attribute :amount, :integer, public?: true
+        attribute :private_note, :string, public?: false
+        attribute :secret_note, :string, public?: true, sensitive?: true
+      end
+
+      relationships do
+        belongs_to :owner, __MODULE__, public?: true
       end
     end
   end

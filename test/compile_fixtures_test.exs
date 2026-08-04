@@ -139,9 +139,31 @@ defmodule AshOnetime.CompileFixturesTest do
     missing_classifier_callback:
       {:charge, :response,
        "AshOnetime.CompileFixture.MissingClassifier is missing callbacks [classify: 2]"},
+    empty_codec_tag:
+      {:charge, :response,
+       "AshOnetime.CompileFixture.EmptyTagCodec returned an invalid format tag"},
+    colon_codec_tag:
+      {:charge, :response,
+       "AshOnetime.CompileFixture.ColonTagCodec returned an invalid format tag"},
+    long_codec_tag:
+      {:charge, :response,
+       "AshOnetime.CompileFixture.LongTagCodec returned an invalid format tag"},
     missing_external_callback:
       {:charge, :external_effect,
        "AshOnetime.CompileFixture.MissingExternal is missing callbacks [recover: 3]"},
+    response_duplicate_fields:
+      {:charge, :response, "response fields must not contain duplicates"},
+    response_private_field:
+      {:charge, :response,
+       "response field :private_note must be a public non-sensitive attribute"},
+    response_sensitive_field:
+      {:charge, :response, "response field :secret_note must be a public non-sensitive attribute"},
+    response_reserved_field:
+      {:charge, :response, "response fields must not contain reserved names"},
+    response_relationship_field:
+      {:charge, :response, "response field :owner must be a public non-sensitive attribute"},
+    response_unknown_field:
+      {:charge, :response, "response field :unknown must be a public non-sensitive attribute"},
     unsafe_global_relationship:
       {:charge, :action, "managed relationships are unsafe for idempotent replay"},
     unsafe_pipeline_relationship:

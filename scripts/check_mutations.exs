@@ -217,10 +217,30 @@ defmodule AshOnetime.MutationCheck do
       tag: "operation_hash_cleanup_mutation",
       test_name: "cleanup delete keeps operation identity when hash partitions share an id",
       assertion: "assert {:ok, %{idempotency: 1, nonce: 0}}"
+    },
+    "response-field-guard" => %{
+      path: "lib/ash_onetime/codec/resource.ex",
+      original: "    MapSet.new(actual) == MapSet.new(Enum.map(expected, &Atom.to_string/1))",
+      mutated: "    true",
+      test: "test/ash_onetime/codec/resource_test.exs",
+      tag: "response_allowlist_mutation",
+      test_name: "undeclared sentinel private payload field is terminal",
+      assertion: "assert {:error, %Error{code: :response_fields_invalid}} ="
+    },
+    "return-contract" => %{
+      path: "test/support/resources/result_examples.ex",
+      original: "    action :nullable_result, :string do",
+      mutated: "    action :nullable_result, :uuid do",
+      test: "test/ash_onetime/codec/response_test.exs",
+      tag: "return_type_mutation",
+      test_name: "fixed bytes bind the live return contract before custom decode",
+      assertion: "assert {:ok, \"fixed\"} = Response.replay(store_result(fixed), contract, [])"
     }
   }
 
   @groups %{
+    "response-allowlist" => ["response-field-guard"],
+    "return-type" => ["return-contract"],
     "dsl-verifiers" => [
       "dsl-idempotency",
       "dsl-nonce",

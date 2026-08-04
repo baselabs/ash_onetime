@@ -16,8 +16,10 @@ defmodule AshOnetime.Test.Support.ResponseCodec do
   @moduledoc false
 
   def format_tag, do: "test"
-  def encode(_value, _fields, _context), do: {:ok, <<>>}
-  def decode(_payload, _fields, _type, _context), do: {:ok, :ok}
+  def encode(value, _contract, _opts), do: {:ok, format_tag(), :erlang.term_to_binary(value)}
+
+  def decode("test", payload, _contract, _opts),
+    do: {:ok, :erlang.binary_to_term(payload, [:safe])}
 end
 
 defmodule AshOnetime.Test.Support.ResponseClassifier do

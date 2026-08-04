@@ -477,14 +477,11 @@ defmodule AshOnetime.Resource.Transformer do
     fields = if Keyword.keyword?(opts), do: Keyword.get(opts, :fields, []), else: :invalid
     classifier = if Keyword.keyword?(opts), do: Keyword.get(opts, :classify), else: nil
 
-    missing_fields =
-      if is_list(fields), do: fields -- Enum.map(context.attributes, & &1.name), else: []
-
     with true <- Keyword.keyword?(opts),
          true <- is_list(fields) and Enum.all?(fields, &is_atom/1),
          true <- is_atom(classifier) and not is_nil(classifier),
-         true <- missing_fields == [],
-         :ok <- ensure_callbacks(response.codec, format_tag: 0, encode: 3, decode: 4),
+         :ok <- verify_response_fields(fields, context),
+         :ok <- verify_response_codec(response.codec),
          :ok <- ensure_callbacks(classifier, classify: 2) do
       :ok
     else
@@ -492,9 +489,12 @@ defmodule AshOnetime.Resource.Transformer do
         error(context.dsl_state, protection, :response, "response fields must be a list of atoms")
 
       false ->
-        response_shape_error(protection, context, classifier, fields, missing_fields)
+        response_shape_error(protection, context, classifier, fields)
 
       {:error, message} ->
+        error(context.dsl_state, protection, :response, message)
+
+      {:field_error, message} ->
         error(context.dsl_state, protection, :response, message)
     end
   end
@@ -503,7 +503,24 @@ defmodule AshOnetime.Resource.Transformer do
     error(context.dsl_state, protection, :response, "idempotency requires response configuration")
   end
 
-  defp response_shape_error(protection, context, classifier, fields, missing_fields) do
+  defp verify_response_codec(codec) do
+    with :ok <- ensure_callbacks(codec, format_tag: 0, encode: 3, decode: 4),
+         {:ok, tag} <- invoke_declaration(codec, :format_tag),
+         :ok <- AshOnetime.Codec.validate_tag(tag) do
+      :ok
+    else
+      {:error, %AshOnetime.Error{}} ->
+        {:error, "#{inspect(codec)} returned an invalid format tag"}
+
+      :error ->
+        {:error, "#{inspect(codec)} format_tag/0 failed"}
+
+      {:error, message} when is_binary(message) ->
+        {:error, message}
+    end
+  end
+
+  defp response_shape_error(protection, context, classifier, fields) do
     cond do
       not is_list(fields) or not Enum.all?(fields, &is_atom/1) ->
         error(context.dsl_state, protection, :response, "response fields must be a list of atoms")
@@ -512,12 +529,38 @@ defmodule AshOnetime.Resource.Transformer do
         error(context.dsl_state, protection, :response, "response classify module is required")
 
       true ->
-        error(
-          context.dsl_state,
-          protection,
-          :response,
-          "response references unknown fields #{inspect(missing_fields)}"
-        )
+        error(context.dsl_state, protection, :response, "response fields are invalid")
+    end
+  end
+
+  defp verify_response_fields([], %{action: %{type: :action}}), do: :ok
+
+  defp verify_response_fields(_fields, %{action: %{type: :action}}),
+    do: {:field_error, "generic action response fields must be empty"}
+
+  defp verify_response_fields(fields, context) do
+    reserved = Ash.Resource.reserved_names()
+
+    cond do
+      fields != Enum.uniq(fields) ->
+        {:field_error, "response fields must not contain duplicates"}
+
+      Enum.any?(fields, &(&1 in reserved)) ->
+        {:field_error, "response fields must not contain reserved names"}
+
+      invalid = Enum.find(fields, &(not valid_response_attribute?(&1, context))) ->
+        {:field_error,
+         "response field #{inspect(invalid)} must be a public non-sensitive attribute"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp valid_response_attribute?(field, context) do
+    case ResourceInfo.attribute(context.dsl_state, field) do
+      %{public?: true, sensitive?: false} -> true
+      _other -> false
     end
   end
 

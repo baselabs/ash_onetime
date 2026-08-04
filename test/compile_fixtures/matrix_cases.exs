@@ -62,8 +62,50 @@ defmodule AshOnetime.CompileFixture.MatrixCases do
     {[], idempotency(response: {CompileFixture.Codec, opts})}
   end
 
+  defp definition(:empty_codec_tag) do
+    {[], idempotency(response: {CompileFixture.EmptyTagCodec, response_opts()})}
+  end
+
+  defp definition(:colon_codec_tag) do
+    {[], idempotency(response: {CompileFixture.ColonTagCodec, response_opts()})}
+  end
+
+  defp definition(:long_codec_tag) do
+    {[], idempotency(response: {CompileFixture.LongTagCodec, response_opts()})}
+  end
+
   defp definition(:missing_external_callback) do
     {[], idempotency(external_effect: CompileFixture.MissingExternal)}
+  end
+
+  defp definition(:response_duplicate_fields) do
+    opts = Keyword.put(response_opts(), :fields, [:account_id, :account_id])
+    {[attributes: :response_fields], idempotency(response: {CompileFixture.Codec, opts})}
+  end
+
+  defp definition(:response_private_field) do
+    opts = Keyword.put(response_opts(), :fields, [:private_note])
+    {[attributes: :response_fields], idempotency(response: {CompileFixture.Codec, opts})}
+  end
+
+  defp definition(:response_sensitive_field) do
+    opts = Keyword.put(response_opts(), :fields, [:secret_note])
+    {[attributes: :response_fields], idempotency(response: {CompileFixture.Codec, opts})}
+  end
+
+  defp definition(:response_reserved_field) do
+    opts = Keyword.put(response_opts(), :fields, [:__metadata__])
+    {[attributes: :response_fields], idempotency(response: {CompileFixture.Codec, opts})}
+  end
+
+  defp definition(:response_relationship_field) do
+    opts = Keyword.put(response_opts(), :fields, [:owner])
+    {[attributes: :response_fields], idempotency(response: {CompileFixture.Codec, opts})}
+  end
+
+  defp definition(:response_unknown_field) do
+    opts = Keyword.put(response_opts(), :fields, [:unknown])
+    {[attributes: :response_fields], idempotency(response: {CompileFixture.Codec, opts})}
   end
 
   defp definition(:unsafe_global_relationship) do

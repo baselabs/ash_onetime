@@ -27,4 +27,22 @@ defmodule AshOnetime.Resource.TransformerTest do
     assert {AshOnetime.GenericAction, opts} = generic.run
     assert opts[:original] == {AshOnetime.Test.Support.GenericRun, []}
   end
+
+  test "landed response declaration executes the exact codec boundary" do
+    protection = Info.protection(Resource, :charge)
+
+    assert {:ok, contract} =
+             AshOnetime.Response.contract(Resource, :charge, protection.response, %{})
+
+    value =
+      Resource
+      |> struct(id: Ash.UUID.generate(), account_id: Ash.UUID.generate(), amount: 10)
+      |> Ecto.put_meta(state: :loaded)
+
+    assert {:ok, encoded} = AshOnetime.Response.encode(value, contract, [])
+    assert encoded.raw_tag == "test"
+    assert encoded.codec =~ "ao:test:"
+    assert encoded.result.id == value.id
+    assert encoded.result.amount == 10
+  end
 end
