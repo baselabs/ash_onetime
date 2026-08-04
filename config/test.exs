@@ -1,6 +1,10 @@
 import Config
 
-database_url = System.fetch_env!("DATABASE_URL")
+database_url =
+  System.get_env(
+    "DATABASE_URL",
+    "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+  )
 
 config :ash, :disable_async?, true
 
