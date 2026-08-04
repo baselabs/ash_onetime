@@ -16,7 +16,8 @@ defmodule AshOnetime.MixProject do
       package: package(),
       docs: docs(),
       dialyzer: [plt_add_apps: [:ecto_sql]],
-      test_paths: ["test"]
+      test_paths: ["test"],
+      test_ignore_filters: [&String.starts_with?(&1, "test/compile_fixtures/")]
     ]
   end
 

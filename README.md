@@ -9,6 +9,8 @@ the authoritative admission store.
 The package is under active construction and is not published. The accepted public
 contract requires every protected action to choose `:idempotency` or `:one_time_nonce`
 and declare a nonempty scope. There is no default strategy or global scope fallback.
+The resource DSL, normalized introspection, and compile-time safety boundary are present;
+the admission store and action execution path are not yet present.
 
 ## Compatibility
 
@@ -33,6 +35,7 @@ DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test mix test
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete gate battery and
 [usage-rules.md](usage-rules.md) for non-negotiable integration boundaries.
+The [Getting started guide](documentation/getting-started.md) includes the resource DSL.
 
 ## License
 

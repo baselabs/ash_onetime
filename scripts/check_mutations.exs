@@ -77,7 +77,108 @@ defmodule AshOnetime.MutationCheck do
       tag: "signature_mutation",
       test_name: "signature binds the exact canonical body bytes",
       assertion: "assert {:ok, ^token} = Token.verify(encoded, KeyResolver, verify_options())"
+    },
+    "dsl-idempotency" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "  defp verify_idempotency(protection, context),\n    do: verify_idempotency_details(protection, context)",
+      mutated: "  defp verify_idempotency(protection, _context), do: {:ok, protection}",
+      test: "test/compile_fixtures_test.exs",
+      tag: "dsl_idempotency_mutation",
+      test_name: "idempotency requires replay contracts",
+      assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
+      probe: {"excessive_bounds.exs", "AshOnetime.CompileFixtures.ExcessiveBounds"}
+    },
+    "dsl-nonce" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "  defp verify_nonce(protection, context), do: verify_nonce_details(protection, context)",
+      mutated: "  defp verify_nonce(protection, _context), do: {:ok, protection}",
+      test: "test/compile_fixtures_test.exs",
+      tag: "dsl_nonce_mutation",
+      test_name: "nonce rejects replay response configuration",
+      assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
+      probe: {"nonce_response.exs", "AshOnetime.CompileFixtures.NonceResponse"}
+    },
+    "dsl-nonce-key" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "  defp verify_nonce_key(protection, context), do: verify_nonce_key_details(protection, context)",
+      mutated: "  defp verify_nonce_key(_protection, _context), do: :ok",
+      test: "test/compile_fixtures_test.exs",
+      tag: "dsl_nonce_key_mutation",
+      test_name: "nonce requires trusted key sources",
+      assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
+      probe: {"unverified_nonce_key.exs", "AshOnetime.CompileFixtures.UnverifiedNonceKey"}
+    },
+    "dsl-lifecycle" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "  defp verify_lifecycle(protection, context), do: verify_lifecycle_details(protection, context)",
+      mutated: "  defp verify_lifecycle(_protection, _context), do: :ok",
+      test: "test/compile_fixtures_test.exs",
+      tag: "dsl_lifecycle_mutation",
+      test_name: "idempotency rejects replay-unsafe lifecycle callbacks",
+      assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
+      probe: {"unsafe_hook.exs", "AshOnetime.CompileFixtures.UnsafeHook"}
+    },
+    "dsl-duplicate" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "  defp reject_duplicates(protections, dsl_state),\n    do: reject_duplicate_details(protections, dsl_state)",
+      mutated: "  defp reject_duplicates(_protections, _dsl_state), do: :ok",
+      test: "test/compile_fixtures_test.exs",
+      tag: "dsl_duplicate_mutation",
+      test_name: "duplicate protection is transformer-owned",
+      assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
+      probe: {"duplicate_protection.exs", "AshOnetime.CompileFixtures.DuplicateProtection"}
+    },
+    "dsl-references" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "  defp verify_references(references, protection, context, option),\n    do: verify_reference_details(references, protection, context, option)",
+      mutated: "  defp verify_references(_references, _protection, _context, _option), do: :ok",
+      test: "test/compile_fixtures_test.exs",
+      tag: "dsl_references_mutation",
+      test_name: "key sources must reference declared action inputs",
+      assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
+      probe: {"missing_key_reference.exs", "AshOnetime.CompileFixtures.MissingKeyReference"}
+    },
+    "dsl-builtin-options" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "  defp verify_replay_ref(ref, allowlist), do: verify_replay_ref_details(ref, allowlist)",
+      mutated: "  defp verify_replay_ref(_ref, _allowlist), do: :ok",
+      test: "test/compile_fixtures_test.exs",
+      tag: "dsl_builtin_options_mutation",
+      test_name: "replay-safe built-ins require literal options",
+      assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
+      probe: {"unsafe_builtin_option.exs", "AshOnetime.CompileFixtures.UnsafeBuiltinOption"}
+    },
+    "dsl-validations" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "  defp verify_replay_validation(validation), do: verify_replay_validation_details(validation)",
+      mutated: "  defp verify_replay_validation(_validation), do: :ok",
+      test: "test/compile_fixtures_test.exs",
+      tag: "dsl_validations_mutation",
+      test_name: "idempotency rejects replay-unsafe validations",
+      assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
+      probe: {"unsafe_validation.exs", "AshOnetime.CompileFixtures.UnsafeValidation"}
     }
+  }
+
+  @groups %{
+    "dsl-verifiers" => [
+      "dsl-idempotency",
+      "dsl-nonce",
+      "dsl-nonce-key",
+      "dsl-lifecycle",
+      "dsl-duplicate",
+      "dsl-references",
+      "dsl-builtin-options",
+      "dsl-validations"
+    ]
   }
 
   @registered @mutations |> Map.keys() |> MapSet.new()
@@ -96,6 +197,8 @@ defmodule AshOnetime.MutationCheck do
   def main(["--" | names]), do: main(names)
 
   def main(names) do
+    names = Enum.flat_map(names, &Map.get(@groups, &1, [&1]))
+
     case validate(names) do
       :ok ->
         Enum.each(names, &run_mutation!(&1, Map.fetch!(@mutations, &1)))
@@ -125,6 +228,7 @@ defmodule AshOnetime.MutationCheck do
     {red_output, red_status} =
       try do
         File.write!(mutation.path, mutated_source)
+        probe_fixture!(name, mutation)
         run_test(mutation)
       after
         File.write!(mutation.path, original_source)
@@ -163,6 +267,38 @@ defmodule AshOnetime.MutationCheck do
       matches -> raise "mutation site count for #{path} was #{length(matches)}, expected 1"
     end
   end
+
+  defp probe_fixture!(_name, %{probe: nil}), do: :ok
+
+  defp probe_fixture!(name, %{probe: {fixture, expected}}) do
+    fixture = Path.expand(Path.join("test/compile_fixtures", fixture))
+    env = [{"MIX_ENV", "test"}, {"DATABASE_URL", @database_url}]
+
+    {compile_output, compile_status} =
+      System.cmd("mix", ["compile", "--force"], env: env, stderr_to_stdout: true)
+
+    if compile_status != 0 do
+      raise "mutation #{name} failed to compile:\n#{compile_output}"
+    end
+
+    {output, status} =
+      System.cmd(
+        "mix",
+        ["run", "--no-compile", "scripts/probe_compile_fixture.exs", fixture, expected],
+        env: env,
+        stderr_to_stdout: true
+      )
+
+    IO.puts("mutation #{name}: direct fixture probe output follows")
+    IO.puts(output)
+
+    unless status == 0 and output =~ "ASH_ONETIME_FIXTURE_RESULT=compiled" and
+             output =~ "ASH_ONETIME_FIXTURE_LOADED=true" do
+      raise "mutation #{name} did not make its owned fixture compile and load"
+    end
+  end
+
+  defp probe_fixture!(_name, _mutation), do: :ok
 
   defp run_test(mutation) do
     env =
