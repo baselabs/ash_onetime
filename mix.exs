@@ -15,7 +15,7 @@ defmodule AshOnetime.MixProject do
       description: description(),
       package: package(),
       docs: docs(),
-      dialyzer: [plt_add_apps: [:ecto_sql]],
+      dialyzer: [plt_add_apps: [:ecto_sql, :ex_unit, :mix]],
       test_paths: ["test"],
       test_ignore_filters: [&String.starts_with?(&1, "test/compile_fixtures/")]
     ]
@@ -56,6 +56,7 @@ defmodule AshOnetime.MixProject do
     [
       files: [
         "lib",
+        "priv/templates",
         "documentation",
         "mix.exs",
         "README.md",

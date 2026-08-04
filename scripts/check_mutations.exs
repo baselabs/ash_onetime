@@ -165,6 +165,58 @@ defmodule AshOnetime.MutationCheck do
       test_name: "idempotency rejects replay-unsafe validations",
       assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
       probe: {"unsafe_validation.exs", "AshOnetime.CompileFixtures.UnsafeValidation"}
+    },
+    "unique-constraint" => %{
+      path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
+      original: "@collision_constraint \"UNIQUE (operation_hash, scope_hash, key_hash)\"",
+      mutated: "@collision_constraint \"CHECK (true)\"",
+      test: "test/ash_onetime/store/contention_test.exs",
+      tag: "unique_constraint_mutation",
+      test_name: "idempotency collision waits on the committed winner and appends one effect",
+      assertion: "assert ledger_count(observer, prefix, request) == 1"
+    },
+    "cleanup-boundary" => %{
+      path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
+      original: "@cleanup_comparator \">\"",
+      mutated: "@cleanup_comparator \">=\"",
+      test: "test/ash_onetime/store/cleanup_test.exs",
+      tag: "cleanup_boundary_mutation",
+      test_name:
+        "cleanup predicate, function, and parent triggers are strict at the retention boundary",
+      assertion: "assert %{rows: [[false]]}"
+    },
+    "operation-hash-select" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "@logical_key_predicate \"operation_hash = $1 AND scope_hash = $2 AND key_hash = $3\"",
+      mutated:
+        "@logical_key_predicate \"$1::bytea IS NOT NULL AND operation_hash = operation_hash AND scope_hash = $2 AND key_hash = $3\"",
+      test: "test/ash_onetime/store/uncertainty_test.exs",
+      tag: "operation_hash_select_mutation",
+      test_name: "operation hash remains part of the shared command-two and load sink",
+      assertion: "assert {:ok, %Result{status: :processing, claim: collision}}"
+    },
+    "operation-hash-completion" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "@completion_key_predicate \"operation_hash = $4 AND scope_hash = $5 AND key_hash = $6\"",
+      mutated:
+        "@completion_key_predicate \"$4::bytea IS NOT NULL AND operation_hash = operation_hash AND scope_hash = $5 AND key_hash = $6\"",
+      test: "test/ash_onetime/store/partition_test.exs",
+      tag: "operation_hash_completion_mutation",
+      test_name: "completion update keeps operation identity when hash partitions share an id",
+      assertion: "assert {:ok, %Result{status: :complete, claim: complete}}"
+    },
+    "operation-hash-cleanup" => %{
+      path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
+      original:
+        "@cleanup_delete_predicate \"claims.operation_hash = candidates.operation_hash AND claims.id = candidates.id\"",
+      mutated:
+        "@cleanup_delete_predicate \"candidates.operation_hash = candidates.operation_hash AND claims.id = candidates.id\"",
+      test: "test/ash_onetime/store/partition_test.exs",
+      tag: "operation_hash_cleanup_mutation",
+      test_name: "cleanup delete keeps operation identity when hash partitions share an id",
+      assertion: "assert {:ok, %{idempotency: 1, nonce: 0}}"
     }
   }
 
@@ -178,6 +230,11 @@ defmodule AshOnetime.MutationCheck do
       "dsl-references",
       "dsl-builtin-options",
       "dsl-validations"
+    ],
+    "operation-hash" => [
+      "operation-hash-select",
+      "operation-hash-completion",
+      "operation-hash-cleanup"
     ]
   }
 
