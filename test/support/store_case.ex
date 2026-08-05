@@ -64,7 +64,7 @@ defmodule AshOnetime.Test.StoreCase do
       operation_hash: hash("operation:" <> label),
       scope_hash: hash("scope:" <> label),
       key_hash: hash("key:" <> label),
-      verified: verified,
+      verified: [verified],
       max_age: Keyword.get(options, :max_age, 60),
       clock_skew: Keyword.get(options, :clock_skew, 0),
       clock: Clock

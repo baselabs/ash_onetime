@@ -40,6 +40,95 @@ defmodule AshOnetime.Store.PostgresTest do
     assert collided.id == claim.id
   end
 
+  @tag task5_composite_clock_mutation: true
+  test "composite nonce persists a coherent aggregate across crossed issuance and expiry", %{
+    target: target
+  } do
+    evaluated_at = Clock.now() |> DateTime.truncate(:second)
+    earlier_issued_at = DateTime.add(evaluated_at, -10, :second)
+    latest_issued_at = DateTime.add(evaluated_at, -5, :second)
+    earlier_expires_at = DateTime.add(evaluated_at, -8, :second)
+
+    verified = [
+      %AshOnetime.Verified{
+        key: "earlier",
+        issued_at: earlier_issued_at,
+        expires_at: earlier_expires_at,
+        verifier_id: "verifier-a"
+      },
+      %AshOnetime.Verified{
+        key: "latest",
+        issued_at: latest_issued_at,
+        expires_at: nil,
+        verifier_id: "verifier-b"
+      }
+    ]
+
+    {:ok, request} =
+      Claim.nonce(
+        operation_hash: hash("composite-operation"),
+        scope_hash: hash("composite-scope"),
+        key_hash: hash("composite-key"),
+        verified: verified,
+        max_age: 60,
+        clock_skew: 15,
+        clock: Clock
+      )
+
+    assert {:ok, %Result{status: :admitted, claim: claim}} =
+             Repo.transaction(fn -> Store.claim(target, request) end)
+
+    assert DateTime.compare(claim.issued_at, latest_issued_at) == :eq
+    assert claim.expires_at == nil
+
+    assert {:ok, verifier_digest} =
+             AshOnetime.Fingerprint.compute(%{
+               domain: :nonce_verifiers,
+               ordered: ["verifier-a", "verifier-b"]
+             })
+
+    assert claim.verifier_id == Base.url_encode64(verifier_digest, padding: false)
+
+    assert DateTime.compare(
+             claim.retain_until,
+             AshOnetime.Window.cleanup_after(latest_issued_at, 60, 15)
+           ) == :eq
+  end
+
+  @tag task5_composite_sibling_mutation: true
+  test "one invalid composite nonce sibling rejects the entire admission", %{target: target} do
+    evaluated_at = Clock.now() |> DateTime.truncate(:second)
+
+    verified = [
+      %AshOnetime.Verified{
+        key: "expired-sibling",
+        issued_at: DateTime.add(evaluated_at, -120, :second),
+        expires_at: DateTime.add(evaluated_at, -90, :second),
+        verifier_id: "expired-verifier"
+      },
+      %AshOnetime.Verified{
+        key: "valid-sibling",
+        issued_at: DateTime.add(evaluated_at, -1, :second),
+        expires_at: nil,
+        verifier_id: "valid-verifier"
+      }
+    ]
+
+    {:ok, request} =
+      Claim.nonce(
+        operation_hash: hash("invalid-sibling-operation"),
+        scope_hash: hash("invalid-sibling-scope"),
+        key_hash: hash("invalid-sibling-key"),
+        verified: verified,
+        max_age: 60,
+        clock_skew: 5,
+        clock: Clock
+      )
+
+    assert {:ok, %Result{status: :failure, reason: :invalid_nonce_window}} =
+             Repo.transaction(fn -> Store.claim(target, request) end)
+  end
+
   test "completion and load accept a zero-byte payload", %{target: target} do
     request = idempotency_request("empty-payload")
     digest = :crypto.hash(:sha256, <<>>)

@@ -170,6 +170,32 @@ defmodule AshOnetime.CompileFixturesTest do
       {:charge, :action, "managed relationships are unsafe for idempotent replay"},
     unsafe_inline_change:
       {:charge, :action, "inline lifecycle callbacks cannot declare replay safety"},
+    crud_notifier:
+      {:charge, :action, "notifier delivery is unsupported for protected CRUD actions"},
+    local_around_action:
+      {:charge, :action,
+       "AshOnetime.CompileFixture.AroundChange declares an additional around-action boundary"},
+    global_around_action:
+      {:charge, :action,
+       "AshOnetime.CompileFixture.AroundChange declares an additional around-action boundary"},
+    nonce_local_around_action:
+      {:charge, :action,
+       "AshOnetime.CompileFixture.AroundChange declares an additional around-action boundary"},
+    nonce_global_around_action:
+      {:charge, :action,
+       "AshOnetime.CompileFixture.AroundChange declares an additional around-action boundary"},
+    pure_notification_producer:
+      {:charge, :action,
+       "AshOnetime.CompileFixture.PureNotificationChange declares notification/effect capabilities incompatible with :pure"},
+    global_pure_notification_producer:
+      {:charge, :action,
+       "AshOnetime.CompileFixture.PureNotificationChange declares notification/effect capabilities incompatible with :pure"},
+    unclassified_notification_producer:
+      {:charge, :action,
+       "AshOnetime.CompileFixture.UnclassifiedProducerChange must export replay_capabilities/1"},
+    marker_blind_notification_producer:
+      {:charge, :action,
+       "AshOnetime.CompileFixture.MarkerBlindProducerChange must consume the replay marker and declare closed capabilities"},
     invalid_change_declaration:
       {:charge, :action,
        "AshOnetime.CompileFixture.InvalidSafetyChange returned an invalid replay safety declaration"},
@@ -196,8 +222,7 @@ defmodule AshOnetime.CompileFixturesTest do
       {:redeem, :key, "nonce keys must contain only verified or minted trusted sources"},
     nonce_argument_key:
       {:redeem, :key, "nonce keys must contain only verified or minted trusted sources"},
-    nonce_attribute_key:
-      {:redeem, :key, "nonce keys must contain only verified or minted trusted sources"},
+    nonce_attribute_key: {:redeem, :key, "generic actions cannot reference attributes"},
     nonce_external_key:
       {:redeem, :key, "nonce keys must contain only verified or minted trusted sources"},
     nonce_mixed_key:
@@ -346,6 +371,51 @@ defmodule AshOnetime.CompileFixturesTest do
 
       assert fixture_fact(output, "MESSAGE") == unquote(message)
       assert fixture_fact(output, "LOCATION") == "test/compile_fixtures/matrix_cases.exs:12"
+    end
+  end
+
+  @tag task5_notifier_guard_mutation: true
+  test "protected CRUD actions reject notifier delivery at compile time" do
+    {output, status} = run_matrix_case(:crud_notifier)
+
+    assert status != 0, output
+    assert fixture_fact(output, "RESULT") == "rejected"
+    assert fixture_fact(output, "LOADED") == "false"
+  end
+
+  @tag task5_around_guard_mutation: true
+  test "protected CRUD actions reject every additional around-action producer" do
+    for case_name <- [
+          :local_around_action,
+          :global_around_action,
+          :nonce_local_around_action,
+          :nonce_global_around_action
+        ] do
+      {output, status} = run_matrix_case(case_name)
+      assert status != 0, output
+      assert fixture_fact(output, "RESULT") == "rejected"
+    end
+  end
+
+  test "nonce CRUD requires only a closed around-action capability declaration" do
+    {output, status} = run_matrix_case(:nonce_non_around_capability)
+
+    assert status == 0, output
+    assert fixture_fact(output, "RESULT") == "compiled"
+    assert fixture_fact(output, "LOADED") == "true"
+  end
+
+  @tag task5_capability_guard_mutation: true
+  test "lifecycle notification and effect capability declarations fail closed" do
+    for case_name <- [
+          :pure_notification_producer,
+          :global_pure_notification_producer,
+          :unclassified_notification_producer,
+          :marker_blind_notification_producer
+        ] do
+      {output, status} = run_matrix_case(case_name)
+      assert status != 0, output
+      assert fixture_fact(output, "RESULT") == "rejected"
     end
   end
 

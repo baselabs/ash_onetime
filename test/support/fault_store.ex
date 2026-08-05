@@ -4,18 +4,31 @@ defmodule AshOnetime.Test.FaultStore do
   @behaviour AshOnetime.Store
 
   @result_key {__MODULE__, :result}
+  @handler_key {__MODULE__, :handler}
 
   def put_result(result), do: Process.put(@result_key, result)
-  def reset, do: Process.delete(@result_key)
+  def put_handler(handler) when is_function(handler, 2), do: Process.put(@handler_key, handler)
+
+  def reset do
+    Process.delete(@result_key)
+    Process.delete(@handler_key)
+    :ok
+  end
 
   @impl AshOnetime.Store
-  def claim(_target, _request), do: result!()
+  def claim(target, request), do: result!(:claim, [target, request])
 
   @impl AshOnetime.Store
-  def complete(_target, _claim, _codec, _digest, _payload), do: result!()
+  def complete(target, claim, codec, digest, payload),
+    do: result!(:complete, [target, claim, codec, digest, payload])
 
   @impl AshOnetime.Store
-  def load(_target, _claim), do: result!()
+  def load(target, claim), do: result!(:load, [target, claim])
 
-  defp result!, do: Process.get(@result_key) || raise("fault store result is not configured")
+  defp result!(operation, arguments) do
+    case Process.get(@handler_key) do
+      handler when is_function(handler, 2) -> handler.(operation, arguments)
+      _other -> Process.get(@result_key) || raise("fault store result is not configured")
+    end
+  end
 end

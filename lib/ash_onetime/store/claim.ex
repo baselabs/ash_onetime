@@ -6,6 +6,7 @@ defmodule AshOnetime.Store.Claim do
   @hash_bytes 32
   @max_verifier_id_bytes 128
   @max_retention_seconds 2_147_483_647
+  @max_verified_components 16
 
   defmodule Request do
     @moduledoc false
@@ -33,10 +34,10 @@ defmodule AshOnetime.Store.Claim do
             key_hash: binary(),
             fingerprint: binary() | nil,
             retention_seconds: pos_integer() | nil,
-            verified: Verified.t() | nil,
+            verified: [Verified.t()] | nil,
             max_age: non_neg_integer() | nil,
             clock_skew: non_neg_integer() | nil,
-            clock: module()
+            clock: module() | nil
           }
   end
 
@@ -117,8 +118,11 @@ defmodule AshOnetime.Store.Claim do
   @spec nonce(keyword()) :: {:ok, Request.t()} | {:error, :invalid_request}
   def nonce(attributes) when is_list(attributes) do
     with {:ok, common} <- common(attributes),
-         %Verified{verifier_id: verifier_id} = verified <- Keyword.get(attributes, :verified),
-         true <- valid_verifier_id?(verifier_id),
+         verified
+         when is_list(verified) and verified != [] and
+                length(verified) <= @max_verified_components <-
+           Keyword.get(attributes, :verified),
+         true <- Enum.all?(verified, &valid_verified?/1),
          max_age when is_integer(max_age) and max_age >= 0 <- Keyword.get(attributes, :max_age),
          clock_skew when is_integer(clock_skew) and clock_skew >= 0 <-
            Keyword.get(attributes, :clock_skew),
@@ -160,4 +164,7 @@ defmodule AshOnetime.Store.Claim do
   defp valid_verifier_id?(value) do
     is_binary(value) and byte_size(value) > 0 and byte_size(value) <= @max_verifier_id_bytes
   end
+
+  defp valid_verified?(%Verified{verifier_id: verifier_id}), do: valid_verifier_id?(verifier_id)
+  defp valid_verified?(_verified), do: false
 end

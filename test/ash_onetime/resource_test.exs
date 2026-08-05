@@ -22,14 +22,17 @@ defmodule AshOnetime.ResourceTest do
     refute :operation_hash in Map.keys(%Protection{})
   end
 
-  test "injected change fails closed until admission execution lands" do
+  test "injected change installs transactional admission hooks without eager execution" do
     protection = Info.protection(Resource, :charge)
     changeset = Ash.Changeset.new(Resource)
 
     assert {:ok, opts} = AshOnetime.Change.init(protection: protection)
-    refute AshOnetime.Change.change(changeset, opts, %{}).valid?
+    changed = AshOnetime.Change.change(changeset, opts, %{})
+    assert changed.valid?
+    assert length(changed.before_action) == 1
+    assert length(changed.around_action) == 1
 
-    assert {:error, %AshOnetime.Error{code: :admission_unavailable}} =
+    assert {:not_atomic, "keyed effects require transactional stream execution"} =
              AshOnetime.Change.atomic(changeset, opts, %{})
   end
 

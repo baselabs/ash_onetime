@@ -98,12 +98,66 @@ defmodule AshOnetime.CompileFixture.SafeChange do
   use Ash.Resource.Change
   def change(changeset, _opts, _context), do: changeset
   def replay_safety(_opts), do: :pure
+
+  def replay_capabilities(_opts),
+    do: %{notifications: false, effects: false, around_action: false, marker: :unused}
 end
 
 defmodule AshOnetime.CompileFixture.InvalidSafetyChange do
   use Ash.Resource.Change
   def change(changeset, _opts, _context), do: changeset
   def replay_safety(_opts), do: :unknown
+
+  def replay_capabilities(_opts),
+    do: %{notifications: false, effects: false, around_action: false, marker: :unused}
+end
+
+defmodule AshOnetime.CompileFixture.AroundChange do
+  use Ash.Resource.Change
+
+  def change(changeset, _opts, _context) do
+    Ash.Changeset.around_action(changeset, fn pending, callback -> callback.(pending) end,
+      prepend?: true
+    )
+  end
+
+  def replay_safety(_opts), do: :replay_aware
+
+  def replay_capabilities(_opts),
+    do: %{notifications: false, effects: false, around_action: true, marker: :consumed}
+end
+
+defmodule AshOnetime.CompileFixture.NonceNonAroundChange do
+  use Ash.Resource.Change
+
+  def change(changeset, _opts, _context), do: changeset
+
+  def replay_capabilities(_opts),
+    do: %{notifications: true, effects: true, around_action: false, marker: :unused}
+end
+
+defmodule AshOnetime.CompileFixture.PureNotificationChange do
+  use Ash.Resource.Change
+  def change(changeset, _opts, _context), do: changeset
+  def replay_safety(_opts), do: :pure
+
+  def replay_capabilities(_opts),
+    do: %{notifications: true, effects: false, around_action: false, marker: :unused}
+end
+
+defmodule AshOnetime.CompileFixture.UnclassifiedProducerChange do
+  use Ash.Resource.Change
+  def change(changeset, _opts, _context), do: changeset
+  def replay_safety(_opts), do: :replay_aware
+end
+
+defmodule AshOnetime.CompileFixture.MarkerBlindProducerChange do
+  use Ash.Resource.Change
+  def change(changeset, _opts, _context), do: changeset
+  def replay_safety(_opts), do: :replay_aware
+
+  def replay_capabilities(_opts),
+    do: %{notifications: true, effects: true, around_action: false, marker: :unused}
 end
 
 defmodule AshOnetime.CompileFixture.UnsafePreparation do
@@ -117,6 +171,9 @@ defmodule AshOnetime.CompileFixture.InvalidSafetyPreparation do
   def prepare(query, _opts, _context), do: query
   def supports(_opts), do: [Ash.Query, Ash.ActionInput]
   def replay_safety(_opts), do: :unknown
+
+  def replay_capabilities(_opts),
+    do: %{notifications: false, effects: false, around_action: false, marker: :unused}
 end
 
 defmodule AshOnetime.CompileFixture.Context do
@@ -134,6 +191,11 @@ end
 defmodule AshOnetime.CompileFixture.Run do
   use Ash.Resource.Actions.Implementation
   def run(_input, _opts, _context), do: {:ok, :ok}
+end
+
+defmodule AshOnetime.CompileFixture.Notifier do
+  use Ash.Notifier
+  def notify(_notification), do: :ok
 end
 
 defmodule AshOnetime.CompileFixture do
@@ -252,6 +314,46 @@ defmodule AshOnetime.CompileFixture do
           argument :idempotency_key, :string
           accept [:account_id, :amount]
           change AshOnetime.CompileFixture.UnsafeChange
+        end
+      end
+    end
+  end
+
+  defp actions_ast(:notifier) do
+    quote do
+      actions do
+        create :charge do
+          argument :idempotency_key, :string
+          accept [:account_id, :amount]
+          notifiers [AshOnetime.CompileFixture.Notifier]
+        end
+      end
+    end
+  end
+
+  defp actions_ast(kind)
+       when kind in [
+              :around_change,
+              :nonce_non_around,
+              :pure_notification,
+              :unclassified_producer,
+              :marker_blind
+            ] do
+    module =
+      case kind do
+        :around_change -> AshOnetime.CompileFixture.AroundChange
+        :nonce_non_around -> AshOnetime.CompileFixture.NonceNonAroundChange
+        :pure_notification -> AshOnetime.CompileFixture.PureNotificationChange
+        :unclassified_producer -> AshOnetime.CompileFixture.UnclassifiedProducerChange
+        :marker_blind -> AshOnetime.CompileFixture.MarkerBlindProducerChange
+      end
+
+    quote do
+      actions do
+        create :charge do
+          argument :idempotency_key, :string
+          accept [:account_id, :amount]
+          change unquote(module)
         end
       end
     end
@@ -559,6 +661,22 @@ defmodule AshOnetime.CompileFixture do
     quote do
       changes do
         change AshOnetime.CompileFixture.UnsafeChange
+      end
+    end
+  end
+
+  defp lifecycle_ast(:global_around) do
+    quote do
+      changes do
+        change AshOnetime.CompileFixture.AroundChange
+      end
+    end
+  end
+
+  defp lifecycle_ast(:global_pure_notification) do
+    quote do
+      changes do
+        change AshOnetime.CompileFixture.PureNotificationChange
       end
     end
   end

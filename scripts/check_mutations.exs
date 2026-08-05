@@ -235,8 +235,468 @@ defmodule AshOnetime.MutationCheck do
       tag: "return_type_mutation",
       test_name: "fixed bytes bind the live return contract before custom decode",
       assertion: "assert {:ok, \"fixed\"} = Response.replay(store_result(fixed), contract, [])"
+    },
+    "task5-replay-execution" => %{
+      path: "lib/ash_onetime/generic_action.ex",
+      original: "when class in [:execute, :nonce, :untracked] ->",
+      mutated: "when class in [:execute, :nonce, :untracked, :replay] ->",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_replay_execution_mutation",
+      test_name: "generic original runs once and its typed stored result replays",
+      assertion: "refute_receive {:generic_run, _arguments}"
+    },
+    "task5-corrupt-replay-execution" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original:
+        "{:error, %Error{} = error} ->\n        emit_conflict(state, :malformed)\n        {:error, error}",
+      mutated:
+        "{:error, %Error{} = _error} ->\n        {:execute, %{state | class: :execute, claim: result.claim}}",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_corrupt_replay_mutation",
+      test_name: "corrupt authoritative replay is terminal and never repairs by executing again",
+      assertion: "assert_terminal_replay(prefix, input)"
+    },
+    "task5-completion" => %{
+      path: "lib/ash_onetime/generic_action.ex",
+      original: "case AshOnetime.Admission.complete(state, persisted_result) do",
+      mutated: "case {:ok, persisted_result} do",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_completion_mutation",
+      test_name: "completion failure rolls back a generic effect through the real wrapper",
+      assertion: "assert {:error, _error} ="
+    },
+    "task5-crud-result-tuple" => %{
+      path: "lib/ash_onetime/change.ex",
+      original: "|> Ash.Changeset.set_result({:ok, decoded})",
+      mutated: "|> Ash.Changeset.set_result(decoded)",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_crud_tuple_mutation",
+      test_name:
+        "CRUD execution, claim, response completion, and replay share one tenant transaction",
+      assertion: "|> Ash.create()"
+    },
+    "task5-crud-completion" => %{
+      path: "lib/ash_onetime/change.ex",
+      original: "case AshOnetime.Admission.complete(state, result) do",
+      mutated: "case {:ok, result} do",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_crud_tuple_mutation",
+      test_name:
+        "CRUD execution, claim, response completion, and replay share one tenant transaction",
+      assertion: "assert {:ok, replayed} ="
+    },
+    "task5-atomic-error-form" => %{
+      path: "lib/ash_onetime/change.ex",
+      original: "do: {:not_atomic, \"keyed effects require transactional stream execution\"}",
+      mutated: "do: {:error, \"keyed effects require transactional stream execution\"}",
+      test: "test/ash_onetime/change_test.exs",
+      tag: "task5_atomic_shape_mutation",
+      test_name: "protected changes force transactional stream execution",
+      assertion:
+        "assert {:not_atomic, \"keyed effects require transactional stream execution\"} ="
+    },
+    "task5-bulk-fallback" => %{
+      path: "lib/ash_onetime/change.ex",
+      original: "Enum.map(changesets, &change(&1, opts, context))",
+      mutated: "changesets",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_bulk_fallback_mutation",
+      test_name: "protected bulk create falls back to transactional stream execution",
+      assertion: "assert table_count(prefix, \"ash_onetime_idempotency_claims\") == 2"
+    },
+    "task5-state-request-sanitization" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: "request: sanitize_request(request),",
+      mutated: "request: request,",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_state_confidentiality_mutation",
+      test_name:
+        "composite verified and minted nonce admits one generic execution then rejects reuse",
+      assertion: "refute state_bytes =~ \"nonce-proof\""
+    },
+    "task5-state-claim-sanitization" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: "claim: sanitize_claim(result.claim)",
+      mutated: "claim: result.claim",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_state_confidentiality_mutation",
+      test_name:
+        "composite verified and minted nonce admits one generic execution then rejects reuse",
+      assertion: "assert state.claim.verifier_id == nil"
+    },
+    "task5-completion-codec" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: "true <- claim.response_codec == encoded.codec,",
+      mutated: "true <- is_binary(claim.response_codec),",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_completion_identity_mutation",
+      test_name: "completion validates every local encoding and outer evidence field",
+      assertion: "assert {:error, %AshOnetime.Error{code: :store_invariant}} ="
+    },
+    "task5-completion-payload" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original:
+        "true <- payload == encoded.payload,\n         true <- fixed_digest_equal?(claim.response_digest, encoded.digest),\n         true <- fixed_digest_equal?(:crypto.hash(:sha256, payload), encoded.digest)",
+      mutated:
+        "true <- is_binary(payload),\n         true <- fixed_digest_equal?(claim.response_digest, encoded.digest),\n         true <- true",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_completion_identity_mutation",
+      test_name: "completion validates every local encoding and outer evidence field",
+      assertion: "assert {:error, %AshOnetime.Error{code: :store_invariant}} ="
+    },
+    "task5-completion-digest" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: "true <- fixed_digest_equal?(claim.response_digest, encoded.digest),",
+      mutated: "true <- is_binary(claim.response_digest),",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_completion_identity_mutation",
+      test_name: "completion validates every local encoding and outer evidence field",
+      assertion: "assert {:error, %AshOnetime.Error{code: :store_invariant}} ="
+    },
+    "task5-completion-partition" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: "response_partition: %Date{},",
+      mutated: "response_partition: _response_partition,",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_completion_identity_mutation",
+      test_name: "completion validates every local encoding and outer evidence field",
+      assertion: "assert {:error, %AshOnetime.Error{code: :store_invariant}} ="
+    },
+    "task5-completion-partition-clock" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: ":ok <- validate_claim_state(claim, :complete),",
+      mutated:
+        ":ok <- validate_claim_state(claim, :complete),\n         true <- claim.response_partition == Date.utc_today(),",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_completion_partition_clock_mutation",
+      test_name:
+        "completion trusts the PostgreSQL transaction date across an application date boundary",
+      assertion: "assert {:ok, :completed} ="
+    },
+    "task5-completion-state" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: ":ok <- validate_claim_state(claim, :complete),",
+      mutated: ":ok <- :ok,",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_completion_identity_mutation",
+      test_name: "completion validates every local encoding and outer evidence field",
+      assertion: "assert {:error, %AshOnetime.Error{code: :store_invariant}} ="
+    },
+    "task5-completion-outer" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original:
+        "defp validate_complete(\n         %Result{\n           status: :complete,\n           reason: nil,\n           admission_dispatch: :sent,\n           transaction: :open,",
+      mutated:
+        "defp validate_complete(\n         %Result{\n           status: :complete,\n           reason: _reason,\n           admission_dispatch: _dispatch,\n           transaction: _transaction,",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_completion_identity_mutation",
+      test_name: "completion validates every local encoding and outer evidence field",
+      assertion: "assert {:error, %AshOnetime.Error{code: :store_invariant}} ="
+    },
+    "task5-completion-transaction" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "if target.repo_module.in_transaction?() do",
+      mutated: "if true do",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_completion_transaction_mutation",
+      test_name:
+        "completion outside the caller transaction fails before changing authoritative state",
+      assertion: "assert {:error, %AshOnetime.Error{code: :store_invariant}} ="
+    },
+    "task5-untracked-siblings" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original:
+        "reason: :checkout_unavailable,\n           admission_dispatch: :not_started,\n           transaction: :not_applicable,",
+      mutated:
+        "reason: _reason,\n           admission_dispatch: _dispatch,\n           transaction: _transaction,",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_untracked_siblings_mutation",
+      test_name: "exact checkout failure executes untracked only for opted-in idempotency",
+      assertion: "assert {:error, %AshOnetime.Error{code: code}} ="
+    },
+    "task5-admitted-identity" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: "true <- claim.id == request.id,",
+      mutated: "true <- true,",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_claim_identity_mutation",
+      test_name: "mutated admitted claim identity never grants execution",
+      assertion: "assert {:error, %AshOnetime.Error{code: :store_invariant}} ="
+    },
+    "task5-fingerprint-identity" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: "if :crypto.hash_equals(left, right), do: :match, else: :fingerprint_mismatch",
+      mutated: "if is_binary(left), do: :match, else: :fingerprint_mismatch",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_fingerprint_identity_mutation",
+      test_name: "mutated admitted claim identity never grants execution",
+      assertion: "assert {:error, %AshOnetime.Error{code: :store_invariant}} ="
+    },
+    "task5-operation-identity" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: ":crypto.hash_equals(claim.operation_hash, request.operation_hash) and",
+      mutated: "is_binary(claim.operation_hash) and",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_claim_identity_mutation",
+      test_name: "mutated admitted claim identity never grants execution",
+      assertion: "assert {:error, %AshOnetime.Error{code: :store_invariant}} ="
+    },
+    "task5-scope-identity" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: ":crypto.hash_equals(claim.scope_hash, request.scope_hash) and",
+      mutated: "is_binary(claim.scope_hash) and",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_claim_identity_mutation",
+      test_name: "mutated admitted claim identity never grants execution",
+      assertion: "assert {:error, %AshOnetime.Error{code: :store_invariant}} ="
+    },
+    "task5-key-identity" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: ":crypto.hash_equals(claim.key_hash, request.key_hash)",
+      mutated: "is_binary(claim.key_hash)",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_claim_identity_mutation",
+      test_name: "mutated admitted claim identity never grants execution",
+      assertion: "assert {:error, %AshOnetime.Error{code: :store_invariant}} ="
+    },
+    "task5-marker-propagation" => %{
+      path: "lib/ash_onetime/generic_action.ex",
+      original: "{:replay, _decoded, state} -> AshOnetime.Admission.put_replay(input, state)",
+      mutated: "{:replay, _decoded, state} -> AshOnetime.Admission.put_state(input, state)",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_marker_propagation_mutation",
+      test_name: "generic original runs once and its typed stored result replays",
+      assertion: "assert_receive {:replay_marker, true}"
+    },
+    "task5-generic-preparation" => %{
+      path: "lib/ash_onetime/generic_action.ex",
+      original:
+        "Ash.ActionInput.before_action(\n      fn pending -> reserve(pending, protection, context) end,",
+      mutated: "Ash.ActionInput.before_action(\n      fn pending -> pending end,",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_marker_propagation_mutation",
+      test_name: "generic original runs once and its typed stored result replays",
+      assertion: "assert {:ok, 42} ="
+    },
+    "task5-notifier-guard" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original: "if notifiers == [] do",
+      mutated: "if is_list(notifiers) do",
+      test: "test/compile_fixtures_test.exs",
+      tag: "task5_notifier_guard_mutation",
+      test_name: "protected CRUD actions reject notifier delivery at compile time",
+      assertion: "assert status != 0, output"
+    },
+    "task5-around-capability" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "effects: effects,\n           around_action: false,\n           marker: :consumed",
+      mutated:
+        "effects: effects,\n           around_action: _around_action,\n           marker: :consumed",
+      test: "test/compile_fixtures_test.exs",
+      tag: "task5_around_guard_mutation",
+      test_name: "protected CRUD actions reject every additional around-action producer",
+      assertion: "for case_name <- ["
+    },
+    "task5-nonce-around-capability" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "effects: _effects,\n           around_action: false,\n           marker: _marker",
+      mutated:
+        "effects: _effects,\n           around_action: _around_action,\n           marker: _marker",
+      test: "test/compile_fixtures_test.exs",
+      tag: "task5_around_guard_mutation",
+      test_name: "protected CRUD actions reject every additional around-action producer",
+      assertion: "for case_name <- ["
+    },
+    "task5-pure-producer-capability" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "%{notifications: false, effects: false, around_action: false, marker: :unused} =\n           capabilities",
+      mutated:
+        "%{notifications: _notifications, effects: false, around_action: false, marker: :unused} =\n           capabilities",
+      test: "test/compile_fixtures_test.exs",
+      tag: "task5_capability_guard_mutation",
+      test_name: "lifecycle notification and effect capability declarations fail closed",
+      assertion: "for case_name <- ["
+    },
+    "task5-marker-consumption-capability" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "effects: effects,\n           around_action: false,\n           marker: :consumed",
+      mutated: "effects: effects,\n           around_action: false,\n           marker: _marker",
+      test: "test/compile_fixtures_test.exs",
+      tag: "task5_capability_guard_mutation",
+      test_name: "lifecycle notification and effect capability declarations fail closed",
+      assertion: "for case_name <- ["
+    },
+    "task5-wrapper-protection" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original: "change: {AshOnetime.Change, [protection: protection]},",
+      mutated: "change: {AshOnetime.Change, [protection: nil]},",
+      test: "test/ash_onetime/resource/verifier_test.exs",
+      tag: "task5_wrapper_protection_mutation",
+      test_name: "AshOnetime.Test.Support.Resource",
+      assertion: "protected action is missing exactly one runtime wrapper"
+    },
+    "task5-dynamic-repo" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "%Target{repo_module: repo, dynamic_repo: repo.get_dynamic_repo(), prefix: prefix}",
+      mutated: "%Target{repo_module: repo, dynamic_repo: repo, prefix: prefix}",
+      test: "test/ash_onetime/store/transaction_test.exs",
+      tag: "task5_dynamic_repo_mutation",
+      test_name: "two live dynamic repo instances preserve their transaction and quoted prefix",
+      assertion: "assert_receive {:live_repo_claimed, ^task_a_pid, :admitted}"
+    },
+    "task5-prefix-routing" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "quote_identifier(prefix) <> \".\" <> quote_identifier(name)",
+      mutated: "quote_identifier(name)",
+      test: "test/ash_onetime/tenant_prefix_test.exs",
+      tag: "task5_prefix_routing_mutation",
+      test_name: "the same complete key is isolated across two tenant prefixes",
+      assertion: "assert {:ok, first} = create_in(prefix, input)"
+    },
+    "task5-authorization-order" => %{
+      path: "lib/ash_onetime/change.ex",
+      original: "protection = Keyword.fetch!(opts, :protection)\n\n    changeset",
+      mutated:
+        "protection = Keyword.fetch!(opts, :protection)\n\n    changeset = reserve(changeset, protection, context)\n\n    changeset",
+      test: "test/ash_onetime/authorization_order_test.exs",
+      tag: "task5_authorization_order_mutation",
+      test_name: "change registration performs no admission callback before Ash authorization",
+      assertion: "changeset = Ash.Changeset.for_create(Resource, :charge, valid_input())"
+    },
+    "task5-ledger-tamper" => %{
+      path: "test/ash_onetime/action_contention_test.exs",
+      original: "RAISE EXCEPTION 'action effect ledger is append-only' USING ERRCODE = '23514';",
+      mutated: "RETURN OLD;",
+      test: "test/ash_onetime/action_contention_test.exs",
+      tag: "task5_ledger_tamper_mutation",
+      test_name:
+        "two protected Ash actions serialize at the authoritative claim and append one effect",
+      assertion: "assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} ="
+    },
+    "task5-external-hold" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original:
+        "defp reject_external_effect(_protection),\n    do:\n      {:error,\n       Error.new(:external_recovery_unavailable, \"external effect recovery is unavailable\")}",
+      mutated: "defp reject_external_effect(_protection), do: :ok",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "task5_external_real_path_mutation",
+      test_name:
+        "real CRUD and generic external protections reject before every observable effect",
+      assertion: "assert {:error, crud_error} ="
+    },
+    "task5-reserved-input" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: "with :ok <- reject_reserved(subject),",
+      mutated: "with :ok <- :ok,",
+      test: "test/ash_onetime/authorization_order_test.exs",
+      tag: "task5_reserved_mutation",
+      test_name: "reserved verification facts reject before callbacks and SQL",
+      assertion: "assert {:error, %AshOnetime.Error{code: :reserved_verification_input}} ="
+    },
+    "task5-composite-clock" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "issued_at: latest.issued_at,",
+      mutated: "issued_at: List.first(verified_facts).issued_at,",
+      test: "test/ash_onetime/store/postgres_test.exs",
+      tag: "task5_composite_clock_mutation",
+      test_name:
+        "composite nonce persists a coherent aggregate across crossed issuance and expiry",
+      assertion: "assert DateTime.compare(claim.issued_at, latest_issued_at) == :eq"
+    },
+    "task5-composite-expiry" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "expires_at: nil,",
+      mutated: "expires_at: List.first(verified_facts).expires_at,",
+      test: "test/ash_onetime/store/postgres_test.exs",
+      tag: "task5_composite_clock_mutation",
+      test_name:
+        "composite nonce persists a coherent aggregate across crossed issuance and expiry",
+      assertion: "assert {:ok, %Result{status: :admitted, claim: claim}} ="
+    },
+    "task5-composite-cleanup" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "|> Enum.max(DateTime)",
+      mutated: "|> Enum.min(DateTime)",
+      test: "test/ash_onetime/store/postgres_test.exs",
+      tag: "task5_composite_clock_mutation",
+      test_name:
+        "composite nonce persists a coherent aggregate across crossed issuance and expiry",
+      assertion: "assert DateTime.compare("
+    },
+    "task5-composite-verifier-order" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "verifier_ids = Enum.map(verified_facts, & &1.verifier_id)",
+      mutated: "verifier_ids = [List.first(verified_facts).verifier_id]",
+      test: "test/ash_onetime/store/postgres_test.exs",
+      tag: "task5_composite_clock_mutation",
+      test_name:
+        "composite nonce persists a coherent aggregate across crossed issuance and expiry",
+      assertion: "assert claim.verifier_id == Base.url_encode64(verifier_digest, padding: false)"
+    },
+    "task5-composite-sibling-validation" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "Enum.all?(verified_facts, &valid_verified_fact?(&1, evaluated_at, max_age, skew))",
+      mutated:
+        "Enum.all?([List.last(verified_facts)], &valid_verified_fact?(&1, evaluated_at, max_age, skew))",
+      test: "test/ash_onetime/store/postgres_test.exs",
+      tag: "task5_composite_sibling_mutation",
+      test_name: "one invalid composite nonce sibling rejects the entire admission",
+      assertion: "assert {:ok, %Result{status: :failure, reason: :invalid_nonce_window}} ="
     }
   }
+
+  @forbidden_telemetry [
+    scope: "raw-scope",
+    scope_hash: <<0::256>>,
+    key: "raw-key",
+    key_hash: <<0::256>>,
+    token: "token",
+    fingerprint: <<0::256>>,
+    response: "response",
+    payload: "payload",
+    signature: "signature",
+    resolver_id: "resolver",
+    verifier_id: "verifier",
+    secret: "secret",
+    store_result: %{status: :failure},
+    exception: %RuntimeError{message: "sensitive"}
+  ]
+
+  @telemetry_builder """
+  metadata = %{
+          strategy: strategy,
+          resource: resource,
+          action: action,
+          result_class: result_class
+        }
+  """
+
+  @mutations Enum.reduce(@forbidden_telemetry, @mutations, fn {field, value}, mutations ->
+               mutated =
+                 "metadata = Map.put(%{\n" <>
+                   "        strategy: strategy,\n" <>
+                   "        resource: resource,\n" <>
+                   "        action: action,\n" <>
+                   "        result_class: result_class\n" <>
+                   "      }, #{inspect(field)}, #{inspect(value, limit: :infinity)})\n"
+
+               Map.put(mutations, "task5-telemetry-#{field}", %{
+                 path: "lib/ash_onetime/telemetry.ex",
+                 original: @telemetry_builder,
+                 mutated: mutated,
+                 test: "test/ash_onetime/action_transaction_test.exs",
+                 tag: "task5_actual_telemetry_mutation",
+                 test_name: "actual admission paths emit every closed telemetry family",
+                 assertion:
+                   "assert Map.keys(metadata) |> Enum.sort() == [:action, :resource, :result_class, :strategy]"
+               })
+             end)
 
   @groups %{
     "response-allowlist" => ["response-field-guard"],
@@ -255,7 +715,52 @@ defmodule AshOnetime.MutationCheck do
       "operation-hash-select",
       "operation-hash-completion",
       "operation-hash-cleanup"
-    ]
+    ],
+    "task5" =>
+      [
+        "task5-replay-execution",
+        "task5-corrupt-replay-execution",
+        "task5-completion",
+        "task5-crud-result-tuple",
+        "task5-crud-completion",
+        "task5-atomic-error-form",
+        "task5-bulk-fallback",
+        "task5-state-request-sanitization",
+        "task5-state-claim-sanitization",
+        "task5-completion-codec",
+        "task5-completion-payload",
+        "task5-completion-digest",
+        "task5-completion-partition",
+        "task5-completion-partition-clock",
+        "task5-completion-state",
+        "task5-completion-outer",
+        "task5-completion-transaction",
+        "task5-untracked-siblings",
+        "task5-admitted-identity",
+        "task5-fingerprint-identity",
+        "task5-operation-identity",
+        "task5-scope-identity",
+        "task5-key-identity",
+        "task5-marker-propagation",
+        "task5-generic-preparation",
+        "task5-notifier-guard",
+        "task5-around-capability",
+        "task5-nonce-around-capability",
+        "task5-pure-producer-capability",
+        "task5-marker-consumption-capability",
+        "task5-wrapper-protection",
+        "task5-dynamic-repo",
+        "task5-prefix-routing",
+        "task5-authorization-order",
+        "task5-ledger-tamper",
+        "task5-external-hold",
+        "task5-reserved-input",
+        "task5-composite-clock",
+        "task5-composite-expiry",
+        "task5-composite-cleanup",
+        "task5-composite-verifier-order",
+        "task5-composite-sibling-validation"
+      ] ++ Enum.map(@forbidden_telemetry, fn {field, _value} -> "task5-telemetry-#{field}" end)
   }
 
   @registered @mutations |> Map.keys() |> MapSet.new()

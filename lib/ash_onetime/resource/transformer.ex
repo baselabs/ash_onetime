@@ -35,6 +35,27 @@ defmodule AshOnetime.Resource.Transformer do
     Ash.Resource.Change.SetContext
   ]
   @replay_safe_preparations [Ash.Resource.Preparation.Build, Ash.Resource.Preparation.SetContext]
+  @nonce_non_around_changes [
+    Ash.Resource.Change.AfterAction,
+    Ash.Resource.Change.AfterTransaction,
+    Ash.Resource.Change.Atomic,
+    Ash.Resource.Change.AtomicSet,
+    Ash.Resource.Change.CascadeDestroy,
+    Ash.Resource.Change.CascadeUpdate,
+    Ash.Resource.Change.Filter,
+    Ash.Resource.Change.GetAndLock,
+    Ash.Resource.Change.GetAndLockForUpdate,
+    Ash.Resource.Change.Increment,
+    Ash.Resource.Change.Load,
+    Ash.Resource.Change.ManageRelationship,
+    Ash.Resource.Change.OptimisticLock,
+    Ash.Resource.Change.PreventChange,
+    Ash.Resource.Change.RelateActor,
+    Ash.Resource.Change.Select,
+    Ash.Resource.Change.SetAttribute,
+    Ash.Resource.Change.SetContext,
+    Ash.Resource.Change.UpdateChange
+  ]
   @replay_safe_validations [
     Ash.Resource.Validation.ActionIs,
     Ash.Resource.Validation.ArgumentDoesNotEqual,
@@ -264,15 +285,25 @@ defmodule AshOnetime.Resource.Transformer do
     missing_arguments = Enum.reject(references.arguments, &MapSet.member?(arguments, &1))
     missing_attributes = Enum.reject(references.attributes, &MapSet.member?(attributes, &1))
 
-    if missing_arguments == [] and missing_attributes == [] do
-      :ok
-    else
-      error(
-        context.dsl_state,
-        protection,
-        option,
-        "references missing arguments #{inspect(missing_arguments)} or attributes #{inspect(missing_attributes)}"
-      )
+    cond do
+      context.action.type == :action and references.attributes != [] ->
+        error(
+          context.dsl_state,
+          protection,
+          option,
+          "generic actions cannot reference attributes"
+        )
+
+      missing_arguments == [] and missing_attributes == [] ->
+        :ok
+
+      true ->
+        error(
+          context.dsl_state,
+          protection,
+          option,
+          "references missing arguments #{inspect(missing_arguments)} or attributes #{inspect(missing_attributes)}"
+        )
     end
   end
 
@@ -654,7 +685,15 @@ defmodule AshOnetime.Resource.Transformer do
     end
   end
 
-  defp verify_lifecycle(%{strategy: :one_time_nonce}, _context), do: :ok
+  defp verify_lifecycle(
+         %{strategy: :one_time_nonce} = protection,
+         %{action: %{type: type}} = context
+       )
+       when type in [:create, :update, :destroy],
+       do: verify_nonce_crud_lifecycle(protection, context)
+
+  defp verify_lifecycle(%{strategy: :one_time_nonce} = protection, context),
+    do: verify_no_notifiers(protection, context)
 
   # mutation sentinel: idempotency-lifecycle-guard
   defp verify_lifecycle(protection, context), do: verify_lifecycle_details(protection, context)
@@ -668,13 +707,106 @@ defmodule AshOnetime.Resource.Transformer do
           ResourceInfo.action_changes(context.dsl_state, context.action)
       end
 
+    case verify_no_notifiers(protection, context) do
+      :ok -> verify_lifecycle_callbacks(callbacks, protection, context.dsl_state)
+      error -> error
+    end
+  end
+
+  defp verify_nonce_crud_lifecycle(protection, context) do
+    callbacks = ResourceInfo.action_changes(context.dsl_state, context.action)
+
+    case verify_no_notifiers(protection, context) do
+      :ok -> verify_nonce_around_callbacks(callbacks, protection, context.dsl_state)
+      error -> error
+    end
+  end
+
+  defp verify_nonce_around_callbacks(callbacks, protection, dsl_state) do
     Enum.reduce_while(callbacks, :ok, fn callback, :ok ->
-      case verify_replay_callback(callback) do
+      case verify_nonce_around_callback(callback) do
         :ok -> {:cont, :ok}
-        {:error, message} -> {:halt, error(context.dsl_state, protection, :action, message)}
+        {:error, message} -> {:halt, error(dsl_state, protection, :action, message)}
       end
     end)
   end
+
+  defp verify_nonce_around_callback(%Ash.Resource.Change{change: {module, opts}})
+       when module in @nonce_non_around_changes and is_list(opts),
+       do: :ok
+
+  defp verify_nonce_around_callback(%Ash.Resource.Change{
+         change: {Ash.Resource.Change.DebugLog, _opts}
+       }),
+       do: {:error, "Ash.Resource.Change.DebugLog declares an additional around-action boundary"}
+
+  defp verify_nonce_around_callback(%Ash.Resource.Change{
+         change: {Ash.Resource.Change.Function, _opts}
+       }),
+       do: {:error, "inline lifecycle callbacks cannot prove the sole around-action boundary"}
+
+  defp verify_nonce_around_callback(%Ash.Resource.Change{change: {module, opts}})
+       when is_atom(module) and is_list(opts) do
+    if Code.ensure_loaded?(module) and function_exported?(module, :replay_capabilities, 1) do
+      with {:ok, capabilities} <- invoke_declaration(module, :replay_capabilities, [opts]),
+           :ok <- validate_nonce_around_capabilities(capabilities) do
+        :ok
+      else
+        {:error, message} when is_binary(message) -> {:error, "#{inspect(module)} #{message}"}
+        _invalid -> {:error, "#{inspect(module)} returned an invalid capability declaration"}
+      end
+    else
+      {:error,
+       "#{inspect(module)} must export replay_capabilities/1 to prove it adds no around-action boundary"}
+    end
+  end
+
+  defp verify_nonce_around_callback(_callback),
+    do: {:error, "lifecycle callback cannot prove the sole around-action boundary"}
+
+  defp validate_nonce_around_capabilities(
+         %{
+           notifications: _notifications,
+           effects: _effects,
+           around_action: false,
+           marker: _marker
+         } = capabilities
+       )
+       when map_size(capabilities) == 4,
+       do: :ok
+
+  defp validate_nonce_around_capabilities(%{around_action: true}),
+    do: {:error, "declares an additional around-action boundary"}
+
+  defp validate_nonce_around_capabilities(_capabilities),
+    do: {:error, "must declare a closed around-action capability"}
+
+  defp verify_lifecycle_callbacks(callbacks, protection, dsl_state) do
+    Enum.reduce_while(callbacks, :ok, fn callback, :ok ->
+      case verify_replay_callback(callback) do
+        :ok -> {:cont, :ok}
+        {:error, message} -> {:halt, error(dsl_state, protection, :action, message)}
+      end
+    end)
+  end
+
+  defp verify_no_notifiers(protection, %{action: %{type: type}} = context)
+       when type in [:create, :update, :destroy] do
+    notifiers = ResourceInfo.notifiers(context.dsl_state) ++ context.action.notifiers
+
+    if notifiers == [] do
+      :ok
+    else
+      error(
+        context.dsl_state,
+        protection,
+        :action,
+        "notifier delivery is unsupported for protected CRUD actions"
+      )
+    end
+  end
+
+  defp verify_no_notifiers(_protection, _context), do: :ok
 
   defp verify_replay_callback(%Ash.Resource.Change{
          change: {Ash.Resource.Change.ManageRelationship, _opts}
@@ -719,23 +851,74 @@ defmodule AshOnetime.Resource.Transformer do
 
   defp verify_replay_ref_details({module, opts}, allowlist)
        when is_atom(module) and is_list(opts) do
-    cond do
-      module in allowlist ->
-        :ok
-
-      not Code.ensure_loaded?(module) or not function_exported?(module, :replay_safety, 1) ->
-        {:error, "#{inspect(module)} must export replay_safety/1"}
-
-      true ->
-        case invoke_declaration(module, :replay_safety, [opts]) do
-          {:ok, mode} when mode in [:pure, :replay_aware] -> :ok
-          _invalid -> {:error, "#{inspect(module)} returned an invalid replay safety declaration"}
-        end
-    end
+    if module in allowlist,
+      do: :ok,
+      else: verify_custom_lifecycle(module, opts, "")
   end
 
   defp verify_replay_ref_details(_ref, _allowlist),
     do: {:error, "lifecycle callback is not module-based"}
+
+  defp verify_custom_lifecycle(module, opts, suffix) do
+    if Code.ensure_loaded?(module) and function_exported?(module, :replay_safety, 1) do
+      case invoke_declaration(module, :replay_safety, [opts]) do
+        {:ok, mode} when mode in [:pure, :replay_aware] ->
+          verify_custom_capabilities(module, opts, mode)
+
+        _invalid ->
+          {:error, "#{inspect(module)} returned an invalid replay safety declaration"}
+      end
+    else
+      {:error, "#{inspect(module)} must export replay_safety/1#{suffix}"}
+    end
+  end
+
+  defp verify_custom_capabilities(module, opts, mode) do
+    if function_exported?(module, :replay_capabilities, 1) do
+      with {:ok, capabilities} <- invoke_declaration(module, :replay_capabilities, [opts]),
+           :ok <- validate_replay_capabilities(mode, capabilities) do
+        :ok
+      else
+        {:error, message} when is_binary(message) ->
+          {:error, "#{inspect(module)} #{message}"}
+
+        _invalid ->
+          {:error, "#{inspect(module)} returned an invalid replay capability declaration"}
+      end
+    else
+      {:error, "#{inspect(module)} must export replay_capabilities/1"}
+    end
+  end
+
+  defp validate_replay_capabilities(
+         :pure,
+         %{notifications: false, effects: false, around_action: false, marker: :unused} =
+           capabilities
+       )
+       when map_size(capabilities) == 4,
+       do: :ok
+
+  defp validate_replay_capabilities(
+         :replay_aware,
+         %{
+           notifications: notifications,
+           effects: effects,
+           around_action: false,
+           marker: :consumed
+         } =
+           capabilities
+       )
+       when is_boolean(notifications) and is_boolean(effects) and map_size(capabilities) == 4,
+       do: :ok
+
+  defp validate_replay_capabilities(_mode, %{around_action: true}),
+    do: {:error, "declares an additional around-action boundary"}
+
+  defp validate_replay_capabilities(:pure, _capabilities),
+    do: {:error, "declares notification/effect capabilities incompatible with :pure"}
+
+  defp validate_replay_capabilities(:replay_aware, _capabilities),
+    do: {:error, "must consume the replay marker and declare closed capabilities"}
 
   defp verify_literal_builtin(value, label) do
     if is_function(value) or
@@ -820,14 +1003,7 @@ defmodule AshOnetime.Resource.Transformer do
        do: :ok
 
   defp verify_validation_ref({module, opts}) when is_atom(module) and is_list(opts) do
-    if not Code.ensure_loaded?(module) or not function_exported?(module, :replay_safety, 1) do
-      {:error, "#{inspect(module)} must export replay_safety/1 for idempotent replay validation"}
-    else
-      case invoke_declaration(module, :replay_safety, [opts]) do
-        {:ok, mode} when mode in [:pure, :replay_aware] -> :ok
-        _invalid -> {:error, "#{inspect(module)} returned an invalid replay safety declaration"}
-      end
-    end
+    verify_custom_lifecycle(module, opts, " for idempotent replay validation")
   end
 
   defp verify_validation_ref(module) when is_atom(module), do: verify_validation_ref({module, []})
@@ -847,12 +1023,21 @@ defmodule AshOnetime.Resource.Transformer do
   end
 
   defp inject(dsl_state, %{type: :action} = action, protection) do
-    if match?({AshOnetime.GenericAction, _opts}, action.run) do
+    if match?({AshOnetime.GenericAction, _opts}, action.run) or
+         Enum.any?(action.preparations, &package_preparation?/1) do
       error(dsl_state, protection, :action, "AshOnetime generic wrapper is already present")
     else
+      package_preparation = %Ash.Resource.Preparation{
+        preparation: {AshOnetime.GenericAction, [protection: protection]},
+        on: [:action],
+        only_when_valid?: false,
+        where: []
+      }
+
       replacement = %{
         action
-        | run: {AshOnetime.GenericAction, [protection: protection, original: action.run]}
+        | run: {AshOnetime.GenericAction, [protection: protection, original: action.run]},
+          preparations: action.preparations ++ [package_preparation]
       }
 
       {:ok, replace_action(dsl_state, action, replacement)}
@@ -867,6 +1052,7 @@ defmodule AshOnetime.Resource.Transformer do
         change: {AshOnetime.Change, [protection: protection]},
         on: [action.type],
         only_when_valid?: false,
+        always_atomic?: false,
         where: []
       }
 
@@ -886,6 +1072,13 @@ defmodule AshOnetime.Resource.Transformer do
 
   defp package_change?(%Ash.Resource.Change{change: {AshOnetime.Change, _opts}}), do: true
   defp package_change?(_change), do: false
+
+  defp package_preparation?(%Ash.Resource.Preparation{
+         preparation: {AshOnetime.GenericAction, _opts}
+       }),
+       do: true
+
+  defp package_preparation?(_preparation), do: false
 
   defp ensure_callbacks(module, callbacks) when is_atom(module) do
     case Code.ensure_compiled(module) do

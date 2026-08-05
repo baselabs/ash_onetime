@@ -85,6 +85,7 @@ defmodule AshOnetime.Store.TransactionTest do
   end
 
   @tag unboxed: true
+  @tag task5_dynamic_repo_mutation: true
   test "two live dynamic repo instances preserve their transaction and quoted prefix", %{
     prefix: prefix
   } do

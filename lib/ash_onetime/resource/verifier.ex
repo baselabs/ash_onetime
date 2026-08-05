@@ -35,7 +35,7 @@ defmodule AshOnetime.Resource.Verifier do
     Enum.reduce_while(protections, :ok, fn protection, :ok ->
       action = ResourceInfo.action(dsl_state, protection.action)
 
-      valid? = valid_wrapper?(action)
+      valid? = valid_wrapper?(dsl_state, action, protection)
 
       if valid? do
         {:cont, :ok}
@@ -46,22 +46,59 @@ defmodule AshOnetime.Resource.Verifier do
     end)
   end
 
-  defp valid_wrapper?(%{type: :action, run: {AshOnetime.GenericAction, opts}}) do
-    match?(%AshOnetime.Resource.Protection{}, opts[:protection]) and
-      match?({_module, _opts}, opts[:original])
+  defp valid_wrapper?(
+         _dsl_state,
+         %{
+           type: :action,
+           run: {AshOnetime.GenericAction, opts},
+           preparations: preparations
+         },
+         protection
+       ) do
+    package =
+      Enum.filter(preparations, fn
+        %Ash.Resource.Preparation{preparation: {AshOnetime.GenericAction, _opts}} -> true
+        _other -> false
+      end)
+
+    opts[:protection] == protection and
+      match?({_module, _opts}, opts[:original]) and length(package) == 1 and
+      List.last(preparations) == hd(package) and
+      package_protection(hd(package)) == opts[:protection]
   end
 
-  defp valid_wrapper?(%{changes: changes}) do
-    Enum.count(changes, fn
-      %{change: {AshOnetime.Change, opts}} ->
-        match?(%AshOnetime.Resource.Protection{}, opts[:protection])
+  defp valid_wrapper?(
+         dsl_state,
+         %{type: type, changes: changes, notifiers: action_notifiers},
+         protection
+       )
+       when type in [:create, :update, :destroy] do
+    package_count =
+      Enum.count(changes, fn
+        %{change: {AshOnetime.Change, opts}} ->
+          match?(%AshOnetime.Resource.Protection{}, opts[:protection])
 
-      _other ->
-        false
-    end) == 1
+        _other ->
+          false
+      end)
+
+    resource_notifiers = ResourceInfo.notifiers(dsl_state)
+
+    package_count == 1 and package_change?(List.first(changes), protection) and
+      resource_notifiers ++ action_notifiers == []
   end
 
-  defp valid_wrapper?(_action), do: false
+  defp valid_wrapper?(_dsl_state, _action, _protection), do: false
+
+  defp package_change?(%{change: {AshOnetime.Change, opts}}, protection),
+    do: opts[:protection] == protection
+
+  defp package_change?(_change, _protection), do: false
+
+  defp package_protection(%Ash.Resource.Preparation{
+         preparation: {AshOnetime.GenericAction, opts}
+       }),
+       do: opts[:protection]
 
   defp verifier_error(dsl_state, message) do
     {:error,

@@ -120,29 +120,68 @@ defmodule AshOnetime.CompileFixture.MatrixCases do
     {[actions: :inline_change], idempotency()}
   end
 
+  defp definition(:crud_notifier) do
+    {[actions: :notifier], idempotency()}
+  end
+
+  defp definition(:local_around_action) do
+    {[actions: :around_change], idempotency()}
+  end
+
+  defp definition(:global_around_action) do
+    {[lifecycle: :global_around], idempotency()}
+  end
+
+  defp definition(:nonce_local_around_action) do
+    {[actions: :around_change], crud_nonce()}
+  end
+
+  defp definition(:nonce_global_around_action) do
+    {[lifecycle: :global_around], crud_nonce()}
+  end
+
+  defp definition(:nonce_non_around_capability) do
+    {[actions: :nonce_non_around], crud_nonce()}
+  end
+
+  defp definition(:pure_notification_producer) do
+    {[actions: :pure_notification], idempotency()}
+  end
+
+  defp definition(:global_pure_notification_producer) do
+    {[lifecycle: :global_pure_notification], idempotency()}
+  end
+
+  defp definition(:unclassified_notification_producer) do
+    {[actions: :unclassified_producer], idempotency()}
+  end
+
+  defp definition(:marker_blind_notification_producer) do
+    {[actions: :marker_blind], idempotency()}
+  end
+
   defp definition(:invalid_change_declaration) do
     {[actions: :invalid_change], idempotency()}
   end
 
   defp definition(:unsafe_local_preparation) do
-    {[actions: :unsafe_preparation], idempotency(action: :redeem, key: {:client, :proof})}
+    {[actions: :unsafe_preparation], generic_idempotency()}
   end
 
   defp definition(:invalid_preparation_declaration) do
-    {[actions: :invalid_preparation], idempotency(action: :redeem, key: {:client, :proof})}
+    {[actions: :invalid_preparation], generic_idempotency()}
   end
 
   defp definition(:unsafe_inline_preparation) do
-    {[actions: :inline_preparation], idempotency(action: :redeem, key: {:client, :proof})}
+    {[actions: :inline_preparation], generic_idempotency()}
   end
 
   defp definition(:unsafe_global_preparation) do
-    {[lifecycle: :global_preparation], idempotency(action: :redeem, key: {:client, :proof})}
+    {[lifecycle: :global_preparation], generic_idempotency()}
   end
 
   defp definition(:unsafe_pipeline_preparation) do
-    {[lifecycle: :pipeline_preparation, actions: :pipeline_preparation],
-     idempotency(action: :redeem, key: {:client, :proof})}
+    {[lifecycle: :pipeline_preparation, actions: :pipeline_preparation], generic_idempotency()}
   end
 
   defp definition(:unsafe_set_context_change) do
@@ -150,7 +189,7 @@ defmodule AshOnetime.CompileFixture.MatrixCases do
   end
 
   defp definition(:unsafe_set_context_preparation) do
-    {[actions: :set_context_preparation], idempotency(action: :redeem, key: {:client, :proof})}
+    {[actions: :set_context_preparation], generic_idempotency()}
   end
 
   defp definition(:unsafe_relate_actor) do
@@ -252,6 +291,21 @@ defmodule AshOnetime.CompileFixture.MatrixCases do
       window: [max_age: 60, clock_skew: 5]
     ]
     |> Keyword.merge(overrides)
+  end
+
+  defp crud_nonce do
+    nonce(
+      action: :charge,
+      key: {:verified, :idempotency_key, CompileFixture.Verifier}
+    )
+  end
+
+  defp generic_idempotency do
+    idempotency(
+      action: :redeem,
+      key: {:client, :proof},
+      fingerprint: [arguments: [:proof], attributes: []]
+    )
   end
 
   defp response_opts do

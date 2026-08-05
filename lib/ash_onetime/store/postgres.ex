@@ -146,8 +146,8 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   defp claim_attempt(target, %Request{strategy: :one_time_nonce} = request, attempt) do
-    with {:ok, cleanup_after} <- validate_nonce(request),
-         result <- insert_claim(target, request, cleanup_after) do
+    with {:ok, aggregate} <- validate_nonce(request),
+         result <- insert_claim(target, request, aggregate) do
       resolve_insert(target, request, result, attempt)
     else
       {:error, :invalid_nonce_window} ->
@@ -256,8 +256,8 @@ defmodule AshOnetime.Store.Postgres do
 
   defp insert_claim(
          target,
-         %Request{strategy: :one_time_nonce, verified: verified} = request,
-         cleanup_after
+         %Request{strategy: :one_time_nonce} = request,
+         aggregate
        ) do
     sql = """
     INSERT INTO #{relation(target, "ash_onetime_nonce_claims")}
@@ -280,10 +280,10 @@ defmodule AshOnetime.Store.Postgres do
         request.operation_hash,
         request.scope_hash,
         request.key_hash,
-        verified.issued_at,
-        verified.expires_at,
-        verified.verifier_id,
-        cleanup_after
+        aggregate.issued_at,
+        aggregate.expires_at,
+        aggregate.verifier_id,
+        aggregate.cleanup_after
       ],
       :one_time_nonce
     )
@@ -430,36 +430,28 @@ defmodule AshOnetime.Store.Postgres do
 
   defp validate_request(%Request{
          strategy: :one_time_nonce,
-         verified: %AshOnetime.Verified{},
+         verified: verified,
          max_age: max_age,
          clock_skew: skew,
          clock: clock
        })
-       when is_integer(max_age) and max_age >= 0 and is_integer(skew) and skew >= 0 and
-              is_atom(clock),
+       when is_list(verified) and verified != [] and is_integer(max_age) and max_age >= 0 and
+              is_integer(skew) and skew >= 0 and is_atom(clock),
        do: :ok
 
   defp validate_request(_request), do: {:error, :invalid_request}
 
   defp validate_nonce(%Request{
-         verified: verified,
+         verified: verified_facts,
          max_age: max_age,
          clock_skew: skew,
          clock: clock
        }) do
     evaluated_at = clock.now()
 
-    with :ok <-
-           AshOnetime.Window.validate(
-             verified.issued_at,
-             verified.expires_at,
-             evaluated_at,
-             max_age,
-             skew
-           ),
-         %DateTime{} = cleanup_after <-
-           AshOnetime.Window.cleanup_after(verified.issued_at, max_age, skew) do
-      {:ok, cleanup_after}
+    with :ok <- validate_verified_facts(verified_facts, evaluated_at, max_age, skew),
+         {:ok, aggregate} <- aggregate_verified_facts(verified_facts, max_age, skew) do
+      {:ok, aggregate}
     else
       _other -> {:error, :invalid_nonce_window}
     end
@@ -467,6 +459,59 @@ defmodule AshOnetime.Store.Postgres do
     _exception -> {:error, :invalid_nonce_window}
   catch
     _kind, _reason -> {:error, :invalid_nonce_window}
+  end
+
+  defp validate_verified_facts(verified_facts, evaluated_at, max_age, skew) do
+    if Enum.all?(verified_facts, &valid_verified_fact?(&1, evaluated_at, max_age, skew)) do
+      :ok
+    else
+      {:error, :invalid_nonce_window}
+    end
+  end
+
+  defp valid_verified_fact?(
+         %AshOnetime.Verified{issued_at: %DateTime{} = issued_at, expires_at: expires_at},
+         evaluated_at,
+         max_age,
+         skew
+       ),
+       do: AshOnetime.Window.validate(issued_at, expires_at, evaluated_at, max_age, skew) == :ok
+
+  defp valid_verified_fact?(_verified, _evaluated_at, _max_age, _skew), do: false
+
+  defp aggregate_verified_facts([verified], max_age, skew) do
+    {:ok,
+     %{
+       issued_at: verified.issued_at,
+       expires_at: verified.expires_at,
+       verifier_id: verified.verifier_id,
+       cleanup_after: AshOnetime.Window.cleanup_after(verified.issued_at, max_age, skew)
+     }}
+  end
+
+  defp aggregate_verified_facts(verified_facts, max_age, skew) do
+    latest = Enum.max_by(verified_facts, & &1.issued_at, DateTime)
+
+    cleanup_after =
+      verified_facts
+      |> Enum.map(&AshOnetime.Window.cleanup_after(&1.issued_at, max_age, skew))
+      |> Enum.max(DateTime)
+
+    verifier_ids = Enum.map(verified_facts, & &1.verifier_id)
+
+    case AshOnetime.Fingerprint.compute(%{domain: :nonce_verifiers, ordered: verifier_ids}) do
+      {:ok, digest} ->
+        {:ok,
+         %{
+           issued_at: latest.issued_at,
+           expires_at: nil,
+           verifier_id: Base.url_encode64(digest, padding: false),
+           cleanup_after: cleanup_after
+         }}
+
+      _other ->
+        {:error, :invalid_nonce_window}
+    end
   end
 
   defp validate_completion(codec, digest, encoded_response) do

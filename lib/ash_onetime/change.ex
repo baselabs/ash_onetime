@@ -12,12 +12,89 @@ defmodule AshOnetime.Change do
   end
 
   @impl true
-  def change(changeset, _opts, _context) do
-    Ash.Changeset.add_error(changeset, unavailable_error())
+  def change(changeset, opts, context) do
+    protection = Keyword.fetch!(opts, :protection)
+
+    changeset
+    |> Ash.Changeset.before_action(
+      fn pending -> reserve(pending, protection, context) end,
+      prepend?: true
+    )
+    |> Ash.Changeset.around_action(
+      fn pending, callback -> complete(pending, callback) end,
+      prepend?: true
+    )
   end
 
   @impl true
-  def atomic(_changeset, _opts, _context), do: {:error, unavailable_error()}
+  def batch_change(changesets, opts, context) do
+    Enum.map(changesets, &change(&1, opts, context))
+  end
+
+  @impl true
+  def atomic(_changeset, _opts, _context),
+    do: {:not_atomic, "keyed effects require transactional stream execution"}
+
+  defp reserve(changeset, protection, context) do
+    case AshOnetime.Admission.reserve(changeset, protection, trusted_context(context)) do
+      {:execute, state} ->
+        AshOnetime.Admission.put_state(changeset, state)
+
+      {:execute_untracked, state} ->
+        AshOnetime.Admission.put_state(changeset, state)
+
+      {:replay, decoded, state} ->
+        changeset
+        |> AshOnetime.Admission.put_replay(state)
+        |> Ash.Changeset.set_result({:ok, decoded})
+
+      {:error, error} ->
+        {:error, error}
+    end
+  end
+
+  defp complete(changeset, callback) do
+    case callback.(changeset) do
+      {:ok, result, final_changeset, instructions} ->
+        complete_state(final_changeset, result, instructions)
+
+      {:error, _error} = error ->
+        error
+    end
+  end
+
+  defp complete_state(final_changeset, result, instructions) do
+    case AshOnetime.Admission.state(final_changeset) do
+      {:ok, %{class: :replay}} ->
+        {:ok, result, final_changeset, suppress_notifications(instructions)}
+
+      {:ok, state} ->
+        normalize_completion(state, result, final_changeset, instructions)
+
+      :error ->
+        {:error, unavailable_error()}
+    end
+  end
+
+  defp normalize_completion(state, result, final_changeset, instructions) do
+    case AshOnetime.Admission.complete(state, result) do
+      {:ok, normalized} -> {:ok, normalized, final_changeset, instructions}
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  defp suppress_notifications(instructions) when is_map(instructions),
+    do: Map.put(instructions, :notifications, [])
+
+  defp suppress_notifications(instructions), do: instructions
+
+  defp trusted_context(context) do
+    context
+    |> Map.from_struct()
+    |> Map.take([:actor, :tenant])
+  rescue
+    _exception -> %{}
+  end
 
   defp unavailable_error do
     AshOnetime.Error.new(:admission_unavailable, "keyed-effect admission is unavailable")

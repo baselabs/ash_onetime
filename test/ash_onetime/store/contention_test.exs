@@ -529,7 +529,7 @@ defmodule AshOnetime.Store.ContentionTest do
         operation_hash: hash("operation:" <> label),
         scope_hash: hash("scope:" <> label),
         key_hash: hash("key:" <> label),
-        verified: verified,
+        verified: [verified],
         max_age: 60,
         clock_skew: 1
       )
