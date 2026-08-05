@@ -1,7 +1,5 @@
 defmodule AshOnetime.Response do
-  @moduledoc """
-  Builds trusted response contracts and binds persisted bytes to those contracts.
-  """
+  @moduledoc false
 
   alias Ash.Resource.Info, as: ResourceInfo
   alias Ash.Type, as: AshType

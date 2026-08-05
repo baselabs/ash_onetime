@@ -9,9 +9,9 @@ defmodule AshOnetime.Codec do
   alias AshOnetime.Error
 
   @callback format_tag() :: binary()
-  @callback encode(term(), AshOnetime.Response.Contract.t(), keyword()) ::
+  @callback encode(term(), map(), keyword()) ::
               {:ok, binary(), binary()} | {:error, Error.t()}
-  @callback decode(binary(), binary(), AshOnetime.Response.Contract.t(), keyword()) ::
+  @callback decode(binary(), binary(), map(), keyword()) ::
               {:ok, term()} | {:error, Error.t()}
 
   @tag_pattern ~r/\A[A-Za-z0-9._-]+\z/

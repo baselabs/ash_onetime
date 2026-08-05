@@ -427,17 +427,27 @@ defmodule AshOnetime.Resource.Transformer do
   defp verify_nonce_key(protection, context), do: verify_nonce_key_details(protection, context)
 
   defp verify_nonce_key_details(protection, context) do
-    if Enum.all?(protection.key, fn source ->
-         match?({:verified, _, _}, source) or match?({:minted, _}, source)
-       end) do
-      :ok
-    else
-      error(
-        context.dsl_state,
-        protection,
-        :key,
-        "nonce keys must contain only verified or minted trusted sources"
-      )
+    cond do
+      not Enum.all?(protection.key, fn source ->
+        match?({:verified, _, _}, source) or match?({:minted, _}, source)
+      end) ->
+        error(
+          context.dsl_state,
+          protection,
+          :key,
+          "nonce keys must contain only verified or minted trusted sources"
+        )
+
+      length(protection.key) > 1 and Enum.any?(protection.key, &match?({:minted, _}, &1)) ->
+        error(
+          context.dsl_state,
+          protection,
+          :key,
+          "a minted nonce key must be the only key source"
+        )
+
+      true ->
+        :ok
     end
   end
 
@@ -721,7 +731,7 @@ defmodule AshOnetime.Resource.Transformer do
         ResourceInfo.preparations(context.dsl_state, :action) ++ context.action.preparations
       else
         ResourceInfo.validations(context.dsl_state, context.action.type) ++
-          ResourceInfo.action_changes(context.dsl_state, context.action)
+          lifecycle_changes(context.dsl_state, context.action)
       end
 
     case verify_no_notifiers(protection, context) do
@@ -731,12 +741,16 @@ defmodule AshOnetime.Resource.Transformer do
   end
 
   defp verify_nonce_crud_lifecycle(protection, context) do
-    callbacks = ResourceInfo.action_changes(context.dsl_state, context.action)
+    callbacks = lifecycle_changes(context.dsl_state, context.action)
 
     case verify_no_notifiers(protection, context) do
       :ok -> verify_nonce_around_callbacks(callbacks, protection, context.dsl_state)
       error -> error
     end
+  end
+
+  defp lifecycle_changes(dsl_state, action) do
+    ResourceInfo.changes(dsl_state, action.type) ++ action.changes
   end
 
   defp verify_nonce_around_callbacks(callbacks, protection, dsl_state) do
@@ -1004,7 +1018,8 @@ defmodule AshOnetime.Resource.Transformer do
 
   defp verify_validation_ref({Ash.Resource.Validation.Match, opts}) when is_list(opts) do
     case Keyword.get(opts, :match) do
-      {Spark.Regex, :cache, [pattern, flags]} when is_binary(pattern) and is_list(flags) ->
+      {Spark.Regex, :cache, [pattern, flags]}
+      when is_binary(pattern) and (is_binary(flags) or is_list(flags)) ->
         :ok
 
       %Regex{} ->

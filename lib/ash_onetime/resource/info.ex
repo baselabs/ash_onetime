@@ -1,13 +1,14 @@
 defmodule AshOnetime.Resource.Info do
   @moduledoc "Read-only introspection for normalized per-action protections."
 
-  alias AshOnetime.Resource.Protection
   alias Spark.Dsl.Extension
 
-  @spec protections(Ash.Resource.t()) :: [Protection.t()]
+  @type protection :: map()
+
+  @spec protections(Ash.Resource.t()) :: [protection()]
   def protections(resource), do: index(resource).ordered
 
-  @spec protection(Ash.Resource.t(), atom()) :: Protection.t() | nil
+  @spec protection(Ash.Resource.t(), atom()) :: protection() | nil
   def protection(resource, action_name), do: Map.get(index(resource).by_action, action_name)
 
   @spec strategy(Ash.Resource.t(), atom()) :: :idempotency | :one_time_nonce | nil

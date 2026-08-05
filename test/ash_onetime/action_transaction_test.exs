@@ -399,7 +399,7 @@ defmodule AshOnetime.ActionTransactionTest do
   end
 
   @tag task5_state_confidentiality_mutation: true
-  test "composite verified and minted nonce admits one generic execution then rejects reuse", %{
+  test "verified nonce admits one generic execution then rejects reuse", %{
     prefix: prefix
   } do
     Process.put({AshOnetime.Test.ActionExamples.GenericRun, :observer}, self())
@@ -423,9 +423,7 @@ defmodule AshOnetime.ActionTransactionTest do
 
     state_bytes = :erlang.term_to_binary(state)
     refute state_bytes =~ "nonce-proof"
-    refute state_bytes =~ "minted-component"
     refute state_bytes =~ "action-verifier"
-    refute state_bytes =~ "action-minter"
     refute state_bytes =~ "nonce-sensitive-scope"
     assert state.request.verified == nil
     assert state.request.clock == nil

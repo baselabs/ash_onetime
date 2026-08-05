@@ -205,6 +205,16 @@ defmodule AshOnetime.CompileFixture.MatrixCases do
     {[], nonce(key: [{:verified, :proof, CompileFixture.Verifier}, {:client, :proof}])}
   end
 
+  defp definition(:nonce_minted_composite) do
+    {[],
+     nonce(
+       key: [
+         {:verified, :proof, CompileFixture.Verifier},
+         {:minted, CompileFixture.FreshMinter}
+       ]
+     )}
+  end
+
   defp definition(:nonce_fingerprint), do: {[], nonce(fingerprint: [arguments: [:proof]])}
   defp definition(:nonce_retention), do: {[], nonce(retention: 60)}
 

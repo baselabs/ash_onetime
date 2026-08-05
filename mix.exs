@@ -8,7 +8,7 @@ defmodule AshOnetime.MixProject do
     [
       app: :ash_onetime,
       version: @version,
-      elixir: "~> 1.15",
+      elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -30,7 +30,7 @@ defmodule AshOnetime.MixProject do
 
   defp deps do
     [
-      {:ash, "~> 3.29"},
+      {:ash, "~> 3.29.0"},
       {:ash_postgres, "~> 2.11"},
       {:spark, "~> 2.7"},
       {:ecto_sql, "~> 3.14"},
@@ -68,7 +68,8 @@ defmodule AshOnetime.MixProject do
       ],
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      maintainers: ["Russ Palermo"]
+      maintainers: ["Russ Palermo"],
+      keywords: ["ash", "idempotency", "nonce", "anti-replay", "replay-protection"]
     ]
   end
 
@@ -77,7 +78,21 @@ defmodule AshOnetime.MixProject do
       main: "readme",
       source_ref: "v#{@version}",
       source_url: @source_url,
-      extras: ["README.md", "documentation/getting-started.md", "CHANGELOG.md"]
+      extras: [
+        "README.md",
+        "documentation/getting-started.md",
+        "documentation/dsl.md",
+        "documentation/idempotency.md",
+        "documentation/one-time-nonces.md",
+        "documentation/external-effects.md",
+        "documentation/operations.md",
+        "documentation/security.md",
+        "documentation/dsls/DSL-AshOnetime.Resource.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        "usage-rules.md",
+        "CHANGELOG.md"
+      ]
     ]
   end
 end

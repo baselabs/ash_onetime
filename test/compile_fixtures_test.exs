@@ -1,5 +1,9 @@
+Code.require_file(Path.join(__DIR__, "compile_fixtures/support.exs"))
+
 defmodule AshOnetime.CompileFixturesTest do
   use ExUnit.Case, async: false
+
+  alias AshOnetime.CompileFixture.FreshMinter
 
   @fixtures %{
     "missing_strategy.exs" => AshOnetime.CompileFixtures.MissingStrategy,
@@ -241,6 +245,7 @@ defmodule AshOnetime.CompileFixturesTest do
       {:redeem, :key, "nonce keys must contain only verified or minted trusted sources"},
     nonce_mixed_key:
       {:redeem, :key, "nonce keys must contain only verified or minted trusted sources"},
+    nonce_minted_composite: {:redeem, :key, "a minted nonce key must be the only key source"},
     nonce_fingerprint: {:redeem, :fingerprint, "nonce has no fingerprint surface"},
     nonce_retention: {:redeem, :retention, "nonce retention derives from its window"},
     nonce_external_create: {:charge, :external_effect, "nonce cannot configure external effects"},
@@ -392,6 +397,17 @@ defmodule AshOnetime.CompileFixturesTest do
       assert fixture_fact(output, "MESSAGE") == unquote(message)
       assert fixture_fact(output, "LOCATION") == "test/compile_fixtures/matrix_cases.exs:12"
     end
+  end
+
+  @tag nonce_minted_composite_mutation: true
+  test "a fresh minted nonce source cannot join a verified key" do
+    assert {:ok, first} = FreshMinter.mint(%{})
+    assert {:ok, second} = FreshMinter.mint(%{})
+    refute first.key == second.key
+
+    {output, status} = run_matrix_case(:nonce_minted_composite)
+    assert status != 0, output
+    assert output =~ "a minted nonce key must be the only key source"
   end
 
   @tag task5_notifier_guard_mutation: true

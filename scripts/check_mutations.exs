@@ -170,20 +170,20 @@ defmodule AshOnetime.MutationCheck do
       path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
       original: "@collision_constraint \"UNIQUE (operation_hash, scope_hash, key_hash)\"",
       mutated: "@collision_constraint \"CHECK (true)\"",
-      test: "test/ash_onetime/store/contention_test.exs",
+      test: "test/system/contention_test.exs",
       tag: "unique_constraint_mutation",
-      test_name: "idempotency collision waits on the committed winner and appends one effect",
-      assertion: "assert ledger_count(observer, prefix, request) == 1"
+      test_name: "a contended real action commits one append-only effect",
+      assertion: "assert first_result.id == second_result.id"
     },
     "cleanup-boundary" => %{
       path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
       original: "@cleanup_comparator \">\"",
       mutated: "@cleanup_comparator \">=\"",
-      test: "test/ash_onetime/store/cleanup_test.exs",
-      tag: "cleanup_boundary_mutation",
+      test: "test/system/window_cleanup_test.exs",
+      tag: "cleanup_strictness_mutation",
       test_name:
-        "cleanup predicate, function, and parent triggers are strict at the retention boundary",
-      assertion: "assert %{rows: [[false]]}"
+        "cleanup preserves the inclusive replay horizon then removes the first expired instant",
+      assertion: "assert %{rows: [[false]]} ="
     },
     "payload-partition" => %{
       path: "lib/ash_onetime/store/postgres.ex",
@@ -329,8 +329,7 @@ defmodule AshOnetime.MutationCheck do
       mutated: "request: request,",
       test: "test/ash_onetime/action_transaction_test.exs",
       tag: "task5_state_confidentiality_mutation",
-      test_name:
-        "composite verified and minted nonce admits one generic execution then rejects reuse",
+      test_name: "verified nonce admits one generic execution then rejects reuse",
       assertion: "refute state_bytes =~ \"nonce-proof\""
     },
     "task5-state-claim-sanitization" => %{
@@ -339,8 +338,7 @@ defmodule AshOnetime.MutationCheck do
       mutated: "claim: result.claim",
       test: "test/ash_onetime/action_transaction_test.exs",
       tag: "task5_state_confidentiality_mutation",
-      test_name:
-        "composite verified and minted nonce admits one generic execution then rejects reuse",
+      test_name: "verified nonce admits one generic execution then rejects reuse",
       assertion: "assert state.claim.verifier_id == nil"
     },
     "task5-completion-codec" => %{
@@ -698,6 +696,66 @@ defmodule AshOnetime.MutationCheck do
       tag: "task5_composite_sibling_mutation",
       test_name: "one invalid composite nonce sibling rejects the entire admission",
       assertion: "assert {:ok, %Result{status: :failure, reason: :invalid_nonce_window}} ="
+    },
+    "cache-admission" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original:
+        "  defp decide(%Result{} = result, state, _protection, _started, _mode) do\n    emit_uncertainty(result, state)\n    {:error, store_error(result)}\n  end",
+      mutated:
+        "  defp decide(%Result{} = result, %{strategy: :idempotency} = state, protection, started, mode) do\n    if Application.get_env(:ash_onetime, :cache, AshOnetime.Cache.None) != AshOnetime.Cache.None do\n      emit_uncertainty(result, state)\n      {:execute_untracked, %{state | class: :untracked}}\n    else\n      decide(result, state, protection, started, mode, :cache_disabled)\n    end\n  end\n\n  defp decide(%Result{} = result, state, protection, started, mode),\n    do: decide(result, state, protection, started, mode, :cache_disabled)\n\n  defp decide(%Result{} = result, state, _protection, _started, _mode, :cache_disabled) do\n    emit_uncertainty(result, state)\n    {:error, store_error(result)}\n  end",
+      test: "test/system/cache_degradation_test.exs",
+      tag: "system_cache_admission_mutation",
+      test_name: "cache presence cannot admit when authoritative PostgreSQL rejects",
+      assertion: "assert {:error, _error} = run(prefix, \"cache-must-not-admit\", 99)"
+    },
+    "nonce-failure-direction" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original:
+        "         %{strategy: :idempotency} = state,\n         %{on_definite_store_failure: :execute_untracked},\n         started,\n         :local_claim\n       ) do",
+      mutated:
+        "         %{strategy: _strategy} = state,\n         _protection,\n         started,\n         :local_claim\n       ) do",
+      test: "test/system/failure_direction_test.exs",
+      tag: "nonce_failure_direction_mutation",
+      test_name:
+        "nonce always fails closed while only a definite idempotency checkout can opt out",
+      assertion: "assert {:error, %Error{code: :checkout_unavailable}} ="
+    },
+    "nonce-minted-composite" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "      length(protection.key) > 1 and Enum.any?(protection.key, &match?({:minted, _}, &1)) ->",
+      mutated: "      false ->",
+      test: "test/compile_fixtures_test.exs",
+      tag: "nonce_minted_composite_mutation",
+      test_name: "a fresh minted nonce source cannot join a verified key",
+      assertion: "assert status != 0, output"
+    },
+    "signature-compare" => %{
+      path: "lib/ash_onetime/signer/hmac.ex",
+      original: "    |> Kernel.==(0)",
+      mutated: "    |> Kernel.!=(0)",
+      test: "test/system/package_consumer_test.exs",
+      tag: "signature_compare_mutation",
+      test_name: "meaningful signature-byte tampering fails closed",
+      assertion: "assert {:error, %Error{code: :invalid_signature}} ="
+    },
+    "canonical-domain-tag" => %{
+      path: "lib/ash_onetime/canonical.ex",
+      original: "  @integer_tag 0x02",
+      mutated: "  @integer_tag 0x03",
+      test: "test/system/package_consumer_test.exs",
+      tag: "canonical_domain_tag_mutation",
+      test_name: "canonical domains stay distinct and the package has no application callback",
+      assertion: "assert {:ok, <<2, _::binary>>} = Canonical.encode(1)"
+    },
+    "action-replay" => %{
+      path: "lib/ash_onetime/generic_action.ex",
+      original: "when class in [:execute, :external_execute, :nonce, :untracked] ->",
+      mutated: "when class in [:execute, :external_execute, :nonce, :untracked, :replay] ->",
+      test: "test/system/contention_test.exs",
+      tag: "action_replay_mutation",
+      test_name: "typed replay and action and scope namespaces remain independent",
+      assertion: "refute_receive {:generic_run, _}"
     }
   }
 
@@ -749,6 +807,21 @@ defmodule AshOnetime.MutationCheck do
              end)
 
   @groups %{
+    "all" => [
+      "operation-hash-select",
+      "operation-hash-completion",
+      "operation-hash-cleanup",
+      "unique-constraint",
+      "cleanup-boundary",
+      "cache-admission",
+      "nonce-failure-direction",
+      "nonce-minted-composite",
+      "task5-completion-digest",
+      "signature-compare",
+      "canonical-domain-tag",
+      "action-replay",
+      "ambiguous-retry"
+    ],
     "response-allowlist" => ["response-field-guard"],
     "return-type" => ["return-contract"],
     "dsl-verifiers" => [
@@ -922,7 +995,7 @@ defmodule AshOnetime.MutationCheck do
 
   defp probe_fixture!(name, %{probe: {fixture, expected}}) do
     fixture = Path.expand(Path.join("test/compile_fixtures", fixture))
-    env = [{"MIX_ENV", "test"}, {"DATABASE_URL", @database_url}]
+    env = mutation_environment()
 
     {compile_output, compile_status} =
       System.cmd("mix", ["compile", "--force"], env: env, stderr_to_stdout: true)
@@ -951,14 +1024,7 @@ defmodule AshOnetime.MutationCheck do
   defp probe_fixture!(_name, _mutation), do: :ok
 
   defp run_test(mutation) do
-    env =
-      case System.get_env("MIX_BUILD_PATH") do
-        nil ->
-          [{"MIX_ENV", "test"}, {"DATABASE_URL", @database_url}]
-
-        build_path ->
-          [{"MIX_BUILD_PATH", build_path}, {"MIX_ENV", "test"}, {"DATABASE_URL", @database_url}]
-      end
+    env = mutation_environment()
 
     System.cmd(
       "mix",
@@ -967,6 +1033,19 @@ defmodule AshOnetime.MutationCheck do
       stderr_to_stdout: true
     )
   end
+
+  defp mutation_environment do
+    [
+      {"MIX_ENV", "test"},
+      {"DATABASE_URL", @database_url}
+    ]
+    |> maybe_put_build_path(System.get_env("MIX_BUILD_PATH"))
+  end
+
+  defp maybe_put_build_path(environment, nil), do: environment
+
+  defp maybe_put_build_path(environment, build_path),
+    do: [{"MIX_BUILD_PATH", build_path} | environment]
 
   defp validate([]), do: {:error, ["no mutation checks requested"]}
 

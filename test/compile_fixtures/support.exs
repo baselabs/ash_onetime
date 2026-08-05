@@ -26,6 +26,20 @@ defmodule AshOnetime.CompileFixture.Minter do
   def trust_model, do: :separated
 end
 
+defmodule AshOnetime.CompileFixture.FreshMinter do
+  def mint(_context) do
+    {:ok,
+     %AshOnetime.Verified{
+       key: :crypto.strong_rand_bytes(32),
+       issued_at: DateTime.utc_now(),
+       verifier_id: "fresh-fixture-minter"
+     }}
+  end
+
+  def algorithm, do: :ed25519
+  def trust_model, do: :separated
+end
+
 defmodule AshOnetime.CompileFixture.MissingMinter do
   def algorithm, do: :ed25519
   def trust_model, do: :separated
@@ -590,7 +604,7 @@ defmodule AshOnetime.CompileFixture do
         create :charge do
           argument :idempotency_key, :string
           accept [:account_id, :amount]
-          validate all([AshOnetime.CompileFixture.UnsafeValidation])
+          validate AshOnetime.CompileFixture.UnsafeValidation
         end
       end
     end

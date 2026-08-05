@@ -412,12 +412,7 @@ defmodule AshOnetime.Test.ActionExamples.Resource do
     protect :consume do
       strategy :one_time_nonce
       scope([{:static, "nonce-sensitive-scope"}])
-
-      key([
-        {:verified, :proof, AshOnetime.Test.ActionExamples.Verifier},
-        {:minted, AshOnetime.Test.ActionExamples.Minter}
-      ])
-
+      key({:verified, :proof, AshOnetime.Test.ActionExamples.Verifier})
       window(max_age: 60, clock_skew: 5)
     end
 

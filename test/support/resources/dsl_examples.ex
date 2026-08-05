@@ -57,7 +57,8 @@ defmodule AshOnetime.Test.Support.Resource do
 
   pipelines do
     pipeline :safe_validation do
-      validate all([present(:amount), compare(:amount, greater_than: 0)])
+      validate present(:amount)
+      validate compare(:amount, greater_than: 0)
       validate match(:idempotency_key, ~r/\S/)
     end
   end

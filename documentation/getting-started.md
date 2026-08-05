@@ -1,7 +1,7 @@
 # Getting started
 
-`ash_onetime` currently targets Elixir 1.15+, Erlang/OTP 26+, Ash 3, AshPostgres 2,
-and PostgreSQL 18.
+`ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.2), Erlang/OTP 29, Ash 3.29.x,
+AshPostgres 2, and PostgreSQL 18.
 
 ## Test database
 

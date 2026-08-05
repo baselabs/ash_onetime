@@ -1,10 +1,16 @@
 # Scope note — idempotency vs. anti-replay, and the natural-key case
 
 - **Date:** 2026-08-03
-- **Status:** design clarification (refines the 2026-07-01 build handoff; nothing built yet)
+- **Status:** historical design clarification; implemented contract is documented in the
+  accepted ADR, package guides, and live code
 - **Origin:** surfaced while reviewing `navyler_cdc`'s S1 wire surface, whose report path
   hand-rolls both an idempotency mechanism and a replay-nonce ledger. Distinguishing the
   two clarifies what `ash_onetime` is — and, deliberately, is **not**.
+
+> Historical evidence notice (reconciled 2026-08-05): this note records the reasoning that
+> led to the unified package. It is not current implementation authority and its consumer
+> references are not package dependencies. Use `docs/adr/0001-single-use-keyed-effects.md`,
+> `documentation/`, and live code for the implemented contract.
 
 ## The boundary this library must draw
 

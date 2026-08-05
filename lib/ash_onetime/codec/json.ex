@@ -63,7 +63,8 @@ defmodule AshOnetime.Codec.JSON do
          {:ok, decoded} <- Jason.decode(payload, objects: :ordered_objects),
          {:ok, envelope} <- normalize(decoded, 0),
          :ok <- Codec.validate_value(envelope, contract, :payload),
-         true <- is_map(envelope) and MapSet.new(Map.keys(envelope)) == @envelope_keys,
+         true <-
+           is_map(envelope) and MapSet.equal?(MapSet.new(Map.keys(envelope)), @envelope_keys),
          true <- envelope["adapter"] == adapter,
          true <- envelope["shape"] == shape,
          true <- envelope["contract"] == Base.url_encode64(contract.digest, padding: false) do
@@ -85,7 +86,8 @@ defmodule AshOnetime.Codec.JSON do
          {:ok, decoded} <- Jason.decode(payload, objects: :ordered_objects),
          {:ok, envelope} <- normalize(decoded, 0),
          :ok <- Codec.validate_value(envelope, contract, :payload),
-         true <- is_map(envelope) and MapSet.new(Map.keys(envelope)) == @envelope_keys,
+         true <-
+           is_map(envelope) and MapSet.equal?(MapSet.new(Map.keys(envelope)), @envelope_keys),
          true <- envelope["adapter"] == adapter,
          true <- envelope["shape"] in shapes,
          true <- envelope["contract"] == Base.url_encode64(contract.digest, padding: false) do
