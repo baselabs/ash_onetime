@@ -13,6 +13,19 @@ defmodule AshOnetime.Telemetry do
     fingerprint_mismatch: [:rejected],
     verification: [:verified, :rejected, :timeout],
     encoding: [:stored, :rejected, :rollback, :failed],
+    cache: [
+      :hit,
+      :miss,
+      :stale,
+      :corrupt,
+      :failure,
+      :timeout,
+      :stored,
+      :expired,
+      :oversized,
+      :disabled
+    ],
+    cleanup: [:claims_deleted, :partitions_dropped],
     external_recovery: [
       :processing_committed,
       :execute_succeeded,
@@ -62,6 +75,15 @@ defmodule AshOnetime.Telemetry do
           :ok | {:error, Error.t()}
   def encoding(duration, strategy, resource, action, result_class),
     do: emit(:encoding, %{duration: duration}, strategy, resource, action, result_class)
+
+  @spec cache(atom(), module(), atom(), atom()) :: :ok | {:error, Error.t()}
+  def cache(strategy, resource, action, result_class),
+    do: emit(:cache, %{count: 1}, strategy, resource, action, result_class)
+
+  @spec cleanup(atom(), module(), atom(), non_neg_integer(), atom()) ::
+          :ok | {:error, Error.t()}
+  def cleanup(strategy, resource, action, count, result_class),
+    do: emit(:cleanup, %{count: count}, strategy, resource, action, result_class)
 
   @spec external_recovery(non_neg_integer(), atom(), module(), atom(), atom()) ::
           :ok | {:error, Error.t()}
@@ -119,8 +141,17 @@ defmodule AshOnetime.Telemetry do
               is_integer(duration) and duration >= 0,
        do: :ok
 
+  defp validate_measurements(:cleanup, %{count: count}) when is_integer(count) and count >= 0,
+    do: :ok
+
   defp validate_measurements(event, %{count: 1})
-       when event in [:conflict, :fingerprint_mismatch, :store_uncertainty, :untracked_execution],
+       when event in [
+              :conflict,
+              :fingerprint_mismatch,
+              :cache,
+              :store_uncertainty,
+              :untracked_execution
+            ],
        do: :ok
 
   defp validate_measurements(_event, _measurements), do: :error

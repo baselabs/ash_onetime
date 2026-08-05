@@ -21,7 +21,9 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     claims: :string,
     claim_partitions: :integer,
     tenants: :boolean,
-    migrations_path: :string
+    migrations_path: :string,
+    partition_start: :string,
+    timestamp: :string
   ]
 
   @impl Mix.Task
@@ -39,9 +41,20 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     create_directory(path)
     refuse_existing!(path)
 
-    module = Module.concat([repo, Migrations, InstallAshOnetime])
-    response_partitions = response_partitions(Date.utc_today())
+    partition_start = parse_partition_start!(options[:partition_start])
+    source = render(repo, hash_partitions: hash_partitions, partition_start: partition_start)
+    file = Path.join(path, "#{parse_timestamp!(options[:timestamp])}_install_ash_onetime.exs")
+    create_file(file, source)
+    Mix.shell().info("Generated #{file}")
+    file
+  end
 
+  @doc "Renders the install migration deterministically for explicit options."
+  @spec render(module(), keyword()) :: binary()
+  def render(repo, options) when is_atom(repo) and is_list(options) do
+    hash_partitions = render_partitioning!(Keyword.get(options, :hash_partitions))
+    partition_start = render_partition_start!(Keyword.get(options, :partition_start))
+    module = Module.concat([repo, Migrations, InstallAshOnetime])
     template_name = if hash_partitions, do: "hash_partitioned.exs", else: "install.exs"
 
     source =
@@ -53,13 +66,12 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
         cleanup_comparator: @cleanup_comparator,
         cleanup_delete_predicate: @cleanup_delete_predicate,
         hash_partitions: hash_partitions,
-        response_partitions: response_partitions
+        response_partitions: response_partitions(partition_start)
       )
 
-    file = Path.join(path, "#{timestamp()}_install_ash_onetime.exs")
-    create_file(file, source)
-    Mix.shell().info("Generated #{file}")
-    file
+    source
+    |> Code.format_string!()
+    |> IO.iodata_to_binary()
   end
 
   defp parse_repo!(nil), do: Mix.raise("--repo is required")
@@ -131,6 +143,22 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     end
   end
 
+  defp parse_partition_start!(nil), do: Date.beginning_of_month(Date.utc_today())
+
+  defp parse_partition_start!(value) do
+    case Date.from_iso8601(value) do
+      {:ok, %Date{day: 1} = date} -> date
+      _error -> Mix.raise("--partition-start must be the first day of a month")
+    end
+  end
+
+  defp render_partition_start!(nil), do: Date.beginning_of_month(Date.utc_today())
+  defp render_partition_start!(%Date{day: 1} = date), do: date
+  defp render_partition_start!(_date), do: raise(ArgumentError, "invalid partition start")
+
+  defp render_partitioning!(nil), do: nil
+  defp render_partitioning!(count), do: validate_partition_count!(count)
+
   defp shift_month(date, offset) do
     month_index = date.year * 12 + date.month - 1 + offset
     Date.new!(div(month_index, 12), rem(month_index, 12) + 1, 1)
@@ -143,7 +171,27 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     |> Path.join("templates/migrations/#{name}")
   end
 
-  defp timestamp do
+  defp parse_timestamp!(nil), do: timestamp()
+
+  defp parse_timestamp!(value) when is_binary(value) do
+    with [_, year, month, day, hour, minute, second] <-
+           Regex.run(~r/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/, value),
+         {year, ""} <- Integer.parse(year),
+         {month, ""} <- Integer.parse(month),
+         {day, ""} <- Integer.parse(day),
+         {hour, ""} <- Integer.parse(hour),
+         {minute, ""} <- Integer.parse(minute),
+         {second, ""} <- Integer.parse(second),
+         {:ok, _date} <- Date.new(year, month, day),
+         {:ok, _time} <- Time.new(hour, minute, second) do
+      value
+    else
+      _invalid -> Mix.raise("--timestamp must be a valid UTC YYYYMMDDHHMMSS value")
+    end
+  end
+
+  @doc false
+  def timestamp do
     {{year, month, day}, {hour, minute, second}} = :calendar.universal_time()
 
     Enum.map_join([year, month, day, hour, minute, second], &pad/1)

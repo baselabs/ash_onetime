@@ -11,6 +11,8 @@ defmodule AshOnetime.TelemetryTest do
     [:ash_onetime, :fingerprint_mismatch],
     [:ash_onetime, :verification],
     [:ash_onetime, :encoding],
+    [:ash_onetime, :cache],
+    [:ash_onetime, :cleanup],
     [:ash_onetime, :store_uncertainty],
     [:ash_onetime, :untracked_execution]
   ]
@@ -38,6 +40,8 @@ defmodule AshOnetime.TelemetryTest do
     assert :ok = Telemetry.fingerprint_mismatch(:idempotency, Resource, :redeem)
     assert :ok = Telemetry.verification(3, :idempotency, Resource, :redeem, :verified)
     assert :ok = Telemetry.encoding(4, :idempotency, Resource, :redeem, :stored)
+    assert :ok = Telemetry.cache(:idempotency, Resource, :redeem, :hit)
+    assert :ok = Telemetry.cleanup(:idempotency, Resource, :redeem, 2, :claims_deleted)
     assert :ok = Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :sent)
     assert :ok = Telemetry.untracked_execution(:idempotency, Resource, :redeem)
 
@@ -78,6 +82,8 @@ defmodule AshOnetime.TelemetryTest do
     refute function_exported?(Telemetry, :fingerprint_mismatch, 1)
     refute function_exported?(Telemetry, :verification, 3)
     refute function_exported?(Telemetry, :encoding, 3)
+    refute function_exported?(Telemetry, :cache, 2)
+    refute function_exported?(Telemetry, :cleanup, 3)
     refute function_exported?(Telemetry, :store_uncertainty, 2)
     refute function_exported?(Telemetry, :untracked_execution, 1)
   end

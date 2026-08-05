@@ -185,6 +185,25 @@ defmodule AshOnetime.MutationCheck do
         "cleanup predicate, function, and parent triggers are strict at the retention boundary",
       assertion: "assert %{rows: [[false]]}"
     },
+    "payload-partition" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "Date.compare(database_date, &1.until_date) == :gt",
+      mutated: "Date.compare(database_date, &1.until_date) in [:eq, :gt]",
+      test: "test/mix/tasks/ash_onetime.prune_test.exs",
+      tag: "payload_partition_mutation",
+      test_name:
+        "manual cleanup retains the exact database-date boundary and drops only older empty partitions",
+      assertion: "payload_partitions: 1"
+    },
+    "payload-partition-lock" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "IN SHARE MODE",
+      mutated: "IN ACCESS SHARE MODE",
+      test: "test/mix/tasks/ash_onetime.prune_test.exs",
+      tag: "payload_partition_lock_mutation",
+      test_name: "cleanup locks an empty partition before deciding to drop it",
+      assertion: "payload_partitions: 0"
+    },
     "operation-hash-select" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:

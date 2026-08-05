@@ -2,7 +2,7 @@ defmodule AshOnetime.Admission do
   @moduledoc false
 
   alias Ash.Resource.Info, as: ResourceInfo
-  alias AshOnetime.{Error, Fingerprint, Response, Telemetry, Verified}
+  alias AshOnetime.{Cache, Error, Fingerprint, Response, Telemetry, Verified}
   alias AshOnetime.Store.{Claim, Postgres, Result}
 
   @private_state :ash_onetime_admission
@@ -22,6 +22,7 @@ defmodule AshOnetime.Admission do
       :target,
       :claim,
       :contract,
+      :cache,
       :replayed
     ]
 
@@ -34,6 +35,7 @@ defmodule AshOnetime.Admission do
             target: AshOnetime.Store.Postgres.Target.t() | nil,
             claim: AshOnetime.Store.Claim.t() | nil,
             contract: AshOnetime.Response.Contract.t() | nil,
+            cache: AshOnetime.Cache.Config.t() | nil,
             replayed: term()
           }
   end
@@ -148,6 +150,7 @@ defmodule AshOnetime.Admission do
 
     with :ok <- validate_complete(completion, state, encoded),
          :ok <- emit_encoding(state, duration(started), :stored) do
+      emit_cache(state, Cache.store(state.cache, completion.claim, encoded.payload))
       {:ok, encoded.result}
     else
       {:error, %Error{} = error} -> {:error, error}
@@ -240,7 +243,8 @@ defmodule AshOnetime.Admission do
          action: subject.action.name,
          request: request,
          target: target,
-         contract: contract
+         contract: contract,
+         cache: Cache.config(protection.limits)
        }}
     end
   end
@@ -673,8 +677,15 @@ defmodule AshOnetime.Admission do
   defp execution_class(:idempotency, :local_claim), do: :execute
 
   defp replay(result, state, started) do
+    {result, cache_status} = Cache.authoritative_payload(result, state.cache)
+    emit_cache(state, cache_status)
+
     case Response.replay(result, state.contract, []) do
       {:ok, replayed} ->
+        if cache_status != :hit do
+          emit_cache(state, Cache.store(state.cache, result.claim, result.payload))
+        end
+
         emit_replay(state, duration(started), :returned)
         {:ok, replayed}
 
@@ -944,6 +955,9 @@ defmodule AshOnetime.Admission do
 
   defp emit_untracked_execution(state),
     do: emit(Telemetry.untracked_execution(state.strategy, state.resource, state.action))
+
+  defp emit_cache(state, class),
+    do: emit(Telemetry.cache(state.strategy, state.resource, state.action, class))
 
   defp emit(:ok), do: :ok
   defp emit({:error, %Error{} = error}), do: {:error, error}

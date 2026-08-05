@@ -28,7 +28,50 @@ defmodule AshOnetime.Store do
   @spec load(term(), Claim.t()) :: Result.t()
   def load(target, claim), do: Postgres.load(target, claim)
 
-  @spec cleanup(term(), pos_integer()) ::
-          {:ok, %{idempotency: non_neg_integer(), nonce: non_neg_integer()}} | Result.t()
-  def cleanup(target, batch_size), do: Postgres.cleanup(target, batch_size)
+  @type cleanup_counts :: %{
+          idempotency: non_neg_integer(),
+          nonce: non_neg_integer(),
+          payload_partitions: non_neg_integer()
+        }
+
+  @spec cleanup(term(), pos_integer()) :: {:ok, cleanup_counts()} | Result.t()
+  def cleanup(target, batch_size), do: cleanup(target, batch_size, 8)
+
+  @spec cleanup(term(), pos_integer(), non_neg_integer()) ::
+          {:ok, cleanup_counts()} | Result.t()
+  def cleanup(target, batch_size, partition_limit) do
+    case Postgres.cleanup(target, batch_size, partition_limit) do
+      {:ok, counts} = success ->
+        emit_cleanup(target, counts)
+        success
+
+      %Result{} = result ->
+        result
+    end
+  end
+
+  defp emit_cleanup(%Postgres.Target{repo_module: repo}, counts) do
+    _ =
+      AshOnetime.Telemetry.cleanup(
+        :idempotency,
+        repo,
+        :cleanup,
+        counts.idempotency,
+        :claims_deleted
+      )
+
+    _ =
+      AshOnetime.Telemetry.cleanup(:one_time_nonce, repo, :cleanup, counts.nonce, :claims_deleted)
+
+    _ =
+      AshOnetime.Telemetry.cleanup(
+        :idempotency,
+        repo,
+        :cleanup,
+        counts.payload_partitions,
+        :partitions_dropped
+      )
+
+    :ok
+  end
 end

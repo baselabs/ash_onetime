@@ -157,11 +157,21 @@ defmodule AshOnetime.Store.Postgres do
   def load(_target, _claim),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
-  @spec cleanup(Target.t(), pos_integer()) ::
-          {:ok, %{idempotency: non_neg_integer(), nonce: non_neg_integer()}} | Result.t()
-  def cleanup(%Target{} = target, batch_size)
-      when is_integer(batch_size) and batch_size > 0 and batch_size <= 10_000 do
-    with_dynamic_repo(target, fn -> cleanup_transaction(target, batch_size) end)
+  @max_partition_drops 128
+
+  @spec cleanup(Target.t(), pos_integer(), non_neg_integer()) ::
+          {:ok,
+           %{
+             idempotency: non_neg_integer(),
+             nonce: non_neg_integer(),
+             payload_partitions: non_neg_integer()
+           }}
+          | Result.t()
+  def cleanup(%Target{} = target, batch_size, partition_limit)
+      when is_integer(batch_size) and batch_size > 0 and batch_size <= 10_000 and
+             is_integer(partition_limit) and partition_limit >= 0 and
+             partition_limit <= @max_partition_drops do
+    with_dynamic_repo(target, fn -> cleanup_transaction(target, batch_size, partition_limit) end)
     |> case do
       {:ok, counts} -> {:ok, counts}
       {:error, %Result{} = result} -> result
@@ -173,17 +183,18 @@ defmodule AshOnetime.Store.Postgres do
     :exit, _reason -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
   end
 
-  def cleanup(_target, _batch_size),
+  def cleanup(_target, _batch_size, _partition_limit),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
-  defp cleanup_transaction(target, batch_size) do
-    target.repo_module.transaction(fn -> cleanup_counts(target, batch_size) end)
+  defp cleanup_transaction(target, batch_size, partition_limit) do
+    target.repo_module.transaction(fn -> cleanup_counts(target, batch_size, partition_limit) end)
   end
 
-  defp cleanup_counts(target, batch_size) do
+  defp cleanup_counts(target, batch_size, partition_limit) do
     with {:ok, idempotency} <- cleanup_strategy(target, :idempotency, batch_size),
-         {:ok, nonce} <- cleanup_strategy(target, :nonce, batch_size) do
-      %{idempotency: idempotency, nonce: nonce}
+         {:ok, nonce} <- cleanup_strategy(target, :nonce, batch_size),
+         {:ok, payload_partitions} <- prune_payload_partitions(target, partition_limit) do
+      %{idempotency: idempotency, nonce: nonce, payload_partitions: payload_partitions}
     else
       {:error, %Result{} = result} -> target.repo_module.rollback(result)
     end
@@ -546,6 +557,135 @@ defmodule AshOnetime.Store.Postgres do
       {:ok, %{rows: [[count]]}} when is_integer(count) and count >= 0 -> {:ok, count}
       {:ok, _result} -> {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
       {:error, %Result{} = result} -> {:error, result}
+    end
+  end
+
+  defp prune_payload_partitions(_target, 0), do: {:ok, 0}
+
+  defp prune_payload_partitions(target, limit) do
+    with {:ok, schema, database_date} <- database_schema_and_date(target),
+         {:ok, partitions} <- payload_partitions(target, schema) do
+      partitions
+      |> Enum.filter(&(Date.compare(database_date, &1.until_date) == :gt))
+      |> Enum.sort_by(&{&1.until_date, &1.name})
+      |> Enum.take(limit)
+      |> drop_empty_partitions(target)
+    end
+  end
+
+  defp database_schema_and_date(target) do
+    case dispatched_query(
+           target,
+           "SELECT current_schema(), transaction_timestamp()::date",
+           []
+         ) do
+      {:ok, %{rows: [[schema, %Date{} = date]]}} when is_binary(schema) ->
+        {:ok, target.prefix || schema, date}
+
+      {:ok, _result} ->
+        {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
+
+      {:error, %Result{} = result} ->
+        {:error, result}
+    end
+  end
+
+  defp payload_partitions(target, schema) do
+    sql = """
+    SELECT child.relname, pg_get_expr(child.relpartbound, child.oid)
+    FROM pg_inherits
+    JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
+    JOIN pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
+    JOIN pg_class child ON child.oid = pg_inherits.inhrelid
+    WHERE parent_namespace.nspname = $1
+      AND parent.relname = 'ash_onetime_response_payloads'
+    """
+
+    case dispatched_query(target, sql, [schema]) do
+      {:ok, %{rows: rows}} when is_list(rows) -> decode_payload_partitions(rows)
+      {:ok, _result} -> {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
+      {:error, %Result{} = result} -> {:error, result}
+    end
+  end
+
+  defp decode_payload_partitions(rows) do
+    Enum.reduce_while(rows, {:ok, []}, &decode_payload_partition/2)
+  end
+
+  defp decode_payload_partition([_name, "DEFAULT"], accumulator),
+    do: {:cont, accumulator}
+
+  defp decode_payload_partition([name, bound], {:ok, partitions})
+       when is_binary(name) and is_binary(bound) do
+    case Regex.run(
+           ~r/^FOR VALUES FROM \('([^']+)'\) TO \('([^']+)'\)$/,
+           bound,
+           capture: :all_but_first
+         ) do
+      [from, until_date] -> build_payload_partition(name, from, until_date, partitions)
+      _invalid -> partition_decode_failure()
+    end
+  end
+
+  defp decode_payload_partition(_row, _accumulator), do: partition_decode_failure()
+
+  defp build_payload_partition(name, from, until_date, partitions) do
+    with {:ok, from_date} <- Date.from_iso8601(from),
+         {:ok, to_date} <- Date.from_iso8601(until_date) do
+      {:cont, {:ok, [%{name: name, from_date: from_date, until_date: to_date} | partitions]}}
+    else
+      _invalid -> partition_decode_failure()
+    end
+  end
+
+  defp partition_decode_failure,
+    do: {:halt, {:error, Result.failure(:store_invariant, :sent, :rolled_back)}}
+
+  defp drop_empty_partitions(partitions, target) do
+    Enum.reduce_while(partitions, {:ok, 0}, &drop_empty_partition(&1, &2, target))
+  end
+
+  defp drop_empty_partition(partition, {:ok, count}, target) do
+    with {:ok, _lock} <-
+           dispatched_query(
+             target,
+             "LOCK TABLE #{relation(target, partition.name)} IN SHARE MODE",
+             []
+           ),
+         {:ok, empty?} <- partition_empty?(target, partition) do
+      if empty?,
+        do: drop_payload_partition(target, partition.name, count),
+        else: {:cont, {:ok, count}}
+    else
+      {:error, %Result{} = result} -> {:halt, {:error, result}}
+    end
+  end
+
+  defp partition_empty?(target, partition) do
+    payload_sql = "SELECT count(*) FROM #{relation(target, partition.name)}"
+
+    claims_sql = """
+    SELECT count(*)
+    FROM #{relation(target, "ash_onetime_idempotency_claims")}
+    WHERE response_partition >= $1 AND response_partition < $2
+    """
+
+    with {:ok, %{rows: [[payload_count]]}} <- dispatched_query(target, payload_sql, []),
+         {:ok, %{rows: [[claim_count]]}} <-
+           dispatched_query(target, claims_sql, [partition.from_date, partition.until_date]),
+         true <- is_integer(payload_count) and payload_count >= 0,
+         true <- is_integer(claim_count) and claim_count >= 0 do
+      {:ok, payload_count == 0 and claim_count == 0}
+    else
+      {:error, %Result{} = result} -> {:error, result}
+      _other -> {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
+    end
+  end
+
+  defp drop_payload_partition(target, name, count) do
+    case dispatched_query(target, "DROP TABLE #{relation(target, name)}", []) do
+      {:ok, _result} -> {:cont, {:ok, count + 1}}
+      {:error, %Result{} = result} -> {:halt, {:error, result}}
     end
   end
 

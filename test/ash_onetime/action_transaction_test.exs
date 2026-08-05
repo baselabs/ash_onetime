@@ -129,6 +129,7 @@ defmodule AshOnetime.ActionTransactionTest do
       [:ash_onetime, :fingerprint_mismatch],
       [:ash_onetime, :verification],
       [:ash_onetime, :encoding],
+      [:ash_onetime, :cache],
       [:ash_onetime, :store_uncertainty],
       [:ash_onetime, :untracked_execution]
     ]
