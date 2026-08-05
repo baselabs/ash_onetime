@@ -123,6 +123,24 @@ defmodule AshOnetime.Store.CleanupTest do
              )
   end
 
+  @tag external_processing_cleanup_mutation: true
+  test "expired processing recovery points are neither cleanup nor direct-delete eligible", %{
+    prefix: prefix,
+    target: target
+  } do
+    claim_id = insert_expired_processing(prefix, "external-recovery-point")
+
+    assert {:ok, %{idempotency: 0, nonce: 0}} = Store.cleanup(target, 100)
+    assert_guarded_delete(prefix, :idempotency, claim_id)
+
+    assert %{rows: [[1]]} =
+             SQL.query!(
+               Repo,
+               "SELECT count(*) FROM #{relation(prefix, "ash_onetime_idempotency_claims")} WHERE id = $1::uuid",
+               [Ecto.UUID.dump!(claim_id)]
+             )
+  end
+
   defp insert_expired_complete(prefix, claim_id, partition_date, payload) do
     digest = :crypto.hash(:sha256, payload)
 
@@ -182,7 +200,7 @@ defmodule AshOnetime.Store.CleanupTest do
     )
   end
 
-  defp insert_boundary_claim(prefix, :idempotency, label, boundary) do
+  defp insert_expired_processing(prefix, label) do
     claim_id = Ecto.UUID.generate()
 
     SQL.query!(
@@ -192,6 +210,36 @@ defmodule AshOnetime.Store.CleanupTest do
         (id, operation_hash, scope_hash, key_hash, fingerprint, state,
          admitted_at, retain_until, inserted_at)
       VALUES ($1::uuid, $2, $3, $4, $5, 'processing',
+              transaction_timestamp() - interval '2 hours',
+              transaction_timestamp() - interval '1 hour',
+              transaction_timestamp() - interval '2 hours')
+      """,
+      [
+        Ecto.UUID.dump!(claim_id),
+        hash("operation:" <> label),
+        hash("scope:" <> label),
+        hash("key:" <> label),
+        hash("fingerprint:" <> label)
+      ]
+    )
+
+    claim_id
+  end
+
+  defp insert_boundary_claim(prefix, :idempotency, label, boundary) do
+    claim_id = Ecto.UUID.generate()
+    partition_date = Date.utc_today()
+    payload = "boundary-#{label}"
+    digest = :crypto.hash(:sha256, payload)
+
+    SQL.query!(
+      Repo,
+      """
+      INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}
+        (id, operation_hash, scope_hash, key_hash, fingerprint, state,
+         response_partition, response_codec, response_digest,
+         admitted_at, retain_until, inserted_at)
+      VALUES ($1::uuid, $2, $3, $4, $5, 'complete', $6, 'test', $7,
               transaction_timestamp() - interval '1 hour',
               #{boundary_expression(boundary)},
               transaction_timestamp() - interval '1 hour')
@@ -201,8 +249,20 @@ defmodule AshOnetime.Store.CleanupTest do
         hash("operation:" <> label),
         hash("scope:" <> label),
         hash("key:" <> label),
-        hash("fingerprint:" <> label)
+        hash("fingerprint:" <> label),
+        partition_date,
+        digest
       ]
+    )
+
+    SQL.query!(
+      Repo,
+      """
+      INSERT INTO #{relation(prefix, "ash_onetime_response_payloads")}
+        (partition_date, claim_id, encoded_response)
+      VALUES ($1, $2::uuid, $3)
+      """,
+      [partition_date, Ecto.UUID.dump!(claim_id), payload]
     )
 
     claim_id

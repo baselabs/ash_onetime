@@ -78,7 +78,11 @@ defmodule AshOnetime.Store.PartitionTest do
         assert routed_child(prefix, table, operation_hash, id) == child
         assert_guarded_delete(prefix, table, operation_hash, id)
         expire_claim!(prefix, table, operation_hash, id)
-        assert %{num_rows: 1} = delete_claim!(prefix, table, operation_hash, id)
+
+        case strategy do
+          :idempotency -> assert_guarded_delete(prefix, table, operation_hash, id)
+          :nonce -> assert %{num_rows: 1} = delete_claim!(prefix, table, operation_hash, id)
+        end
       end
     end
   end
@@ -123,18 +127,23 @@ defmodule AshOnetime.Store.PartitionTest do
     target: target
   } do
     shared_id = Ecto.UUID.generate()
+    partition_date = Date.utc_today()
+    payload = "shared-cleanup-response"
 
     for operation <- ["cleanup-operation-a", "cleanup-operation-b"] do
-      insert_processing_claim!(
+      insert_complete_claim!(
         prefix,
         shared_id,
         hash(operation),
         hash("cleanup-scope"),
         hash("cleanup-key"),
         hash("fingerprint:" <> operation),
-        :after
+        partition_date,
+        payload
       )
     end
+
+    insert_payload(prefix, partition_date, shared_id, payload)
 
     assert {:ok, %{idempotency: 1, nonce: 0}} = Store.cleanup(target, 1)
 
@@ -317,6 +326,42 @@ defmodule AshOnetime.Store.PartitionTest do
               transaction_timestamp() - interval '1 hour')
       """,
       [Ecto.UUID.dump!(id), operation_hash, scope_hash, key_hash, fingerprint]
+    )
+  end
+
+  defp insert_complete_claim!(
+         prefix,
+         id,
+         operation_hash,
+         scope_hash,
+         key_hash,
+         fingerprint,
+         partition_date,
+         payload
+       ) do
+    digest = :crypto.hash(:sha256, payload)
+
+    SQL.query!(
+      Repo,
+      """
+      INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}
+        (id, operation_hash, scope_hash, key_hash, fingerprint, state,
+         response_partition, response_codec, response_digest,
+         admitted_at, retain_until, inserted_at)
+      VALUES ($1::uuid, $2, $3, $4, $5, 'complete', $6, 'test', $7,
+              transaction_timestamp() - interval '2 hours',
+              transaction_timestamp() - interval '1 hour',
+              transaction_timestamp() - interval '2 hours')
+      """,
+      [
+        Ecto.UUID.dump!(id),
+        operation_hash,
+        scope_hash,
+        key_hash,
+        fingerprint,
+        partition_date,
+        digest
+      ]
     )
   end
 

@@ -36,9 +36,21 @@ defmodule AshOnetime.Change do
     do: {:not_atomic, "keyed effects require transactional stream execution"}
 
   defp reserve(changeset, protection, context) do
-    case AshOnetime.Admission.reserve(changeset, protection, trusted_context(context)) do
+    trusted = trusted_context(context)
+
+    reservation =
+      if protection.external_effect do
+        AshOnetime.ExternalRecovery.reserve(changeset, protection, trusted)
+      else
+        AshOnetime.Admission.reserve(changeset, protection, trusted)
+      end
+
+    case reservation do
       {:execute, state} ->
         AshOnetime.Admission.put_state(changeset, state)
+
+      {:execute, prepared, state} ->
+        AshOnetime.Admission.put_state(prepared, state)
 
       {:execute_untracked, state} ->
         AshOnetime.Admission.put_state(changeset, state)

@@ -39,6 +39,29 @@ defmodule AshOnetime.Test.StoreCase do
     installation
   end
 
+  def start_unboxed_repo! do
+    {:ok, repo} =
+      Repo.start_link(
+        name: nil,
+        pool: DBConnection.ConnectionPool,
+        pool_size: 10
+      )
+
+    Process.unlink(repo)
+
+    Callbacks.on_exit(fn ->
+      if Process.alive?(repo) do
+        try do
+          GenServer.stop(repo, :normal, 5_000)
+        catch
+          :exit, _reason -> :ok
+        end
+      end
+    end)
+
+    repo
+  end
+
   def idempotency_request(label, options \\ []) do
     Claim.idempotency(
       operation_hash: hash("operation:" <> label),

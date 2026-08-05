@@ -98,37 +98,27 @@ defmodule AshOnetime.Store.ContentionTest do
            } = store_result
   end
 
-  test "a committed cleanup between command one and command two permits exactly one retry", %{
+  test "an expired processing claim remains authoritative and cannot be deleted", %{
     prefix: prefix
   } do
-    request = idempotency_request("vanished-row-retry")
+    request = idempotency_request("processing-recovery-point")
     old_id = Ecto.UUID.generate()
     insert_expired_conflict!(prefix, old_id, request)
     observer = observer!()
-    parent = self()
-    claimant = spawn(fn -> vanished_claim_worker(parent, prefix, request) end)
 
-    assert_receive {:vanished_claim_backend, ^claimant, claimant_backend}, 2_000
-    assert_receive {:command_one_conflict, ^claimant}, 2_000
-    cleaner = spawn(fn -> cleanup_conflict_worker(parent, prefix, old_id) end)
-    assert_receive {:cleanup_delete_ready, ^cleaner, cleaner_backend}, 2_000
-    send(claimant, :continue_to_command_two)
+    assert {:ok, %Result{status: :processing, claim: claim}} =
+             with_owner(fn ->
+               Repo.transaction(fn -> Store.claim(Postgres.for_repo(Repo, prefix), request) end)
+             end)
 
-    observation = waiting_observation(observer, claimant_backend)
-    assert {blockers, query} = observation
-    assert cleaner_backend in blockers
-    assert query =~ "SELECT id, operation_hash"
-    assert query =~ "FOR UPDATE"
+    assert claim.id == old_id
 
-    send(cleaner, :commit_cleanup)
-    assert_receive {:cleanup_done, ^cleaner, {:ok, :deleted}}, 2_000
-
-    assert_receive {:vanished_claim_done, ^claimant,
-                    {:ok, %Result{status: :admitted, claim: claim}}},
-                   2_000
-
-    assert claim.id == request.id
-    assert claim.id != old_id
+    assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} =
+             Postgrex.query(
+               observer,
+               "DELETE FROM #{relation(prefix, "ash_onetime_idempotency_claims")} WHERE operation_hash = $1 AND id = $2::uuid",
+               [request.operation_hash, Ecto.UUID.dump!(old_id)]
+             )
 
     assert %{rows: [[1]]} =
              Postgrex.query!(
@@ -246,72 +236,6 @@ defmodule AshOnetime.Store.ContentionTest do
         end)
     end)
   end
-
-  defp vanished_claim_worker(parent, prefix, request) do
-    worker = self()
-    handler_id = {__MODULE__, :vanished_claim, worker, make_ref()}
-    event = Repo.config()[:telemetry_prefix] ++ [:query]
-
-    :ok =
-      :telemetry.attach(
-        handler_id,
-        event,
-        fn _event, _measurements, metadata, {notify, claimant} ->
-          if self() == claimant and command_one_conflict?(metadata) do
-            send(notify, {:command_one_conflict, claimant})
-
-            receive do
-              :continue_to_command_two -> :ok
-            end
-          end
-        end,
-        {parent, worker}
-      )
-
-    result =
-      try do
-        with_owner(fn ->
-          Repo.transaction(fn ->
-            send(parent, {:vanished_claim_backend, self(), backend_pid!()})
-            Store.claim(Postgres.for_repo(Repo, prefix), request)
-          end)
-        end)
-      after
-        :telemetry.detach(handler_id)
-      end
-
-    send(parent, {:vanished_claim_done, self(), result})
-  end
-
-  defp cleanup_conflict_worker(parent, prefix, old_id) do
-    result =
-      with_owner(fn ->
-        Repo.transaction(fn ->
-          backend = backend_pid!()
-
-          %{num_rows: 1} =
-            SQL.query!(
-              Repo,
-              "DELETE FROM #{relation(prefix, "ash_onetime_idempotency_claims")} WHERE id = $1::uuid",
-              [Ecto.UUID.dump!(old_id)]
-            )
-
-          send(parent, {:cleanup_delete_ready, self(), backend})
-
-          receive do
-            :commit_cleanup -> :deleted
-          end
-        end)
-      end)
-
-    send(parent, {:cleanup_done, self(), result})
-  end
-
-  defp command_one_conflict?(%{query: query, result: {:ok, %{num_rows: 0}}}) do
-    query =~ "INSERT INTO" and query =~ "ash_onetime_idempotency_claims"
-  end
-
-  defp command_one_conflict?(_metadata), do: false
 
   defp observer! do
     {:ok, observer} = Postgrex.start_link(@database_options)

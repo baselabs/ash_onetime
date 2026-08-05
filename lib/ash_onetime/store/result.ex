@@ -27,7 +27,7 @@ defmodule AshOnetime.Store.Result do
           payload: binary() | nil,
           reason: reason() | nil,
           admission_dispatch: :not_started | :sent | :unknown,
-          transaction: :open | :rolled_back | :unknown | :not_applicable
+          transaction: :open | :committed | :rolled_back | :unknown | :not_applicable
         }
 
   @spec success(status(), keyword()) :: t()
@@ -38,6 +38,11 @@ defmodule AshOnetime.Store.Result do
       [status: status, admission_dispatch: :sent, transaction: :open] ++ fields
     )
   end
+
+  @spec committed(t()) :: t()
+  def committed(%__MODULE__{status: status, transaction: :open} = result)
+      when status in [:admitted, :processing, :complete],
+      do: %{result | transaction: :committed}
 
   @spec failure(
           reason(),

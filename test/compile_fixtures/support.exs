@@ -89,6 +89,16 @@ defmodule AshOnetime.CompileFixture.MissingExternal do
   def execute(_operation_key, _input, _context), do: {:error, :not_implemented}
 end
 
+defmodule AshOnetime.CompileFixture.WrongExecuteArityExternal do
+  def execute(_input, _context), do: {:error, :not_implemented}
+  def recover(_operation_key, _input, _context), do: :unknown
+end
+
+defmodule AshOnetime.CompileFixture.WrongRecoverArityExternal do
+  def execute(_operation_key, _input, _context), do: {:error, :outcome_unknown}
+  def recover(_input, _context), do: :unknown
+end
+
 defmodule AshOnetime.CompileFixture.UnsafeChange do
   use Ash.Resource.Change
   def change(changeset, _opts, _context), do: changeset
@@ -289,6 +299,35 @@ defmodule AshOnetime.CompileFixture do
         action :redeem, :atom do
           argument :proof, :string
           transaction? false
+          run AshOnetime.CompileFixture.Run
+        end
+      end
+    end
+  end
+
+  defp actions_ast(:external_nonce_matrix) do
+    quote do
+      actions do
+        create :charge do
+          argument :idempotency_key, :string
+          accept [:account_id, :amount]
+        end
+
+        update :adjust do
+          transaction? true
+          require_atomic? false
+          argument :proof, :string
+          accept [:amount]
+        end
+
+        destroy :remove do
+          transaction? true
+          argument :proof, :string
+        end
+
+        action :redeem, :atom do
+          argument :proof, :string
+          transaction? true
           run AshOnetime.CompileFixture.Run
         end
       end

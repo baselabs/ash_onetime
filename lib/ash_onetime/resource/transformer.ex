@@ -598,11 +598,28 @@ defmodule AshOnetime.Resource.Transformer do
   defp verify_external_effect(%{external_effect: nil}, _context), do: :ok
 
   defp verify_external_effect(protection, context) do
-    case ensure_callbacks(protection.external_effect, execute: 3, recover: 3) do
-      :ok -> :ok
+    with :ok <- ensure_callbacks(protection.external_effect, execute: 3, recover: 3),
+         :ok <- reject_external_untracked(protection, context) do
+      :ok
+    else
+      {:error, %DslError{} = error} -> {:error, error}
       {:error, message} -> error(context.dsl_state, protection, :external_effect, message)
     end
   end
+
+  defp reject_external_untracked(
+         %{on_definite_store_failure: :execute_untracked} = protection,
+         context
+       ) do
+    error(
+      context.dsl_state,
+      protection,
+      :on_definite_store_failure,
+      "external effects require a committed recovery point and cannot execute untracked"
+    )
+  end
+
+  defp reject_external_untracked(_protection, _context), do: :ok
 
   defp reject_explicit_failure_option(protection, context) do
     if Entity.property_anno(protection, :on_definite_store_failure) do

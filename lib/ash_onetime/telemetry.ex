@@ -13,6 +13,16 @@ defmodule AshOnetime.Telemetry do
     fingerprint_mismatch: [:rejected],
     verification: [:verified, :rejected, :timeout],
     encoding: [:stored, :rejected, :rollback, :failed],
+    external_recovery: [
+      :processing_committed,
+      :execute_succeeded,
+      :recover_succeeded,
+      :absence_proven,
+      :outcome_unknown,
+      :external_effect_unavailable,
+      :finalize_locked,
+      :replayed
+    ],
     store_uncertainty: [:sent, :unknown, :disconnected, :lock_timeout],
     untracked_execution: [:checkout_unavailable]
   }
@@ -52,6 +62,11 @@ defmodule AshOnetime.Telemetry do
           :ok | {:error, Error.t()}
   def encoding(duration, strategy, resource, action, result_class),
     do: emit(:encoding, %{duration: duration}, strategy, resource, action, result_class)
+
+  @spec external_recovery(non_neg_integer(), atom(), module(), atom(), atom()) ::
+          :ok | {:error, Error.t()}
+  def external_recovery(duration, strategy, resource, action, result_class),
+    do: emit(:external_recovery, %{duration: duration}, strategy, resource, action, result_class)
 
   @spec store_uncertainty(atom(), module(), atom(), atom()) :: :ok | {:error, Error.t()}
   def store_uncertainty(strategy, resource, action, result_class),
@@ -100,7 +115,7 @@ defmodule AshOnetime.Telemetry do
   end
 
   defp validate_measurements(event, %{duration: duration})
-       when event in [:admission, :replay, :verification, :encoding] and
+       when event in [:admission, :replay, :verification, :encoding, :external_recovery] and
               is_integer(duration) and duration >= 0,
        do: :ok
 

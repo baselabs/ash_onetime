@@ -2,6 +2,9 @@ defmodule AshOnetime.Test.ActionExamples.GenericRun do
   @moduledoc false
   use Ash.Resource.Actions.Implementation
 
+  alias Ash.Error.Invalid
+  alias AshOnetime.ExternalEffect
+  alias AshOnetime.Test.{ExternalEffectSupport, ExternalPeer, Repo}
   alias Ecto.Adapters.SQL
 
   @impl true
@@ -13,16 +16,32 @@ defmodule AshOnetime.Test.ActionExamples.GenericRun do
 
     value = Ash.ActionInput.get_argument(input, :value)
 
+    external_result = ExternalEffect.result(input)
+
+    if match?({:ok, _result}, external_result) do
+      {:ok, operation_key} = ExternalEffect.operation_key(input)
+      :ok = ExternalEffectSupport.pause_local(operation_key)
+      :ok = ExternalPeer.append_local!(input.to_tenant, operation_key, value)
+    end
+
     if Process.get({__MODULE__, :ledger?}) do
       prefix = input.to_tenant
 
       SQL.query!(
-        AshOnetime.Test.Repo,
+        Repo,
         "INSERT INTO \"#{prefix}\".\"ash_onetime_generic_effect_ledger\" (value) VALUES ($1)",
         [value]
       )
     end
 
+    if external_result != :error and ExternalEffectSupport.mode() == :fail_local do
+      {:error, Invalid.exception(errors: [])}
+    else
+      generic_result(input, value)
+    end
+  end
+
+  defp generic_result(input, value) do
     if Process.get({__MODULE__, :notify?}) do
       notification = %Ash.Notifier.Notification{
         resource: input.resource,
@@ -114,15 +133,20 @@ end
 
 defmodule AshOnetime.Test.ActionExamples.ExternalEffect do
   @moduledoc false
+  @behaviour AshOnetime.ExternalEffect
 
-  def execute(_key, _input, _context) do
+  alias AshOnetime.Test.ExternalEffectSupport
+
+  @impl true
+  def execute(key, input, _context) do
     notify(:execute)
-    {:error, :must_not_execute}
+    ExternalEffectSupport.execute(key, input)
   end
 
-  def recover(_key, _input, _context) do
+  @impl true
+  def recover(key, input, _context) do
     notify(:recover)
-    {:error, :must_not_recover}
+    ExternalEffectSupport.recover(key, input)
   end
 
   defp notify(operation) do
@@ -223,6 +247,7 @@ defmodule AshOnetime.Test.ActionExamples.DeniedResource do
       )
 
       retention(3_600)
+      external_effect(AshOnetime.Test.ActionExamples.ExternalEffect)
     end
 
     protect :denied_redeem do
@@ -237,6 +262,7 @@ defmodule AshOnetime.Test.ActionExamples.DeniedResource do
       )
 
       retention(3_600)
+      external_effect(AshOnetime.Test.ActionExamples.ExternalEffect)
     end
   end
 end

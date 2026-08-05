@@ -32,7 +32,7 @@ defmodule AshOnetime.GenericAction do
   @impl Ash.Resource.Actions.Implementation
   def run(input, opts, context) do
     case AshOnetime.Admission.state(input) do
-      {:ok, %{class: class}} when class in [:execute, :nonce, :untracked] ->
+      {:ok, %{class: class}} when class in [:execute, :external_execute, :nonce, :untracked] ->
         run_original(input, Keyword.get(opts, :original), context)
 
       {:ok, %{class: :replay, replayed: replayed}} ->
@@ -44,8 +44,18 @@ defmodule AshOnetime.GenericAction do
   end
 
   defp reserve(input, protection, context) do
-    case AshOnetime.Admission.reserve(input, protection, trusted_context(context)) do
+    trusted = trusted_context(context)
+
+    reservation =
+      if protection.external_effect do
+        AshOnetime.ExternalRecovery.reserve(input, protection, trusted)
+      else
+        AshOnetime.Admission.reserve(input, protection, trusted)
+      end
+
+    case reservation do
       {:execute, state} -> AshOnetime.Admission.put_state(input, state)
+      {:execute, prepared, state} -> AshOnetime.Admission.put_state(prepared, state)
       {:execute_untracked, state} -> AshOnetime.Admission.put_state(input, state)
       {:replay, _decoded, state} -> AshOnetime.Admission.put_replay(input, state)
       {:error, error} -> {:error, error}

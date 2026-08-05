@@ -1,9 +1,8 @@
 defmodule AshOnetime.ActionTransactionTest do
   use AshOnetime.Test.StoreCase, async: false
 
-  alias AshOnetime.Resource.Protection
   alias AshOnetime.Store.Result
-  alias AshOnetime.Test.ActionExamples.{ExternalEffect, Resource}
+  alias AshOnetime.Test.ActionExamples.Resource
   alias AshOnetime.Test.FaultStore
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -119,103 +118,6 @@ defmodule AshOnetime.ActionTransactionTest do
     )
 
     :ok
-  end
-
-  @tag task5_external_hold_mutation: true
-  test "external effect recovery boundary rejects before any callback or store selection" do
-    protection = %Protection{
-      action: :redeem,
-      strategy: :idempotency,
-      external_effect: ExternalEffect
-    }
-
-    input = Ash.ActionInput.for_action(Resource, :redeem, %{value: 1, request_key: "request-1"})
-
-    assert {:error,
-            %AshOnetime.Error{
-              code: :external_recovery_unavailable,
-              message: "external effect recovery is unavailable"
-            }} = AshOnetime.Admission.reserve(input, protection, %{})
-  end
-
-  @tag task5_external_real_path_mutation: true
-  test "real CRUD and generic external protections reject before every observable effect", %{
-    prefix: prefix
-  } do
-    event = Repo.config()[:telemetry_prefix] ++ [:query]
-    handler = "external-hold-before-sql-#{System.unique_integer([:positive])}"
-    parent = self()
-
-    :ok =
-      :telemetry.attach(
-        handler,
-        event,
-        fn _event, _measurements, metadata, _config ->
-          query = String.downcase(metadata.query)
-
-          if String.contains?(query, [
-               "ash_onetime_idempotency_claims",
-               "ash_onetime_nonce_claims",
-               "ash_onetime_response_payloads",
-               "ash_onetime_action_examples",
-               "ash_onetime_generic_effect_ledger"
-             ]) do
-            send(parent, {:external_hold_protected_query, metadata.query})
-          end
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
-
-    Process.put({AshOnetime.Test.ActionExamples.GenericRun, :observer}, self())
-    Process.put({ExternalEffect, :observer}, self())
-    Process.put({AshOnetime.Test.ActionExamples.Verifier, :observer}, self())
-    Process.put({AshOnetime.Test.ActionExamples.Minter, :observer}, self())
-    Process.put({AshOnetime.Test.ActionExamples.TenantResolver, :observer}, self())
-
-    on_exit(fn ->
-      Process.delete({AshOnetime.Test.ActionExamples.GenericRun, :observer})
-      Process.delete({ExternalEffect, :observer})
-      Process.delete({AshOnetime.Test.ActionExamples.Verifier, :observer})
-      Process.delete({AshOnetime.Test.ActionExamples.Minter, :observer})
-      Process.delete({AshOnetime.Test.ActionExamples.TenantResolver, :observer})
-    end)
-
-    assert {:error, crud_error} =
-             Resource
-             |> Ash.Changeset.for_create(:external_charge, %{
-               account_id: Ecto.UUID.generate(),
-               amount: 10,
-               request_key: "external-crud",
-               proof: "external-crud-proof"
-             })
-             |> Ash.Changeset.set_tenant(prefix)
-             |> Ash.create()
-
-    assert Exception.message(crud_error) =~ "external effect recovery is unavailable"
-
-    assert {:error, generic_error} =
-             Resource
-             |> Ash.ActionInput.for_action(:external_redeem, %{
-               value: 10,
-               request_key: "external-generic",
-               proof: "external-generic-proof"
-             })
-             |> Ash.ActionInput.set_tenant(prefix)
-             |> Ash.run_action()
-
-    assert Exception.message(generic_error) =~ "external effect recovery is unavailable"
-    :ok = :telemetry.detach(handler)
-    refute_receive {:external_hold_protected_query, _sql}
-    refute_receive {:generic_run, _arguments}
-    refute_receive {:external, _operation}
-    refute_receive {:verifier, _token}
-    refute_receive :minter
-    refute_receive :tenant_resolver
-    assert table_count(prefix, "ash_onetime_action_examples") == 0
-    assert table_count(prefix, "ash_onetime_idempotency_claims") == 0
-    assert table_count(prefix, "ash_onetime_response_payloads") == 0
   end
 
   @tag task5_actual_telemetry_mutation: true

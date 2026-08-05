@@ -26,7 +26,7 @@ defmodule AshOnetime.Admission do
     ]
 
     @type t :: %__MODULE__{
-            class: :pending | :execute | :nonce | :untracked | :replay,
+            class: :pending | :execute | :external_execute | :nonce | :untracked | :replay,
             strategy: :idempotency | :one_time_nonce,
             resource: module(),
             action: atom(),
@@ -49,33 +49,15 @@ defmodule AshOnetime.Admission do
 
     with :ok <- reject_reserved(subject),
          :ok <- reject_external_effect(protection),
-         {:ok, operation_hash} <- operation_hash(subject),
-         {:ok, scope_hash} <- scope_hash(subject, protection.scope, trusted_context),
-         {:ok, key_hash, verified} <-
-           key_hash(
-             subject,
-             protection.key,
-             protection.limits,
-             trusted_context,
-             protection.strategy
-           ),
-         {:ok, fingerprint} <- request_fingerprint(subject, protection),
-         {:ok, contract} <- response_contract(subject, protection),
-         {:ok, request} <-
-           claim_request(protection, operation_hash, scope_hash, key_hash, fingerprint, verified),
-         {:ok, target} <- target(subject),
-         %Result{} = result <- store().claim(target, request) do
-      state = %State{
-        class: :pending,
-        strategy: protection.strategy,
-        resource: subject.resource,
-        action: subject.action.name,
-        request: sanitize_request(request),
-        target: target,
-        contract: contract
-      }
-
-      decide(result, state, protection, started)
+         {:ok, state} <- prepare_resolved(subject, protection, trusted_context),
+         %Result{} = result <- store().claim(state.target, state.request) do
+      resolve(
+        result,
+        %{state | request: sanitize_request(state.request)},
+        protection,
+        started,
+        :local_claim
+      )
     else
       {:error, %Error{} = error} ->
         emit_admission(subject, protection, started, :rejected)
@@ -102,11 +84,37 @@ defmodule AshOnetime.Admission do
   def reserve(_subject, _protection, _trusted_context),
     do: {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
 
+  @doc false
+  @spec prepare(Ash.Changeset.t() | Ash.ActionInput.t(), struct(), map()) ::
+          {:ok, State.t()} | {:error, Error.t()} | Result.t()
+  def prepare(subject, protection, trusted_context)
+      when is_map(subject) and is_map(protection) and is_map(trusted_context) do
+    with :ok <- reject_reserved(subject) do
+      prepare_resolved(subject, protection, trusted_context)
+    end
+  rescue
+    _exception ->
+      {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
+  catch
+    _kind, _reason ->
+      {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
+  end
+
+  def prepare(_subject, _protection, _trusted_context),
+    do: {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
+
+  @doc false
+  def resolve(%Result{} = result, %State{} = state, protection, started, mode)
+      when mode in [:local_claim, :committed_external_claim, :locked_external_finalize] do
+    decide(result, state, protection, started, mode)
+  end
+
   @spec complete(State.t(), term()) :: {:ok, term()} | {:error, Error.t()}
   def complete(%State{class: class}, result) when class in [:nonce, :untracked, :replay],
     do: {:ok, result}
 
-  def complete(%State{class: :execute, contract: contract} = state, result) do
+  def complete(%State{class: class, contract: contract} = state, result)
+      when class in [:execute, :external_execute] do
     started = System.monotonic_time()
 
     case Response.encode(result, contract, []) do
@@ -136,14 +144,7 @@ defmodule AshOnetime.Admission do
     do: {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
 
   defp persist_completion(state, encoded, started) do
-    completion =
-      store().complete(
-        state.target,
-        state.claim,
-        encoded.codec,
-        encoded.digest,
-        encoded.payload
-      )
+    completion = persist_encoded(state, encoded)
 
     with :ok <- validate_complete(completion, state, encoded),
          :ok <- emit_encoding(state, duration(started), :stored) do
@@ -151,6 +152,26 @@ defmodule AshOnetime.Admission do
     else
       {:error, %Error{} = error} -> {:error, error}
     end
+  end
+
+  defp persist_encoded(%State{class: :external_execute} = state, encoded) do
+    store().complete_external(
+      state.target,
+      state.claim,
+      encoded.codec,
+      encoded.digest,
+      encoded.payload
+    )
+  end
+
+  defp persist_encoded(state, encoded) do
+    store().complete(
+      state.target,
+      state.claim,
+      encoded.codec,
+      encoded.digest,
+      encoded.payload
+    )
   end
 
   @spec replay?(Ash.Changeset.t() | Ash.ActionInput.t()) :: boolean()
@@ -192,6 +213,35 @@ defmodule AshOnetime.Admission do
       }
 
       if class == :replay, do: put_replay(subject, state), else: put_state(subject, state)
+    end
+  end
+
+  defp prepare_resolved(subject, protection, trusted_context) do
+    with {:ok, operation_hash} <- operation_hash(subject),
+         {:ok, scope_hash} <- scope_hash(subject, protection.scope, trusted_context),
+         {:ok, key_hash, verified} <-
+           key_hash(
+             subject,
+             protection.key,
+             protection.limits,
+             trusted_context,
+             protection.strategy
+           ),
+         {:ok, fingerprint} <- request_fingerprint(subject, protection),
+         {:ok, contract} <- response_contract(subject, protection),
+         {:ok, request} <-
+           claim_request(protection, operation_hash, scope_hash, key_hash, fingerprint, verified),
+         {:ok, target} <- target(subject) do
+      {:ok,
+       %State{
+         class: :pending,
+         strategy: protection.strategy,
+         resource: subject.resource,
+         action: subject.action.name,
+         request: request,
+         target: target,
+         contract: contract
+       }}
     end
   end
 
@@ -496,9 +546,11 @@ defmodule AshOnetime.Admission do
     end
   end
 
-  defp decide(%Result{status: :admitted} = result, state, _protection, started) do
-    with :ok <- validate_admitted(result, state.request) do
-      class = if state.strategy == :one_time_nonce, do: :nonce, else: :execute
+  defp decide(%Result{status: :admitted} = result, state, _protection, started, mode) do
+    transaction = expected_transaction(mode)
+
+    with :ok <- validate_admitted(result, state.request, transaction) do
+      class = execution_class(state.strategy, mode)
       state = %{state | class: class, claim: sanitize_claim(result.claim)}
       emit_admission(state, started, :admitted)
       {:execute, state}
@@ -509,9 +561,11 @@ defmodule AshOnetime.Admission do
          %Result{status: :complete} = result,
          %{strategy: :idempotency} = state,
          _protection,
-         started
+         started,
+         mode
        ) do
-    with {:ok, disposition} <- validate_collision(result, state.request),
+    with {:ok, disposition} <-
+           validate_collision(result, state.request, expected_transaction(mode)),
          :match <- disposition,
          {:ok, replayed} <- replay(result, state, started) do
       emit_conflict(state, :complete)
@@ -535,12 +589,24 @@ defmodule AshOnetime.Admission do
          %Result{status: :processing} = result,
          %{strategy: :idempotency} = state,
          _protection,
-         _started
+         _started,
+         mode
        ) do
-    with {:ok, disposition} <- validate_collision(result, state.request),
+    with {:ok, disposition} <-
+           validate_collision(result, state.request, expected_transaction(mode)),
          :match <- disposition do
       emit_conflict(state, :processing)
-      {:error, Error.new(:request_in_progress, "request is already processing")}
+
+      case mode do
+        :local_claim ->
+          {:error, Error.new(:request_in_progress, "request is already processing")}
+
+        :committed_external_claim ->
+          {:recover, %{state | claim: sanitize_claim(result.claim)}}
+
+        :locked_external_finalize ->
+          {:execute, %{state | class: :external_execute, claim: sanitize_claim(result.claim)}}
+      end
     else
       :fingerprint_mismatch ->
         emit_fingerprint_mismatch(state)
@@ -557,9 +623,10 @@ defmodule AshOnetime.Admission do
          %Result{status: :collision} = result,
          %{strategy: :one_time_nonce} = state,
          _protection,
-         _started
+         _started,
+         mode
        ) do
-    case validate_collision(result, state.request) do
+    case validate_collision(result, state.request, expected_transaction(mode)) do
       {:ok, :match} ->
         emit_conflict(state, :nonce_used)
         {:error, Error.new(:nonce_already_used, "nonce was already used")}
@@ -581,7 +648,8 @@ defmodule AshOnetime.Admission do
          },
          %{strategy: :idempotency} = state,
          %{on_definite_store_failure: :execute_untracked},
-         started
+         started,
+         :local_claim
        ) do
     state = %{state | class: :untracked}
     emit_untracked_execution(state)
@@ -589,10 +657,20 @@ defmodule AshOnetime.Admission do
     {:execute_untracked, state}
   end
 
-  defp decide(%Result{} = result, state, _protection, _started) do
+  defp decide(%Result{} = result, state, _protection, _started, _mode) do
     emit_uncertainty(result, state)
     {:error, store_error(result)}
   end
+
+  defp expected_transaction(:committed_external_claim), do: :committed
+
+  defp expected_transaction(mode) when mode in [:local_claim, :locked_external_finalize],
+    do: :open
+
+  defp execution_class(:one_time_nonce, :local_claim), do: :nonce
+  defp execution_class(:idempotency, :committed_external_claim), do: :external_execute
+  defp execution_class(:idempotency, :locked_external_finalize), do: :external_execute
+  defp execution_class(:idempotency, :local_claim), do: :execute
 
   defp replay(result, state, started) do
     case Response.replay(result, state.contract, []) do
@@ -611,13 +689,15 @@ defmodule AshOnetime.Admission do
            status: :admitted,
            reason: nil,
            admission_dispatch: :sent,
-           transaction: :open,
+           transaction: transaction,
            payload: nil,
            claim: %Claim{} = claim
          },
-         request
+         request,
+         expected_transaction
        ) do
-    with :ok <- validate_locator(claim, request),
+    with true <- transaction == expected_transaction,
+         :ok <- validate_locator(claim, request),
          true <- claim.id == request.id,
          :match <- fingerprint_disposition(claim, request),
          :ok <- validate_claim_state(claim, :admitted) do
@@ -627,7 +707,7 @@ defmodule AshOnetime.Admission do
     end
   end
 
-  defp validate_admitted(_result, _request),
+  defp validate_admitted(_result, _request, _expected_transaction),
     do: {:error, Error.new(:store_invariant, "store result violated an invariant")}
 
   defp validate_collision(
@@ -635,13 +715,15 @@ defmodule AshOnetime.Admission do
            status: status,
            reason: nil,
            admission_dispatch: :sent,
-           transaction: :open,
+           transaction: transaction,
            payload: payload,
            claim: %Claim{} = claim
          } = result,
-         request
+         request,
+         expected_transaction
        ) do
-    with true <- valid_uuid?(claim.id),
+    with true <- transaction == expected_transaction,
+         true <- valid_uuid?(claim.id),
          :ok <- validate_collision_payload(status, payload),
          :ok <- validate_locator(claim, request),
          :ok <- validate_claim_state(claim, result.status) do
@@ -651,7 +733,7 @@ defmodule AshOnetime.Admission do
     end
   end
 
-  defp validate_collision(_result, _request),
+  defp validate_collision(_result, _request, _expected_transaction),
     do: {:error, Error.new(:store_invariant, "store result violated an invariant")}
 
   defp validate_collision_payload(:complete, payload) when is_binary(payload), do: :ok

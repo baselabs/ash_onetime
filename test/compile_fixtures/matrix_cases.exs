@@ -208,6 +208,29 @@ defmodule AshOnetime.CompileFixture.MatrixCases do
   defp definition(:nonce_fingerprint), do: {[], nonce(fingerprint: [arguments: [:proof]])}
   defp definition(:nonce_retention), do: {[], nonce(retention: 60)}
 
+  defp definition(:nonce_external_create) do
+    {[actions: :external_nonce_matrix],
+     nonce(
+       action: :charge,
+       key: {:verified, :idempotency_key, CompileFixture.Verifier},
+       external_effect: CompileFixture.External
+     )}
+  end
+
+  defp definition(:nonce_external_update) do
+    {[actions: :external_nonce_matrix],
+     nonce(action: :adjust, external_effect: CompileFixture.External)}
+  end
+
+  defp definition(:nonce_external_destroy) do
+    {[actions: :external_nonce_matrix],
+     nonce(action: :remove, external_effect: CompileFixture.External)}
+  end
+
+  defp definition(:nonce_external_generic) do
+    {[actions: :external_nonce_matrix], nonce(external_effect: CompileFixture.External)}
+  end
+
   defp definition(:limit_max_key_bytes),
     do: {[], idempotency(limits: [max_key_bytes: 4_097])}
 

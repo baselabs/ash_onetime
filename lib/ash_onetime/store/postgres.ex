@@ -10,6 +10,7 @@ defmodule AshOnetime.Store.Postgres do
   @payload_ceiling 16_777_216
   @max_retention_seconds 2_147_483_647
   @max_codec_bytes 128
+  @committed_claim_timeout 30_000
   @phase_key {__MODULE__, :admission_phase}
   @logical_key_predicate "operation_hash = $1 AND scope_hash = $2 AND key_hash = $3"
   @completion_key_predicate "operation_hash = $4 AND scope_hash = $5 AND key_hash = $6"
@@ -78,6 +79,27 @@ defmodule AshOnetime.Store.Postgres do
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
   @impl AshOnetime.Store
+  def claim_committed(%Target{} = target, %Request{strategy: :idempotency} = request) do
+    parent = self()
+    message_ref = make_ref()
+
+    {worker, monitor_ref} =
+      spawn_monitor(fn ->
+        result = committed_claim_transaction(target, request)
+        send(parent, {message_ref, result})
+      end)
+
+    receive_committed_claim(worker, monitor_ref, message_ref)
+  rescue
+    _exception -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+  catch
+    _kind, _reason -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+  end
+
+  def claim_committed(_target, _request),
+    do: Result.failure(:invalid_request, :not_started, :not_applicable)
+
+  @impl AshOnetime.Store
   def complete(
         %Target{} = target,
         %Claim{strategy: :idempotency} = claim,
@@ -94,6 +116,28 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   def complete(_target, _claim, _codec, _digest, _encoded_response),
+    do: Result.failure(:invalid_request, :not_started, :not_applicable)
+
+  @impl AshOnetime.Store
+  def complete_external(
+        %Target{} = target,
+        %Claim{strategy: :idempotency} = claim,
+        codec,
+        digest,
+        encoded_response
+      ) do
+    with_checkout(target, fn ->
+      case transaction_preconditions(target) do
+        :ok ->
+          complete_transaction(target, claim, codec, digest, encoded_response, :external)
+
+        {:error, %Result{} = result} ->
+          result
+      end
+    end)
+  end
+
+  def complete_external(_target, _claim, _codec, _digest, _encoded_response),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
   @impl AshOnetime.Store
@@ -159,11 +203,14 @@ defmodule AshOnetime.Store.Postgres do
     resolve_insert(target, request, insert_claim(target, request, nil), attempt)
   end
 
-  defp complete_transaction(target, claim, codec, digest, encoded_response) do
+  defp complete_transaction(target, claim, codec, digest, encoded_response),
+    do: complete_transaction(target, claim, codec, digest, encoded_response, :database)
+
+  defp complete_transaction(target, claim, codec, digest, encoded_response, mode) do
     with :ok <- validate_completion(codec, digest, encoded_response),
-         {:ok, partition_date} <- database_date(target),
+         {:ok, partition_date} <- database_date(target, mode),
          :ok <- insert_payload(target, partition_date, claim.id, encoded_response),
-         {:ok, completed} <- update_complete(target, claim, partition_date, codec, digest) do
+         {:ok, completed} <- update_complete(target, claim, partition_date, codec, digest, mode) do
       Result.success(:complete, claim: completed, payload: encoded_response)
     else
       {:error, %Result{} = result} ->
@@ -344,10 +391,17 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  defp update_complete(target, claim, partition_date, codec, digest) do
+  defp update_complete(target, claim, partition_date, codec, digest, mode) do
+    retention_update =
+      case mode do
+        :database -> ""
+        :external -> ", retain_until = statement_timestamp() + (retain_until - admitted_at)"
+      end
+
     sql = """
     UPDATE #{relation(target, "ash_onetime_idempotency_claims")}
-    SET state = 'complete', response_partition = $1, response_codec = $2, response_digest = $3
+    SET state = 'complete', response_partition = $1, response_codec = $2,
+        response_digest = $3#{retention_update}
     WHERE #{@completion_key_predicate}
       AND id = $7::uuid AND state = 'processing'
       AND (
@@ -401,11 +455,83 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  defp database_date(target) do
-    case dispatched_query(target, "SELECT transaction_timestamp()::date", []) do
+  defp database_date(target, mode) do
+    timestamp = if mode == :external, do: "statement_timestamp()", else: "transaction_timestamp()"
+
+    case dispatched_query(target, "SELECT #{timestamp}::date", []) do
       {:ok, %{rows: [[%Date{} = date]]}} -> {:ok, date}
       {:ok, _result} -> {:error, Result.failure(:store_invariant, :sent, :open)}
       {:error, %Result{} = result} -> {:error, result}
+    end
+  end
+
+  defp committed_claim_transaction(target, request) do
+    with_dynamic_repo(target, fn -> run_committed_claim_transaction(target, request) end)
+  rescue
+    _exception -> Result.failure(:dispatched_unknown, :unknown, :unknown)
+  catch
+    :exit, _reason -> Result.failure(:disconnected, :unknown, :unknown)
+    _kind, _reason -> Result.failure(:dispatched_unknown, :unknown, :unknown)
+  end
+
+  defp run_committed_claim_transaction(target, request) do
+    if target.repo_module.in_transaction?() do
+      Result.failure(:store_invariant, :not_started, :not_applicable)
+    else
+      target.repo_module.transaction(fn -> claim_for_commit(target, request) end)
+      |> committed_transaction_result()
+    end
+  end
+
+  defp claim_for_commit(target, request) do
+    case claim(target, request) do
+      %Result{status: status, transaction: :open} = result
+      when status in [:admitted, :processing, :complete] ->
+        result
+
+      %Result{} = result ->
+        target.repo_module.rollback(result)
+    end
+  end
+
+  defp committed_transaction_result({:ok, %Result{} = result}), do: Result.committed(result)
+
+  defp committed_transaction_result({:error, %Result{} = result}) do
+    transaction = if result.transaction == :unknown, do: :unknown, else: :rolled_back
+    %{result | transaction: transaction}
+  end
+
+  defp committed_transaction_result(_other),
+    do: Result.failure(:dispatched_unknown, :unknown, :unknown)
+
+  defp receive_committed_claim(worker, monitor_ref, message_ref) do
+    receive do
+      {^message_ref, %Result{} = result} ->
+        receive do
+          {:DOWN, ^monitor_ref, :process, ^worker, :normal} ->
+            result
+
+          {:DOWN, ^monitor_ref, :process, ^worker, _reason} ->
+            Result.failure(:dispatched_unknown, :unknown, :unknown)
+        after
+          @committed_claim_timeout ->
+            Process.demonitor(monitor_ref, [:flush])
+            Result.failure(:dispatched_unknown, :unknown, :unknown)
+        end
+
+      {:DOWN, ^monitor_ref, :process, ^worker, _reason} ->
+        Result.failure(:dispatched_unknown, :unknown, :unknown)
+    after
+      @committed_claim_timeout ->
+        Process.exit(worker, :kill)
+
+        receive do
+          {:DOWN, ^monitor_ref, :process, ^worker, _reason} -> :ok
+        after
+          1_000 -> Process.demonitor(monitor_ref, [:flush])
+        end
+
+        Result.failure(:dispatched_unknown, :unknown, :unknown)
     end
   end
 

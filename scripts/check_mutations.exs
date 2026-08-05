@@ -578,16 +578,47 @@ defmodule AshOnetime.MutationCheck do
         "two protected Ash actions serialize at the authoritative claim and append one effect",
       assertion: "assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} ="
     },
-    "task5-external-hold" => %{
-      path: "lib/ash_onetime/admission.ex",
+    "external-recover" => %{
+      path: "lib/ash_onetime/external_recovery.ex",
+      original: "case module.recover(operation_key, subject, context) do",
+      mutated: "case :unknown do",
+      test: "test/ash_onetime/external_recovery_test.exs",
+      tag: "external_recover_mutation",
+      test_name: "peer success followed by caller death recovers without another execute",
+      assertion: "assert [[\"execute\", ^operation_key], [\"recover\", ^operation_key]] =",
+      required_failures: [
+        {"caller death before peer preserves one key and retry proves absence",
+         "assert [[\"recover\", ^operation_key], [\"execute\", ^operation_key]] ="},
+        {"peer success followed by caller death recovers without another execute",
+         "assert [[\"execute\", ^operation_key], [\"recover\", ^operation_key]] ="},
+        {"unknown execute is recovered once immediately",
+         "assert [[\"execute\", operation_key], [\"recover\", operation_key]] ="}
+      ],
+      red_summary: "Result: 0/3 passed, 7 excluded",
+      green_summary: "Result: 3 passed, 7 excluded"
+    },
+    "external-operation-key" => %{
+      path: "lib/ash_onetime/external_recovery.ex",
       original:
-        "defp reject_external_effect(_protection),\n    do:\n      {:error,\n       Error.new(:external_recovery_unavailable, \"external effect recovery is unavailable\")}",
-      mutated: "defp reject_external_effect(_protection), do: :ok",
-      test: "test/ash_onetime/action_transaction_test.exs",
-      tag: "task5_external_real_path_mutation",
-      test_name:
-        "real CRUD and generic external protections reject before every observable effect",
-      assertion: "assert {:error, crud_error} ="
+        "defp continue({:recover, state}, subject, protection, context, started) do\n    operation_key = state.claim.id",
+      mutated:
+        "defp continue({:recover, state}, subject, protection, context, started) do\n    operation_key = state.request.id",
+      test: "test/ash_onetime/external_recovery_test.exs",
+      tag: "external_operation_key_mutation",
+      test_name: "caller death before peer preserves one key and retry proves absence",
+      assertion: "assert [[\"recover\", ^operation_key], [\"execute\", ^operation_key]] ="
+    },
+    "ambiguous-retry" => %{
+      path: "lib/ash_onetime/external_recovery.ex",
+      original:
+        ":unknown ->\n        ambiguous_recovery(state, started)\n    end\n  end\n\n  defp execute_then_settle",
+      mutated:
+        ":unknown ->\n        execute_then_settle(state, subject, protection, context, operation_key, started)\n    end\n  end\n\n  defp execute_then_settle",
+      test: "test/ash_onetime/external_recovery_test.exs",
+      tag: "ambiguous_retry_mutation",
+      test_name: "ambiguous recovery never executes or finalizes",
+      assertion:
+        "assert ExternalPeer.calls(context.prefix) == calls_before ++ [[\"recover\", operation_key]]"
     },
     "task5-reserved-input" => %{
       path: "lib/ash_onetime/admission.ex",
@@ -753,7 +784,6 @@ defmodule AshOnetime.MutationCheck do
         "task5-prefix-routing",
         "task5-authorization-order",
         "task5-ledger-tamper",
-        "task5-external-hold",
         "task5-reserved-input",
         "task5-composite-clock",
         "task5-composite-expiry",
@@ -804,8 +834,14 @@ defmodule AshOnetime.MutationCheck do
       String.replace(original_source, mutation.original, mutation.mutated, global: false)
 
     IO.puts("mutation #{name}: source edit #{mutation.original} -> #{mutation.mutated}")
-    IO.puts("mutation #{name}: expected failing test: #{mutation.test_name}")
-    IO.puts("mutation #{name}: expected failing assertion: #{mutation.assertion}")
+
+    required_failures =
+      Map.get(mutation, :required_failures, [{mutation.test_name, mutation.assertion}])
+
+    for {test_name, assertion} <- required_failures do
+      IO.puts("mutation #{name}: expected failing test: #{test_name}")
+      IO.puts("mutation #{name}: expected failing assertion: #{assertion}")
+    end
 
     {red_output, red_status} =
       try do
@@ -823,10 +859,13 @@ defmodule AshOnetime.MutationCheck do
       raise "mutation #{name} survived its owned test"
     end
 
-    unless String.contains?(red_output, mutation.test_name) and
-             String.contains?(red_output, mutation.assertion) do
-      raise "mutation #{name} failed without its named assertion"
+    unless Enum.all?(required_failures, fn {test_name, assertion} ->
+             String.contains?(red_output, test_name) and String.contains?(red_output, assertion)
+           end) do
+      raise "mutation #{name} failed without every required named assertion"
     end
+
+    assert_summary!(name, :mutant, red_output, Map.get(mutation, :red_summary))
 
     unless File.read!(mutation.path) == original_source do
       raise "mutation #{name} did not restore exact source bytes"
@@ -840,6 +879,8 @@ defmodule AshOnetime.MutationCheck do
       raise "mutation #{name} did not return green after restoration"
     end
 
+    assert_summary!(name, :restored, restored_output, Map.get(mutation, :green_summary))
+
     IO.puts("mutation #{name}: RED confirmed; exact source bytes restored; tagged test GREEN")
   end
 
@@ -847,6 +888,14 @@ defmodule AshOnetime.MutationCheck do
     case :binary.matches(source, needle) do
       [_single] -> :ok
       matches -> raise "mutation site count for #{path} was #{length(matches)}, expected 1"
+    end
+  end
+
+  defp assert_summary!(_name, _phase, _output, nil), do: :ok
+
+  defp assert_summary!(name, phase, output, expected) do
+    unless String.contains?(output, expected) do
+      raise "mutation #{name} #{phase} output omitted required summary #{inspect(expected)}"
     end
   end
 

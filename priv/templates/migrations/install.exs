@@ -139,35 +139,30 @@ defmodule <%= inspect(module) %> do
     AS $guard$
     DECLARE payload_count integer;
     BEGIN
+      IF OLD.state = 'processing' THEN
+        RAISE EXCEPTION 'processing idempotency claims are recovery points and cannot be deleted'
+          USING ERRCODE = '23514';
+      END IF;
+
       IF NOT #{q("ash_onetime_cleanup_eligible")}(OLD.retain_until) THEN
         RAISE EXCEPTION 'idempotency claim is inside its retention horizon'
           USING ERRCODE = '23514';
       END IF;
 
-      IF OLD.state = 'complete' THEN
-        SELECT count(*) INTO payload_count
-        FROM #{q("ash_onetime_response_payloads")}
-        WHERE claim_id = OLD.id;
-        IF payload_count <> 1 THEN
-          RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
-            USING ERRCODE = '23514';
-        END IF;
+      SELECT count(*) INTO payload_count
+      FROM #{q("ash_onetime_response_payloads")}
+      WHERE claim_id = OLD.id;
+      IF payload_count <> 1 THEN
+        RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
+          USING ERRCODE = '23514';
+      END IF;
 
-        DELETE FROM #{q("ash_onetime_response_payloads")}
-        WHERE partition_date = OLD.response_partition AND claim_id = OLD.id;
-        GET DIAGNOSTICS payload_count = ROW_COUNT;
-        IF payload_count <> 1 THEN
-          RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
-            USING ERRCODE = '23514';
-        END IF;
-      ELSE
-        SELECT count(*) INTO payload_count
-        FROM #{q("ash_onetime_response_payloads")}
-        WHERE claim_id = OLD.id;
-        IF payload_count <> 0 THEN
-          RAISE EXCEPTION 'processing idempotency claim has a payload'
-            USING ERRCODE = '23514';
-        END IF;
+      DELETE FROM #{q("ash_onetime_response_payloads")}
+      WHERE partition_date = OLD.response_partition AND claim_id = OLD.id;
+      GET DIAGNOSTICS payload_count = ROW_COUNT;
+      IF payload_count <> 1 THEN
+        RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
+          USING ERRCODE = '23514';
       END IF;
 
       RETURN OLD;
@@ -216,7 +211,8 @@ defmodule <%= inspect(module) %> do
       WITH candidates AS (
         SELECT operation_hash, id
         FROM #{q("ash_onetime_idempotency_claims")}
-        WHERE #{q("ash_onetime_cleanup_eligible")}(retain_until)
+        WHERE state = 'complete'
+          AND #{q("ash_onetime_cleanup_eligible")}(retain_until)
         ORDER BY retain_until, operation_hash, id
         FOR UPDATE SKIP LOCKED
         LIMIT batch_size

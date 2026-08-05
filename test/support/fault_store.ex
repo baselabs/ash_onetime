@@ -19,8 +19,15 @@ defmodule AshOnetime.Test.FaultStore do
   def claim(target, request), do: result!(:claim, [target, request])
 
   @impl AshOnetime.Store
+  def claim_committed(target, request), do: result!(:claim_committed, [target, request])
+
+  @impl AshOnetime.Store
   def complete(target, claim, codec, digest, payload),
     do: result!(:complete, [target, claim, codec, digest, payload])
+
+  @impl AshOnetime.Store
+  def complete_external(target, claim, codec, digest, payload),
+    do: result!(:complete_external, [target, claim, codec, digest, payload])
 
   @impl AshOnetime.Store
   def load(target, claim), do: result!(:load, [target, claim])

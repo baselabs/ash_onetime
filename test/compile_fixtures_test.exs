@@ -23,6 +23,9 @@ defmodule AshOnetime.CompileFixturesTest do
     "duplicate_protection.exs" => AshOnetime.CompileFixtures.DuplicateProtection,
     "excessive_bounds.exs" => AshOnetime.CompileFixtures.ExcessiveBounds,
     "missing_callbacks.exs" => AshOnetime.CompileFixtures.MissingCallbacks,
+    "wrong_execute_arity_external.exs" => AshOnetime.CompileFixtures.WrongExecuteArityExternal,
+    "wrong_recover_arity_external.exs" => AshOnetime.CompileFixtures.WrongRecoverArityExternal,
+    "external_untracked.exs" => AshOnetime.CompileFixtures.ExternalUntracked,
     "reserved_arguments.exs" => AshOnetime.CompileFixtures.ReservedArguments,
     "reserved_attributes.exs" => AshOnetime.CompileFixtures.ReservedAttributes,
     "reserved_argument_key.exs" => AshOnetime.CompileFixtures.ReservedArgumentKey,
@@ -79,6 +82,17 @@ defmodule AshOnetime.CompileFixturesTest do
     "missing_callbacks.exs" =>
       {:redeem, :scope,
        "AshOnetime.CompileFixture.UnsafeChange is missing callbacks [resolve: 2]", 8},
+    "wrong_execute_arity_external.exs" =>
+      {:charge, :external_effect,
+       "AshOnetime.CompileFixture.WrongExecuteArityExternal is missing callbacks [execute: 3]",
+       13},
+    "wrong_recover_arity_external.exs" =>
+      {:charge, :external_effect,
+       "AshOnetime.CompileFixture.WrongRecoverArityExternal is missing callbacks [recover: 3]",
+       13},
+    "external_untracked.exs" =>
+      {:charge, :on_definite_store_failure,
+       "external effects require a committed recovery point and cannot execute untracked", 14},
     "reserved_arguments.exs" =>
       {:charge, :action,
        "protected action exposes reserved verification inputs: [:verification_state]", 7},
@@ -229,6 +243,12 @@ defmodule AshOnetime.CompileFixturesTest do
       {:redeem, :key, "nonce keys must contain only verified or minted trusted sources"},
     nonce_fingerprint: {:redeem, :fingerprint, "nonce has no fingerprint surface"},
     nonce_retention: {:redeem, :retention, "nonce retention derives from its window"},
+    nonce_external_create: {:charge, :external_effect, "nonce cannot configure external effects"},
+    nonce_external_update: {:adjust, :external_effect, "nonce cannot configure external effects"},
+    nonce_external_destroy:
+      {:remove, :external_effect, "nonce cannot configure external effects"},
+    nonce_external_generic:
+      {:redeem, :external_effect, "nonce cannot configure external effects"},
     limit_max_key_bytes:
       {:charge, :limits, "limit overrides must be positive and cannot exceed package ceilings"},
     limit_max_token_bytes:

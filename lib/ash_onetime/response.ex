@@ -125,12 +125,13 @@ defmodule AshOnetime.Response do
               response_digest: payload_digest
             } = claim,
           admission_dispatch: :sent,
-          transaction: :open
+          transaction: transaction
         },
         %Contract{} = contract,
         _opts
       )
-      when is_binary(payload) and is_binary(binding) and is_binary(payload_digest) do
+      when transaction in [:open, :committed] and is_binary(payload) and is_binary(binding) and
+             is_binary(payload_digest) do
     with :ok <- validate_complete_claim(claim),
          :ok <- validate_persisted_payload(payload, payload_digest, contract),
          {:ok, raw_tag, contract_digest} <- parse_binding(binding),
