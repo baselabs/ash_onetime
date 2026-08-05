@@ -184,7 +184,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Token => [__struct__: 0, __struct__: 1, mint: 2, sign: 3, verify: 3],
     AshOnetime.Verified => [__struct__: 0, __struct__: 1],
     AshOnetime.Verifier => [],
-    AshOnetime.Window => [cleanup_after: 3, validate: 5],
+    AshOnetime.Window => [cleanup_after: 3, cleanup_skew_margin_seconds: 0, validate: 5],
     Mix.Tasks.AshOnetime.Gen.Migrations => [render: 2, run: 1, timestamp: 0],
     Mix.Tasks.AshOnetime.Install => [
       igniter: 1,

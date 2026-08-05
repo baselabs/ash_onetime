@@ -323,7 +323,10 @@ defmodule AshOnetime.Store.Postgres do
        admitted_at, retain_until, inserted_at)
     VALUES ($1::uuid, $2, $3, $4, $5, $6, $7,
             transaction_timestamp(),
-            GREATEST($8::timestamptz, transaction_timestamp() + interval '1 microsecond'),
+            GREATEST(
+              $8::timestamptz,
+              transaction_timestamp() + (#{AshOnetime.Window.cleanup_skew_margin_seconds()} * interval '1 second')
+            ),
             transaction_timestamp())
     ON CONFLICT DO NOTHING
     RETURNING id, operation_hash, scope_hash, key_hash, issued_at, expires_at, verifier_id,

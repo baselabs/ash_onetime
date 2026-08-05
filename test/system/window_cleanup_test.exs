@@ -26,12 +26,13 @@ defmodule AshOnetime.System.WindowCleanupTest do
     assert count(prefix, expired) == 0
   end
 
-  test "window cleanup begins one microsecond after the inclusive boundary" do
+  test "window cleanup horizon clears the inclusive boundary by the clock-skew margin" do
     issued_at = ~U[2026-08-05 12:00:00.000000Z]
     horizon = DateTime.add(issued_at, 65, :second)
+    margin = AshOnetime.Window.cleanup_skew_margin_seconds()
 
     assert AshOnetime.Window.cleanup_after(issued_at, 60, 5) ==
-             DateTime.add(horizon, 1, :microsecond)
+             DateTime.add(horizon, margin, :second)
   end
 
   defp insert_nonce(prefix, label, position) do

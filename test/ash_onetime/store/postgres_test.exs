@@ -95,6 +95,42 @@ defmodule AshOnetime.Store.PostgresTest do
            ) == :eq
   end
 
+  test "the retention floor keeps a still-acceptable nonce when the app clock lags the database",
+       %{target: target} do
+    # Double-spend scenario: the application clock lags the PostgreSQL clock. Freeze the app
+    # clock far in the past so the nonce is valid against the acceptance window, while its
+    # issuance-based cleanup horizon already sits in the database's past. The retention floor
+    # (transaction_timestamp() + margin) must therefore win and keep the nonce retained for the
+    # full margin beyond admission — a 1-microsecond floor would let cleanup delete it
+    # immediately and let a replay re-admit (double-spend).
+    lagging_now = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+    Clock.freeze(lagging_now)
+
+    {:ok, request} =
+      Claim.nonce(
+        operation_hash: hash("floor-operation"),
+        scope_hash: hash("floor-scope"),
+        key_hash: hash("floor-key"),
+        verified: [
+          %AshOnetime.Verified{
+            key: "floor",
+            issued_at: lagging_now,
+            expires_at: nil,
+            verifier_id: "floor-verifier"
+          }
+        ],
+        max_age: 60,
+        clock_skew: 15,
+        clock: Clock
+      )
+
+    assert {:ok, %Result{status: :admitted, claim: claim}} =
+             Repo.transaction(fn -> Store.claim(target, request) end)
+
+    margin = AshOnetime.Window.cleanup_skew_margin_seconds()
+    assert DateTime.diff(claim.retain_until, claim.admitted_at, :second) == margin
+  end
+
   @tag task5_composite_sibling_mutation: true
   test "one invalid composite nonce sibling rejects the entire admission", %{target: target} do
     evaluated_at = Clock.now() |> DateTime.truncate(:second)

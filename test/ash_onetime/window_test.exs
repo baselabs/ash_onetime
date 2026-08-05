@@ -35,13 +35,18 @@ defmodule AshOnetime.WindowTest do
              Window.validate(issued_at, tick(issued_at, -1), @evaluated_at, 60, 5)
   end
 
-  test "cleanup returns the first DateTime strictly after the inclusive horizon" do
+  test "cleanup horizon clears the replay horizon by the clock-skew retention margin" do
     issued_at = ~U[2026-08-04 11:58:55.000000Z]
     replay_horizon = DateTime.add(issued_at, 65, :second)
     cleanup_at = Window.cleanup_after(issued_at, 60, 5)
+    margin = Window.cleanup_skew_margin_seconds()
 
     assert %DateTime{} = cleanup_at
-    assert cleanup_at == tick(replay_horizon, 1)
+    # The nonce stays retained for the full margin PAST the acceptance horizon, so a
+    # cleanup evaluated on the PostgreSQL clock cannot delete a nonce the acceptance
+    # window (application clock) still accepts, given app<->DB skew below the margin.
+    assert margin >= 1
+    assert cleanup_at == DateTime.add(replay_horizon, margin, :second)
     assert DateTime.compare(cleanup_at, replay_horizon) == :gt
   end
 

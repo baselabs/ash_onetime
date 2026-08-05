@@ -4,6 +4,29 @@ defmodule AshOnetime.Window do
   """
 
   @max_duration_seconds 2_147_483_647
+  @default_cleanup_skew_margin_seconds 1
+
+  @doc """
+  Retention safety margin, in seconds, added beyond a nonce's acceptance window
+  before the spent nonce becomes eligible for cleanup.
+
+  The acceptance window is evaluated against the application clock, while cleanup
+  eligibility is evaluated against the PostgreSQL clock. This margin guarantees a
+  spent nonce stays retained until strictly after its acceptance window has
+  closed — and therefore cannot be deleted and re-admitted (double-spent) — as
+  long as the PostgreSQL clock is not ahead of the application clock by more than
+  this margin. Keep both clocks synchronized (e.g. via NTP); operators with looser
+  synchronization should raise it. Configure with
+  `config :ash_onetime, :cleanup_clock_skew_margin_seconds, integer_seconds`
+  (default #{@default_cleanup_skew_margin_seconds}).
+  """
+  @spec cleanup_skew_margin_seconds() :: pos_integer()
+  def cleanup_skew_margin_seconds do
+    case Application.get_env(:ash_onetime, :cleanup_clock_skew_margin_seconds) do
+      seconds when is_integer(seconds) and seconds >= 1 -> seconds
+      _other -> @default_cleanup_skew_margin_seconds
+    end
+  end
 
   @spec validate(
           DateTime.t(),
@@ -39,7 +62,7 @@ defmodule AshOnetime.Window do
     if valid_datetime?(issued_at) and valid_durations?(max_age, skew) do
       issued_at
       |> DateTime.add(max_age + skew, :second)
-      |> DateTime.add(1, :microsecond)
+      |> DateTime.add(cleanup_skew_margin_seconds(), :second)
     else
       {:error, :invalid}
     end
