@@ -977,7 +977,10 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  defp valid_prefix?(value), do: is_binary(value) and byte_size(value) > 0
+  # PostgreSQL silently truncates identifiers at 63 bytes (NAMEDATALEN), so two context
+  # tenants sharing a 63-byte prefix would route to the same physical schema. Fail closed
+  # on an over-long prefix, matching the cleanup-side bound (cleanup_worker.ex, prune task).
+  defp valid_prefix?(value), do: is_binary(value) and byte_size(value) in 1..63
 
   defp restore_process_value(key, nil), do: Process.delete(key)
   defp restore_process_value(key, value), do: Process.put(key, value)

@@ -25,6 +25,11 @@ external recovery points, removes response bytes atomically with completed claim
 only empty expired payload partitions after obtaining the required lock. Batch size and
 prefix are explicit. Schedule `AshOnetime.Oban.CleanupWorker` only if Oban is installed.
 
+A context-multitenant tenant prefix must be 1..63 bytes — PostgreSQL truncates identifiers at
+63 bytes (NAMEDATALEN), so a longer prefix could route two tenants to the same schema. Both
+admission and cleanup reject an out-of-range prefix (admission fails closed with
+`:missing_prefix`) rather than truncating.
+
 Configure an optional completed-response cache with `config :ash_onetime, :cache, MyCache`
 and a bounded `:cache_timeout`. Implement `AshOnetime.Cache`; treat every value as untrusted.
 The default `AshOnetime.Cache.None` needs no application configuration or supervision tree.
