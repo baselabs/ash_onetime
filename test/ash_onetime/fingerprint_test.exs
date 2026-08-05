@@ -14,6 +14,16 @@ defmodule AshOnetime.FingerprintTest do
     assert byte_size(digest) == 32
   end
 
+  test "compute/2 enforces the configured max_fingerprint_bytes on the canonical input" do
+    value = %{"pad" => String.duplicate("x", 1_000)}
+    assert {:ok, encoded} = Canonical.encode(value)
+
+    assert {:ok, _digest} = Fingerprint.compute(value, byte_size(encoded))
+
+    assert {:error, %Error{code: :fingerprint_too_large}} =
+             Fingerprint.compute(value, byte_size(encoded) - 1)
+  end
+
   property "map fingerprints use independently sorted encoded keys" do
     check all(left <- integer(), right <- integer()) do
       value = %{"bb" => left, "a" => right}

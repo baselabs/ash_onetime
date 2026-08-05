@@ -7,7 +7,7 @@ defmodule AshOnetime.Codec.ResponseTest do
   alias AshOnetime.Test.{FixedEmptyCodec, LongTagCodec, StoreClassifier}
   alias AshOnetime.Test.ResultExamples.Account
 
-  @fixed_nullable_binding "ao:fixed-empty:qf-V7MKlVNIfNk77WAg-IzjlUZlKHDgaT3vLVgRWb7s"
+  @fixed_nullable_binding "ao:fixed-empty:qOrwDE5KM8cy6ap184HN_WWByO6f3n_UOFGOz-ik3Sc"
 
   test "fixed custom zero-byte codec is contract-bound on first result and replay" do
     contract = contract!(:nullable_result, FixedEmptyCodec, value: "fixed")
@@ -30,6 +30,20 @@ defmodule AshOnetime.Codec.ResponseTest do
     }
 
     assert {:ok, "fixed"} = Response.replay(store_result(fixed), contract, [])
+  end
+
+  test "codec options are bound into the digest so stored bytes cannot be reinterpreted" do
+    stored = contract!(:nullable_result, FixedEmptyCodec, value: "fixed")
+    reinterpret = contract!(:nullable_result, FixedEmptyCodec, value: "attacker")
+
+    refute stored.digest == reinterpret.digest
+
+    assert {:ok, encoded} = Response.encode("fixed", stored, [])
+
+    # The same empty payload replayed under different codec options must fail closed,
+    # never silently decode to the attacker's substituted value.
+    assert {:error, %Error{code: :response_contract_mismatch}} =
+             Response.replay(store_result(encoded), reinterpret, [])
   end
 
   test "81-byte raw tags fit exactly and malformed bindings are terminal" do

@@ -20,7 +20,7 @@ defmodule AshOnetime.Codec.ResourceTest do
     assert %Ash.NotLoaded{field: :sentinel_private, type: :attribute} = restored.sentinel_private
     assert %Ash.NotLoaded{field: :secret, type: :attribute} = restored.secret
     assert %Ash.NotLoaded{field: :parent, type: :relationship} = restored.parent
-    assert restored.__metadata__ == %{}
+    assert restored.__metadata__ == %{selected: [:id, :name, :amount]}
     assert restored.__meta__.state == :loaded
   end
 
@@ -43,6 +43,22 @@ defmodule AshOnetime.Codec.ResourceTest do
     end
   end
 
+  test "a configured max_response_bytes bounds the encoded resource payload" do
+    response = %AshOnetime.Resource.Response{
+      codec: Resource,
+      opts: [fields: [:id, :name, :amount], classify: AshOnetime.Test.StoreClassifier]
+    }
+
+    {:ok, capped} =
+      Response.contract(Account, :create_account, response, %{limits: [max_response_bytes: 1]})
+
+    assert AshOnetime.Codec.max_bytes(capped) == 1
+    assert {:error, %Error{}} = Response.encode(account(), capped, [])
+
+    {:ok, uncapped} = Response.contract(Account, :create_account, response, %{})
+    assert {:ok, _encoded} = Response.encode(account(), uncapped, [])
+  end
+
   test "custom codecs receive and return only the normalized resource projection" do
     contract = custom_contract!(AshOnetime.Test.ObservingCodec, observer: self())
 
@@ -56,7 +72,8 @@ defmodule AshOnetime.Codec.ResourceTest do
     assert_receive {:codec_received, received}
     assert %Ash.NotLoaded{} = received.sentinel_private
     assert %Ash.NotLoaded{} = received.secret
-    assert received.__metadata__ == %{}
+    assert received.__metadata__ == %{selected: [:id, :name]}
+    refute Map.has_key?(received.__metadata__, :secret)
     assert encoded.result == received
     assert {:ok, ^received} = Response.replay(store_result(encoded), contract, [])
 

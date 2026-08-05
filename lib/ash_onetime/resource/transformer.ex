@@ -158,6 +158,7 @@ defmodule AshOnetime.Resource.Transformer do
          :ok <- verify_scope_callbacks(protection, scope, dsl_state),
          :ok <- verify_key_callbacks(protection, key, dsl_state),
          {:ok, limits} <- normalize_limits(protection, dsl_state),
+         :ok <- verify_scope_bound(scope, limits, protection, dsl_state),
          {:ok, normalized} <-
            verify_strategy(%{protection | scope: scope, key: key, limits: limits}, context),
          :ok <- verify_lifecycle(normalized, context) do
@@ -260,6 +261,21 @@ defmodule AshOnetime.Resource.Transformer do
 
       {:error, message} ->
         error(context.dsl_state, protection, :scope, message)
+    end
+  end
+
+  defp verify_scope_bound(scope, limits, protection, dsl_state) do
+    maximum = Keyword.fetch!(limits, :max_scope_components)
+
+    if length(scope) <= maximum do
+      :ok
+    else
+      error(
+        dsl_state,
+        protection,
+        :scope,
+        "scope has #{length(scope)} components but max_scope_components is #{maximum}"
+      )
     end
   end
 

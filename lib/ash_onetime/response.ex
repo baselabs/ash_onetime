@@ -353,7 +353,8 @@ defmodule AshOnetime.Response do
         :type,
         :constraints,
         :allow_nil?,
-        :codec
+        :codec,
+        :codec_opts
       ])
       |> :erlang.term_to_binary([:deterministic])
 

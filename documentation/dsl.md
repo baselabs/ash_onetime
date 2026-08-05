@@ -42,7 +42,12 @@ Nonce protection requires only verified or minted sources. Verification callback
 `AshOnetime.Verified`; action input cannot supply trusted timestamps, algorithms, or
 verification state. Choose either verified sources or one minted source for a nonce key;
 a minted source cannot be combined with another source because fresh minting would change
-the authoritative replay key on every attempt.
+the authoritative replay key on every attempt. Idempotency keys, by contrast, must be
+deterministic for the same logical operation: the same request must yield the same key so
+admission can match a prior claim. A nondeterministic source such as a fresh `{:minted, minter}`
+would produce a new key on every attempt and never match, defeating idempotency; use stable
+sources like `{:client, ...}`, `{:argument, ...}`, `{:attribute, ...}`, or a `{:verified, ...}`
+proof whose descriptor is stable.
 
 Idempotency requires `fingerprint`, `response`, and positive `retention`. The response
 codec receives an explicit field allowlist and a classifier that chooses store, reject,

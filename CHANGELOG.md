@@ -11,7 +11,11 @@ All notable changes to this project are documented here.
 - Add PostgreSQL-authoritative idempotency and one-time nonce admission with exact operation,
   scope, key, fingerprint, transaction, and failure-direction invariants.
 - Add transactional CRUD and generic-action execution, classified typed response persistence,
-  digest-bound replay, and replay-safe lifecycle enforcement.
+  digest-bound replay, and replay-safe lifecycle enforcement. The response contract digest binds
+  the codec options, so stored bytes cannot be reinterpreted under changed options; replayed
+  results carry the same `selected`/`tenant` metadata as a first execution.
+- Enforce the configurable `max_scope_components`, `max_fingerprint_bytes`, and
+  `max_response_bytes` limit overrides at their declared values, not only their package ceilings.
 - Add bounded canonical encoding, HMAC-SHA-256 and Ed25519 signing, trusted verification facts,
   self-identifying tokens, and inclusive nonce windows.
 - Add committed external-effect recovery points, stable peer operation keys, conservative

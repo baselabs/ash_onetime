@@ -225,7 +225,7 @@ defmodule AshOnetime.Codec.Resource do
       |> unload(ResourceInfo.calculations(resource), :calculation)
       |> unload(ResourceInfo.aggregates(resource), :aggregate)
       |> Map.merge(values)
-      |> Map.put(:__metadata__, trusted_metadata(contract.trusted))
+      |> Map.put(:__metadata__, result_metadata(contract))
       |> Ecto.put_meta(state: resource_state(contract.result_mode))
 
     {:ok, restored}
@@ -268,8 +268,14 @@ defmodule AshOnetime.Codec.Resource do
     MapSet.new(actual) == MapSet.new(Enum.map(expected, &Atom.to_string/1))
   end
 
-  defp trusted_metadata(%{tenant: tenant}) when not is_nil(tenant), do: %{tenant: tenant}
-  defp trusted_metadata(_trusted), do: %{}
+  defp result_metadata(contract) do
+    metadata = %{selected: contract.fields}
+
+    case contract.trusted do
+      %{tenant: tenant} when not is_nil(tenant) -> Map.put(metadata, :tenant, tenant)
+      _ -> metadata
+    end
+  end
 
   defp resource_state({:resource, state}), do: state
 

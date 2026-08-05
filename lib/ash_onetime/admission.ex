@@ -456,16 +456,22 @@ defmodule AshOnetime.Admission do
 
   defp request_fingerprint(_subject, %{strategy: :one_time_nonce}), do: {:ok, nil}
 
-  defp request_fingerprint(subject, %{strategy: :idempotency, fingerprint: fingerprint}) do
+  defp request_fingerprint(
+         subject,
+         %{strategy: :idempotency, fingerprint: fingerprint} = protection
+       ) do
     with {:ok, arguments} <-
            dump_references(subject, Keyword.get(fingerprint, :arguments, []), :argument),
          {:ok, attributes} <-
            dump_references(subject, Keyword.get(fingerprint, :attributes, []), :attribute) do
-      Fingerprint.compute(%{
-        domain: :request_fingerprint,
-        arguments: arguments,
-        attributes: attributes
-      })
+      Fingerprint.compute(
+        %{
+          domain: :request_fingerprint,
+          arguments: arguments,
+          attributes: attributes
+        },
+        Keyword.get(protection.limits, :max_fingerprint_bytes, :infinity)
+      )
     end
   end
 
@@ -508,9 +514,20 @@ defmodule AshOnetime.Admission do
 
   defp response_contract(_subject, %{strategy: :one_time_nonce}), do: {:ok, nil}
 
-  defp response_contract(subject, %{strategy: :idempotency, response: response}) do
-    trusted = if subject.action.type == :destroy, do: %{return_destroyed?: true}, else: %{}
+  defp response_contract(subject, %{strategy: :idempotency, response: response} = protection) do
+    trusted =
+      if(subject.action.type == :destroy, do: %{return_destroyed?: true}, else: %{})
+      |> put_result_tenant(subject)
+      |> Map.put(:limits, protection.limits)
+
     Response.contract(subject.resource, subject.action.name, response, trusted)
+  end
+
+  defp put_result_tenant(trusted, subject) do
+    case Map.get(subject, :to_tenant) do
+      nil -> trusted
+      tenant -> Map.put(trusted, :tenant, tenant)
+    end
   end
 
   defp claim_request(protection, operation_hash, scope_hash, key_hash, fingerprint, verified) do

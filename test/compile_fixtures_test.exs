@@ -273,6 +273,8 @@ defmodule AshOnetime.CompileFixturesTest do
     limit_negative:
       {:charge, :limits, "limit overrides must be positive and cannot exceed package ceilings"},
     limit_unknown: {:charge, :limits, "unknown limit options: [:unknown_bound]"},
+    scope_over_configured_limit:
+      {:charge, :scope, "scope has 2 components but max_scope_components is 1"},
     retention_negative: {:charge, :retention, "must be a positive bounded duration"},
     retention_tuple_negative: {:charge, :retention, "must be a positive bounded duration"},
     window_negative_age:

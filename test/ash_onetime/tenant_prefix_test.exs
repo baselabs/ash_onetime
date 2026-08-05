@@ -91,6 +91,25 @@ defmodule AshOnetime.TenantPrefixTest do
     end
   end
 
+  test "a replayed idempotent result preserves the fresh result's tenant", %{prefix: prefix} do
+    input = %{
+      account_id: Ecto.UUID.generate(),
+      amount: 10,
+      request_key: "fidelity-key",
+      natural_key: "fidelity-natural",
+      external_key: "fidelity-external"
+    }
+
+    assert {:ok, fresh} = create_in(prefix, input)
+    assert {:ok, replayed} = create_in(prefix, input)
+
+    assert replayed.id == fresh.id
+    assert replayed.__meta__.prefix == fresh.__meta__.prefix
+    assert fresh.__metadata__.tenant == prefix
+    assert replayed.__metadata__.tenant == prefix
+    assert replayed.__metadata__ == fresh.__metadata__
+  end
+
   defp create_in(prefix, input) do
     Resource
     |> Ash.Changeset.for_create(:charge, input)

@@ -265,6 +265,12 @@ defmodule AshOnetime.CompileFixture.MatrixCases do
   defp definition(:limit_zero), do: {[], idempotency(limits: [max_key_bytes: 0])}
   defp definition(:limit_negative), do: {[], idempotency(limits: [max_key_bytes: -1])}
   defp definition(:limit_unknown), do: {[], idempotency(limits: [unknown_bound: 1])}
+
+  defp definition(:scope_over_configured_limit),
+    do:
+      {[],
+       idempotency(scope: [{:static, "a"}, {:static, "b"}], limits: [max_scope_components: 1])}
+
   defp definition(:retention_negative), do: {[], idempotency(retention: -1)}
   defp definition(:retention_tuple_negative), do: {[], idempotency(retention: {-1, :second})}
   defp definition(:window_negative_age), do: {[], nonce(window: [max_age: -1, clock_skew: 0])}

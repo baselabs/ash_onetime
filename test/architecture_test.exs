@@ -138,7 +138,7 @@ defmodule AshOnetime.ArchitectureTest do
     ],
     AshOnetime.Error => [__struct__: 0, __struct__: 1, exception: 1, message: 1, new: 2, new: 3],
     AshOnetime.ExternalEffect => [operation_key: 1, put_result: 3, result: 1],
-    AshOnetime.Fingerprint => [compute: 1],
+    AshOnetime.Fingerprint => [compute: 1, compute: 2],
     AshOnetime.KeyResolver => [],
     AshOnetime.KeySource => [normalize: 1, references: 1],
     AshOnetime.Oban.CleanupWorker => [
