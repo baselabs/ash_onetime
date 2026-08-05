@@ -156,6 +156,7 @@ defmodule AshOnetime.Resource.Transformer do
          {:ok, scope} <- normalize_scope(protection, context),
          {:ok, key} <- normalize_key(protection, context),
          :ok <- verify_scope_callbacks(protection, scope, dsl_state),
+         :ok <- verify_tenant_scope(scope, protection, context),
          :ok <- verify_key_callbacks(protection, key, dsl_state),
          {:ok, limits} <- normalize_limits(protection, dsl_state),
          :ok <- verify_scope_bound(scope, limits, protection, dsl_state),
@@ -334,6 +335,42 @@ defmodule AshOnetime.Resource.Transformer do
       _component, :ok ->
         {:cont, :ok}
     end)
+  end
+
+  # mutation sentinel: attribute-tenant-scope-guard
+  defp verify_tenant_scope(scope, protection, context),
+    do: verify_tenant_scope_details(scope, protection, context)
+
+  # Attribute multitenancy shares one physical set of claim tables across tenants (the
+  # resource's own schema), so cross-tenant isolation depends entirely on the tenant
+  # discriminator being present in the declared scope. Require it, or a tenant resolver.
+  defp verify_tenant_scope_details(scope, protection, %{dsl_state: dsl_state}) do
+    case ResourceInfo.multitenancy_strategy(dsl_state) do
+      :attribute ->
+        tenant_attribute = ResourceInfo.multitenancy_attribute(dsl_state)
+
+        if tenant_scoped?(scope, tenant_attribute) do
+          :ok
+        else
+          error(dsl_state, protection, :scope, tenant_scope_message(tenant_attribute))
+        end
+
+      _strategy ->
+        :ok
+    end
+  end
+
+  defp tenant_scoped?(scope, tenant_attribute) do
+    Enum.any?(scope, fn
+      {:tenant, _module} -> true
+      {:attribute, attribute} -> not is_nil(tenant_attribute) and attribute == tenant_attribute
+      _component -> false
+    end)
+  end
+
+  defp tenant_scope_message(tenant_attribute) do
+    "attribute multitenancy requires the tenant attribute #{inspect(tenant_attribute)} " <>
+      "or a {:tenant, module} resolver in scope"
   end
 
   defp verify_key_callbacks(protection, key, dsl_state) do

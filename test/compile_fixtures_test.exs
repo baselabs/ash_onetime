@@ -44,7 +44,9 @@ defmodule AshOnetime.CompileFixturesTest do
     "missing_key_reference.exs" => AshOnetime.CompileFixtures.MissingKeyReference,
     "missing_external_reference.exs" => AshOnetime.CompileFixtures.MissingExternalReference,
     "unsafe_builtin_option.exs" => AshOnetime.CompileFixtures.UnsafeBuiltinOption,
-    "unsafe_validation.exs" => AshOnetime.CompileFixtures.UnsafeValidation
+    "unsafe_validation.exs" => AshOnetime.CompileFixtures.UnsafeValidation,
+    "attribute_multitenant_unscoped.exs" =>
+      AshOnetime.CompileFixtures.AttributeMultitenantUnscoped
   }
 
   @fixture_expectations %{
@@ -130,7 +132,11 @@ defmodule AshOnetime.CompileFixturesTest do
     "unsafe_validation.exs" =>
       {:charge, :action,
        "AshOnetime.CompileFixture.UnsafeValidation must export replay_safety/1 for idempotent replay validation",
-       7}
+       7},
+    "attribute_multitenant_unscoped.exs" =>
+      {:charge, :scope,
+       "attribute multitenancy requires the tenant attribute :account_id or a {:tenant, module} resolver in scope",
+       9}
   }
 
   @matrix_expectations %{
@@ -497,6 +503,28 @@ defmodule AshOnetime.CompileFixturesTest do
     assert_rejected("unsafe_validation.exs", AshOnetime.CompileFixtures.UnsafeValidation)
   end
 
+  @tag :dsl_attribute_tenant_scope_mutation
+  test "attribute multitenancy requires the tenant discriminator in scope" do
+    assert_rejected(
+      "attribute_multitenant_unscoped.exs",
+      AshOnetime.CompileFixtures.AttributeMultitenantUnscoped
+    )
+  end
+
+  test "attribute multitenancy accepts the tenant attribute in scope" do
+    assert_compiled(
+      "attribute_multitenant_scoped.exs",
+      AshOnetime.CompileFixtures.AttributeMultitenantScoped
+    )
+  end
+
+  test "attribute multitenancy accepts a tenant resolver in scope" do
+    assert_compiled(
+      "attribute_multitenant_tenant_resolver.exs",
+      AshOnetime.CompileFixtures.AttributeMultitenantTenantResolver
+    )
+  end
+
   def run_fixture(fixture, expected) do
     fixture = Path.expand(Path.join("test/compile_fixtures", fixture))
 
@@ -533,6 +561,14 @@ defmodule AshOnetime.CompileFixturesTest do
     assert status != 0, output
     assert output =~ "ASH_ONETIME_FIXTURE_RESULT=rejected"
     assert output =~ "ASH_ONETIME_FIXTURE_LOADED=false"
+  end
+
+  defp assert_compiled(fixture, expected) do
+    {output, status} = run_fixture(fixture, expected)
+
+    assert status == 0, output
+    assert output =~ "ASH_ONETIME_FIXTURE_RESULT=compiled"
+    assert output =~ "ASH_ONETIME_FIXTURE_LOADED=true"
   end
 
   defp fixture_fact(output, name) do

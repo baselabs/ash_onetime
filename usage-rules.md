@@ -7,6 +7,10 @@
   untracked failure direction.
 - Declare a nonempty scope. Missing scope data is an error, never a global fallback. Include
   every tenant or principal boundary needed to prevent cross-scope blocking or replay.
+- On a resource using `multitenancy strategy :attribute`, put the tenant discriminator in the
+  scope (`{:attribute, <tenant_attribute>}` or a `{:tenant, module}` resolver). Those tenants
+  share one set of claim tables, so the library rejects a tenant-less scope at compile time.
+  Context multitenancy isolates by schema and needs no scope entry for this.
 - Let the library derive operation identity from the protected resource and action. Do not
   substitute a caller-controlled operation name.
 - Bind idempotency keys to all request arguments and attributes that change the effect.

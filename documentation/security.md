@@ -36,6 +36,14 @@ Misuse: using a shared HMAC secret across a separated signer/verifier boundary. 
 verify can then forge. Use Ed25519 or a verifier callback backed by the provider's supported
 scheme.
 
+Misuse: declaring `multitenancy strategy :attribute` without the tenant discriminator in scope.
+Attribute-multitenant resources share one physical set of claim tables across every tenant, so
+cross-tenant isolation rests entirely on the tenant being part of the scope; omit it and one
+tenant is served another's stored response or burns another's nonce. `ash_onetime` rejects such
+a resource at compile time — the scope must include `{:attribute, <tenant_attribute>}` or a
+`{:tenant, module}` resolver. (Context multitenancy routes each tenant to its own schema and
+needs no scope entry for isolation.)
+
 Retention and cleanup are security boundaries. Deleting a nonce while its acceptance window is
 still open can admit a replay. The acceptance window is evaluated on the application clock while
 cleanup eligibility is evaluated on the PostgreSQL clock, so a spent nonce is retained for a

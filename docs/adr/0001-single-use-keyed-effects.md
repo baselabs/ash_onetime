@@ -70,7 +70,8 @@ old tokens are validated before insertion so cleanup cannot reopen replay.
 
 - Strategy-specific types, tables, options, and tests remain separate even where their
   unique-key machinery is similar.
-- The compiler rejects missing strategy or scope, unsafe transaction shapes, untrusted
+- The compiler rejects missing strategy or scope, a tenant-less scope on an attribute-multitenant
+  resource (whose tenants share one set of claim tables), unsafe transaction shapes, untrusted
   nonce facts, and unsupported external effects.
 - Tests must use real committed PostgreSQL connections for contention and must cover
   failure direction, exact window edges, cross-operation isolation, and cleanup races.

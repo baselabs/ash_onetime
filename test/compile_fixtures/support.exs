@@ -230,6 +230,7 @@ defmodule AshOnetime.CompileFixture do
     data_layer = Keyword.get(options, :data_layer, AshPostgres.DataLayer)
     actions = options |> Keyword.get(:actions) |> actions_ast()
     attributes = options |> Keyword.get(:attributes) |> attributes_ast()
+    multitenancy = options |> Keyword.get(:multitenancy) |> multitenancy_ast()
     lifecycle = options |> Keyword.get(:lifecycle) |> lifecycle_ast()
 
     postgres =
@@ -251,6 +252,7 @@ defmodule AshOnetime.CompileFixture do
 
         unquote(postgres)
         unquote(attributes)
+        unquote(multitenancy)
         unquote(lifecycle)
         unquote(actions)
         unquote(body)
@@ -673,6 +675,17 @@ defmodule AshOnetime.CompileFixture do
         create :charge do
           accept [unquote(name)]
         end
+      end
+    end
+  end
+
+  defp multitenancy_ast(nil), do: nil
+
+  defp multitenancy_ast(:attribute_account_id) do
+    quote do
+      multitenancy do
+        strategy :attribute
+        attribute :account_id
       end
     end
   end

@@ -166,6 +166,19 @@ defmodule AshOnetime.MutationCheck do
       assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
       probe: {"unsafe_validation.exs", "AshOnetime.CompileFixtures.UnsafeValidation"}
     },
+    "dsl-attribute-tenant-scope" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "  defp verify_tenant_scope(scope, protection, context),\n    do: verify_tenant_scope_details(scope, protection, context)",
+      mutated: "  defp verify_tenant_scope(_scope, _protection, _context), do: :ok",
+      test: "test/compile_fixtures_test.exs",
+      tag: "dsl_attribute_tenant_scope_mutation",
+      test_name: "attribute multitenancy requires the tenant discriminator in scope",
+      assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
+      probe:
+        {"attribute_multitenant_unscoped.exs",
+         "AshOnetime.CompileFixtures.AttributeMultitenantUnscoped"}
+    },
     "unique-constraint" => %{
       path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
       original: "@collision_constraint \"UNIQUE (operation_hash, scope_hash, key_hash)\"",
@@ -832,7 +845,8 @@ defmodule AshOnetime.MutationCheck do
       "dsl-duplicate",
       "dsl-references",
       "dsl-builtin-options",
-      "dsl-validations"
+      "dsl-validations",
+      "dsl-attribute-tenant-scope"
     ],
     "operation-hash" => [
       "operation-hash-select",
