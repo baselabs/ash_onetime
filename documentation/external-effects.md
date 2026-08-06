@@ -23,7 +23,7 @@ continues without a second peer effect. If local finalization rolls back, the pr
 claim remains a recoverable point.
 
 A processing claim that is never completed or recovered is retained for recovery, but not
-forever: the opt-in reaper (`AshOnetime.Store.reap/3`, see the operations guide) deletes it once
+forever: the opt-in reaper (`mix ash_onetime.reap`, see the operations guide) deletes it once
 it is past both a long abandonment horizon and its own retention horizon. After that, a retry of
 the same logical key is a new execution with a new peer operation key, so the peer — not the
 package — is the last line of defense against a duplicate effect for a claim abandoned that long.

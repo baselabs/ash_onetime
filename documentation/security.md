@@ -55,7 +55,7 @@ synchronization. Processing external claims are retained for recovery until they
 completed or reaped. An abandoned processing claim that never settles would otherwise be immortal
 (cleanup skips it and the delete guard forbids deleting it), so a caller driving external-effect
 actions with distinct keys and abandoning each after commit could accumulate unbounded undeletable
-rows — a storage denial of service. The opt-in `AshOnetime.Store.reap/3` deletes such claims past a
+rows — a storage denial of service. The opt-in reaper (`mix ash_onetime.reap`) deletes such claims past a
 separate, much longer abandonment horizon, through a sanctioned delete path: a processing claim is
 removable only when it is older than both the operator's horizon and a hard 1-day floor and past
 its own retention horizon, all re-enforced by the delete guard. Recoverability is thereby bounded
