@@ -17,16 +17,17 @@ release gates are present.
 
 - Elixir `~> 1.20` (developed and tested on 1.20.2)
 - Erlang/OTP 29
-- Ash `~> 3.29` (`>= 3.29.0`, `< 4.0.0`)
+- Ash `>= 3.29.3` and `< 4.0.0` (the whole 3.x line from the 3.29.3 floor up)
 - AshPostgres 2
 - PostgreSQL 18 for the project test harness
 
-The supported runtime is the one pinned in `.tool-versions` (Elixir 1.20.2,
-Erlang/OTP 29); release gates run against it. The gate battery is additionally
-verified against both the `3.29` floor and the latest published Ash 3.x at the
-time (3.31.0). A continuous multi-version CI matrix is not yet in place, so
-intermediate Ash versions permitted by the declared requirement are not part of
-an automated tested matrix.
+The floor is Ash 3.29.3, not 3.29.0: EEF-CVE-2026-55736 (private action
+arguments settable by user input) affects Ash 3.29.0–3.29.2 and is fixed in
+3.29.3. Compatibility across the range is verified by the full gate battery —
+including `mix hex.audit` — run against the 3.29.3 floor, each intermediate
+minor, and the latest published Ash 3.x. `.github/workflows/ci.yml` is
+configured to re-run this matrix on every push and pull request. The pinned
+development runtime is Elixir 1.20.2 / Erlang/OTP 29 (`.tool-versions`).
 
 ## Development
 

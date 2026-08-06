@@ -3,6 +3,7 @@ _build/
 erl_crash.dump
 *.beam
 *.ez
+*.tar
 
 # Dependencies
 deps/

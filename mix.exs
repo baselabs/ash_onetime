@@ -30,7 +30,7 @@ defmodule AshOnetime.MixProject do
 
   defp deps do
     [
-      {:ash, "~> 3.29"},
+      {:ash, ash_requirement()},
       {:ash_postgres, "~> 2.11"},
       {:spark, "~> 2.7"},
       {:ecto_sql, "~> 3.14"},
@@ -46,6 +46,20 @@ defmodule AshOnetime.MixProject do
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:stream_data, "~> 1.4"}
     ]
+  end
+
+  # `>= 3.29.3 and < 4.0.0` is the published requirement every consumer resolves against. The floor
+  # is 3.29.3, not 3.29.0: EEF-CVE-2026-55736 (private action arguments settable by user input)
+  # affects Ash 3.29.0–3.29.2 and is fixed in 3.29.3 — a security library must not admit the
+  # vulnerable floor. The CI compatibility matrix sets ASH_ONETIME_ASH_VERSION to pin one exact Ash
+  # per cell (the floor and each later minor); `latest`/unset keeps the floating requirement so the
+  # newest published Ash is exercised. The namespaced var name is extremely unlikely to collide
+  # with anything in a consumer's environment, so a published build sees the full requirement.
+  defp ash_requirement do
+    case System.get_env("ASH_ONETIME_ASH_VERSION") do
+      version when version in [nil, "", "latest"] -> ">= 3.29.3 and < 4.0.0"
+      version -> "== #{version}"
+    end
   end
 
   defp description do

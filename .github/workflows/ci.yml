@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# The test harness (test/test_helper.exs) fails closed unless DATABASE_URL is
+# EXACTLY this string, and the contention tests connect their observer sessions
+# to 127.0.0.1:18841 directly, so the Postgres service is mapped to that port.
+env:
+  ELIXIR_VERSION: "1.20.2"
+  OTP_VERSION: "29.0.3"
+  DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+
+jobs:
+  # Compatibility matrix: the full per-version gate battery across the supported
+  # Ash range — the declared floor, each intermediate minor, and a floating
+  # `latest` cell that auto-exercises the newest published Ash on every run.
+  compat:
+    name: "Ash ${{ matrix.ash }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ash:
+          - "3.29.3" # declared floor (3.29.0-3.29.2 excluded: EEF-CVE-2026-55736)
+          - "3.30.1" # intermediate minor
+          - "latest" # floating >= 3.29.3, < 4.0.0 — newest published Ash 3.x
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ASH_ONETIME_ASH_VERSION: ${{ matrix.ash }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-ash${{ matrix.ash }}-${{ hashFiles('mix.exs', 'mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-ash${{ matrix.ash }}-
+
+      - name: Resolve the matrix Ash version
+        # `== X` cells resolve to exactly X; the floating `latest` cell resolves to the
+        # newest Ash satisfying `>= 3.29.3 and < 4.0.0`. Unlock first so the committed
+        # lock's floor pin never holds a cell back.
+        run: |
+          mix deps.unlock ash
+          mix deps.get
+          mix deps.update ash
+
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      # hex.audit (not deps.audit) is what surfaces Hex security advisories such as
+      # EEF-CVE-2026-55736; it fails the build on any retired/advised dependency.
+      - run: mix hex.audit
+      - run: mix deps.audit
+      - run: mix test
+      - run: mix credo --strict
+      - run: mix dialyzer
+      - run: mix docs --warnings-as-errors
+      - run: mix hex.build
+
+  # Version-independent release gates from CONTRIBUTING.md, run once on the floor.
+  release-checks:
+    name: "Release gates"
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-release-${{ hashFiles('mix.exs', 'mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-release-
+
+      - run: mix deps.get
+      - run: mix compile --warnings-as-errors
+      - name: Mutation battery
+        run: MIX_ENV=test mix run scripts/check_mutations.exs -- all
+      # check_package.exs inspects the built archive, so hex.build must precede it.
+      - name: Build the Hex package
+        run: mix hex.build
+      - name: Unpacked consumer package check
+        run: mix run scripts/check_package.exs

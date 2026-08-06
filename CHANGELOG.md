@@ -4,10 +4,14 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
-- Broaden the Ash dependency requirement from `~> 3.29.0` to `~> 3.29`
-  (`>= 3.29.0` and `< 4.0.0`) so the package installs across the whole Ash 3.x line
-  rather than only 3.29.x; the gate battery is verified against both the 3.29
-  floor and the latest published Ash 3.x (3.31.0).
+- Broaden the Ash dependency requirement from `~> 3.29.0` (only 3.29.x) to
+  `>= 3.29.3 and < 4.0.0`, so the package installs across the whole Ash 3.x line.
+  The floor is 3.29.3, not 3.29.0: EEF-CVE-2026-55736 (private action arguments
+  settable by user input) affects Ash 3.29.0–3.29.2 and is fixed in 3.29.3.
+- Add a CI compatibility matrix (`.github/workflows/ci.yml`), configured to run
+  the full gate battery — including `mix hex.audit` — against the 3.29.3 floor,
+  each intermediate minor, and a floating `latest` Ash 3.x cell on every push
+  and pull request once the repository is pushed to a GitHub remote.
 - Establish the standalone Mix package, PostgreSQL 18 test harness, package boundary
   checks, accepted architecture decision, and project documentation.
 - Add the per-action Spark resource DSL, normalized introspection, precompile rejection
