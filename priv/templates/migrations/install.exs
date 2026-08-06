@@ -3,6 +3,15 @@ defmodule <%= inspect(module) %> do
 
   @payload_ceiling 16_777_216
 
+  # Hard safety floor (seconds) for the abandoned-processing reaper. A `processing` claim may be
+  # reaped only when it is older than this floor AND older than the operator's abandonment horizon
+  # AND past its own retention horizon. The floor is enforced independently in both the delete
+  # guard and the reaper function, so no caller — however it arms the reap session variable — can
+  # delete a recently-admitted recovery point. The floor is orders of magnitude beyond any single
+  # request's in-flight window; a retry that begins recovery near the horizon is serialized against
+  # the reaper by the row lock and fails closed, so the floor need not bound recovery latency.
+  @abandonment_floor_seconds 86_400
+
   def up do
     execute("""
     CREATE TABLE #{q("ash_onetime_idempotency_claims")} (
@@ -41,6 +50,12 @@ defmodule <%= inspect(module) %> do
     """)
 
     execute("""
+    CREATE INDEX ash_onetime_idempotency_claims_processing_index
+    ON #{q("ash_onetime_idempotency_claims")} (inserted_at)
+    WHERE state = 'processing'
+    """)
+
+    execute("""
     CREATE TABLE #{q("ash_onetime_nonce_claims")} (
       id uuid <%= if hash_partitions, do: "NOT NULL", else: "PRIMARY KEY" %>,
       operation_hash bytea NOT NULL CHECK (octet_length(operation_hash) = 32),
@@ -73,6 +88,7 @@ defmodule <%= inspect(module) %> do
   end
 
   def down do
+    execute("DROP FUNCTION IF EXISTS #{q("ash_onetime_reap_idempotency")}(integer, bigint)")
     execute("DROP FUNCTION IF EXISTS #{q("ash_onetime_cleanup_nonce")}(integer)")
     execute("DROP FUNCTION IF EXISTS #{q("ash_onetime_cleanup_idempotency")}(integer)")
     execute("DROP TABLE IF EXISTS #{q("ash_onetime_nonce_claims")} CASCADE")
@@ -137,11 +153,38 @@ defmodule <%= inspect(module) %> do
     RETURNS trigger
     LANGUAGE plpgsql
     AS $guard$
-    DECLARE payload_count integer;
+    DECLARE
+      payload_count integer;
+      reap_before text;
     BEGIN
       IF OLD.state = 'processing' THEN
-        RAISE EXCEPTION 'processing idempotency claims are recovery points and cannot be deleted'
-          USING ERRCODE = '23514';
+        -- Processing rows are recovery points. They are deletable only inside a sanctioned reap:
+        -- the reaper arms the ash_onetime.reap_before session variable, and even then only a row
+        -- older than BOTH that cutoff and the hard floor AND past its own retention horizon may
+        -- go. Anything else RAISEs, exactly as before.
+        reap_before := current_setting('ash_onetime.reap_before', true);
+
+        IF reap_before IS NULL OR reap_before = '' THEN
+          RAISE EXCEPTION 'processing idempotency claims are recovery points and cannot be deleted'
+            USING ERRCODE = '23514';
+        END IF;
+
+        IF OLD.inserted_at >= reap_before::timestamptz
+           OR OLD.inserted_at >= transaction_timestamp() - (#{@abandonment_floor_seconds} * interval '1 second')
+           OR NOT #{q("ash_onetime_cleanup_eligible")}(OLD.retain_until) THEN
+          RAISE EXCEPTION 'processing idempotency claims are recovery points and cannot be deleted'
+            USING ERRCODE = '23514';
+        END IF;
+
+        SELECT count(*) INTO payload_count
+        FROM #{q("ash_onetime_response_payloads")}
+        WHERE claim_id = OLD.id;
+        IF payload_count <> 0 THEN
+          RAISE EXCEPTION 'reaped processing idempotency claim unexpectedly carries a payload'
+            USING ERRCODE = '23514';
+        END IF;
+
+        RETURN OLD;
       END IF;
 
       IF NOT #{q("ash_onetime_cleanup_eligible")}(OLD.retain_until) THEN
@@ -256,6 +299,49 @@ defmodule <%= inspect(module) %> do
       RETURN deleted_count;
     END
     $cleanup$
+    """)
+
+    execute("""
+    CREATE FUNCTION #{q("ash_onetime_reap_idempotency")}(batch_size integer, abandonment_seconds bigint)
+    RETURNS bigint
+    LANGUAGE plpgsql
+    AS $reap$
+    DECLARE
+      reaped_count bigint;
+      reap_before timestamptz;
+    BEGIN
+      IF batch_size < 1 OR batch_size > 10000 THEN
+        RAISE EXCEPTION 'invalid reap batch size' USING ERRCODE = '22023';
+      END IF;
+
+      IF abandonment_seconds < #{@abandonment_floor_seconds} THEN
+        RAISE EXCEPTION 'reap abandonment horizon is below the safe floor' USING ERRCODE = '22023';
+      END IF;
+
+      reap_before := transaction_timestamp() - (abandonment_seconds * interval '1 second');
+      PERFORM set_config('ash_onetime.reap_before', reap_before::text, true);
+
+      WITH candidates AS (
+        SELECT operation_hash, id
+        FROM #{q("ash_onetime_idempotency_claims")}
+        WHERE state = 'processing'
+          AND inserted_at < reap_before
+          AND #{q("ash_onetime_cleanup_eligible")}(retain_until)
+        ORDER BY inserted_at, operation_hash, id
+        FOR UPDATE SKIP LOCKED
+        LIMIT batch_size
+      ), deleted AS (
+        DELETE FROM #{q("ash_onetime_idempotency_claims")} claims
+        USING candidates
+        WHERE <%= cleanup_delete_predicate %>
+        RETURNING claims.id
+      )
+      SELECT count(*) INTO reaped_count FROM deleted;
+
+      PERFORM set_config('ash_onetime.reap_before', '', true);
+      RETURN reaped_count;
+    END
+    $reap$
     """)
   end
 

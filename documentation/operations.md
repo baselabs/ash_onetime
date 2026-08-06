@@ -25,6 +25,24 @@ external recovery points, removes response bytes atomically with completed claim
 only empty expired payload partitions after obtaining the required lock. Batch size and
 prefix are explicit. Schedule `AshOnetime.Oban.CleanupWorker` only if Oban is installed.
 
+Abandoned external `processing` claims — committed recovery points whose peer effect never
+settles and that no retry ever recovers — are immortal under cleanup (it skips them) and the
+delete guard (it forbids deleting them). Left unbounded this is a storage denial of service.
+`AshOnetime.Store.reap(target, batch_size, abandonment_seconds)` is an opt-in, bounded reaper that
+deletes such claims past a separate, much longer abandonment horizon. A claim is reaped only when
+it is older than both `abandonment_seconds` and a hard 1-day floor and past its own retention
+horizon (all re-enforced by the delete guard), so an in-flight or in-retention recovery point is
+never removed. `abandonment_seconds` must be at least the 1-day floor. Schedule it far less
+frequently than cleanup (recoverability becomes bounded by `max(retention, abandonment)`), and
+size the horizon well beyond any legitimate in-flight window. Existing deployments installed before
+the reaper existed must, in a manual migration, `CREATE OR REPLACE` the
+`ash_onetime_guard_idempotency_delete` function with the new body (the attached trigger keeps
+pointing at the same name), `CREATE` the `ash_onetime_reap_idempotency` function, and `CREATE` the
+`ash_onetime_idempotency_claims_processing_index`. Copy those three definitions from a freshly
+generated install migration (`mix ash_onetime.gen.migrations`), changing the guard's `CREATE
+FUNCTION` to `CREATE OR REPLACE FUNCTION`. Until they are applied a reap attempt fails closed
+against the old guard.
+
 A context-multitenant tenant prefix must be 1..63 bytes — PostgreSQL truncates identifiers at
 63 bytes (NAMEDATALEN), so a longer prefix could route two tenants to the same schema. Both
 admission and cleanup reject an out-of-range prefix (admission fails closed with

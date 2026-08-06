@@ -50,6 +50,21 @@ defmodule AshOnetime.Store do
     end
   end
 
+  @doc """
+  Deletes abandoned `processing` idempotency recovery points past an abandonment horizon.
+
+  Opt-in and bounded. A `processing` claim is reaped only when it is older than
+  `abandonment_seconds` AND older than the migration's hard safety floor AND past its own
+  retention horizon — the delete guard re-enforces all three, so a still-recoverable in-flight
+  claim is never removed. `abandonment_seconds` must be at least the migration floor (86_400 s);
+  a smaller horizon is rejected by the database.
+
+  Returns `{:ok, reaped_count}` or an `AshOnetime.Store.Result` failure.
+  """
+  @spec reap(term(), pos_integer(), pos_integer()) :: {:ok, non_neg_integer()} | Result.t()
+  def reap(target, batch_size, abandonment_seconds),
+    do: Postgres.reap(target, batch_size, abandonment_seconds)
+
   defp emit_cleanup(%Postgres.Target{repo_module: repo}, counts) do
     _ =
       AshOnetime.Telemetry.cleanup(

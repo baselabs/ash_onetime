@@ -186,6 +186,47 @@ defmodule AshOnetime.Store.Postgres do
   def cleanup(_target, _batch_size, _partition_limit),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
+  @spec reap(Target.t(), pos_integer(), pos_integer()) ::
+          {:ok, non_neg_integer()} | Result.t()
+  def reap(%Target{} = target, batch_size, abandonment_seconds)
+      when is_integer(batch_size) and batch_size > 0 and batch_size <= 10_000 and
+             is_integer(abandonment_seconds) and abandonment_seconds > 0 do
+    with_dynamic_repo(target, fn -> reap_transaction(target, batch_size, abandonment_seconds) end)
+    |> case do
+      {:ok, count} when is_integer(count) -> {:ok, count}
+      {:error, %Result{} = result} -> result
+      _other -> Result.failure(:dispatched_unknown, :unknown, :unknown)
+    end
+  rescue
+    _exception -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+  catch
+    :exit, _reason -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+  end
+
+  def reap(_target, _batch_size, _abandonment_seconds),
+    do: Result.failure(:invalid_request, :not_started, :not_applicable)
+
+  defp reap_transaction(target, batch_size, abandonment_seconds) do
+    target.repo_module.transaction(fn -> reap_count(target, batch_size, abandonment_seconds) end)
+  end
+
+  defp reap_count(target, batch_size, abandonment_seconds) do
+    case dispatched_query(
+           target,
+           "SELECT #{relation(target, "ash_onetime_reap_idempotency")}($1, $2)",
+           [batch_size, abandonment_seconds]
+         ) do
+      {:ok, %{rows: [[count]]}} when is_integer(count) and count >= 0 ->
+        count
+
+      {:ok, _result} ->
+        target.repo_module.rollback(Result.failure(:store_invariant, :sent, :rolled_back))
+
+      {:error, %Result{} = result} ->
+        target.repo_module.rollback(result)
+    end
+  end
+
   defp cleanup_transaction(target, batch_size, partition_limit) do
     target.repo_module.transaction(fn -> cleanup_counts(target, batch_size, partition_limit) end)
   end

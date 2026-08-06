@@ -198,6 +198,35 @@ defmodule AshOnetime.MutationCheck do
         "cleanup preserves the inclusive replay horizon then removes the first expired instant",
       assertion: "assert %{rows: [[false]]} ="
     },
+    "reap-removes-abandoned" => %{
+      path: "priv/templates/migrations/install.exs",
+      original: "AND inserted_at < reap_before",
+      mutated: "AND false",
+      test: "test/ash_onetime/store/reap_test.exs",
+      tag: "reap_removes_abandoned_mutation",
+      test_name:
+        "reaps a processing recovery point past the abandonment horizon and its retention",
+      assertion: "assert {:ok, 1} = Store.reap(target, 100, @horizon)"
+    },
+    "reap-retention-guard" => %{
+      path: "priv/templates/migrations/install.exs",
+      original: "OR NOT \#{q(\"ash_onetime_cleanup_eligible\")}(OLD.retain_until) THEN",
+      mutated: "OR false THEN",
+      test: "test/ash_onetime/store/reap_test.exs",
+      tag: "reap_retention_guard_mutation",
+      test_name: "never reaps a processing claim still inside its retention horizon",
+      assertion: "assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} ="
+    },
+    "reap-floor-guard" => %{
+      path: "priv/templates/migrations/install.exs",
+      original:
+        "OR OLD.inserted_at >= transaction_timestamp() - (\#{@abandonment_floor_seconds} * interval '1 second')",
+      mutated: "OR false",
+      test: "test/ash_onetime/store/reap_test.exs",
+      tag: "reap_floor_guard_mutation",
+      test_name: "never reaps a processing claim younger than the hard floor",
+      assertion: "assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} ="
+    },
     "payload-partition" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original: "Date.compare(database_date, &1.until_date) == :gt",
@@ -852,6 +881,11 @@ defmodule AshOnetime.MutationCheck do
       "operation-hash-select",
       "operation-hash-completion",
       "operation-hash-cleanup"
+    ],
+    "reap" => [
+      "reap-removes-abandoned",
+      "reap-retention-guard",
+      "reap-floor-guard"
     ],
     "task5" =>
       [

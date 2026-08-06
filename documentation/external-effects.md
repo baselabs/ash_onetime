@@ -22,6 +22,12 @@ dies after peer success, recovery returns the existing peer result and local fin
 continues without a second peer effect. If local finalization rolls back, the processing
 claim remains a recoverable point.
 
+A processing claim that is never completed or recovered is retained for recovery, but not
+forever: the opt-in reaper (`AshOnetime.Store.reap/3`, see the operations guide) deletes it once
+it is past both a long abandonment horizon and its own retention horizon. After that, a retry of
+the same logical key is a new execution with a new peer operation key, so the peer — not the
+package — is the last line of defense against a duplicate effect for a claim abandoned that long.
+
 Adapters must make execute idempotent by operation key and make recover authoritative. A
 stub that merely records the request proves only that the package produced a shape; peer
 conformance requires a live peer contract. External effects are idempotency-only because a

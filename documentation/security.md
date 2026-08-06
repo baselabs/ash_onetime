@@ -51,7 +51,18 @@ configurable clock-skew safety margin (`config :ash_onetime, :cleanup_clock_skew
 default 1 second) beyond its acceptance horizon. Cleanup is therefore strictly later than the
 acceptance window as long as the PostgreSQL clock is not ahead of the application clock by more
 than that margin — keep both clocks synchronized (e.g. via NTP), and raise the margin for looser
-synchronization. Processing external claims are retained for recovery.
+synchronization. Processing external claims are retained for recovery until they are either
+completed or reaped. An abandoned processing claim that never settles would otherwise be immortal
+(cleanup skips it and the delete guard forbids deleting it), so a caller driving external-effect
+actions with distinct keys and abandoning each after commit could accumulate unbounded undeletable
+rows — a storage denial of service. The opt-in `AshOnetime.Store.reap/3` deletes such claims past a
+separate, much longer abandonment horizon, through a sanctioned delete path: a processing claim is
+removable only when it is older than both the operator's horizon and a hard 1-day floor and past
+its own retention horizon, all re-enforced by the delete guard. Recoverability is thereby bounded
+by `max(retention, abandonment horizon)` rather than unbounded, and a retry after reaping is a new
+execution with a new peer operation key. The reaper bounds steady-state growth, not a burst
+(residual ≈ admission rate × that window); operators tune it with edge rate limiting and reap
+cadence.
 Telemetry is deliberately value-free to avoid exporting keys, tokens, signatures, payloads,
 or verifier identities.
 
