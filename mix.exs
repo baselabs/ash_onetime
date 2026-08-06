@@ -30,7 +30,7 @@ defmodule AshOnetime.MixProject do
 
   defp deps do
     [
-      {:ash, "~> 3.29.0"},
+      {:ash, "~> 3.29"},
       {:ash_postgres, "~> 2.11"},
       {:spark, "~> 2.7"},
       {:ecto_sql, "~> 3.14"},

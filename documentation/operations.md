@@ -85,7 +85,7 @@ using it to sign. Retain every old verification key until the last token it sign
 fall back silently to a different key.
 
 The supported runtime is Elixir `~> 1.20` (verified on 1.20.2) and Erlang/OTP 29 with
-Ash 3.29.x, AshPostgres 2, and PostgreSQL 18. Release checks include the full suite, mutation
+Ash `~> 3.29`, AshPostgres 2, and PostgreSQL 18. Release checks include the full suite, mutation
 matrix, warnings-as-errors documentation, exact Hex archive inspection, and an unpacked
 zero-configuration consumer, all run on the runtime pinned in `.tool-versions`; see
 [CONTRIBUTING](../CONTRIBUTING.md).

@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Broaden the Ash dependency requirement from `~> 3.29.0` to `~> 3.29`
+  (`>= 3.29.0` and `< 4.0.0`) so the package installs across the whole Ash 3.x line
+  rather than only 3.29.x; the gate battery is verified against both the 3.29
+  floor and the latest published Ash 3.x (3.31.0).
 - Establish the standalone Mix package, PostgreSQL 18 test harness, package boundary
   checks, accepted architecture decision, and project documentation.
 - Add the per-action Spark resource DSL, normalized introspection, precompile rejection
