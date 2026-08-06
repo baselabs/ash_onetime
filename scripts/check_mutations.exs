@@ -227,6 +227,15 @@ defmodule AshOnetime.MutationCheck do
       test_name: "never reaps a processing claim younger than the hard floor",
       assertion: "assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} ="
     },
+    "reap-skips-locked-recovery" => %{
+      path: "priv/templates/migrations/install.exs",
+      original: "ORDER BY inserted_at, operation_hash, id\n        FOR UPDATE SKIP LOCKED",
+      mutated: "ORDER BY inserted_at, operation_hash, id\n        FOR UPDATE",
+      test: "test/ash_onetime/store/reap_contention_test.exs",
+      tag: "reap_skips_locked_recovery_mutation",
+      test_name: "the reaper skips a recovery point locked by an in-flight finalization",
+      assertion: "assert_receive {:reaper_done, ^reaper, {:ok, 0}}"
+    },
     "payload-partition" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original: "Date.compare(database_date, &1.until_date) == :gt",
@@ -885,7 +894,8 @@ defmodule AshOnetime.MutationCheck do
     "reap" => [
       "reap-removes-abandoned",
       "reap-retention-guard",
-      "reap-floor-guard"
+      "reap-floor-guard",
+      "reap-skips-locked-recovery"
     ],
     "task5" =>
       [

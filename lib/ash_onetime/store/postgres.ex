@@ -206,6 +206,45 @@ defmodule AshOnetime.Store.Postgres do
   def reap(_target, _batch_size, _abandonment_seconds),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
+  @spec processing_backlog(Target.t()) ::
+          {:ok,
+           %{processing_count: non_neg_integer(), oldest_age_seconds: non_neg_integer() | nil}}
+          | Result.t()
+  def processing_backlog(%Target{} = target) do
+    with_dynamic_repo(target, fn -> processing_backlog_query(target) end)
+  rescue
+    _exception -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+  catch
+    :exit, _reason -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+  end
+
+  def processing_backlog(_target),
+    do: Result.failure(:invalid_request, :not_started, :not_applicable)
+
+  defp processing_backlog_query(target) do
+    sql = """
+    SELECT count(*),
+           EXTRACT(EPOCH FROM (transaction_timestamp() - min(inserted_at)))::bigint
+    FROM #{relation(target, "ash_onetime_idempotency_claims")}
+    WHERE state = 'processing'
+    """
+
+    case dispatched_query(target, sql, []) do
+      {:ok, %{rows: [[count, age]]}} when is_integer(count) and count >= 0 ->
+        {:ok, %{processing_count: count, oldest_age_seconds: oldest_age(count, age)}}
+
+      {:ok, _result} ->
+        Result.failure(:store_invariant, :sent, :not_applicable)
+
+      {:error, %Result{} = result} ->
+        result
+    end
+  end
+
+  defp oldest_age(0, _age), do: nil
+  defp oldest_age(_count, age) when is_integer(age), do: max(age, 0)
+  defp oldest_age(_count, _age), do: 0
+
   defp reap_transaction(target, batch_size, abandonment_seconds) do
     target.repo_module.transaction(fn -> reap_count(target, batch_size, abandonment_seconds) end)
   end

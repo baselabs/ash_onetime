@@ -34,7 +34,21 @@ it is older than both `abandonment_seconds` and a hard 1-day floor and past its 
 horizon (all re-enforced by the delete guard), so an in-flight or in-retention recovery point is
 never removed. `abandonment_seconds` must be at least the 1-day floor. Schedule it far less
 frequently than cleanup (recoverability becomes bounded by `max(retention, abandonment)`), and
-size the horizon well beyond any legitimate in-flight window. Existing deployments installed before
+size the horizon well beyond any legitimate in-flight window.
+
+Run the reaper manually or with the optional Oban worker, mirroring cleanup:
+
+```sh
+mix ash_onetime.reap --repo MyApp.Repo --abandonment-seconds 1209600
+```
+
+`--abandonment-seconds` defaults to 604800 (7 days) and must be at least the 86400-second (1 day)
+floor; `--batch-size` defaults to 500. Schedule `AshOnetime.Oban.ReapWorker` only if Oban is
+installed, on its own far slower cadence than `AshOnetime.Oban.CleanupWorker`. Before reaping,
+observe the backlog with `AshOnetime.Store.processing_backlog(target)`, which returns
+`{:ok, %{processing_count: n, oldest_age_seconds: seconds}}` (`oldest_age_seconds` is `nil` when
+no recovery points are in flight) — watch it grow to detect abandonment accumulation and to size
+the abandonment horizon above the oldest legitimate in-flight claim. Existing deployments installed before
 the reaper existed must, in a manual migration, `CREATE OR REPLACE` the
 `ash_onetime_guard_idempotency_delete` function with the new body (the attached trigger keeps
 pointing at the same name), `CREATE` the `ash_onetime_reap_idempotency` function, and `CREATE` the
@@ -56,8 +70,9 @@ The default `AshOnetime.Cache.None` needs no application configuration or superv
 does not verify them. Trusted verification remains inside the protected action.
 
 Telemetry events are `[:ash_onetime, event]`, where event is `:admission`, `:conflict`,
-`:replay`, `:fingerprint_mismatch`, `:verification`, `:encoding`, `:cache`, `:cleanup`,
-`:external_recovery`, `:store_uncertainty`, or `:untracked_execution`. Metadata is exactly
+`:replay`, `:fingerprint_mismatch`, `:verification`, `:encoding`, `:cache`, `:cleanup`, `:reap`,
+`:external_recovery`, `:store_uncertainty`, or `:untracked_execution`. The `:reap` event carries a
+`:claims_reaped` count for each bounded reaper run. Metadata is exactly
 `strategy`, `resource`, `action`, and `result_class`; measurements are only `duration` or
 `count`. Raw keys, scopes, tokens, fingerprints, payloads, signatures, resolver identities,
 exceptions, and store results are never telemetry fields.

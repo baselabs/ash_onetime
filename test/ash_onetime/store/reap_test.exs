@@ -86,6 +86,35 @@ defmodule AshOnetime.Store.ReapTest do
              Store.reap(target, 20_000, @horizon)
   end
 
+  test "processing_backlog reports the count and oldest age of processing recovery points", %{
+    prefix: prefix,
+    target: target
+  } do
+    assert {:ok, %{processing_count: 0, oldest_age_seconds: nil}} =
+             Store.processing_backlog(target)
+
+    insert_processing(prefix, "backlog-old", inserted_ago: "5 days", retain_in: "5 days")
+    insert_processing(prefix, "backlog-new", inserted_ago: "1 hour", retain_in: "5 days")
+
+    assert {:ok, %{processing_count: 2, oldest_age_seconds: age}} =
+             Store.processing_backlog(target)
+
+    # The age tracks the OLDEST processing claim (5 days), not the newest (1 hour).
+    assert age >= 5 * 86_400
+    assert age < 6 * 86_400
+  end
+
+  test "processing_backlog ignores complete idempotency and nonce claims", %{
+    prefix: prefix,
+    target: target
+  } do
+    insert_expired_complete(prefix)
+    insert_expired_nonce(prefix, "backlog-nonce")
+
+    assert {:ok, %{processing_count: 0, oldest_age_seconds: nil}} =
+             Store.processing_backlog(target)
+  end
+
   # --- helpers ---
 
   defp insert_processing(prefix, label, timings) do

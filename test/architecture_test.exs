@@ -25,6 +25,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.KeyResolver,
     AshOnetime.KeySource,
     AshOnetime.Oban.CleanupWorker,
+    AshOnetime.Oban.ReapWorker,
     AshOnetime.Plug,
     AshOnetime.ReplaySafety,
     AshOnetime.Resource,
@@ -57,7 +58,8 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Window,
     Mix.Tasks.AshOnetime.Gen.Migrations,
     Mix.Tasks.AshOnetime.Install,
-    Mix.Tasks.AshOnetime.Prune
+    Mix.Tasks.AshOnetime.Prune,
+    Mix.Tasks.AshOnetime.Reap
   ]
 
   @documented_modules [
@@ -77,6 +79,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.KeyResolver,
     AshOnetime.KeySource,
     AshOnetime.Oban.CleanupWorker,
+    AshOnetime.Oban.ReapWorker,
     AshOnetime.Plug,
     AshOnetime.ReplaySafety,
     AshOnetime.Resource,
@@ -93,7 +96,8 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Window,
     Mix.Tasks.AshOnetime.Gen.Migrations,
     Mix.Tasks.AshOnetime.Install,
-    Mix.Tasks.AshOnetime.Prune
+    Mix.Tasks.AshOnetime.Prune,
+    Mix.Tasks.AshOnetime.Reap
   ]
 
   @exports %{
@@ -149,6 +153,14 @@ defmodule AshOnetime.ArchitectureTest do
       perform: 1,
       timeout: 1
     ],
+    AshOnetime.Oban.ReapWorker => [
+      __opts__: 0,
+      backoff: 1,
+      new: 1,
+      new: 2,
+      perform: 1,
+      timeout: 1
+    ],
     AshOnetime.Plug => [call: 2, init: 1],
     AshOnetime.ReplaySafety => [],
     AshOnetime.Resource => [
@@ -176,6 +188,7 @@ defmodule AshOnetime.ArchitectureTest do
       encoding: 5,
       external_recovery: 5,
       fingerprint_mismatch: 3,
+      reap: 5,
       replay: 5,
       store_uncertainty: 4,
       untracked_execution: 3,
@@ -194,7 +207,8 @@ defmodule AshOnetime.ArchitectureTest do
       run: 1,
       supports_umbrella?: 0
     ],
-    Mix.Tasks.AshOnetime.Prune => [run: 1]
+    Mix.Tasks.AshOnetime.Prune => [run: 1],
+    Mix.Tasks.AshOnetime.Reap => [run: 1]
   }
 
   test "the production module and public documentation censuses are exact" do

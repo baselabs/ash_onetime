@@ -13,6 +13,7 @@ defmodule AshOnetime.TelemetryTest do
     [:ash_onetime, :encoding],
     [:ash_onetime, :cache],
     [:ash_onetime, :cleanup],
+    [:ash_onetime, :reap],
     [:ash_onetime, :store_uncertainty],
     [:ash_onetime, :untracked_execution]
   ]
@@ -42,6 +43,7 @@ defmodule AshOnetime.TelemetryTest do
     assert :ok = Telemetry.encoding(4, :idempotency, Resource, :redeem, :stored)
     assert :ok = Telemetry.cache(:idempotency, Resource, :redeem, :hit)
     assert :ok = Telemetry.cleanup(:idempotency, Resource, :redeem, 2, :claims_deleted)
+    assert :ok = Telemetry.reap(:idempotency, Resource, :redeem, 2, :claims_reaped)
     assert :ok = Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :sent)
     assert :ok = Telemetry.untracked_execution(:idempotency, Resource, :redeem)
 
@@ -84,6 +86,7 @@ defmodule AshOnetime.TelemetryTest do
     refute function_exported?(Telemetry, :encoding, 3)
     refute function_exported?(Telemetry, :cache, 2)
     refute function_exported?(Telemetry, :cleanup, 3)
+    refute function_exported?(Telemetry, :reap, 4)
     refute function_exported?(Telemetry, :store_uncertainty, 2)
     refute function_exported?(Telemetry, :untracked_execution, 1)
   end

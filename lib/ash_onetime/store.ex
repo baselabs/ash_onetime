@@ -50,6 +50,23 @@ defmodule AshOnetime.Store do
     end
   end
 
+  @type processing_backlog :: %{
+          processing_count: non_neg_integer(),
+          oldest_age_seconds: non_neg_integer() | nil
+        }
+
+  @doc """
+  Observes the abandoned-`processing` backlog: how many idempotency recovery points are in
+  `processing` state and the age, in seconds, of the oldest.
+
+  A pull-based surface for operators to watch abandonment accumulate before it becomes a storage
+  denial of service and to size the reaper's abandonment horizon. `oldest_age_seconds` is `nil`
+  when there are no processing claims. Returns `{:ok, backlog}` or an `AshOnetime.Store.Result`
+  failure.
+  """
+  @spec processing_backlog(term()) :: {:ok, processing_backlog()} | Result.t()
+  def processing_backlog(target), do: Postgres.processing_backlog(target)
+
   @doc """
   Deletes abandoned `processing` idempotency recovery points past an abandonment horizon.
 
@@ -62,8 +79,16 @@ defmodule AshOnetime.Store do
   Returns `{:ok, reaped_count}` or an `AshOnetime.Store.Result` failure.
   """
   @spec reap(term(), pos_integer(), pos_integer()) :: {:ok, non_neg_integer()} | Result.t()
-  def reap(target, batch_size, abandonment_seconds),
-    do: Postgres.reap(target, batch_size, abandonment_seconds)
+  def reap(target, batch_size, abandonment_seconds) do
+    case Postgres.reap(target, batch_size, abandonment_seconds) do
+      {:ok, count} = success ->
+        emit_reap(target, count)
+        success
+
+      %Result{} = result ->
+        result
+    end
+  end
 
   defp emit_cleanup(%Postgres.Target{repo_module: repo}, counts) do
     _ =
@@ -87,6 +112,11 @@ defmodule AshOnetime.Store do
         :partitions_dropped
       )
 
+    :ok
+  end
+
+  defp emit_reap(%Postgres.Target{repo_module: repo}, count) do
+    _ = AshOnetime.Telemetry.reap(:idempotency, repo, :reap, count, :claims_reaped)
     :ok
   end
 end

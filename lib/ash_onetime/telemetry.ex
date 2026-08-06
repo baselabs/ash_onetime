@@ -26,6 +26,7 @@ defmodule AshOnetime.Telemetry do
       :disabled
     ],
     cleanup: [:claims_deleted, :partitions_dropped],
+    reap: [:claims_reaped],
     external_recovery: [
       :processing_committed,
       :execute_succeeded,
@@ -85,6 +86,11 @@ defmodule AshOnetime.Telemetry do
   def cleanup(strategy, resource, action, count, result_class),
     do: emit(:cleanup, %{count: count}, strategy, resource, action, result_class)
 
+  @spec reap(atom(), module(), atom(), non_neg_integer(), atom()) ::
+          :ok | {:error, Error.t()}
+  def reap(strategy, resource, action, count, result_class),
+    do: emit(:reap, %{count: count}, strategy, resource, action, result_class)
+
   @spec external_recovery(non_neg_integer(), atom(), module(), atom(), atom()) ::
           :ok | {:error, Error.t()}
   def external_recovery(duration, strategy, resource, action, result_class),
@@ -141,8 +147,9 @@ defmodule AshOnetime.Telemetry do
               is_integer(duration) and duration >= 0,
        do: :ok
 
-  defp validate_measurements(:cleanup, %{count: count}) when is_integer(count) and count >= 0,
-    do: :ok
+  defp validate_measurements(event, %{count: count})
+       when event in [:cleanup, :reap] and is_integer(count) and count >= 0,
+       do: :ok
 
   defp validate_measurements(event, %{count: 1})
        when event in [
