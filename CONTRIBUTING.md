@@ -16,6 +16,7 @@ mix test
 mix credo --strict
 mix dialyzer
 mix deps.audit
+mix hex.audit
 mix spark.cheat_sheets
 mix docs --warnings-as-errors
 DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test \
