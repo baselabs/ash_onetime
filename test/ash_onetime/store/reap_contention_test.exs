@@ -9,6 +9,11 @@ defmodule AshOnetime.Store.ReapContentionTest do
 
   @moduletag :store
 
+  # Cross-process coordination ceiling. The spawned completer/reaper reach their observable
+  # state in milliseconds on a healthy machine; this bound only adds headroom on a loaded CI
+  # runner, and stays well under ExUnit's 60s per-test timeout even across three sequential waits.
+  @receive_timeout 10_000
+
   # Comfortably above the migration's 86_400 s (1 day) hard floor and any legitimate in-flight
   # window, so a genuinely abandoned recovery point is reapable.
   @horizon 7 * 86_400
@@ -43,16 +48,18 @@ defmodule AshOnetime.Store.ReapContentionTest do
     on_exit(fn -> if Process.alive?(completer), do: send(completer, :release) end)
 
     send(completer, :start)
-    assert_receive {:completer_ready, ^completer, %Result{status: :complete}}, 2_000
+    assert_receive {:completer_ready, ^completer, %Result{status: :complete}}, @receive_timeout
 
     # The finalizer now holds the claim row locked (updated to complete, uncommitted). A concurrent
     # reap must observe the still-committed `processing` row, find it locked, and SKIP it.
     reaper = spawn(fn -> reaper_worker(parent, target) end)
     send(reaper, :start)
-    assert_receive {:reaper_done, ^reaper, {:ok, 0}}, 2_000
+    assert_receive {:reaper_done, ^reaper, {:ok, 0}}, @receive_timeout
 
     send(completer, :release)
-    assert_receive {:completer_done, ^completer, {:ok, %Result{status: :complete}}}, 2_000
+
+    assert_receive {:completer_done, ^completer, {:ok, %Result{status: :complete}}},
+                   @receive_timeout
 
     # The recovery point survived the reap and finalized normally.
     assert claim_state(observer, prefix, claim.id) == "complete"

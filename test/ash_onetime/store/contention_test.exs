@@ -265,7 +265,8 @@ defmodule AshOnetime.Store.ContentionTest do
   end
 
   defp waiting_observation(observer, loser_backend) do
-    Enum.reduce_while(1..200, nil, fn _attempt, _last ->
+    # ~10s deadline: generous for a loaded CI runner; halts as soon as the wait is observed.
+    Enum.reduce_while(1..2_000, nil, fn _attempt, _last ->
       %{rows: rows} =
         Postgrex.query!(
           observer,

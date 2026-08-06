@@ -86,7 +86,8 @@ defmodule AshOnetime.ActionContentionTest do
   end
 
   defp wait_for_blocked_query(observer, expected_blocker, excluded_pid \\ nil) do
-    Enum.reduce_while(1..400, nil, fn _attempt, _last ->
+    # ~10s deadline: generous for a loaded CI runner; halts as soon as the wait is observed.
+    Enum.reduce_while(1..2_000, nil, fn _attempt, _last ->
       case blocked_query(observer, expected_blocker, excluded_pid) do
         [pid, blockers, query] ->
           {:halt, {pid, blockers, query}}
