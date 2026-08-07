@@ -88,6 +88,33 @@ defmodule AshOnetime.MutationCheck do
       test_name: "a non-map context fails closed before the classifier is invoked",
       assertion: "ResponseClassifier.classify(StoreClassifier, :secret, :not_a_map)"
     },
+    "cache-fingerprint-conjunct" => %{
+      path: "lib/ash_onetime/cache.ex",
+      original: "fixed_equal?(entry.fingerprint, claim.fingerprint)",
+      mutated: "is_binary(entry.fingerprint)",
+      test: "test/ash_onetime/cache_test.exs",
+      tag: "cache_fingerprint_conjunct_mutation",
+      test_name: "an entry whose fingerprint mismatches the claim degrades to stale",
+      assertion: "assert {%Result{}, :stale} = CacheApi.authoritative_payload(result, config)"
+    },
+    "cache-codec-conjunct" => %{
+      path: "lib/ash_onetime/cache.ex",
+      original: "entry.codec == claim.response_codec",
+      mutated: "is_binary(entry.codec)",
+      test: "test/ash_onetime/cache_test.exs",
+      tag: "cache_codec_conjunct_mutation",
+      test_name: "an entry whose codec mismatches the claim degrades to stale",
+      assertion: "assert {%Result{}, :stale} = CacheApi.authoritative_payload(result, config)"
+    },
+    "cache-digest-conjunct" => %{
+      path: "lib/ash_onetime/cache.ex",
+      original: "fixed_equal?(entry.digest, claim.response_digest)",
+      mutated: "is_binary(entry.digest)",
+      test: "test/ash_onetime/cache_test.exs",
+      tag: "cache_digest_conjunct_mutation",
+      test_name: "an entry whose digest field mismatches the claim degrades to stale",
+      assertion: "assert {%Result{}, :stale} = CacheApi.authoritative_payload(result, config)"
+    },
     "scope-component-limit" => %{
       path: "lib/ash_onetime/scope.ex",
       original: "length(components) > @max_components ->",

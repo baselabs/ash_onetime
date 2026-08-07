@@ -1,8 +1,10 @@
 defmodule AshOnetime.CacheTest do
   use AshOnetime.Test.StoreCase, async: false
 
+  alias AshOnetime.Cache, as: CacheApi
   alias AshOnetime.Cache.Entry
   alias AshOnetime.Cache.None
+  alias AshOnetime.Store.{Claim, Result}
   alias AshOnetime.Test.ActionExamples.Resource
   alias AshOnetime.Test.Cache
 
@@ -84,6 +86,48 @@ defmodule AshOnetime.CacheTest do
     assert ledger_count(prefix) == 1
   end
 
+  describe "valid_entry? conjunct isolation and admission authority (unit)" do
+    test "a fully claim-consistent entry is a hit" do
+      {result, config, valid, payload} = cache_fixture()
+      Cache.poison(valid)
+      assert {%Result{payload: ^payload}, :hit} = CacheApi.authoritative_payload(result, config)
+    end
+
+    @tag :cache_fingerprint_conjunct_mutation
+    test "an entry whose fingerprint mismatches the claim degrades to stale" do
+      {result, config, valid, _payload} = cache_fixture()
+      Cache.poison(%{valid | fingerprint: :crypto.hash(:sha256, "wrong-fingerprint")})
+      assert {%Result{}, :stale} = CacheApi.authoritative_payload(result, config)
+    end
+
+    @tag :cache_codec_conjunct_mutation
+    test "an entry whose codec mismatches the claim degrades to stale" do
+      {result, config, valid, _payload} = cache_fixture()
+      Cache.poison(%{valid | codec: "wrong-codec"})
+      assert {%Result{}, :stale} = CacheApi.authoritative_payload(result, config)
+    end
+
+    @tag :cache_digest_conjunct_mutation
+    test "an entry whose digest field mismatches the claim degrades to stale" do
+      # The payload still rehashes to the claim digest (payload-rehash conjunct passes); only the
+      # entry's own digest field is wrong, isolating the digest conjunct from the rehash.
+      {result, config, valid, _payload} = cache_fixture()
+      Cache.poison(%{valid | digest: :crypto.hash(:sha256, "wrong-digest")})
+      assert {%Result{}, :stale} = CacheApi.authoritative_payload(result, config)
+    end
+
+    test "a live, valid cache hit is ignored when the authoritative result is not a completion" do
+      {result, config, valid, _payload} = cache_fixture()
+      # prime a fully valid, claim-matching hit
+      Cache.poison(valid)
+
+      # PostgreSQL is consulted first: a non-completion result (collision/rejection) never reaches
+      # the cache get, so a live hit cannot turn a store rejection into an admission.
+      rejection = %{result | status: :collision, payload: nil}
+      assert {^rejection, :disabled} = CacheApi.authoritative_payload(rejection, config)
+    end
+  end
+
   test "None is a total no-op cache implementation" do
     key = :crypto.strong_rand_bytes(32)
 
@@ -108,6 +152,44 @@ defmodule AshOnetime.CacheTest do
       )
 
     count
+  end
+
+  defp cache_fixture do
+    payload = "authoritative-cache-payload"
+    now = DateTime.utc_now()
+
+    claim = %Claim{
+      strategy: :idempotency,
+      id: Ecto.UUID.generate(),
+      operation_hash: :crypto.hash(:sha256, "operation"),
+      scope_hash: :crypto.hash(:sha256, "scope"),
+      key_hash: :crypto.hash(:sha256, "key"),
+      fingerprint: :crypto.hash(:sha256, "fingerprint"),
+      state: :complete,
+      response_codec: "test-codec",
+      response_digest: :crypto.hash(:sha256, payload),
+      admitted_at: now,
+      retain_until: DateTime.add(now, 3_600, :second),
+      inserted_at: now
+    }
+
+    result = %Result{
+      status: :complete,
+      claim: claim,
+      payload: nil,
+      admission_dispatch: :sent,
+      transaction: :committed
+    }
+
+    valid = %Entry{
+      claim_id: claim.id,
+      fingerprint: claim.fingerprint,
+      codec: claim.response_codec,
+      digest: claim.response_digest,
+      payload: payload
+    }
+
+    {result, CacheApi.config([]), valid, payload}
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:ash_onetime, key)
