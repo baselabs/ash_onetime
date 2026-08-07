@@ -959,10 +959,12 @@ defmodule AshOnetime.MutationCheck do
                })
              end)
 
-  # `all` is every registered mutation, computed from @mutations rather than hand-listed, so a
-  # newly added mutation can never be silently orphaned out of the CI battery (CONTRIBUTING and
-  # the CI release-checks job both run `-- all`); the self-test below enforces that invariant.
-  # The named subsets below stay for fast, focused local runs.
+  # `all` is computed from @mutations rather than hand-listed, which is what STRUCTURALLY prevents
+  # the orphan class (a newly added mutation is in `all` by construction — CONTRIBUTING and the CI
+  # release-checks job both run `-- all`). The self-test below is a REGRESSION GUARD, not present
+  # coverage: while `all` is `Map.keys(@mutations)` it can never fire, but it trips the moment a
+  # future change reverts `all` to a hand-list that drops a registered mutation — the exact drift
+  # that once orphaned the ARCH mutations. The named subsets below stay for fast, focused local runs.
   @groups %{
     "all" => Map.keys(@mutations),
     "response-allowlist" => ["response-field-guard"],
@@ -1047,8 +1049,9 @@ defmodule AshOnetime.MutationCheck do
         System.halt(1)
     end
 
-    # Every registered mutation must be reachable from some group, so none can be silently
-    # orphaned out of every runnable command the way three ARCH mutations once were.
+    # Regression guard (see @groups): tautological while `all` is Map.keys(@mutations), but it
+    # trips if a future change reverts `all` to a hand-list that drops a registered mutation —
+    # the drift that once orphaned three ARCH mutations from every runnable command.
     grouped = @groups |> Map.values() |> List.flatten() |> MapSet.new()
     orphaned = @registered |> MapSet.difference(grouped) |> MapSet.to_list() |> Enum.sort()
 
