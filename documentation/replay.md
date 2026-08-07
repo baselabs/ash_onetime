@@ -50,18 +50,18 @@ action via an `after_action` hook that reads the in-flight admission state:
 Resource
 |> Ash.ActionInput.for_action(:redeem, arguments)
 |> Ash.ActionInput.after_action(fn input, result ->
-  # The internal Admission replay predicate reads the in-flight input the outer caller
-  # never holds; use it to suppress a duplicate side effect on a replay.
-  if internal_replay_check?(input), do: suppress_side_effect()
+  # The admission module exposes a replay predicate for in-action use; it reads the
+  # in-flight input the outer caller never holds. Use it to suppress a duplicate side
+  # effect on a replay.
+  if AshOnetime.Admission.replay?(input), do: suppress_side_effect()
   {:ok, result}
 end)
 |> Ash.run_action()
 ```
 
-The admission module exposes an internal replay predicate that takes the in-flight input
-the caller no longer holds, so it is for in-action use only (it is intentionally
-undocumented at the module level; reach for it only when you cannot use a record-returning
-action).
+The admission module's replay predicate takes the in-flight input the caller no longer
+holds, so it is for in-action use only (the admission module is `@moduledoc false`; reach
+for it only when you cannot use a record-returning action).
 
 ## The carrier
 

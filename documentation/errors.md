@@ -108,10 +108,17 @@ mis-categorize them; the per-code HTTP below overrides the `:invalid` class.
 | `:admission_unavailable` | **503** | Admission is unavailable (fail-closed; retryable). |
 | `:telemetry_invalid` | **500** | A telemetry event was invalid (internal). |
 
-## No secrets in `details`
+## `details` and classified data
 
-The `details` map carries non-secret context only. As of this release, no internal call
-site populates `details` with key material, tokens, payloads, or signatures — the field is
-empty at every call site. Because the error now renders through `Ash.error_descriptions`,
-this matters: nothing classified reaches logs, API error renderers, or HTTP bodies via the
-error channel. (Audited; re-audit any future call site that adds `details`.)
+The `details` map is rendered into Ash's standard error description output, so it reaches
+logs, API error renderers, and HTTP bodies. Treat `details` as renderable-to-callers: never
+put key material, tokens, payloads, signatures, or PII in it.
+
+The library's own call sites populate `details` only with non-secret context — field or
+option names (atoms) and numeric byte limits (e.g. `%{field: :key_id, maximum: 128}`).
+**One path carries application-supplied data:** when an application's key resolver returns
+`{:error, reason}`, `ash_onetime` wraps it as
+`Error.new(:key_resolution_failed, ..., %{reason: reason})` (`lib/ash_onetime/token.ex`). A
+resolver that returns key material in its error reason would leak it through the rendered
+error. Keep resolver error reasons secret-free — return an atom or a generic message, not
+the key. (Audited at this release; re-audit any future call site that adds `details`.)

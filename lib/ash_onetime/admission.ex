@@ -177,6 +177,7 @@ defmodule AshOnetime.Admission do
     )
   end
 
+  @doc false
   @spec replay?(Ash.Changeset.t() | Ash.ActionInput.t()) :: boolean()
   def replay?(%{context: %{private: %{@private_replay => true}}}), do: true
   def replay?(_subject), do: false
