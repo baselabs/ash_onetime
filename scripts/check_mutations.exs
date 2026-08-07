@@ -50,6 +50,25 @@ defmodule AshOnetime.MutationCheck do
       test_name: "oldest replay-window endpoint is inclusive",
       assertion: "assert :ok = Window.validate(oldest, nil, @evaluated_at, 60, 5)"
     },
+    "scope-component-limit" => %{
+      path: "lib/ash_onetime/scope.ex",
+      original: "length(components) > @max_components ->",
+      mutated: "length(components) > 999_999 ->",
+      test: "test/ash_onetime/scope_test.exs",
+      tag: "scope_component_limit_mutation",
+      test_name: "rejects one component over the limit",
+      assertion: "assert {:error, message} = Scope.normalize(over)"
+    },
+    "scope-uniqueness" => %{
+      path: "lib/ash_onetime/scope.ex",
+      original: "Enum.uniq(components) != components ->",
+      mutated: "false ->",
+      test: "test/ash_onetime/scope_test.exs",
+      tag: "scope_uniqueness_mutation",
+      test_name: "rejects duplicate components",
+      # ExUnit renders the keyword-list scope in shorthand in the failed-assertion source.
+      assertion: "Scope.normalize(static: \"x\", attribute: :a, static: \"x\")"
+    },
     "token-identifier-bound" => %{
       path: "lib/ash_onetime/token.ex",
       original: "  @max_identifier_bytes 128",
