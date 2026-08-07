@@ -61,7 +61,12 @@ defmodule AshOnetime.ReplayMetadataTest do
   describe "resource create (idempotency, record return)" do
     @tag :replay_metadata_mutation
     test "fresh create stamps replayed: false; retry stamps replayed: true", %{prefix: prefix} do
-      input = charge_input(Ecto.UUID.generate(), 10, "replay-signal-#{System.unique_integer([:positive])}")
+      input =
+        charge_input(
+          Ecto.UUID.generate(),
+          10,
+          "replay-signal-#{System.unique_integer([:positive])}"
+        )
 
       assert {:ok, fresh} =
                Resource

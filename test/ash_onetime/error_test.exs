@@ -30,7 +30,8 @@ defmodule AshOnetime.ErrorTest do
     end
 
     test "a single error returned through the Ash pipeline keeps its code" do
-      error = Error.new(:key_reused_with_different_request, "key was reused with a different request")
+      error =
+        Error.new(:key_reused_with_different_request, "key was reused with a different request")
 
       wrapped = Ash.Error.to_ash_error(error)
 
