@@ -187,6 +187,11 @@ defmodule AshOnetime.Test.ExternalPeer do
 
       :authoritative ->
         load_operation(transaction, prefix, operation_key)
+
+      # A well-formed peer recovery that DIVERGES from what execute stored, used to prove that
+      # finalize binds the recover result (the peer is authoritative for external effects).
+      :divergent ->
+        {:ok, 9_999}
     end
   end
 

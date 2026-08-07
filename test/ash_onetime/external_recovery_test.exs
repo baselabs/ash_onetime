@@ -87,6 +87,32 @@ defmodule AshOnetime.ExternalRecoveryTest do
     assert {:ok, 11} = result
   end
 
+  test "a divergent but well-formed peer recovery is trusted, not rejected", context do
+    reference = make_ref()
+
+    {worker, monitor} =
+      run_worker(context, {:pause_after_execute, self(), reference}, "divergent-recover", 11)
+
+    assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^worker}, 5_000
+    Process.exit(worker, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 5_000
+
+    # On retry the peer's `recover` returns a WELL-FORMED value (9999) that DIVERGES from what
+    # execute stored (11). For external effects the peer is authoritative (ADR 0001): finalize
+    # binds the recover result straight through, with no execute-vs-recover comparison. So the
+    # recovery COMPLETES successfully rather than rejecting the divergence — the trust boundary the
+    # protocol relies on. (The caller observes the local return value; the peer value binds the
+    # external effect result.) If a future change added divergence validation, this would break.
+    ExternalEffectSupport.put_mode(:recover_divergent)
+    result = run_generic(context, "divergent-recover", 11)
+
+    assert [["execute", ^operation_key], ["recover", ^operation_key]] =
+             ExternalPeer.calls(context.prefix)
+
+    assert {:ok, 11} = result
+    assert claim_state(context.prefix, operation_key) == "complete"
+  end
+
   @tag external_recover_mutation: true
   test "unknown execute is recovered once immediately", context do
     ExternalEffectSupport.put_mode(:unknown_after_execute)

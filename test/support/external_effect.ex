@@ -65,6 +65,7 @@ defmodule AshOnetime.Test.ExternalEffectSupport do
       cond do
         mode() == :recover_unknown -> :unknown
         mode() == :execute_unknown_recover_unknown -> :unknown
+        mode() == :recover_divergent -> :divergent
         true -> :authoritative
       end
 
