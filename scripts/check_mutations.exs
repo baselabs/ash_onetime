@@ -115,6 +115,16 @@ defmodule AshOnetime.MutationCheck do
       test_name: "an entry whose digest field mismatches the claim degrades to stale",
       assertion: "assert {%Result{}, :stale} = CacheApi.authoritative_payload(result, config)"
     },
+    "cleanup-partition-limit-guard" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "partition_limit <= @max_partition_drops do",
+      mutated: "partition_limit <= 999_999 do",
+      test: "test/ash_onetime/store/cleanup_test.exs",
+      tag: "cleanup_partition_limit_guard_mutation",
+      test_name: "cleanup rejects out-of-range batch sizes and partition limits",
+      assertion:
+        "assert %Result{status: :failure, reason: :invalid_request} = Store.cleanup(target, 100, 129)"
+    },
     "resource-relationship-leak" => %{
       path: "lib/ash_onetime/codec/resource.ex",
       original: "&relationship_unloaded?(value, &1, resource)",

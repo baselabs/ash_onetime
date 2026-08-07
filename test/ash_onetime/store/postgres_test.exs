@@ -95,6 +95,65 @@ defmodule AshOnetime.Store.PostgresTest do
            ) == :eq
   end
 
+  @tag task5_composite_clock_mutation: true
+  test "a 3+ sibling composite breaks issued_at ties and collapses expiry unconditionally", %{
+    target: target
+  } do
+    evaluated_at = Clock.now() |> DateTime.truncate(:second)
+    tie_at = DateTime.add(evaluated_at, -5, :second)
+
+    # Three siblings, ALL with a non-nil expires_at, two of them tied at the latest issued_at.
+    verified = [
+      %AshOnetime.Verified{
+        key: "s1",
+        issued_at: DateTime.add(evaluated_at, -20, :second),
+        expires_at: DateTime.add(evaluated_at, 120, :second),
+        verifier_id: "verifier-1"
+      },
+      %AshOnetime.Verified{
+        key: "s2",
+        issued_at: tie_at,
+        expires_at: DateTime.add(evaluated_at, 120, :second),
+        verifier_id: "verifier-2"
+      },
+      %AshOnetime.Verified{
+        key: "s3",
+        issued_at: tie_at,
+        expires_at: DateTime.add(evaluated_at, 120, :second),
+        verifier_id: "verifier-3"
+      }
+    ]
+
+    {:ok, request} =
+      Claim.nonce(
+        operation_hash: hash("triple-operation"),
+        scope_hash: hash("triple-scope"),
+        key_hash: hash("triple-key"),
+        verified: verified,
+        max_age: 120,
+        clock_skew: 15,
+        clock: Clock
+      )
+
+    assert {:ok, %Result{status: :admitted, claim: claim}} =
+             Repo.transaction(fn -> Store.claim(target, request) end)
+
+    # max_by over a tie is deterministic — the latest issued_at is the tie value
+    assert DateTime.compare(claim.issued_at, tie_at) == :eq
+
+    # expiry collapses to nil even though EVERY sibling carried a non-nil expires_at
+    assert claim.expires_at == nil
+
+    # the verifier digest binds all three siblings, not a truncated subset
+    assert {:ok, verifier_digest} =
+             AshOnetime.Fingerprint.compute(%{
+               domain: :nonce_verifiers,
+               ordered: ["verifier-1", "verifier-2", "verifier-3"]
+             })
+
+    assert claim.verifier_id == Base.url_encode64(verifier_digest, padding: false)
+  end
+
   test "the retention floor keeps a still-acceptable nonce when the app clock lags the database",
        %{target: target} do
     # Double-spend scenario: the application clock lags the PostgreSQL clock. Freeze the app

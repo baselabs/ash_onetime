@@ -1,6 +1,8 @@
 defmodule AshOnetime.Store.CleanupTest do
   use AshOnetime.Test.StoreCase, async: false
 
+  alias AshOnetime.Store.Result
+
   @moduletag :store
 
   setup_all do
@@ -121,6 +123,16 @@ defmodule AshOnetime.Store.CleanupTest do
                "SELECT count(*) FROM #{relation(prefix, "ash_onetime_nonce_claims")}",
                []
              )
+  end
+
+  @tag :cleanup_partition_limit_guard_mutation
+  test "cleanup rejects out-of-range batch sizes and partition limits", %{target: target} do
+    # The reaper's identical guards are tested (reap_test); the cleanup guard was the untested
+    # sibling — a batch of 0 or >10_000, or a partition_limit above @max_partition_drops (128),
+    # must fail closed with :invalid_request before any DELETE runs.
+    assert %Result{status: :failure, reason: :invalid_request} = Store.cleanup(target, 0, 10)
+    assert %Result{status: :failure, reason: :invalid_request} = Store.cleanup(target, 20_000, 10)
+    assert %Result{status: :failure, reason: :invalid_request} = Store.cleanup(target, 100, 129)
   end
 
   @tag external_processing_cleanup_mutation: true
