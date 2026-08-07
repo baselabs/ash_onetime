@@ -24,6 +24,13 @@ defmodule AshOnetime.Codec.ResourceTest do
     assert restored.__meta__.state == :loaded
   end
 
+  @tag :resource_relationship_leak_mutation
+  test "encode rejects a result carrying a loaded relationship" do
+    contract = contract!([:id, :name])
+    loaded = %{account() | parent: account()}
+    assert {:error, %Error{code: :response_value_invalid}} = Resource.encode(loaded, contract, [])
+  end
+
   test "rejects loaded relationships, unloaded selected fields, and forbidden fields" do
     contract = contract!([:id, :name])
 

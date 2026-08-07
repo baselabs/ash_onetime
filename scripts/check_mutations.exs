@@ -115,6 +115,16 @@ defmodule AshOnetime.MutationCheck do
       test_name: "an entry whose digest field mismatches the claim degrades to stale",
       assertion: "assert {%Result{}, :stale} = CacheApi.authoritative_payload(result, config)"
     },
+    "resource-relationship-leak" => %{
+      path: "lib/ash_onetime/codec/resource.ex",
+      original: "&relationship_unloaded?(value, &1, resource)",
+      mutated: "fn _relationship -> true end",
+      test: "test/ash_onetime/codec/resource_test.exs",
+      tag: "resource_relationship_leak_mutation",
+      test_name: "encode rejects a result carrying a loaded relationship",
+      assertion:
+        "assert {:error, %Error{code: :response_value_invalid}} = Resource.encode(loaded, contract, [])"
+    },
     "scope-component-limit" => %{
       path: "lib/ash_onetime/scope.ex",
       original: "length(components) > @max_components ->",
