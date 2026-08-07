@@ -959,20 +959,12 @@ defmodule AshOnetime.MutationCheck do
                })
              end)
 
-  # Mutations whose RED depends on observing a live lock-wait via pg_stat_activity. Their timing is
-  # load-sensitive and intermittently flaky under the sequential battery, so they are excluded from
-  # `all` (the CI/CONTRIBUTING battery) and run in isolation via `-- concurrency`. They are NOT
-  # orphaned: they live in a named group, and the self-test below asserts every registered mutation
-  # is reachable from some group.
-  @concurrency_mutations ["payload-partition-lock"]
-
-  # `all` is every registered mutation except the load-sensitive concurrency set, computed from
-  # @mutations rather than hand-listed, so a newly added mutation can never be silently orphaned out
-  # of the CI battery (CONTRIBUTING and the CI release-checks job both run `-- all`). The named
-  # subsets below stay for fast, focused local runs.
+  # `all` is every registered mutation, computed from @mutations rather than hand-listed, so a
+  # newly added mutation can never be silently orphaned out of the CI battery (CONTRIBUTING and
+  # the CI release-checks job both run `-- all`); the self-test below enforces that invariant.
+  # The named subsets below stay for fast, focused local runs.
   @groups %{
-    "all" => Map.keys(@mutations) -- @concurrency_mutations,
-    "concurrency" => @concurrency_mutations,
+    "all" => Map.keys(@mutations),
     "response-allowlist" => ["response-field-guard"],
     "return-type" => ["return-contract"],
     "dsl-verifiers" => [

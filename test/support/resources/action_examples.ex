@@ -301,6 +301,14 @@ defmodule AshOnetime.Test.ActionExamples.Resource do
       accept [:account_id, :amount]
     end
 
+    create :charge_untracked do
+      transaction? true
+      argument :request_key, :string, allow_nil?: false
+      argument :natural_key, :string, allow_nil?: false
+      argument :external_key, :string, allow_nil?: false
+      accept [:account_id, :amount]
+    end
+
     create :external_charge do
       transaction? true
       argument :request_key, :string, allow_nil?: false
@@ -369,6 +377,28 @@ defmodule AshOnetime.Test.ActionExamples.Resource do
   onetime do
     protect :charge do
       strategy :idempotency
+      scope([{:static, "charge"}, {:attribute, :account_id}])
+
+      key([
+        {:client, :request_key},
+        {:argument, :natural_key},
+        {:external, :external_key},
+        {:attribute, :account_id}
+      ])
+
+      fingerprint(arguments: [], attributes: [:account_id, :amount])
+
+      response(AshOnetime.Test.Support.ResponseCodec,
+        fields: [:id, :account_id, :amount],
+        classify: AshOnetime.Test.Support.ResponseClassifier
+      )
+
+      retention(3_600)
+    end
+
+    protect :charge_untracked do
+      strategy :idempotency
+      on_definite_store_failure(:execute_untracked)
       scope([{:static, "charge"}, {:attribute, :account_id}])
 
       key([

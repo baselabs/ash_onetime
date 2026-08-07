@@ -16,7 +16,9 @@ defmodule AshOnetime.ReplayMetadataTest do
   """
   use AshOnetime.Test.StoreCase, async: false
 
+  alias AshOnetime.Store.Result
   alias AshOnetime.Test.ActionExamples.Resource
+  alias AshOnetime.Test.FaultStore
   alias Ecto.Adapters.SQL
 
   setup_all do
@@ -170,6 +172,74 @@ defmodule AshOnetime.ReplayMetadataTest do
 
       assert stamped.__metadata__[:ash_onetime][:replayed] == false
       assert AshOnetime.replayed?(stamped) == false
+    end
+  end
+
+  describe ":execute_untracked end-to-end (ADR 0001 transparency + telemetry)" do
+    setup do
+      # Drive the whole Ash pipeline against a store that reports a definite, no-dispatch
+      # checkout failure, so a :charge_untracked create actually takes the :execute_untracked
+      # branch — not a direct stamp_replay/2 call.
+      AshOnetime.Admission.put_test_store(FaultStore)
+
+      FaultStore.put_result(Result.failure(:checkout_unavailable, :not_started, :not_applicable))
+
+      parent = self()
+      handler_id = {__MODULE__, :untracked_telemetry}
+
+      :telemetry.attach(
+        handler_id,
+        [:ash_onetime, :untracked_execution],
+        fn _event, measurements, metadata, _config ->
+          send(parent, {:untracked_telemetry, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn ->
+        :telemetry.detach(handler_id)
+        FaultStore.reset()
+        AshOnetime.Admission.reset_test_store()
+      end)
+
+      :ok
+    end
+
+    @tag :untracked_transparency_mutation
+    test "a definite checkout failure runs the effect untracked, stamps no metadata, and emits telemetry",
+         %{prefix: prefix} do
+      account_id = Ecto.UUID.generate()
+      key = "untracked-e2e-#{System.unique_integer([:positive])}"
+
+      assert {:ok, record} =
+               Resource
+               |> Ash.Changeset.for_create(:charge_untracked, charge_input(account_id, 7, key))
+               |> Ash.Changeset.set_tenant(prefix)
+               |> Ash.create()
+
+      # The effect executed: the record landed in the real data layer even though the
+      # authoritative store was unavailable — the untracked branch proceeds.
+      assert record.account_id == account_id
+      assert record.amount == 7
+
+      assert %{rows: [[1]]} =
+               SQL.query!(
+                 Repo,
+                 "SELECT count(*) FROM \"#{prefix}\".\"ash_onetime_action_examples\" WHERE id = $1",
+                 [Ecto.UUID.dump!(record.id)]
+               )
+
+      # Untracked transparency (ADR 0001): observationally indistinguishable from an
+      # unprotected action — NO :ash_onetime metadata, so replayed?/1 is nil, not false.
+      assert AshOnetime.replayed?(record) == nil
+      refute Map.has_key?(record.__metadata__, :ash_onetime)
+
+      # ...but the condition is surfaced through value-free telemetry (AGENTS.md boundary).
+      assert_receive {:untracked_telemetry, %{count: 1}, metadata}
+      assert metadata.strategy == :idempotency
+      assert metadata.resource == Resource
+      assert metadata.action == :charge_untracked
+      assert metadata.result_class == :checkout_unavailable
     end
   end
 end

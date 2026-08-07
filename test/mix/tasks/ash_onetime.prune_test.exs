@@ -280,22 +280,27 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
   end
 
   defp waiting_partition_prune(observer, _prefix) do
-    pattern = "%ash_onetime_response_payloads_race%"
-
-    # ~10s deadline: generous for a loaded CI runner; halts as soon as the wait is observed.
-    Enum.reduce_while(1..2_000, false, fn _attempt, _last ->
+    # Observe the pruning worker blocked on the race partition. `pg_locks.granted = false`
+    # is a *durable* signal — it persists for the entire time the request is blocked — so a
+    # single snapshot cannot miss the wait the way the transient pg_stat_activity.wait_event
+    # can under battery load. The worker blocks either taking SHARE (correct) or, once the
+    # lock is weakened, ACCESS EXCLUSIVE for the DROP; both are lock requests on the partition,
+    # so either mode is caught. ~30s deadline is far beyond any scheduling delay yet halts the
+    # instant the wait appears.
+    Enum.reduce_while(1..6_000, false, fn _attempt, _last ->
       %{rows: rows} =
         Postgrex.query!(
           observer,
           """
-          SELECT query
-          FROM pg_stat_activity
-          WHERE datname = current_database()
-            AND pid <> pg_backend_pid()
-            AND wait_event_type = 'Lock'
-            AND query LIKE $1
+          SELECT 1
+          FROM pg_locks l
+          JOIN pg_class c ON c.oid = l.relation
+          WHERE l.granted = false
+            AND l.pid <> pg_backend_pid()
+            AND c.relname LIKE 'ash_onetime_response_payloads_race%'
+          LIMIT 1
           """,
-          [pattern]
+          []
         )
 
       if rows == [] do
