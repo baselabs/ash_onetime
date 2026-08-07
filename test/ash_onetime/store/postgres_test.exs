@@ -311,6 +311,81 @@ defmodule AshOnetime.Store.PostgresTest do
     assert table_count(prefix, "ash_onetime_response_payloads") == 0
   end
 
+  @tag completion_once_mutation: true
+  test "an already-complete claim rejects re-completion with one effect", %{
+    prefix: prefix,
+    target: target
+  } do
+    request = idempotency_request("recompletion")
+    payload = "authoritative"
+    digest = :crypto.hash(:sha256, payload)
+    completed = seed_completed_claim!(prefix, request, payload, digest)
+
+    assert table_count(prefix, "ash_onetime_idempotency_claims") == 1
+    assert table_count(prefix, "ash_onetime_response_payloads") == 1
+
+    # The completion guard's state predicate (state = 'processing') matches
+    # nothing on an already-complete claim, so a second completer turns into
+    # store_invariant regardless of which layered guard fires first. No second
+    # payload or state mutation lands.
+    assert {:error, %Result{status: :failure, reason: :store_invariant}} =
+             Repo.transaction(fn ->
+               Store.complete(target, completed, "test", digest, payload)
+             end)
+
+    assert table_count(prefix, "ash_onetime_idempotency_claims") == 1
+    assert table_count(prefix, "ash_onetime_response_payloads") == 1
+  end
+
+  @tag completion_once_mutation: true
+  test "an already-complete claim rejects an external re-completion", %{
+    prefix: prefix,
+    target: target
+  } do
+    request = idempotency_request("recompletion-external")
+    payload = "authoritative"
+    digest = :crypto.hash(:sha256, payload)
+    completed = seed_completed_claim!(prefix, request, payload, digest)
+
+    assert {:error, %Result{status: :failure, reason: :store_invariant}} =
+             Repo.transaction(fn ->
+               Store.complete_external(target, completed, "test", digest, payload)
+             end)
+
+    assert table_count(prefix, "ash_onetime_idempotency_claims") == 1
+    assert table_count(prefix, "ash_onetime_response_payloads") == 1
+  end
+
+  @tag completion_once_mutation: true
+  test "the completion state predicate is the effect-once backstop without a payload", %{
+    prefix: prefix,
+    target: target
+  } do
+    # Isolate the state predicate (state = 'processing') in update_complete from
+    # the insert_payload conflict guard and the payload-cardinality guard: seed a
+    # complete claim with no payload, then attempt completion. insert_payload
+    # lands exactly one row, the cardinality and partition checks pass, and only
+    # the state predicate (claim is :complete, not :processing) forces the 0-row
+    # update into store_invariant. Proves the state guard is a real backstop.
+    request = idempotency_request("recompletion-state-backstop")
+    payload = "authoritative"
+    digest = :crypto.hash(:sha256, payload)
+    completed = seed_completed_claim!(prefix, request, payload, digest)
+
+    SQL.query!(
+      Repo,
+      "DELETE FROM #{relation(prefix, "ash_onetime_response_payloads")} WHERE claim_id = $1::uuid",
+      [Ecto.UUID.dump!(request.id)]
+    )
+
+    assert {:error, %Result{status: :failure, reason: :store_invariant}} =
+             Repo.transaction(fn ->
+               Store.complete(target, completed, "test", digest, payload)
+             end)
+
+    assert table_count(prefix, "ash_onetime_idempotency_claims") == 1
+  end
+
   test "load reports a missing authoritative claim as a store invariant", %{target: target} do
     request = idempotency_request("missing-load")
     parent = self()
@@ -524,6 +599,59 @@ defmodule AshOnetime.Store.PostgresTest do
       """,
       [date, Ecto.UUID.dump!(id), payload]
     )
+  end
+
+  # Seeds an already-complete authoritative claim plus its single payload via
+  # direct SQL, bypassing Store.complete. This is the "given" state for the
+  # re-completion tests: the seeded claim never passes through update_complete,
+  # so a mutation of the completion state predicate isolates the re-completion
+  # call (the "when") rather than also breaking a first-completion setup step.
+  defp seed_completed_claim!(prefix, request, payload, digest) do
+    partition_date = Date.utc_today()
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    retain_until = DateTime.add(now, 3_600, :second)
+
+    SQL.query!(
+      Repo,
+      """
+      INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}
+        (id, operation_hash, scope_hash, key_hash, fingerprint, state,
+         response_partition, response_codec, response_digest,
+         admitted_at, retain_until, inserted_at)
+      VALUES ($1::uuid, $2, $3, $4, $5, 'complete',
+              $6, $7, $8, $9, $10, $9)
+      """,
+      [
+        Ecto.UUID.dump!(request.id),
+        request.operation_hash,
+        request.scope_hash,
+        request.key_hash,
+        request.fingerprint,
+        partition_date,
+        "test",
+        digest,
+        now,
+        retain_until
+      ]
+    )
+
+    insert_payload!(prefix, partition_date, request.id, payload)
+
+    %Claim{
+      strategy: :idempotency,
+      id: request.id,
+      operation_hash: request.operation_hash,
+      scope_hash: request.scope_hash,
+      key_hash: request.key_hash,
+      fingerprint: request.fingerprint,
+      state: :complete,
+      response_partition: partition_date,
+      response_codec: "test",
+      response_digest: digest,
+      admitted_at: now,
+      retain_until: retain_until,
+      inserted_at: now
+    }
   end
 
   defp table_count(prefix, table) do

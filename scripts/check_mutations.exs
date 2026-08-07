@@ -688,6 +688,37 @@ defmodule AshOnetime.MutationCheck do
       assertion:
         "assert ExternalPeer.calls(context.prefix) == calls_before ++ [[\"recover\", operation_key]]"
     },
+    "ambiguous-retry-settle" => %{
+      path: "lib/ash_onetime/external_recovery.ex",
+      original:
+        ":unknown ->\n        ambiguous_recovery(state, started)\n    end\n  end\n\n  # mutation sentinel: ambiguous-retry",
+      mutated:
+        ":unknown ->\n        execute_then_settle(state, subject, protection, operation_key, callback_context, started)\n    end\n  end\n\n  # mutation sentinel: ambiguous-retry",
+      test: "test/ash_onetime/external_recovery_test.exs",
+      tag: "ambiguous_retry_mutation",
+      test_name: "ambiguous outcome from an unknown execute and recover never executes or finalizes",
+      assertion:
+        "assert Exception.message(error) =~ \"external effect outcome is unknown\""
+    },
+    "completion-once" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "      AND id = $7::uuid AND state = 'processing'\n",
+      mutated: "      AND id = $7::uuid AND state = 'complete'\n",
+      test: "test/ash_onetime/store/postgres_test.exs",
+      tag: "completion_once_mutation",
+      test_name: "the completion state predicate is the effect-once backstop without a payload",
+      assertion: "assert {:error, %Result{status: :failure, reason: :store_invariant}} ="
+    },
+    "completion-invariant-rollback" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "WHERE claim_id = $7::uuid\n      ) = 1\n",
+      mutated: "WHERE claim_id = $7::uuid\n      ) >= 1\n",
+      test: "test/ash_onetime/action_transaction_test.exs",
+      tag: "completion_invariant_rollback_mutation",
+      test_name:
+        "a real completion invariant rolls back claim, payload, and effect through the Ash pipeline",
+      assertion: "charge_input(account_id, 10, \"poisoned-completion\")"
+    },
     "task5-reserved-input" => %{
       path: "lib/ash_onetime/admission.ex",
       original: "with :ok <- reject_reserved(subject),",
@@ -871,7 +902,10 @@ defmodule AshOnetime.MutationCheck do
       "signature-compare",
       "canonical-domain-tag",
       "action-replay",
-      "ambiguous-retry"
+      "ambiguous-retry",
+      "ambiguous-retry-settle",
+      "completion-once",
+      "completion-invariant-rollback"
     ],
     "response-allowlist" => ["response-field-guard"],
     "return-type" => ["return-contract"],

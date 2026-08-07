@@ -35,7 +35,11 @@ defmodule AshOnetime.Test.ExternalEffectSupport do
         receive do: ({:external_continue, ^reference} -> :ok)
         {:ok, result}
 
-      :unknown_after_execute ->
+      mode when mode in [:unknown_after_execute, :execute_unknown_recover_unknown] ->
+        # Both modes run execute at the peer (evidence lands once) and return an
+        # unknown outcome. :execute_unknown_recover_unknown additionally makes the
+        # subsequent recover return :unknown, driving the settle_unknown_execute
+        # -> ambiguous_recovery path-D arm of the double-execute firewall.
         _result = ExternalPeer.execute(prefix, operation_key, peer_result(subject))
         {:error, :outcome_unknown}
 
@@ -57,7 +61,13 @@ defmodule AshOnetime.Test.ExternalEffectSupport do
   end
 
   def recover(operation_key, subject) do
-    disposition = if mode() == :recover_unknown, do: :unknown, else: :authoritative
+    disposition =
+      cond do
+        mode() == :recover_unknown -> :unknown
+        mode() == :execute_unknown_recover_unknown -> :unknown
+        true -> :authoritative
+      end
+
     ExternalPeer.recover(subject.to_tenant, operation_key, disposition)
   end
 

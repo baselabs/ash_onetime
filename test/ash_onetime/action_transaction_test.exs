@@ -814,6 +814,66 @@ defmodule AshOnetime.ActionTransactionTest do
     assert table_count(prefix, "ash_onetime_generic_effect_ledger") == 0
   end
 
+  @tag completion_invariant_rollback_mutation: true
+  test "a real completion invariant rolls back claim, payload, and effect through the Ash pipeline", %{
+    prefix: prefix
+  } do
+    # Inject a cross-partition payload row inside the Ash caller transaction via a
+    # trigger on claim INSERT, so the real Store.complete/5 hits its 1-payload
+    # cardinality guard (update_complete) and returns store_invariant. Unlike the
+    # FaultStore mock, this drives real PostgreSQL rollback through Ash.run_action
+    # -> Admission.complete -> Store.complete, unwinding the authoritative claim,
+    # both payload rows, and the CRUD business record together.
+    SQL.query!(
+      Repo,
+      """
+      CREATE OR REPLACE FUNCTION #{relation(prefix, "poison_payload_on_claim")}()
+      RETURNS trigger LANGUAGE plpgsql AS $poison$
+      BEGIN
+        INSERT INTO #{relation(prefix, "ash_onetime_response_payloads")}
+          (partition_date, claim_id, encoded_response)
+        VALUES ('2100-01-01', NEW.id, 'poison');
+        RETURN NEW;
+      END
+      $poison$
+      """,
+      []
+    )
+
+    SQL.query!(
+      Repo,
+      "DROP TRIGGER IF EXISTS poison_payload_on_claim ON #{relation(prefix, "ash_onetime_idempotency_claims")}",
+      []
+    )
+
+    SQL.query!(
+      Repo,
+      """
+      CREATE TRIGGER poison_payload_on_claim
+      AFTER INSERT ON #{relation(prefix, "ash_onetime_idempotency_claims")}
+      FOR EACH ROW EXECUTE FUNCTION #{relation(prefix, "poison_payload_on_claim")}()
+      """,
+      []
+    )
+
+    try do
+      account_id = Ecto.UUID.generate()
+
+      assert {:error, _error} =
+               Resource
+               |> Ash.Changeset.for_create(:charge, charge_input(account_id, 10, "poisoned-completion"))
+               |> Ash.Changeset.set_tenant(prefix)
+               |> Ash.create()
+
+      assert table_count(prefix, "ash_onetime_action_examples") == 0
+      assert table_count(prefix, "ash_onetime_idempotency_claims") == 0
+      assert table_count(prefix, "ash_onetime_response_payloads") == 0
+    after
+      SQL.query!(Repo, "DROP TRIGGER IF EXISTS poison_payload_on_claim ON #{relation(prefix, "ash_onetime_idempotency_claims")}", [])
+      SQL.query!(Repo, "DROP FUNCTION IF EXISTS #{relation(prefix, "poison_payload_on_claim")}()", [])
+    end
+  end
+
   @tag task5_completion_identity_mutation: true
   test "completion validates every local encoding and outer evidence field" do
     protection = AshOnetime.Resource.Info.protection(Resource, :redeem)

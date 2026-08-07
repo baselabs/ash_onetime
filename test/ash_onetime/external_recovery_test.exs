@@ -117,6 +117,27 @@ defmodule AshOnetime.ExternalRecoveryTest do
     assert claim_state(context.prefix, operation_key) == "processing"
   end
 
+  @tag ambiguous_retry_mutation: true
+  test "ambiguous outcome from an unknown execute and recover never executes or finalizes", context do
+    # Path D of the double-execute firewall: a fresh admission reaches
+    # execute_then_settle, execute runs at the peer but returns :outcome_unknown,
+    # and the immediate recover returns :unknown. The claim must settle to
+    # {:error, :outcome_unknown}. Execute's evidence lands once (it ran), but
+    # finalize never runs, so there is no local effect and no second execute.
+    ExternalEffectSupport.put_mode(:execute_unknown_recover_unknown)
+
+    result = run_generic(context, "ambiguous-execute", 19)
+
+    assert [["execute", operation_key], ["recover", operation_key]] =
+             ExternalPeer.calls(context.prefix)
+
+    assert ExternalPeer.count(context.prefix, "external_peer_effects") == 1
+    assert ExternalPeer.count(context.prefix, "external_local_effects") == 0
+    assert {:error, error} = result
+    assert Exception.message(error) =~ "external effect outcome is unknown"
+    assert claim_state(context.prefix, operation_key) == "processing"
+  end
+
   test "local finalization rollback leaves peer result recoverable", context do
     ExternalEffectSupport.put_mode(:fail_local)
 
