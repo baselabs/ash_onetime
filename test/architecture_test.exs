@@ -101,7 +101,7 @@ defmodule AshOnetime.ArchitectureTest do
   ]
 
   @exports %{
-    AshOnetime => [],
+    AshOnetime => [replayed?: 1],
     AshOnetime.Cache => [authoritative_payload: 2, config: 1, store: 3],
     AshOnetime.Cache.Entry => [__struct__: 0, __struct__: 1],
     AshOnetime.Cache.None => [delete: 1, get: 1, put: 3],
@@ -140,7 +140,19 @@ defmodule AshOnetime.ArchitectureTest do
       normalize: 2,
       require_normalized: 2
     ],
-    AshOnetime.Error => [__struct__: 0, __struct__: 1, exception: 1, message: 1, new: 2, new: 3],
+    AshOnetime.Error => [
+      __struct__: 0,
+      __struct__: 1,
+      code: 1,
+      error_class?: 0,
+      exception: 0,
+      exception: 1,
+      from_json: 1,
+      message: 1,
+      new: 2,
+      new: 3,
+      splode_error?: 0
+    ],
     AshOnetime.ExternalEffect => [operation_key: 1, put_result: 3, result: 1],
     AshOnetime.Fingerprint => [compute: 1, compute: 2],
     AshOnetime.KeyResolver => [],
@@ -274,6 +286,19 @@ defmodule AshOnetime.ArchitectureTest do
   test "documented public exports are exact" do
     actual = Map.new(@documented_modules, &{&1, &1.__info__(:functions)})
     assert actual == @exports
+  end
+
+  test "AshOnetime.Error is a Splode error so its typed code survives the Ash pipeline" do
+    # ARCH-1: AshOnetime.Error must be a Splode leaf of class :invalid so Ash preserves it
+    # (instead of wrapping it as an unknown error and losing the typed :code). A bare
+    # defexception would make splode_error?/0 undefined and ash_error?/1 false.
+    assert function_exported?(AshOnetime.Error, :splode_error?, 0)
+    assert AshOnetime.Error.splode_error?() == true
+    assert AshOnetime.Error.error_class?() == false
+
+    error = AshOnetime.Error.new(:nonce_already_used, "nonce was already used")
+    assert Ash.Error.ash_error?(error) == true
+    assert error.class == :invalid
   end
 
   test "reference-project and provider-crypto dependencies stay absent" do
