@@ -33,8 +33,9 @@
   correctness; processing external effects are not ordinary expiry candidates.
 - A protected action's failure carries a typed `:code` that survives the Ash pipeline. Read it
   with `AshOnetime.Error.code/1` to drive HTTP status; do not assume a blanket class→status
-  mapping, because `:store_invariant` and `:outcome_unknown` are server faults (500/503), not
-  client input. See [Errors and HTTP mapping](documentation/errors.md).
+  mapping, because a family of server-fault and transport codes (e.g. `:store_invariant`,
+  `:outcome_unknown`, `:checkout_unavailable`, `:lock_timeout`) are 500/503, not client input.
+  See [Errors and HTTP mapping](documentation/errors.md) for the full code→status table.
 - A protected action's success carries a replayed-vs-fresh signal. `AshOnetime.replayed?/1`
   returns `true` (stored replay), `false` (fresh execution), or `nil` (untracked execution,
   primitive-return action, or unprotected). Treat `nil` as "cannot tell," not as "fresh." See

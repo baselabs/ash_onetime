@@ -33,9 +33,14 @@ distinguishable from "some other error occurred."
 ## Class and HTTP
 
 All `AshOnetime.Error` codes are class `:invalid`. AshJsonApi and AshGraphql auto-map class
-`:invalid` to the 4xx family. The code→HTTP table below names the recommended status per
-code; **two codes are server-side faults, not client input**, and override the class default
-to 5xx — a consumer mapping class→HTTP must special-case these two.
+`:invalid` to the 4xx family. That default is correct for the client-input codes below, but a
+family of **server-fault and transport codes overrides it to 5xx** — a consumer mapping
+class→HTTP must special-case those (the two 5xx tables below), or a store outage, a trusted
+clock fault, or an internal invariant violation is mis-reported to the client as a 4xx.
+
+This page lists every code a caller can observe from `AshOnetime.Error.code/1`, including the
+token-verification codes, the trusted-clock codes, and the store-fault/transport codes routed
+through the authoritative store — not only the codes raised on the happy admission path.
 
 ### Client-input / operational codes (4xx)
 
@@ -56,9 +61,14 @@ to 5xx — a consumer mapping class→HTTP must special-case these two.
 | `:invalid_key` | 422 | A key is structurally invalid. |
 | `:invalid_key_role` | 422 | A key source role is unrecognized. |
 | `:invalid_window` | 422 | A nonce window is malformed. |
+| `:invalid_nonce_window` | 422 | The authoritative store rejected a malformed nonce window. |
 | `:invalid_expires_at` | 422 | A verified expiry is malformed. |
 | `:invalid_token` | 422 | A token is structurally invalid. |
 | `:malformed_token` | 422 | A token envelope could not be parsed. |
+| `:invalid_key_id` | 422 | A token key id is missing or out of bounds. |
+| `:invalid_namespace` | 422 | A token namespace is missing or out of bounds. |
+| `:invalid_issued_at` | 422 | A token issuance timestamp is malformed. |
+| `:invalid_trust_boundary` | 422 | HMAC material did not prove same-service trust. |
 | `:invalid_encoding` | 422 | A canonical encoding is invalid. |
 | `:noncanonical_encoding` | 422 | A canonical encoding is non-canonical. |
 | `:noncanonical_envelope` | 422 | A token envelope is non-canonical. |
@@ -95,6 +105,7 @@ mis-categorize them; the per-code HTTP below overrides the `:invalid` class.
 |---|---|---|
 | `:store_invariant` | **500** | The authoritative store returned a result that violated an internal invariant (integrity fault, not client input). |
 | `:outcome_unknown` | **503** | External recovery was ambiguous; the effect's outcome could not be determined (retryable). |
+| `:invalid_evaluated_at` | **500** | The trusted evaluation clock returned an invalid time. |
 | `:response_payload_invalid` | **500** | The persisted response payload is invalid. |
 | `:response_persisted_state_invalid` | **500** | The persisted response state is invalid. |
 | `:response_digest_mismatch` | **500** | The persisted response digest does not match the payload. |
@@ -107,6 +118,28 @@ mis-categorize them; the per-code HTTP below overrides the `:invalid` class.
 | `:admission_request_invalid` | **500** | The admission request is internally invalid. |
 | `:admission_unavailable` | **503** | Admission is unavailable (fail-closed; retryable). |
 | `:telemetry_invalid` | **500** | A telemetry event was invalid (internal). |
+
+### Store-fault and transport codes (5xx — override the class default)
+
+When the authoritative PostgreSQL store is unavailable or reports a fault, admission fails
+closed (nonces always; idempotency unless untracked execution is explicitly enabled) and the
+store's reason surfaces verbatim through `AshOnetime.Error.code/1`. A generic
+`:store_failure` covers any reason not enumerated below. Treat the `503` codes as retryable
+(the request may succeed on retry once the store recovers) and the `500` codes as integrity or
+configuration faults that will not clear by retrying.
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `:checkout_unavailable` | **503** | No database connection could be checked out (pool exhausted or down). |
+| `:disconnected` | **503** | The database connection dropped mid-operation. |
+| `:lock_timeout` | **503** | A row lock could not be acquired within the timeout. |
+| `:dispatched_unknown` | **503** | A statement was dispatched but its outcome is unknown (retryable). |
+| `:store_failure` | **503** | The authoritative store failed for an unenumerated reason. |
+| `:missing_prefix` | **500** | The context-tenant schema prefix is missing or out of the 1..63-byte bound (fail-closed, not truncated). |
+| `:not_in_transaction` | **500** | Admission ran outside the required database transaction. |
+| `:unsupported_isolation` | **500** | The connection's transaction isolation level is unsupported. |
+| `:corrupt_payload` | **500** | A persisted response payload failed its integrity check. |
+| `:invalid_request` | **500** | The store received an internally malformed request. |
 
 ## `details` and classified data
 
