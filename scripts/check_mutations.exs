@@ -838,6 +838,25 @@ defmodule AshOnetime.MutationCheck do
       tag: "action_replay_mutation",
       test_name: "typed replay and action and scope namespaces remain independent",
       assertion: "refute_receive {:generic_run, _}"
+    },
+    "for-repo-prefix-bound" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "    unless is_nil(prefix) or valid_prefix?(prefix) do",
+      mutated: "    unless is_nil(prefix) or is_binary(prefix) do",
+      test: "test/ash_onetime/store/transaction_test.exs",
+      tag: "for_repo_prefix_bound_mutation",
+      test_name: "for_repo rejects a schema prefix beyond PostgreSQL's 63-byte identifier limit",
+      assertion: "Postgres.for_repo(Repo, over_bound)"
+    },
+    "prefix-length-bound" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "  defp valid_prefix?(value), do: is_binary(value) and byte_size(value) in 1..63",
+      mutated: "  defp valid_prefix?(value), do: is_binary(value) and byte_size(value) in 1..64",
+      test: "test/ash_onetime/store/transaction_test.exs",
+      tag: "prefix_length_bound_mutation",
+      test_name:
+        "target rejects a context tenant prefix beyond PostgreSQL's 63-byte identifier limit",
+      assertion: "Postgres.target(AshOnetime.Test.TenantStoreResource, tenant: over_bound)"
     }
   }
 
@@ -905,7 +924,9 @@ defmodule AshOnetime.MutationCheck do
       "ambiguous-retry",
       "ambiguous-retry-settle",
       "completion-once",
-      "completion-invariant-rollback"
+      "completion-invariant-rollback",
+      "for-repo-prefix-bound",
+      "prefix-length-bound"
     ],
     "response-allowlist" => ["response-field-guard"],
     "return-type" => ["return-contract"],

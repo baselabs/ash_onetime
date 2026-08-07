@@ -88,6 +88,17 @@ defmodule AshOnetime.Store.TransactionTest do
              Postgres.target(AshOnetime.Test.TenantStoreResource, tenant: over_bound)
   end
 
+  @tag for_repo_prefix_bound_mutation: true
+  test "for_repo rejects a schema prefix beyond PostgreSQL's 63-byte identifier limit" do
+    within_bound = String.duplicate("t", 63)
+    over_bound = String.duplicate("t", 64)
+
+    assert %Postgres.Target{prefix: nil} = Postgres.for_repo(Repo)
+    assert %Postgres.Target{prefix: ^within_bound} = Postgres.for_repo(Repo, within_bound)
+
+    assert_raise ArgumentError, fn -> Postgres.for_repo(Repo, over_bound) end
+  end
+
   test "quoted prefix selects the installed tenant-local store", %{prefix: prefix} do
     assert {:ok, %Postgres.Target{} = target} =
              Postgres.target(AshOnetime.Test.TenantStoreResource, tenant: prefix)

@@ -31,6 +31,18 @@ defmodule AshOnetime.Store.Postgres do
 
   @spec for_repo(Ecto.Repo.t(), binary() | nil) :: Target.t()
   def for_repo(repo, prefix \\ nil) when is_atom(repo) do
+    # mutation sentinel: for-repo-prefix-bound
+    # target/2 already fails closed on an over-long context-tenant prefix. This is the parallel
+    # construction path — the shared entry every ops surface uses (reap/prune/cleanup tasks and
+    # the Oban workers) — so it enforces the same NAMEDATALEN bound here. Without it, a caller
+    # passing a >63-byte prefix would be silently truncated by PostgreSQL and routed to the wrong
+    # tenant's physical schema (a cross-tenant isolation failure), so fail closed instead.
+    unless is_nil(prefix) or valid_prefix?(prefix) do
+      raise ArgumentError,
+            "ash_onetime schema prefix must be nil or a 1..63-byte binary; " <>
+              "PostgreSQL silently truncates identifiers at NAMEDATALEN (63 bytes)"
+    end
+
     %Target{repo_module: repo, dynamic_repo: repo.get_dynamic_repo(), prefix: prefix}
   end
 
