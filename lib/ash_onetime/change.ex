@@ -77,8 +77,9 @@ defmodule AshOnetime.Change do
 
   defp complete_state(final_changeset, result, instructions) do
     case AshOnetime.Admission.state(final_changeset) do
-      {:ok, %{class: :replay}} ->
-        {:ok, result, final_changeset, suppress_notifications(instructions)}
+      {:ok, %{class: :replay} = state} ->
+        {:ok, AshOnetime.Admission.stamp_replay(state, result), final_changeset,
+         suppress_notifications(instructions)}
 
       {:ok, state} ->
         normalize_completion(state, result, final_changeset, instructions)
@@ -90,8 +91,12 @@ defmodule AshOnetime.Change do
 
   defp normalize_completion(state, result, final_changeset, instructions) do
     case AshOnetime.Admission.complete(state, result) do
-      {:ok, normalized} -> {:ok, normalized, final_changeset, instructions}
-      {:error, error} -> {:error, error}
+      {:ok, normalized} ->
+        {:ok, AshOnetime.Admission.stamp_replay(state, normalized), final_changeset,
+         instructions}
+
+      {:error, error} ->
+        {:error, error}
     end
   end
 

@@ -107,7 +107,10 @@ defmodule AshOnetime.TenantPrefixTest do
     assert replayed.__meta__.prefix == fresh.__meta__.prefix
     assert fresh.__metadata__.tenant == prefix
     assert replayed.__metadata__.tenant == prefix
-    assert replayed.__metadata__ == fresh.__metadata__
+    # The replay signal (replayed: true vs false) is intentionally fresh/replay-specific,
+    # so compare the tenant only — this test asserts tenant isolation, not full-metadata
+    # equality.
+    assert replayed.__metadata__.tenant == fresh.__metadata__.tenant
   end
 
   defp create_in(prefix, input) do

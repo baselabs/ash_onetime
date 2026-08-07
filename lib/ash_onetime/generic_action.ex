@@ -64,15 +64,18 @@ defmodule AshOnetime.GenericAction do
 
   defp complete(input, result) do
     case AshOnetime.Admission.state(input) do
-      {:ok, %{class: :replay}} ->
-        after_result(input, result)
+      {:ok, %{class: :replay} = state} ->
+        after_result(input, AshOnetime.Admission.stamp_replay(state, result))
 
       {:ok, state} ->
         persisted_result = if is_nil(input.action.returns), do: :ok, else: result
 
         case AshOnetime.Admission.complete(state, persisted_result) do
-          {:ok, normalized} -> after_result(input, normalized)
-          {:error, error} -> {:error, error}
+          {:ok, normalized} ->
+            after_result(input, AshOnetime.Admission.stamp_replay(state, normalized))
+
+          {:error, error} ->
+            {:error, error}
         end
 
       :error ->

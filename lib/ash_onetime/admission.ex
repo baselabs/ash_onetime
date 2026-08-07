@@ -197,6 +197,34 @@ defmodule AshOnetime.Admission do
     |> put_private(@private_replay, true)
   end
 
+  @doc """
+  Stamps the caller-visible replayed-vs-fresh signal onto a result record.
+
+  For tracked admission classes (`:execute`, `:external_execute`, `:replay`, `:nonce`),
+  the result is stamped with `__metadata__[:ash_onetime][:replayed]` — `true` for a stored
+  replay, `false` for a fresh execution — so the outer caller can observe the distinction
+  after `Ash.create/2` / `Ash.run_action/2` returns. Non-struct results (primitive
+  generic-action returns, destroy `:ok`) carry no `__metadata__` and are returned unchanged,
+  so `AshOnetime.replayed?/1` reports `nil` for them.
+
+  The `:untracked` class is deliberately NOT stamped: an untracked execution must remain
+  observationally indistinguishable from an unprotected action (ADR 0001 "Failure and safe
+  cleanup"), so it returns no `:ash_onetime` metadata and `replayed?/1` reports `nil`.
+  """
+  @spec stamp_replay(State.t(), term()) :: term()
+  def stamp_replay(%State{class: :untracked}, result), do: result
+
+  def stamp_replay(%State{class: class}, result)
+      when class in [:execute, :external_execute, :replay, :nonce] do
+    case result do
+      %{__metadata__: _} = record ->
+        Ash.Resource.put_metadata(record, :ash_onetime, %{replayed: class == :replay})
+
+      _other ->
+        result
+    end
+  end
+
   if Mix.env() == :test do
     @doc false
     def put_test_store(module) when is_atom(module),

@@ -867,6 +867,30 @@ defmodule AshOnetime.MutationCheck do
       tag: "error_splode_membership_mutation",
       test_name: "AshOnetime.Error is recognized as an Ash error",
       assertion: "assert Ash.Error.ash_error?(error) == true"
+    },
+    "replay-metadata" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original:
+        "        Ash.Resource.put_metadata(record, :ash_onetime, %{replayed: class == :replay})",
+      mutated: "        record",
+      test: "test/ash_onetime/replay_metadata_test.exs",
+      tag: "replay_metadata_mutation",
+      test_name: "fresh create stamps replayed: false; retry stamps replayed: true",
+      assertion: "assert AshOnetime.replayed?(fresh) == false",
+      required_failures: [
+        {"fresh create stamps replayed: false; retry stamps replayed: true",
+         "assert AshOnetime.replayed?(fresh) == false"}
+      ]
+    },
+    "untracked-transparency" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: "  def stamp_replay(%State{class: :untracked}, result), do: result",
+      mutated:
+        "  def stamp_replay(%State{class: :untracked}, result), do: Ash.Resource.put_metadata(result, :ash_onetime, %{replayed: false})",
+      test: "test/ash_onetime/replay_metadata_test.exs",
+      tag: "untracked_transparency_mutation",
+      test_name: "an untracked execution carries no :ash_onetime metadata (replayed? nil)",
+      assertion: "assert stamped.__metadata__ == %{}"
     }
   }
 
