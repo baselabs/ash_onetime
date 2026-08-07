@@ -24,9 +24,9 @@ defmodule AshOnetime do
 
   For record-returning actions (create/update, generic actions returning a struct, destroy
   with `return_destroyed?`), the signal is `true`/`false`. For primitive returns and
-  untracked executions it is `nil` — use a record-returning action or the in-action
-  `AshOnetime.Admission.replay?/1` hook if you need replay observability on a primitive
-  return. See `documentation/replay.md`.
+  untracked executions it is `nil` — use a record-returning action, or observe replay inside
+  the action via an `after_action` hook reading the admission state, if you need replay
+  observability on a primitive return. See `documentation/replay.md`.
   """
   @spec replayed?(term()) :: boolean() | nil
   def replayed?(%{__metadata__: metadata}) when is_map(metadata) do

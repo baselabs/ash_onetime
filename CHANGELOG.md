@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Make `AshOnetime.Error` a Splode error of class `:invalid` so Ash recognizes it and
+  preserves the typed `:code` through the action pipeline. Before, a protected-action
+  failure was wrapped as `Ash.Error.Unknown.UnknownError` and the code (e.g.
+  `:nonce_already_used`, `:key_reused_with_different_request`) was lost before it could
+  reach the caller. Add `AshOnetime.Error.code/1` to recover the code from a leaf or class
+  wrapper. See `documentation/errors.md` for the code→HTTP table.
+- Add a caller-visible replayed-vs-fresh signal. After `Ash.create/2` / `Ash.run_action/2`
+  returns, `AshOnetime.replayed?/1` reports whether the result was a stored replay (`true`),
+  a fresh execution (`false`), or carries no signal (`nil` — untracked execution,
+  primitive-return action, or unprotected). The signal rides `__metadata__[:ash_onetime]`
+  for tracked admission classes; `:untracked` is deliberately not stamped to preserve
+  untracked transparency. See `documentation/replay.md`.
 - Broaden the Ash dependency requirement from `~> 3.29.0` (only 3.29.x) to
   `>= 3.29.3 and < 4.0.0`, so the package installs across the whole Ash 3.x line.
   The floor is 3.29.3, not 3.29.0: EEF-CVE-2026-55736 (private action arguments

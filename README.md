@@ -43,12 +43,42 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete gate battery and
 [usage-rules.md](usage-rules.md) for non-negotiable integration boundaries.
 The [Getting started guide](documentation/getting-started.md) includes the resource DSL.
 
+## Handling results at the call boundary
+
+A protected action's failure carries a typed `:code` that survives the Ash pipeline, and its
+success carries a replayed-vs-fresh signal. Both are observable after `Ash.create/2` /
+`Ash.run_action/2` returns:
+
+```elixir
+case Ash.create(changeset) do
+  {:ok, record} ->
+    # 201 on fresh execution (replayed? == false), 200 + Idempotent-Replayed on retry (true).
+    status = if AshOnetime.replayed?(record), do: 200, else: 201
+
+  {:error, error} ->
+    # The typed code reaches the caller — map it to HTTP.
+    case AshOnetime.Error.code(error) do
+      :nonce_already_used -> {:conflict, "nonce was already used"}
+      :key_reused_with_different_request -> {:conflict, "key reused with a different request"}
+      :request_in_progress -> {:conflict, "request is already processing"}
+      nil -> {:internal_server_error, "unexpected error"}
+    end
+end
+```
+
+`AshOnetime.replayed?/1` is tri-state: `true` (tracked replay), `false` (tracked fresh), or
+`nil` (untracked execution, primitive-return action, or unprotected — see
+[Replay](documentation/replay.md)). The full code→HTTP table is in
+[Errors](documentation/errors.md).
+
 ## Guides
 
 - [Resource DSL](documentation/dsl.md)
 - [Idempotency](documentation/idempotency.md)
 - [One-time nonces](documentation/one-time-nonces.md)
 - [External effects and recovery](documentation/external-effects.md)
+- [Replay: fresh vs stored](documentation/replay.md)
+- [Errors and HTTP mapping](documentation/errors.md)
 - [Operations](documentation/operations.md)
 - [Security model](documentation/security.md)
 - [Generated Spark DSL reference](documentation/dsls/DSL-AshOnetime.Resource.md)

@@ -99,6 +99,8 @@ defmodule AshOnetime.MixProject do
         "documentation/idempotency.md",
         "documentation/one-time-nonces.md",
         "documentation/external-effects.md",
+        "documentation/replay.md",
+        "documentation/errors.md",
         "documentation/operations.md",
         "documentation/security.md",
         "documentation/dsls/DSL-AshOnetime.Resource.md",

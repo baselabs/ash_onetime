@@ -31,7 +31,16 @@
   External effects require the idempotent execute/recover protocol and are forbidden for nonces.
 - Cleanup occurs only after the strategy-safe horizon. Caches and cleanup jobs never decide
   correctness; processing external effects are not ordinary expiry candidates.
+- A protected action's failure carries a typed `:code` that survives the Ash pipeline. Read it
+  with `AshOnetime.Error.code/1` to drive HTTP status; do not assume a blanket class→status
+  mapping, because `:store_invariant` and `:outcome_unknown` are server faults (500/503), not
+  client input. See [Errors and HTTP mapping](documentation/errors.md).
+- A protected action's success carries a replayed-vs-fresh signal. `AshOnetime.replayed?/1`
+  returns `true` (stored replay), `false` (fresh execution), or `nil` (untracked execution,
+  primitive-return action, or unprotected). Treat `nil` as "cannot tell," not as "fresh." See
+  [Replay](documentation/replay.md).
 
 See [the DSL guide](documentation/dsl.md), [idempotency guide](documentation/idempotency.md),
-[nonce guide](documentation/one-time-nonces.md), and [security model](documentation/security.md)
+[nonce guide](documentation/one-time-nonces.md), [errors guide](documentation/errors.md),
+[replay guide](documentation/replay.md), and [security model](documentation/security.md)
 for examples and the complete contract.
