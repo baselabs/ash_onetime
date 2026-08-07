@@ -82,6 +82,17 @@ defmodule AshOnetime.ErrorTest do
       assert error.details == details
     end
 
+    test "exception/1 defaults details to %{} (preserves the pre-Splode contract)" do
+      # Splode's generated defexception gives user fields no defaults; without the
+      # exception/1 override a direct raise/exception would yield details: nil, violating
+      # the @type t :: details: map() contract. new/3 defaults it too.
+      error = Error.exception(code: :nonce_already_used, message: "x")
+      assert error.details == %{}
+
+      error2 = Error.new(:nonce_already_used, "y")
+      assert error2.details == %{}
+    end
+
     test "pattern matching on %AshOnetime.Error{code: :x} still works" do
       error = Error.new(:duplicate_map_key, "duplicate")
 

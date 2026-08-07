@@ -12,11 +12,22 @@ defmodule AshOnetime.Error do
 
   use Splode.Error, class: :invalid, fields: [:code, :message, :details]
 
+  # Splode's generated defexception gives the user fields no defaults, so a direct
+  # `exception/1` / `raise` would yield `details: nil`, violating the @type below. The
+  # sanctioned constructor is `new/3` (which guards and defaults `details`), but `exception/1`
+  # is the path Splode/Ash use when wrapping; restore the `details: %{}` default there so
+  # the public struct contract holds regardless of construction path.
   @type t :: %__MODULE__{
           code: atom(),
           message: String.t(),
           details: map()
         }
+
+  @impl true
+  def exception(opts) do
+    opts = Keyword.put_new(opts, :details, %{})
+    super(opts)
+  end
 
   @spec new(atom(), String.t(), map()) :: t()
   def new(code, message, details \\ %{})
