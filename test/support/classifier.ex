@@ -23,6 +23,16 @@ defmodule AshOnetime.Test.RaisingClassifier do
   def classify(_value, _context), do: raise("classified value must not leak")
 end
 
+defmodule AshOnetime.Test.ThrowingClassifier do
+  @moduledoc false
+  def classify(_value, _context), do: throw(:classified_value_must_not_leak)
+end
+
+defmodule AshOnetime.Test.ExitingClassifier do
+  @moduledoc false
+  def classify(_value, _context), do: exit(:classified_value_must_not_leak)
+end
+
 defmodule AshOnetime.Test.FixedEmptyCodec do
   @moduledoc false
   def format_tag, do: "fixed-empty"

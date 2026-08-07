@@ -50,6 +50,44 @@ defmodule AshOnetime.MutationCheck do
       test_name: "oldest replay-window endpoint is inclusive",
       assertion: "assert :ok = Window.validate(oldest, nil, @evaluated_at, 60, 5)"
     },
+    "window-newest" => %{
+      path: "lib/ash_onetime/window.ex",
+      original: "DateTime.compare(issued_at, newest) in [:eq, :lt]",
+      mutated: "DateTime.compare(issued_at, newest) == :lt",
+      test: "test/ash_onetime/window_test.exs",
+      tag: "window_newest_mutation",
+      test_name: "newest replay-window endpoint is inclusive and the next tick is invalid",
+      assertion: "assert :ok = Window.validate(newest, nil, @evaluated_at, 60, 5)"
+    },
+    "window-expiry-order" => %{
+      path: "lib/ash_onetime/window.ex",
+      original: "DateTime.compare(expires_at, issued_at) in [:eq, :gt] and",
+      mutated: "DateTime.compare(expires_at, issued_at) == :gt and",
+      test: "test/ash_onetime/window_test.exs",
+      tag: "window_expiry_order_mutation",
+      test_name: "an expiry equal to issuance is the inclusive ordering edge and accepts",
+      assertion:
+        "assert :ok = Window.validate(@evaluated_at, @evaluated_at, @evaluated_at, 60, 5)"
+    },
+    "window-expiry-horizon" => %{
+      path: "lib/ash_onetime/window.ex",
+      original: "DateTime.compare(evaluated_at, expiry_horizon) in [:eq, :lt]",
+      mutated: "DateTime.compare(evaluated_at, expiry_horizon) == :lt",
+      test: "test/ash_onetime/window_test.exs",
+      tag: "window_expiry_horizon_mutation",
+      test_name: "expiry is ordered and inclusive through skew",
+      assertion: "assert :ok = Window.validate(issued_at, expires_at, @evaluated_at, 60, 5)"
+    },
+    "classifier-context-guard" => %{
+      path: "lib/ash_onetime/response_classifier.ex",
+      original:
+        "def classify(classifier, value, context) when is_atom(classifier) and is_map(context) do",
+      mutated: "def classify(classifier, value, context) when is_atom(classifier) do",
+      test: "test/ash_onetime/response_classifier_test.exs",
+      tag: "classifier_context_guard_mutation",
+      test_name: "a non-map context fails closed before the classifier is invoked",
+      assertion: "ResponseClassifier.classify(StoreClassifier, :secret, :not_a_map)"
+    },
     "scope-component-limit" => %{
       path: "lib/ash_onetime/scope.ex",
       original: "length(components) > @max_components ->",
