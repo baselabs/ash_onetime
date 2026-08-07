@@ -69,6 +69,52 @@ defmodule AshOnetime.MutationCheck do
       # ExUnit renders the keyword-list scope in shorthand in the failed-assertion source.
       assertion: "Scope.normalize(static: \"x\", attribute: :a, static: \"x\")"
     },
+    "ed25519-verify-honored" => %{
+      path: "lib/ash_onetime/signer/ed25519.ex",
+      original: "if :crypto.verify(:eddsa, :none, message, signature, [key, :ed25519]) do",
+      mutated: "if true do",
+      test: "test/ash_onetime/signer/ed25519_test.exs",
+      tag: "ed25519_wrong_key_mutation",
+      test_name: "a valid signature is invalid under a different, equally valid public key",
+      assertion: "Ed25519.verify(\"bound to key A\", signature, public(public_b))"
+    },
+    "canonical-decoder-order" => %{
+      path: "lib/ash_onetime/canonical.ex",
+      original: "is_nil(previous) or key_raw > previous ->",
+      mutated: "is_nil(previous) or is_binary(key_raw) ->",
+      test: "test/ash_onetime/canonical_test.exs",
+      tag: "canonical_decoder_identity_mutation",
+      test_name: "decoder rejects trailing, duplicate, and noncanonical map bytes",
+      assertion: "Decoder.decode(reversed)"
+    },
+    "token-from-body-bounds" => %{
+      path: "lib/ash_onetime/token.ex",
+      original: ":ok <- validate_identifier(body[\"key_id\"], :invalid_key_id, :key_id),",
+      mutated: ":ok <- :ok,",
+      test: "test/ash_onetime/token_test.exs",
+      tag: "token_from_body_bounds_mutation",
+      test_name: "verify re-validates the decoded body's key_id bound before the signature",
+      assertion: "Token.verify(encoded, KeyResolver, verify_options())"
+    },
+    "secure-equal-truncate" => %{
+      path: "lib/ash_onetime/signer/hmac.ex",
+      original: "|> :binary.bin_to_list()",
+      mutated: "|> :binary.bin_to_list() |> Enum.take(1)",
+      test: "test/ash_onetime/signer/hmac_test.exs",
+      tag: "secure_equal_full_length_mutation",
+      test_name:
+        "a tamper anywhere past the first byte fails closed (full-length constant-time compare)",
+      assertion: "HMAC.verify(\"Hi There\", last, material)"
+    },
+    "secure-equal-length" => %{
+      path: "lib/ash_onetime/signer/hmac.ex",
+      original: "defp secure_equal(_left, _right), do: false",
+      mutated: "defp secure_equal(_left, _right), do: true",
+      test: "test/ash_onetime/signer/hmac_test.exs",
+      tag: "secure_equal_length_mutation",
+      test_name: "invalid trusted keys and signature sizes fail closed",
+      assertion: "HMAC.verify(\"message\", <<0>>, same_service(@rfc_key))"
+    },
     "token-identifier-bound" => %{
       path: "lib/ash_onetime/token.ex",
       original: "  @max_identifier_bytes 128",

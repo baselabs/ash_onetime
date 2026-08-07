@@ -12,7 +12,6 @@ defmodule AshOnetime.Signer.HMAC do
 
   alias AshOnetime.Error
 
-  @digest_bytes 32
   @max_key_bytes 4_096
 
   @impl AshOnetime.Signer
@@ -44,8 +43,11 @@ defmodule AshOnetime.Signer.HMAC do
   def verify(message, signature, %{key: key, trust: :same_service})
       when is_binary(message) and is_binary(signature) and is_binary(key) and
              byte_size(key) in 1..@max_key_bytes do
-    if byte_size(signature) == @digest_bytes and
-         secure_equal(signature, :crypto.mac(:hmac, :sha256, key, message)) do
+    # secure_equal owns the length check: its equal-length clause runs the constant-time compare,
+    # and its fallback fails closed on any length mismatch (the mac is always 32 bytes). Keeping the
+    # length guard inside the comparator, rather than a separate byte_size prefix on this `if`, means
+    # the fallback is live and covered rather than dead, and a wrong-length signature still fails closed.
+    if secure_equal(signature, :crypto.mac(:hmac, :sha256, key, message)) do
       :ok
     else
       {:error, Error.new(:invalid_signature, "HMAC signature is invalid")}

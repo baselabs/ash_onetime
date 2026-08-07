@@ -1,5 +1,6 @@
 defmodule AshOnetime.Signer.Ed25519Test do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias AshOnetime.Error
   alias AshOnetime.Signer.Ed25519
@@ -53,6 +54,34 @@ defmodule AshOnetime.Signer.Ed25519Test do
 
     assert {:error, %Error{code: :invalid_message}} =
              Ed25519.verify(:not_binary, @signature, public(@public_key))
+  end
+
+  @tag :ed25519_wrong_key_mutation
+  test "a valid signature is invalid under a different, equally valid public key" do
+    {public_a, private_a} = :crypto.generate_key(:eddsa, :ed25519)
+    {public_b, _private_b} = :crypto.generate_key(:eddsa, :ed25519)
+    refute public_a == public_b
+    assert byte_size(public_b) == 32
+
+    assert {:ok, signature} = Ed25519.sign("bound to key A", private(private_a))
+    assert :ok = Ed25519.verify("bound to key A", signature, public(public_a))
+
+    # The signature is bound to A's key, not merely well-formed: a *different valid* 32-byte
+    # public key rejects it rather than accepting any 64-byte blob.
+    assert {:error, %Error{code: :invalid_signature}} =
+             Ed25519.verify("bound to key A", signature, public(public_b))
+  end
+
+  property "a signature never verifies under a wrong but valid public key" do
+    check all(message <- binary(max_length: 96)) do
+      {_public_a, private_a} = :crypto.generate_key(:eddsa, :ed25519)
+      {public_b, _private_b} = :crypto.generate_key(:eddsa, :ed25519)
+
+      assert {:ok, signature} = Ed25519.sign(message, private(private_a))
+
+      assert {:error, %Error{code: :invalid_signature}} =
+               Ed25519.verify(message, signature, public(public_b))
+    end
   end
 
   defp private(key), do: %{key: key, kind: :private}

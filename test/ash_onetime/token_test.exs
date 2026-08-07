@@ -1,5 +1,6 @@
 defmodule AshOnetime.TokenTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias AshOnetime.Canonical
   alias AshOnetime.Canonical.Decoder
@@ -45,6 +46,60 @@ defmodule AshOnetime.TokenTest do
     assert {:ok, token} = mint_hmac()
     assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
     assert {:ok, ^token} = Token.verify(encoded, KeyResolver, verify_options())
+  end
+
+  property "mint -> sign -> verify round-trips for both algorithms over generated fields" do
+    check all(
+            {algorithm, key_id} <-
+              member_of([{:hmac_sha256, "hmac-main"}, {:ed25519, "ed-current"}]),
+            namespace <- string(:alphanumeric, min_length: 1, max_length: 64),
+            key <- binary(min_length: 1, max_length: 200),
+            issued_offset <- integer(-3600..3600),
+            expiry_offset <- one_of([constant(nil), integer(0..3600)])
+          ) do
+      issued_at = DateTime.add(@issued_at, issued_offset, :second)
+      expires_at = expiry_offset && DateTime.add(issued_at, expiry_offset, :second)
+
+      assert {:ok, token} =
+               Token.mint(key,
+                 algorithm: algorithm,
+                 key_id: key_id,
+                 namespace: namespace,
+                 issued_at: issued_at,
+                 expires_at: expires_at
+               )
+
+      # freeze evaluation to issuance so the acceptance window always admits the fresh token
+      Clock.freeze(issued_at)
+
+      assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+
+      assert {:ok, ^token} =
+               Token.verify(
+                 encoded,
+                 KeyResolver,
+                 verify_options(algorithm: algorithm, namespace: namespace)
+               )
+    end
+  end
+
+  property "any single-byte tamper of a valid signed token fails closed" do
+    assert {:ok, token} = mint_hmac()
+    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+    raw = decode_wire!(encoded)
+
+    check all(
+            index <- integer(0..(byte_size(raw) - 1)),
+            xor <- integer(1..255)
+          ) do
+      # Flipping ANY byte of the signed wire — body, signature tail, or a structural byte — must
+      # reject: reaching the signature tail forces the full-length constant-time comparison, and a
+      # body/structural change breaks canonical byte-identity. Never {:ok}.
+      tampered = mutate_byte(raw, index, xor)
+
+      assert {:error, %Error{}} =
+               Token.verify(wire(tampered), KeyResolver, verify_options())
+    end
   end
 
   test "verification requires and binds the expected algorithm and namespace" do
@@ -339,6 +394,25 @@ defmodule AshOnetime.TokenTest do
              )
   end
 
+  @tag :token_from_body_bounds_mutation
+  test "verify re-validates the decoded body's key_id bound before the signature" do
+    # mint refuses to build an over-length key_id, so forge the wire envelope directly. verify's
+    # token_from_body re-validates the decoded body's identifier/key bounds BEFORE it resolves a
+    # key or checks the signature, so the over-length field — not a signature mismatch — is the
+    # reject. A garbage signature proves the bound fires first.
+    encoded = forge_token(%{"key_id" => :binary.copy("A", 129)})
+
+    assert {:error, %Error{code: :invalid_key_id}} =
+             Token.verify(encoded, KeyResolver, verify_options())
+  end
+
+  test "verify re-validates the decoded body's key bound before the signature" do
+    encoded = forge_token(%{"key" => :binary.copy(<<0>>, 1_025)})
+
+    assert {:error, %Error{code: :key_too_large}} =
+             Token.verify(encoded, KeyResolver, verify_options())
+  end
+
   test "malformed DateTime structs fail closed across mint, sign, and verify" do
     malformed = %{@issued_at | month: 13}
 
@@ -535,6 +609,33 @@ defmodule AshOnetime.TokenTest do
   end
 
   defp decode_wire!("ash_onetime." <> encoded), do: Base.url_decode64!(encoded, padding: false)
+
+  defp mutate_byte(binary, index, xor) do
+    <<prefix::binary-size(^index), byte, suffix::binary>> = binary
+    <<prefix::binary, Bitwise.bxor(byte, xor)::8, suffix::binary>>
+  end
+
+  # Forges a wire token from an arbitrary body (bypassing mint's own bounds), used to drive the
+  # decode-side re-validation in Token.verify. The signature is deliberately garbage — the body
+  # bounds are enforced before it is ever consulted.
+  defp forge_token(overrides) do
+    body =
+      Map.merge(
+        %{
+          "algorithm" => "hmac-sha256",
+          "key_id" => "hmac-main",
+          "namespace" => @namespace,
+          "key" => "nonce-123",
+          "issued_at" => DateTime.to_unix(@issued_at, :microsecond),
+          "expires_at" => nil
+        },
+        overrides
+      )
+
+    {:ok, raw} = Canonical.encode(%{"body" => body, "signature" => :binary.copy(<<0>>, 32)})
+    "ash_onetime." <> Base.url_encode64(raw, padding: false)
+  end
+
   defp wire(envelope), do: "ash_onetime." <> Base.url_encode64(envelope, padding: false)
 
   defp flip_first_byte(<<first, rest::binary>>),

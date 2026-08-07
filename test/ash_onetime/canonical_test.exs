@@ -188,6 +188,7 @@ defmodule AshOnetime.CanonicalTest do
     end
   end
 
+  @tag :canonical_decoder_identity_mutation
   test "decoder rejects trailing, duplicate, and noncanonical map bytes" do
     assert {:ok, canonical} = Canonical.encode(%{"a" => 1, "b" => 2})
     assert {:ok, %{"a" => 1, "b" => 2}} = Decoder.decode(canonical)
@@ -200,6 +201,35 @@ defmodule AshOnetime.CanonicalTest do
 
     assert {:error, %Error{code: :duplicate_map_key}} = Decoder.decode(duplicate)
     assert {:error, %Error{code: :noncanonical_encoding}} = Decoder.decode(reversed)
+  end
+
+  property "the decoder is a total inverse of the encoder over in-algebra values" do
+    check all(value <- canonical_value()) do
+      assert {:ok, encoded} = Canonical.encode(value)
+      assert {:ok, decoded} = Decoder.decode(encoded)
+      assert decoded == value
+    end
+  end
+
+  property "the decoder accepts only an exact canonical encoding (non-malleable)" do
+    # The decoder is the anti-malleability boundary on the token verify path: it re-encodes what
+    # it decoded and demands byte-identity. So a flipped byte must either fail to decode, or land
+    # on the canonical encoding of some value and decode to exactly that — never accept a
+    # NON-canonical encoding. (A flip that turns `true`→`false` or `1`→`2` is a different but still
+    # canonical encoding; the signature, not the decoder, rejects the value change.)
+    check all(
+            value <- canonical_value(),
+            index <- integer(0..4096),
+            xor <- integer(1..255)
+          ) do
+      assert {:ok, encoded} = Canonical.encode(value)
+      mutated = mutate_byte(encoded, rem(index, byte_size(encoded)), xor)
+
+      case Decoder.decode(mutated) do
+        {:ok, decoded} -> assert Canonical.encode(decoded) == {:ok, mutated}
+        {:error, %Error{}} -> :ok
+      end
+    end
   end
 
   @tag :canonical_surface_mutation
@@ -223,6 +253,34 @@ defmodule AshOnetime.CanonicalTest do
       constant({<<>>, []}),
       constant({[], %{}})
     ])
+  end
+
+  defp canonical_value, do: canonical_value(0)
+
+  defp canonical_value(depth) when depth >= 3, do: canonical_scalar()
+
+  defp canonical_value(depth) do
+    one_of([
+      canonical_scalar(),
+      list_of(canonical_value(depth + 1), max_length: 3),
+      map_of(canonical_scalar(), canonical_value(depth + 1), max_length: 3)
+    ])
+  end
+
+  defp canonical_scalar do
+    one_of([
+      constant(nil),
+      boolean(),
+      integer(-100_000..100_000),
+      string(:alphanumeric, max_length: 8),
+      # decode uses String.to_existing_atom, so the generated atoms must already exist
+      member_of([:alpha, :beta, :gamma, :ok, :error])
+    ])
+  end
+
+  defp mutate_byte(binary, index, xor) do
+    <<prefix::binary-size(^index), byte, suffix::binary>> = binary
+    <<prefix::binary, Bitwise.bxor(byte, xor)::8, suffix::binary>>
   end
 
   defp decoder_moduledoc do

@@ -41,11 +41,32 @@ defmodule AshOnetime.Signer.HMACTest do
     end
   end
 
+  @tag :secure_equal_length_mutation
   test "invalid trusted keys and signature sizes fail closed" do
     assert {:error, %Error{code: :invalid_key}} = HMAC.sign("message", same_service(<<>>))
 
+    # A wrong-length signature reaches secure_equal, whose length-mismatch fallback fails closed.
     assert {:error, %Error{code: :invalid_signature}} =
              HMAC.verify("message", <<0>>, same_service(@rfc_key))
+
+    assert {:error, %Error{code: :invalid_signature}} =
+             HMAC.verify("message", :binary.copy(<<0>>, 64), same_service(@rfc_key))
+  end
+
+  @tag :secure_equal_full_length_mutation
+  test "a tamper anywhere past the first byte fails closed (full-length constant-time compare)" do
+    material = same_service(@rfc_key)
+    assert {:ok, digest} = HMAC.sign("Hi There", material)
+
+    # Flip the last byte and a middle byte — NOT the first. A comparator that short-circuited on,
+    # or only inspected, byte 0 would accept these tail flips; a full-length compare rejects them.
+    last = flip_byte(digest, byte_size(digest) - 1)
+    middle = flip_byte(digest, div(byte_size(digest), 2))
+    refute last == digest
+    refute middle == digest
+
+    assert {:error, %Error{code: :invalid_signature}} = HMAC.verify("Hi There", last, material)
+    assert {:error, %Error{code: :invalid_signature}} = HMAC.verify("Hi There", middle, material)
   end
 
   @tag :hmac_key_bound_mutation
@@ -74,4 +95,9 @@ defmodule AshOnetime.Signer.HMACTest do
 
   defp flip_first_byte(<<first, rest::binary>>),
     do: <<Bitwise.bxor(first, 1), rest::binary>>
+
+  defp flip_byte(binary, index) do
+    <<prefix::binary-size(^index), byte, suffix::binary>> = binary
+    <<prefix::binary, Bitwise.bxor(byte, 1)::8, suffix::binary>>
+  end
 end
