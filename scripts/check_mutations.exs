@@ -179,6 +179,18 @@ defmodule AshOnetime.MutationCheck do
         {"attribute_multitenant_unscoped.exs",
          "AshOnetime.CompileFixtures.AttributeMultitenantUnscoped"}
     },
+    "dsl-attribute-tenant-scope-equality" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original: "not is_nil(tenant_attribute) and attribute == tenant_attribute",
+      mutated: "not is_nil(tenant_attribute) and is_atom(attribute)",
+      test: "test/compile_fixtures_test.exs",
+      tag: "dsl_attribute_tenant_scope_equality_mutation",
+      test_name: "attribute multitenancy rejects a non-tenant attribute in scope",
+      assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
+      probe:
+        {"attribute_multitenant_wrong_attribute.exs",
+         "AshOnetime.CompileFixtures.AttributeMultitenantWrongAttribute"}
+    },
     "unique-constraint" => %{
       path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
       original: "@collision_constraint \"UNIQUE (operation_hash, scope_hash, key_hash)\"",
@@ -308,8 +320,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "task5-replay-execution" => %{
       path: "lib/ash_onetime/generic_action.ex",
-      original: "when class in [:execute, :nonce, :untracked] ->",
-      mutated: "when class in [:execute, :nonce, :untracked, :replay] ->",
+      original: "when class in [:execute, :external_execute, :nonce, :untracked] ->",
+      mutated: "when class in [:execute, :external_execute, :nonce, :untracked, :replay] ->",
       test: "test/ash_onetime/action_transaction_test.exs",
       tag: "task5_replay_execution_mutation",
       test_name: "generic original runs once and its typed stored result replays",
@@ -376,8 +388,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "task5-state-request-sanitization" => %{
       path: "lib/ash_onetime/admission.ex",
-      original: "request: sanitize_request(request),",
-      mutated: "request: request,",
+      original: "request: sanitize_request(state.request)",
+      mutated: "request: state.request",
       test: "test/ash_onetime/action_transaction_test.exs",
       tag: "task5_state_confidentiality_mutation",
       test_name: "verified nonce admits one generic execution then rejects reuse",
@@ -385,12 +397,14 @@ defmodule AshOnetime.MutationCheck do
     },
     "task5-state-claim-sanitization" => %{
       path: "lib/ash_onetime/admission.ex",
-      original: "claim: sanitize_claim(result.claim)",
-      mutated: "claim: result.claim",
+      original: "class: class, claim: sanitize_claim(result.claim)",
+      mutated: "class: class, claim: result.claim",
       test: "test/ash_onetime/action_transaction_test.exs",
       tag: "task5_state_confidentiality_mutation",
       test_name: "verified nonce admits one generic execution then rejects reuse",
-      assertion: "assert state.claim.verifier_id == nil"
+      # The unsanitized claim leaks its verifier_id ("action-verifier") into the serialized
+      # admission state, so the state_bytes refute fires before the later verifier_id assertion.
+      assertion: "refute state_bytes =~ \"action-verifier\""
     },
     "task5-completion-codec" => %{
       path: "lib/ash_onetime/admission.ex",
@@ -463,8 +477,9 @@ defmodule AshOnetime.MutationCheck do
     },
     "task5-completion-transaction" => %{
       path: "lib/ash_onetime/store/postgres.ex",
-      original: "if target.repo_module.in_transaction?() do",
-      mutated: "if true do",
+      original:
+        "defp transaction_preconditions(target) do\n    if target.repo_module.in_transaction?() do",
+      mutated: "defp transaction_preconditions(target) do\n    if true do",
       test: "test/ash_onetime/action_transaction_test.exs",
       tag: "task5_completion_transaction_mutation",
       test_name:
@@ -662,8 +677,8 @@ defmodule AshOnetime.MutationCheck do
         {"unknown execute is recovered once immediately",
          "assert [[\"execute\", operation_key], [\"recover\", operation_key]] ="}
       ],
-      red_summary: "Result: 0/3 passed, 7 excluded",
-      green_summary: "Result: 3 passed, 7 excluded"
+      red_summary: "Result: 0/3 passed, 8 excluded",
+      green_summary: "Result: 3 passed, 8 excluded"
     },
     "external-operation-key" => %{
       path: "lib/ash_onetime/external_recovery.ex",
@@ -717,6 +732,9 @@ defmodule AshOnetime.MutationCheck do
       tag: "completion_invariant_rollback_mutation",
       test_name:
         "a real completion invariant rolls back claim, payload, and effect through the Ash pipeline",
+      # The mutation makes the poisoned completion succeed, so the `{:error, error} = Ash.create`
+      # match is the assertion that goes RED; ExUnit prints its source, which carries this unique
+      # input needle. (The follow-on :store_invariant code assertion never executes under RED.)
       assertion: "charge_input(account_id, 10, \"poisoned-completion\")"
     },
     "task5-reserved-input" => %{
@@ -941,27 +959,20 @@ defmodule AshOnetime.MutationCheck do
                })
              end)
 
+  # Mutations whose RED depends on observing a live lock-wait via pg_stat_activity. Their timing is
+  # load-sensitive and intermittently flaky under the sequential battery, so they are excluded from
+  # `all` (the CI/CONTRIBUTING battery) and run in isolation via `-- concurrency`. They are NOT
+  # orphaned: they live in a named group, and the self-test below asserts every registered mutation
+  # is reachable from some group.
+  @concurrency_mutations ["payload-partition-lock"]
+
+  # `all` is every registered mutation except the load-sensitive concurrency set, computed from
+  # @mutations rather than hand-listed, so a newly added mutation can never be silently orphaned out
+  # of the CI battery (CONTRIBUTING and the CI release-checks job both run `-- all`). The named
+  # subsets below stay for fast, focused local runs.
   @groups %{
-    "all" => [
-      "operation-hash-select",
-      "operation-hash-completion",
-      "operation-hash-cleanup",
-      "unique-constraint",
-      "cleanup-boundary",
-      "cache-admission",
-      "nonce-failure-direction",
-      "nonce-minted-composite",
-      "task5-completion-digest",
-      "signature-compare",
-      "canonical-domain-tag",
-      "action-replay",
-      "ambiguous-retry",
-      "ambiguous-retry-settle",
-      "completion-once",
-      "completion-invariant-rollback",
-      "for-repo-prefix-bound",
-      "prefix-length-bound"
-    ],
+    "all" => Map.keys(@mutations) -- @concurrency_mutations,
+    "concurrency" => @concurrency_mutations,
     "response-allowlist" => ["response-field-guard"],
     "return-type" => ["return-contract"],
     "dsl-verifiers" => [
@@ -1041,6 +1052,24 @@ defmodule AshOnetime.MutationCheck do
 
       result ->
         IO.puts(:stderr, "mutation checker self-test failed: #{inspect(result)}")
+        System.halt(1)
+    end
+
+    # Every registered mutation must be reachable from some group, so none can be silently
+    # orphaned out of every runnable command the way three ARCH mutations once were.
+    grouped = @groups |> Map.values() |> List.flatten() |> MapSet.new()
+    orphaned = @registered |> MapSet.difference(grouped) |> MapSet.to_list() |> Enum.sort()
+
+    case orphaned do
+      [] ->
+        IO.puts("mutation checker self-test: every registered mutation is in a runnable group")
+
+      names ->
+        IO.puts(
+          :stderr,
+          "mutation checker self-test failed: orphaned mutations: #{Enum.join(names, ", ")}"
+        )
+
         System.halt(1)
     end
   end

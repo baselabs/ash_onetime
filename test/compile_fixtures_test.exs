@@ -46,7 +46,9 @@ defmodule AshOnetime.CompileFixturesTest do
     "unsafe_builtin_option.exs" => AshOnetime.CompileFixtures.UnsafeBuiltinOption,
     "unsafe_validation.exs" => AshOnetime.CompileFixtures.UnsafeValidation,
     "attribute_multitenant_unscoped.exs" =>
-      AshOnetime.CompileFixtures.AttributeMultitenantUnscoped
+      AshOnetime.CompileFixtures.AttributeMultitenantUnscoped,
+    "attribute_multitenant_wrong_attribute.exs" =>
+      AshOnetime.CompileFixtures.AttributeMultitenantWrongAttribute
   }
 
   @fixture_expectations %{
@@ -134,6 +136,10 @@ defmodule AshOnetime.CompileFixturesTest do
        "AshOnetime.CompileFixture.UnsafeValidation must export replay_safety/1 for idempotent replay validation",
        7},
     "attribute_multitenant_unscoped.exs" =>
+      {:charge, :scope,
+       "attribute multitenancy requires the tenant attribute :account_id or a {:tenant, module} resolver in scope",
+       9},
+    "attribute_multitenant_wrong_attribute.exs" =>
       {:charge, :scope,
        "attribute multitenancy requires the tenant attribute :account_id or a {:tenant, module} resolver in scope",
        9}
@@ -508,6 +514,14 @@ defmodule AshOnetime.CompileFixturesTest do
     assert_rejected(
       "attribute_multitenant_unscoped.exs",
       AshOnetime.CompileFixtures.AttributeMultitenantUnscoped
+    )
+  end
+
+  @tag :dsl_attribute_tenant_scope_equality_mutation
+  test "attribute multitenancy rejects a non-tenant attribute in scope" do
+    assert_rejected(
+      "attribute_multitenant_wrong_attribute.exs",
+      AshOnetime.CompileFixtures.AttributeMultitenantWrongAttribute
     )
   end
 

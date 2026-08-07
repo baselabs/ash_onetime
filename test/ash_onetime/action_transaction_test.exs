@@ -860,7 +860,7 @@ defmodule AshOnetime.ActionTransactionTest do
     try do
       account_id = Ecto.UUID.generate()
 
-      assert {:error, _error} =
+      assert {:error, error} =
                Resource
                |> Ash.Changeset.for_create(
                  :charge,
@@ -868,6 +868,14 @@ defmodule AshOnetime.ActionTransactionTest do
                )
                |> Ash.Changeset.set_tenant(prefix)
                |> Ash.create()
+
+      # Pin the code the completion invariant surfaces to the caller (P1-2): an unrelated
+      # failure that also rolled everything back to zero must not satisfy this test for the
+      # wrong reason. Through the full Ash pipeline the store's `store_invariant` is caught as
+      # the Ecto rollback unwinds and normalized to `:response_completion_failed`
+      # (admission.ex:139/142) — the store-level tests see the raw `:store_invariant`. This
+      # pins the true caller contract and proves the typed code survives the pipeline (ARCH-1).
+      assert AshOnetime.Error.code(error) == :response_completion_failed
 
       assert table_count(prefix, "ash_onetime_action_examples") == 0
       assert table_count(prefix, "ash_onetime_idempotency_claims") == 0
