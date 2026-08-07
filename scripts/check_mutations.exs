@@ -696,9 +696,9 @@ defmodule AshOnetime.MutationCheck do
         ":unknown ->\n        execute_then_settle(state, subject, protection, operation_key, callback_context, started)\n    end\n  end\n\n  # mutation sentinel: ambiguous-retry",
       test: "test/ash_onetime/external_recovery_test.exs",
       tag: "ambiguous_retry_mutation",
-      test_name: "ambiguous outcome from an unknown execute and recover never executes or finalizes",
-      assertion:
-        "assert Exception.message(error) =~ \"external effect outcome is unknown\""
+      test_name:
+        "ambiguous outcome from an unknown execute and recover never executes or finalizes",
+      assertion: "assert Exception.message(error) =~ \"external effect outcome is unknown\""
     },
     "completion-once" => %{
       path: "lib/ash_onetime/store/postgres.ex",

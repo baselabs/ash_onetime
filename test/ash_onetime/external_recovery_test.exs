@@ -118,7 +118,8 @@ defmodule AshOnetime.ExternalRecoveryTest do
   end
 
   @tag ambiguous_retry_mutation: true
-  test "ambiguous outcome from an unknown execute and recover never executes or finalizes", context do
+  test "ambiguous outcome from an unknown execute and recover never executes or finalizes",
+       context do
     # Path D of the double-execute firewall: a fresh admission reaches
     # execute_then_settle, execute runs at the peer but returns :outcome_unknown,
     # and the immediate recover returns :unknown. The claim must settle to
