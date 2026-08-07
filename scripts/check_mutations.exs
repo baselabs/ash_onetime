@@ -857,6 +857,16 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "target rejects a context tenant prefix beyond PostgreSQL's 63-byte identifier limit",
       assertion: "Postgres.target(AshOnetime.Test.TenantStoreResource, tenant: over_bound)"
+    },
+    "error-splode-membership" => %{
+      path: "lib/ash_onetime/error.ex",
+      original: "  use Splode.Error, class: :invalid, fields: [:code, :message, :details]",
+      mutated:
+        "  defexception code: nil, message: nil, details: %{}, class: :invalid, splode: nil, bread_crumbs: [], vars: [], path: [], stacktrace: nil",
+      test: "test/ash_onetime/error_test.exs",
+      tag: "error_splode_membership_mutation",
+      test_name: "AshOnetime.Error is recognized as an Ash error",
+      assertion: "assert Ash.Error.ash_error?(error) == true"
     }
   }
 
