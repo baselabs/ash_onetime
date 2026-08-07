@@ -110,9 +110,13 @@ mis-categorize them; the per-code HTTP below overrides the `:invalid` class.
 
 ## `details` and classified data
 
-The `details` map is rendered into Ash's standard error description output, so it reaches
-logs, API error renderers, and HTTP bodies. Treat `details` as renderable-to-callers: never
-put key material, tokens, payloads, signatures, or PII in it.
+The `details` map is part of the error struct and reaches sinks that serialize or inspect
+the struct — `inspect(error)` in logs is the present-tense sink, and any future
+AshJsonApi/AshGraphql integration renders struct fields into HTTP/API responses. (Note:
+`Exception.message/1` and `Ash.Error.error_descriptions/1` render only the `message` field,
+not `details` — but `details` is still on the struct and should be treated as
+renderable-to-callers.) Never put key material, tokens, payloads, signatures, or PII in
+`details`.
 
 The library's own call sites populate `details` only with non-secret context — field or
 option names (atoms) and numeric byte limits (e.g. `%{field: :key_id, maximum: 128}`).

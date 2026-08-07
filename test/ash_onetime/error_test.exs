@@ -51,6 +51,12 @@ defmodule AshOnetime.ErrorTest do
       codes = Enum.map(leaves, &Error.code/1)
       assert :nonce_already_used in codes
       assert :request_in_progress in codes
+
+      # The wrapper-recovery branch of code/1 (the %{errors: errors} clause) must recover a
+      # code when handed the class wrapper directly — not only when handed the leaves. This
+      # is the path a caller hits when Ash hands back an Ash.Error.Invalid from a multi-error
+      # failure. (Without this assertion the wrapper branch is untested — gate-integrity finding.)
+      assert Error.code(wrapped) in [:nonce_already_used, :request_in_progress]
     end
   end
 
