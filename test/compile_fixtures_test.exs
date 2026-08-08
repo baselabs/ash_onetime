@@ -541,10 +541,15 @@ defmodule AshOnetime.CompileFixturesTest do
 
   @tag :response_unknown_opt_mutation
   test "response rejects unknown options (no silent drop)" do
-    assert_rejected(
-      "response_unknown_opt.exs",
-      AshOnetime.CompileFixtures.ResponseUnknownOpt
-    )
+    {output, status} =
+      run_fixture("response_unknown_opt.exs", AshOnetime.CompileFixtures.ResponseUnknownOpt)
+
+    assert status != 0, output
+    assert output =~ "ASH_ONETIME_FIXTURE_RESULT=rejected"
+    # Discriminate the intended defect (an unknown `field:` opt) from any unrelated
+    # compile error — Spark names the rejected key and the valid option set.
+    assert output =~ "unknown options [:field]"
+    assert output =~ "valid options are: [:codec, :fields, :classify, :codec_opts, :limits]"
   end
 
   def run_fixture(fixture, expected) do

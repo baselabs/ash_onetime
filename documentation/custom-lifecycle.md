@@ -74,7 +74,7 @@ responsibility for the replay decision).
 | Key             | Type    | Meaning |
 |-----------------|---------|---------|
 | `notifications` | boolean | Emits Ash notifications / notifiers (e.g. `Ash.Notifier.Notification`). |
-| `effects`       | boolean | Has side effects beyond notifications (DB writes outside the action's own transaction, external HTTP, process sends, etc.). |
+| `effects`       | boolean | Has any side effect beyond notifications and returning the result — including a DB write your callback owns (an `after_action` insert/update is an effect even though it runs inside the action's transaction), external HTTP, process sends, file/socket writes, etc. A callback that only reads or transforms in memory is effect-free. |
 | `around_action` | boolean | Wraps the action in an `around_action` (opens a new boundary around the whole action). **Must be `false`** — `ash_onetime` owns the sole around-action boundary. |
 | `marker`        | `:unused` \| `:consumed` | Whether the callback takes responsibility for the replay decision. `:unused` for `:pure`; `:consumed` for `:replay_aware`. |
 
@@ -172,9 +172,19 @@ Two things to notice:
    defeating idempotency. The compile-time check cannot read your runtime logic, so the
    `marker: :consumed` value is your signed declaration that you did the work. Declare it
    truthfully.
-2. **Use `after_action`/`before_action`, not `around_action`.** `around_action: true` is
-   always rejected because `ash_onetime` must own the sole around-action boundary on a
-   protected action. Compose your effect as a before/after hook instead.
+2. **Use `after_action`/`before_action`/`after_transaction`, not `around_action`.**
+   `around_action: true` is always rejected because `ash_onetime` must own the sole
+   around-action boundary on a protected action. Compose your effect as a before/after hook
+   instead, and pick the hook by **transactionality**:
+   - **`after_action`** runs *inside* the action's transaction. Use it for effects that should
+     roll back with the action (e.g. a related DB write that must not survive if the action
+     fails). The worked example above writes its ledger row here. A transactional write is
+     still an `effects: true` declaration.
+   - **`after_transaction`** (or an outbox/Oban job enqueued from `after_action`) runs *after*
+     the transaction commits. Use it for effects that must survive independent of the action's
+     outcome — external HTTP calls, process messages, emails. Whatever path the effect lives in,
+     the replay branch (`Admission.replay?/1`) must run there too, so the effect is suppressed
+     on a stored-response replay.
 
 ## Validations and preparations
 
@@ -200,5 +210,5 @@ returning a four-key map with `around_action: false`.
 | `<module> must export replay_capabilities/1` (idempotent) or `... to prove it adds no around-action boundary` (nonce) | Missing the capability map | Implement `replay_capabilities/1` returning the four-key map with `around_action: false` |
 | `declares notification/effect capabilities incompatible with :pure` | Declared `:pure` but returned a map with `notifications: true` or `effects: true` | Either keep the map all-false for `:pure`, or switch to `:replay_aware` and branch on replay |
 | `must consume the replay marker and declare closed capabilities` | Declared `:replay_aware` but `marker:` is not `:consumed` | Set `marker: :consumed` and ensure your code branches on `Admission.replay?/1` |
-| `declares an additional around-action boundary` | `around_action: true` | Set `around_action: false`; use `before_action`/`after_action` instead of `around_action` |
+| `declares an additional around-action boundary` | `around_action: true` | Set `around_action: false`; use `before_action`/`after_action`/`after_transaction` instead of `around_action` (pick by transactionality — see above) |
 | `inline lifecycle callbacks cannot declare replay safety` | Used `change fn ...` or `prepare fn ...` | Extract the function into a module that implements `AshOnetime.ReplaySafety` |
