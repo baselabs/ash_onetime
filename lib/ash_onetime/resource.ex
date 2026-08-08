@@ -1,19 +1,20 @@
 defmodule AshOnetime.Resource.Response do
   @moduledoc """
   The normalized response contract for a protected action: the codec, the projected field
-  allowlist, the result classifier, codec options, and optional response-size limits.
+  allowlist, the result classifier, and codec options.
 
   Returned as the `:response` field of an `AshOnetime.Resource.Protection`. Built by the DSL
   from the `response` entity on a `protect` block; read with `AshOnetime.Resource.Info`.
+  Response-size limits are declared on the `protect` block's `limits` option (the single,
+  unified vocabulary), not on the `response` entity.
   """
-  defstruct [:codec, :classify, :limits, :__spark_metadata__, fields: [], codec_opts: []]
+  defstruct [:codec, :classify, :__spark_metadata__, fields: [], codec_opts: []]
 
   @type t :: %__MODULE__{
           codec: module(),
           classify: module() | nil,
           fields: [atom()],
           codec_opts: Keyword.t(),
-          limits: Keyword.t() | nil,
           __spark_metadata__: Spark.Dsl.Entity.spark_meta()
         }
 end
@@ -99,15 +100,6 @@ defmodule AshOnetime.Resource do
         doc:
           "Codec-specific options forwarded to the codec: the third argument to `encode/3` " <>
             "and the fourth argument to `decode/4`."
-      ],
-      limits: [
-        type: {:or, [:keyword_list, {:literal, nil}]},
-        doc:
-          "Optional response-size bounds. Valid keys: `max_response_bytes`, " <>
-            "`max_response_depth`, `max_response_nodes`, `max_response_entries`, and " <>
-            "`max_response_scalar_bytes` (each a positive integer at or below its package " <>
-            "ceiling). Unknown keys are rejected at contract time. When absent, the " <>
-            "protect-level or trusted limits are used."
       ]
     ]
   }
@@ -178,12 +170,15 @@ defmodule AshOnetime.Resource do
         type: :keyword_list,
         default: [],
         doc:
-          "Protect-level bounds applied unless the response declares its own `limits`. " <>
-            "Valid keys: `max_key_bytes`, `max_token_bytes`, `max_scope_components`, " <>
-            "`max_fingerprint_bytes`, `max_response_bytes`, `verifier_timeout_ms`, and " <>
-            "`max_cache_entry_bytes` (each a positive integer at or below its package ceiling). " <>
-            "Unknown keys are rejected at compile time. Of these, only `max_response_bytes` " <>
-            "also bounds the response payload; the rest bound the key/verification/cache paths."
+          "The single, unified vocabulary of size bounds for this protection. Valid keys: " <>
+            "`max_key_bytes`, `max_token_bytes`, `max_scope_components`, `max_fingerprint_bytes`, " <>
+            "`verifier_timeout_ms`, and `max_cache_entry_bytes` bound the key/verification/cache " <>
+            "paths; `max_response_bytes`, `max_response_depth`, `max_response_nodes`, " <>
+            "`max_response_entries`, and `max_response_scalar_bytes` bound the response payload " <>
+            "(structural limits). Each is a positive integer at or below its package ceiling. " <>
+            "Unknown keys are rejected at compile time. Response bounds apply only to idempotent " <>
+            "strategies (which store a payload); nonce strategies accept the keys but do not " <>
+            "encode a response."
       ]
     ]
   }

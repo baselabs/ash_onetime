@@ -3,6 +3,7 @@ defmodule AshOnetime.Resource.Transformer do
   use Spark.Dsl.Transformer
 
   alias Ash.Resource.Info, as: ResourceInfo
+  alias AshOnetime.Codec
   alias AshOnetime.KeySource
   alias AshOnetime.Resource.Protection
   alias AshOnetime.Resource.Response
@@ -14,15 +15,18 @@ defmodule AshOnetime.Resource.Transformer do
   @max_seconds 2_147_483_647
   @reserved_inputs [:key, :issued_at, :expires_at, :verification_state, :algorithm]
   @duration_factors [second: 1, minute: 60, hour: 3_600, day: 86_400]
-  @limit_ceilings [
+  # The protect-only ceilings bound the key/verification/cache/scope/fingerprint paths.
+  # The response-structural ceilings (max_response_*) are sourced from Codec.hard_limits/0 so
+  # there is a single source of truth for the response payload bounds (ARCH-8 union collapse).
+  @protect_only_ceilings [
     max_key_bytes: 4_096,
     max_token_bytes: 65_536,
     max_scope_components: 16,
     max_fingerprint_bytes: 1_048_576,
-    max_response_bytes: 16_777_216,
     verifier_timeout_ms: 30_000,
     max_cache_entry_bytes: 16_777_216
   ]
+  @limit_ceilings Keyword.merge(@protect_only_ceilings, Keyword.new(Codec.hard_limits()))
   @replay_safe_changes [
     Ash.Resource.Change.Atomic,
     Ash.Resource.Change.AtomicSet,

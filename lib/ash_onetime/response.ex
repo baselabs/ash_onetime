@@ -74,7 +74,7 @@ defmodule AshOnetime.Response do
          classifier when is_atom(classifier) <- response.classify,
          codec_opts when is_list(codec_opts) <- response.codec_opts,
          true <- Keyword.keyword?(codec_opts),
-         {:ok, limits} <- normalize_limits(response_limits(response, trusted)),
+         {:ok, limits} <- normalize_response_limits(response_limit(trusted)),
          :ok <- callbacks(response.codec),
          :ok <- callbacks(classifier, classify: 2),
          :ok <- Codec.validate_tag(response.codec.format_tag()),
@@ -407,27 +407,52 @@ defmodule AshOnetime.Response do
     end
   end
 
-  # The response-level limits come from two sources with DIFFERENT vocabularies: the
-  # consumer-declared `response.limits` (response-level keys: max_response_*) and the trusted
-  # fallback `protection.limits` (protect-level keys: max_key_bytes, max_token_bytes,
-  # max_scope_components, max_fingerprint_bytes, max_response_bytes, verifier_timeout_ms,
-  # max_cache_entry_bytes). A consumer typo in `response.limits` must be rejected (F4); the
-  # protect-level fallback is filtered to the keys the response codec understands so the two
-  # vocabularies don't collide. The dual surface itself is ARCH-8's concern.
-  defp response_limits(response, trusted) do
-    case response.limits do
+  # The unified protect limits (the 11-key `@limit_ceilings` vocabulary) carry BOTH
+  # response-relevant keys (max_response_*, from Codec.hard_limits/0) and protect-only keys
+  # (max_key_bytes, max_token_bytes, max_scope_components, max_fingerprint_bytes,
+  # verifier_timeout_ms, max_cache_entry_bytes) that bound the key/verification/cache paths,
+  # not the response codec. The response contract SELECTS the response-relevant subset and
+  # REJECTS any key that is neither — a typo (e.g. max_respomse_bytes) must not be silently
+  # dropped. Single response vocabulary (Codec.hard_limits/0); the protect-only set is named
+  # explicitly so it can be told apart from a typo. (ARCH-8 collapsed the dual-surface filter
+  # this replaced.)
+  @protect_only_limit_keys ~w(
+    max_key_bytes
+    max_token_bytes
+    max_scope_components
+    max_fingerprint_bytes
+    verifier_timeout_ms
+    max_cache_entry_bytes
+  )a
+
+  defp response_limit(trusted) do
+    response_keys = Codec.hard_limits() |> Map.keys() |> MapSet.new()
+
+    case Map.get(trusted, :limits) do
       nil ->
-        known = Map.keys(Codec.hard_limits())
+        {:ok, []}
 
-        trusted
-        |> Map.get(:limits)
-        |> Kernel.||([])
-        |> Enum.filter(fn {key, _value} -> key in known end)
+      limits when is_list(limits) ->
+        {selected, rejected} =
+          Enum.split_with(limits, fn {key, _value} -> key in response_keys end)
 
-      response_limits ->
-        response_limits
+        typos = Enum.filter(rejected, fn {key, _value} -> key not in @protect_only_limit_keys end)
+
+        if typos == [],
+          do: {:ok, selected},
+          else: {:error, :unknown, Enum.map(typos, &elem(&1, 0))}
+
+      _malformed ->
+        {:error, :invalid, "response limits are invalid"}
     end
   end
+
+  defp normalize_response_limits({:ok, selected}), do: normalize_limits(selected)
+
+  defp normalize_response_limits({:error, :unknown, keys}),
+    do: invalid_contract("unknown response limit options: #{inspect(keys)}")
+
+  defp normalize_response_limits({:error, :invalid, message}), do: invalid_contract(message)
 
   defp normalize_limits(limits) when is_list(limits) do
     if Keyword.keyword?(limits),
@@ -459,8 +484,6 @@ defmodule AshOnetime.Response do
       invalid_contract(message)
     end
   end
-
-  defp normalize_limits(_limits), do: invalid_contract("response limits are invalid")
 
   defp secure_equal?(left, right)
        when is_binary(left) and is_binary(right) and byte_size(left) == byte_size(right),
