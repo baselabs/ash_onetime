@@ -84,7 +84,8 @@ defmodule AshOnetime.Resource do
         type: :keyword_list,
         default: [],
         doc:
-          "Codec-specific options forwarded to `encode/3` and `decode/4` as the fourth argument."
+          "Codec-specific options forwarded to the codec: the third argument to `encode/3` " <>
+            "and the fourth argument to `decode/4`."
       ],
       limits: [
         type: {:or, [:keyword_list, {:literal, nil}]},

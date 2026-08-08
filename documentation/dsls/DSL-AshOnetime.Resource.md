@@ -77,7 +77,7 @@ Declares the response codec, field allowlist, and result classifier.
 |------|------|---------|------|
 | [`fields`](#onetime-protect-response-fields){: #onetime-protect-response-fields } | `list(atom)` | `[]` | The resource attributes projected into the stored/replayed response payload. Acts as the field allowlist; attributes not named here never enter the response. |
 | [`classify`](#onetime-protect-response-classify){: #onetime-protect-response-classify } | `module` |  | The module exporting `classify/2` that decides whether a result is stored, rejected, or rolled back. Required for idempotency strategies. |
-| [`codec_opts`](#onetime-protect-response-codec_opts){: #onetime-protect-response-codec_opts } | `keyword` | `[]` | Codec-specific options forwarded to `encode/3` and `decode/4` as the fourth argument. |
+| [`codec_opts`](#onetime-protect-response-codec_opts){: #onetime-protect-response-codec_opts } | `keyword` | `[]` | Codec-specific options forwarded to the codec: the third argument to `encode/3` and the fourth argument to `decode/4`. |
 | [`limits`](#onetime-protect-response-limits){: #onetime-protect-response-limits } | `keyword \| nil` |  | Optional response-size bounds (e.g. `max_response_bytes`). When absent, the protect-level or trusted limits are used. |
 
 
