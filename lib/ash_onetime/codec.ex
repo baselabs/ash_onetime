@@ -31,6 +31,29 @@ defmodule AshOnetime.Codec do
     }
   end
 
+  # The protect-only limit keys bound the key/verification/cache/scope/fingerprint paths but
+  # NOT the response codec. The single source of the limit-key vocabulary's two halves: this
+  # set (protect-only) and hard_limits/0's keys (response). Both the transformer (compile-time
+  # ceiling validation) and Response.response_limit/1 (runtime select-out of protect-only keys
+  # + typo rejection) read from here so the two cannot drift — adding a protect-only key in one
+  # place carries to the other automatically.
+  @protect_only_limit_keys [
+    max_key_bytes: 4_096,
+    max_token_bytes: 65_536,
+    max_scope_components: 16,
+    max_fingerprint_bytes: 1_048_576,
+    verifier_timeout_ms: 30_000,
+    max_cache_entry_bytes: 16_777_216
+  ]
+
+  @doc """
+  The protect-only limit keys with their package ceilings (the half of the limit vocabulary
+  that bounds the key/verification/cache paths, not the response codec). Single source shared
+  with `Response.response_limit/1`'s typo-discrimination set.
+  """
+  @spec protect_only_ceilings() :: keyword()
+  def protect_only_ceilings, do: @protect_only_limit_keys
+
   @doc """
   Returns the response structural limits for `contract`, merging the contract's declared
   limits over the package hard limits. Only the hard-limit keys are honored (`max_response_*`);

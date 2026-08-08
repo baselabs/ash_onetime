@@ -113,6 +113,7 @@ defmodule AshOnetime.ArchitectureTest do
       ash_resource?: 1,
       hard_limits: 0,
       max_bytes: 1,
+      protect_only_ceilings: 0,
       structural_limits: 1,
       validate_tag: 1,
       validate_value: 2,

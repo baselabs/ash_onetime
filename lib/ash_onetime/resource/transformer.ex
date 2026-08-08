@@ -15,18 +15,11 @@ defmodule AshOnetime.Resource.Transformer do
   @max_seconds 2_147_483_647
   @reserved_inputs [:key, :issued_at, :expires_at, :verification_state, :algorithm]
   @duration_factors [second: 1, minute: 60, hour: 3_600, day: 86_400]
-  # The protect-only ceilings bound the key/verification/cache/scope/fingerprint paths.
-  # The response-structural ceilings (max_response_*) are sourced from Codec.hard_limits/0 so
-  # there is a single source of truth for the response payload bounds (ARCH-8 union collapse).
-  @protect_only_ceilings [
-    max_key_bytes: 4_096,
-    max_token_bytes: 65_536,
-    max_scope_components: 16,
-    max_fingerprint_bytes: 1_048_576,
-    verifier_timeout_ms: 30_000,
-    max_cache_entry_bytes: 16_777_216
-  ]
-  @limit_ceilings Keyword.merge(@protect_only_ceilings, Keyword.new(Codec.hard_limits()))
+  # The full limit vocabulary (11 keys) is the union of the protect-only ceilings (key/
+  # verification/cache paths) and the response-structural ceilings (max_response_*, sourced
+  # from Codec.hard_limits/0). Both halves are owned by Codec so there is a single source of
+  # truth (ARCH-8 union collapse) — the transformer reads them for compile-time validation.
+  @limit_ceilings Keyword.merge(Codec.protect_only_ceilings(), Keyword.new(Codec.hard_limits()))
   @replay_safe_changes [
     Ash.Resource.Change.Atomic,
     Ash.Resource.Change.AtomicSet,

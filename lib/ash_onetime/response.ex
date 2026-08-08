@@ -407,44 +407,42 @@ defmodule AshOnetime.Response do
     end
   end
 
-  # The unified protect limits (the 11-key `@limit_ceilings` vocabulary) carry BOTH
-  # response-relevant keys (max_response_*, from Codec.hard_limits/0) and protect-only keys
-  # (max_key_bytes, max_token_bytes, max_scope_components, max_fingerprint_bytes,
-  # verifier_timeout_ms, max_cache_entry_bytes) that bound the key/verification/cache paths,
-  # not the response codec. The response contract SELECTS the response-relevant subset and
-  # REJECTS any key that is neither — a typo (e.g. max_respomse_bytes) must not be silently
-  # dropped. Single response vocabulary (Codec.hard_limits/0); the protect-only set is named
-  # explicitly so it can be told apart from a typo. (ARCH-8 collapsed the dual-surface filter
-  # this replaced.)
-  @protect_only_limit_keys ~w(
-    max_key_bytes
-    max_token_bytes
-    max_scope_components
-    max_fingerprint_bytes
-    verifier_timeout_ms
-    max_cache_entry_bytes
-  )a
+  # The unified protect limits (the 11-key vocabulary) carry BOTH response-relevant keys
+  # (max_response_*, from Codec.hard_limits/0) and protect-only keys (Codec.protect_only_ceilings/0
+  # — max_key_bytes, max_token_bytes, etc.) that bound the key/verification/cache paths, not the
+  # response codec. The response contract SELECTS the response-relevant subset and REJECTS any
+  # key that is neither — a typo (e.g. max_respomse_bytes) must not be silently dropped, and a
+  # malformed limits list (non-keyword) is rejected explicitly rather than via a rescue. Both
+  # key sets are sourced from Codec (single source of truth) so the typo-discrimination set
+  # cannot drift from the transformer's ceiling vocabulary. (ARCH-8 collapsed the dual-surface
+  # filter this replaced.)
+  @response_limit_keys MapSet.new(Map.keys(Codec.hard_limits()))
+  @protect_only_limit_keys MapSet.new(Keyword.keys(Codec.protect_only_ceilings()))
 
   defp response_limit(trusted) do
-    response_keys = Codec.hard_limits() |> Map.keys() |> MapSet.new()
-
     case Map.get(trusted, :limits) do
       nil ->
         {:ok, []}
 
       limits when is_list(limits) ->
-        {selected, rejected} =
-          Enum.split_with(limits, fn {key, _value} -> key in response_keys end)
+        if Keyword.keyword?(limits),
+          do: select_response_limits(limits),
+          else: {:error, :invalid, "response limits are invalid"}
 
-        typos = Enum.filter(rejected, fn {key, _value} -> key not in @protect_only_limit_keys end)
-
-        if typos == [],
-          do: {:ok, selected},
-          else: {:error, :unknown, Enum.map(typos, &elem(&1, 0))}
-
-      _malformed ->
+      _invalid ->
         {:error, :invalid, "response limits are invalid"}
     end
+  end
+
+  defp select_response_limits(limits) do
+    {selected, rejected} =
+      Enum.split_with(limits, fn {key, _value} -> key in @response_limit_keys end)
+
+    typos = Enum.filter(rejected, fn {key, _value} -> key not in @protect_only_limit_keys end)
+
+    if typos == [],
+      do: {:ok, selected},
+      else: {:error, :unknown, Enum.map(typos, &elem(&1, 0))}
   end
 
   defp normalize_response_limits({:ok, selected}), do: normalize_limits(selected)

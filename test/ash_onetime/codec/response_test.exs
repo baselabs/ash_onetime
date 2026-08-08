@@ -222,7 +222,9 @@ defmodule AshOnetime.Codec.ResponseTest do
     }
 
     assert {:error, %Error{code: :response_contract_invalid}} =
-             Response.contract(Account, :create_account, response, %{limits: [max_respomse_bytes: 1]})
+             Response.contract(Account, :create_account, response, %{
+               limits: [max_respomse_bytes: 1]
+             })
   end
 
   test "the response contract selects out known protect-only limit keys but rejects typos" do
@@ -237,10 +239,47 @@ defmodule AshOnetime.Codec.ResponseTest do
     }
 
     assert {:ok, _contract} =
-             Response.contract(Account, :create_account, response, %{limits: [max_key_bytes: 4096]})
+             Response.contract(Account, :create_account, response, %{
+               limits: [max_key_bytes: 4096]
+             })
 
     assert {:error, %Error{code: :response_contract_invalid}} =
-             Response.contract(Account, :create_account, response, %{limits: [max_respomse_bytes: 1]})
+             Response.contract(Account, :create_account, response, %{
+               limits: [max_respomse_bytes: 1]
+             })
+  end
+
+  test "every protect-only limit key is selected out without being mistaken for a typo" do
+    # diff-review F1: the protect-only key set (Codec.protect_only_ceilings/0) and the response
+    # key set (Codec.hard_limits/0) are both sourced from Codec so they cannot drift. This test
+    # pins that EVERY protect-only key is accepted (selected out), not rejected as a typo — if
+    # a future protect-only key were added to the transformer but not to Codec, this would fail.
+    response = %AshOnetime.Resource.Response{
+      codec: AshOnetime.Codec.Resource,
+      fields: [:id, :name, :amount],
+      classify: StoreClassifier
+    }
+
+    for key <- Keyword.keys(AshOnetime.Codec.protect_only_ceilings()) do
+      assert {:ok, _contract} =
+               Response.contract(Account, :create_account, response, %{limits: [{key, 1}]})
+    end
+  end
+
+  test "a malformed trusted limits list is rejected, not rescued into an opaque error" do
+    # diff-review F2: a non-keyword list (non-tuple elements, or odd arity) must be rejected
+    # explicitly via the selector's Keyword.keyword? guard — not fall through to contract/4's
+    # blanket rescue. The error code is the same, but the path is a structured rejection.
+    response = %AshOnetime.Resource.Response{
+      codec: AshOnetime.Codec.Resource,
+      fields: [:id, :name, :amount],
+      classify: StoreClassifier
+    }
+
+    for malformed <- [[1, 2], [:max_response_bytes], [{:max_response_bytes, 1}, 2]] do
+      assert {:error, %Error{code: :response_contract_invalid}} =
+               Response.contract(Account, :create_account, response, %{limits: malformed})
+    end
   end
 
   defp contract!(action, codec, codec_opts) do
