@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- **Breaking (DSL):** collapse the dual `limits` surface into a single `protect`-level
+  vocabulary. Response-size limits can no longer be declared on the `response` entity
+  (`response ..., limits: [...]`); declare them on `protect` instead. The `protect limits:`
+  option now accepts the full 11-key union vocabulary: `max_key_bytes`, `max_token_bytes`,
+  `max_scope_components`, `max_fingerprint_bytes`, `verifier_timeout_ms`,
+  `max_cache_entry_bytes` (key/verification/cache paths), and `max_response_bytes`,
+  `max_response_depth`, `max_response_nodes`, `max_response_entries`,
+  `max_response_scalar_bytes` (response payload). All keys are validated at compile time.
+  To migrate, move any `response ..., limits: [max_response_*: ...]` keys onto
+  `protect ..., limits: [...]`.
 - Make `AshOnetime.Error` a Splode error of class `:invalid` so Ash recognizes it and
   preserves the typed `:code` through the action pipeline. Before, a protected-action
   failure was wrapped as `Ash.Error.Unknown.UnknownError` and the code (e.g.

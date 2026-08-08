@@ -59,7 +59,8 @@ defmodule AshOnetime.Codec do
   limits over the package hard limits. Only the hard-limit keys are honored (`max_response_*`);
   any other keys in `contract.limits` are ignored, so this is safe to call on an un-normalized
   map. Values are taken as-is — callers building a `%AshOnetime.Response.Contract{}` must
-  validate values (the `Response.contract/4` path does so via `normalize_limits/1`).
+  validate values (the `Response.contract/4` path does so via `normalize_response_limits/1`,
+  which selects + validates the response-relevant subset before delegating to `normalize_limits/1`).
   """
   @spec structural_limits(map()) :: map()
   def structural_limits(contract) do

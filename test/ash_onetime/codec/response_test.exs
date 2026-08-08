@@ -267,9 +267,12 @@ defmodule AshOnetime.Codec.ResponseTest do
   end
 
   test "a malformed trusted limits list is rejected, not rescued into an opaque error" do
-    # diff-review F2: a non-keyword list (non-tuple elements, or odd arity) must be rejected
-    # explicitly via the selector's Keyword.keyword? guard — not fall through to contract/4's
-    # blanket rescue. The error code is the same, but the path is a structured rejection.
+    # diff-review F2 / correctness lens F-1: a non-keyword list (non-tuple elements, or odd
+    # arity) must be rejected explicitly via the selector's Keyword.keyword? guard (message
+    # "response limits are invalid") — not fall through to contract/4's blanket rescue
+    # (message "response contract is invalid"). Asserting on the message discriminates the
+    # structured-reject path from the rescue path: neutering the guard makes split_with raise
+    # and the rescue's different message surfaces, turning this test red.
     response = %AshOnetime.Resource.Response{
       codec: AshOnetime.Codec.Resource,
       fields: [:id, :name, :amount],
@@ -277,7 +280,7 @@ defmodule AshOnetime.Codec.ResponseTest do
     }
 
     for malformed <- [[1, 2], [:max_response_bytes], [{:max_response_bytes, 1}, 2]] do
-      assert {:error, %Error{code: :response_contract_invalid}} =
+      assert {:error, %Error{code: :response_contract_invalid, message: "response limits are invalid"}} =
                Response.contract(Account, :create_account, response, %{limits: malformed})
     end
   end
