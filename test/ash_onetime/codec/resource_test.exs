@@ -80,6 +80,29 @@ defmodule AshOnetime.Codec.ResourceTest do
              Response.contract(Account, :create_account, response, %{limits: nil})
   end
 
+  test "the trusted-limits filter keeps the shared response key and drops protect-only keys" do
+    # The protect-level limits vocabulary (@limit_ceilings) and the response-level vocabulary
+    # (Codec.hard_limits) overlap on exactly max_response_bytes. The response contract must
+    # keep the shared key (so a protect-level response-size bound still applies) and drop the
+    # protect-only keys (max_key_bytes etc., which bound the key/verification/cache paths, not
+    # the response codec). This test pins the filter so ARCH-8 vocabulary drift cannot silently
+    # re-introduce a drop of a key that SHOULD bound the response.
+    response = %AshOnetime.Resource.Response{
+      codec: Resource,
+      fields: [:id, :name, :amount],
+      classify: AshOnetime.Test.StoreClassifier
+    }
+
+    # A protect-level limits map: a shared key + a protect-only key.
+    trusted = %{limits: [max_response_bytes: 100, max_key_bytes: 4096]}
+
+    assert {:ok, contract} = Response.contract(Account, :create_account, response, trusted)
+    # The shared key survives and applies the trusted value.
+    assert AshOnetime.Codec.max_bytes(contract) == 100
+    # The protect-only key does NOT leak into the response contract.
+    refute Map.has_key?(contract.limits, :max_key_bytes)
+  end
+
   test "custom codecs receive and return only the normalized resource projection" do
     contract = custom_contract!(AshOnetime.Test.ObservingCodec, observer: self())
 
