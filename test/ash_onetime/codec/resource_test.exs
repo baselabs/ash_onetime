@@ -105,6 +105,24 @@ defmodule AshOnetime.Codec.ResourceTest do
     refute Map.has_key?(structural, :max_key_bytes)
   end
 
+  @tag structural_limits_map_take_mutation: true
+  test "structural_limits ignores non-response keys even on an un-normalized contract" do
+    # structural_limits/1 is documented safe to call on an un-normalized map (codec.ex) — its
+    # Map.take over Codec.hard_limits/0 keys is the defense that keeps a protect-only key (or any
+    # non-response key) out of the response structural computation when a direct caller hands it a
+    # contract carrying the full union. This pins that Map.take (plan-review F4 / the single-source
+    # guard): removing it lets max_key_bytes leak into the structural map. RED before the mutation
+    # restoration: if Map.take becomes a passthrough, this test fails.
+    unnormalized = %{limits: %{max_response_bytes: 100, max_key_bytes: 4096, bogus: 1}}
+
+    structural = AshOnetime.Codec.structural_limits(unnormalized)
+
+    assert structural.max_response_bytes == 100
+    # Only the response-relevant keys survive — protect-only and unknown keys are taken out.
+    refute Map.has_key?(structural, :max_key_bytes)
+    refute Map.has_key?(structural, :bogus)
+  end
+
   test "custom codecs receive and return only the normalized resource projection" do
     contract = custom_contract!(AshOnetime.Test.ObservingCodec, observer: self())
 

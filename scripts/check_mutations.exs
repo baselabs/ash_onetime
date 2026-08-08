@@ -363,6 +363,15 @@ defmodule AshOnetime.MutationCheck do
       test_name: "response limits reject unknown option keys (no silent drop)",
       assertion: "{:error, %Error{code: :response_contract_invalid}}"
     },
+    "structural-limits-map-take" => %{
+      path: "lib/ash_onetime/codec.ex",
+      original: "    Map.merge(known, Map.take(Map.get(contract, :limits, %{}), Map.keys(known)))",
+      mutated: "    Map.merge(known, Map.get(contract, :limits, %{}))",
+      test: "test/ash_onetime/codec/resource_test.exs",
+      tag: "structural_limits_map_take_mutation",
+      test_name: "structural_limits ignores non-response keys even on an un-normalized contract",
+      assertion: "refute Map.has_key?(structural, :max_key_bytes)"
+    },
     "unique-constraint" => %{
       path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
       original: "@collision_constraint \"UNIQUE (operation_hash, scope_hash, key_hash)\"",
