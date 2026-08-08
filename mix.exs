@@ -100,6 +100,7 @@ defmodule AshOnetime.MixProject do
         "documentation/one-time-nonces.md",
         "documentation/external-effects.md",
         "documentation/replay.md",
+        "documentation/custom-lifecycle.md",
         "documentation/errors.md",
         "documentation/operations.md",
         "documentation/security.md",
