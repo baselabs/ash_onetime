@@ -131,3 +131,6 @@ jobs:
         run: mix hex.build
       - name: Unpacked consumer package check
         run: mix run scripts/check_package.exs
+      # Fails when the committed documentation/dsls/DSL-*.md drifts from the declared schema.
+      - name: DSL cheat-sheet freshness
+        run: mix spark.cheat_sheets --check --extensions AshOnetime.Resource

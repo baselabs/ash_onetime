@@ -539,6 +539,14 @@ defmodule AshOnetime.CompileFixturesTest do
     )
   end
 
+  @tag :response_unknown_opt_mutation
+  test "response rejects unknown options (no silent drop)" do
+    assert_rejected(
+      "response_unknown_opt.exs",
+      AshOnetime.CompileFixtures.ResponseUnknownOpt
+    )
+  end
+
   def run_fixture(fixture, expected) do
     fixture = Path.expand(Path.join("test/compile_fixtures", fixture))
 

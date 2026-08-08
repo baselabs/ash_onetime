@@ -567,12 +567,10 @@ defmodule AshOnetime.Resource.Transformer do
   end
 
   defp verify_response(%{response: %Response{} = response} = protection, context) do
-    opts = response.opts
-    fields = if Keyword.keyword?(opts), do: Keyword.get(opts, :fields, []), else: :invalid
-    classifier = if Keyword.keyword?(opts), do: Keyword.get(opts, :classify), else: nil
+    fields = response.fields
+    classifier = response.classify
 
-    with true <- Keyword.keyword?(opts),
-         true <- is_list(fields) and Enum.all?(fields, &is_atom/1),
+    with true <- is_list(fields) and Enum.all?(fields, &is_atom/1),
          true <- is_atom(classifier) and not is_nil(classifier),
          :ok <- verify_response_fields(fields, context),
          :ok <- verify_response_codec(response.codec),

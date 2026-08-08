@@ -86,8 +86,7 @@ defmodule AshOnetime.Test.Support.Resource do
 
       response(AshOnetime.Test.Support.ResponseCodec,
         fields: [:id, :account_id, :amount],
-        classify: AshOnetime.Test.Support.ResponseClassifier,
-        codec_option: :preserved
+        classify: AshOnetime.Test.Support.ResponseClassifier
       )
 
       retention({24, :hour})

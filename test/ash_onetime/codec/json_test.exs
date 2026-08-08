@@ -67,7 +67,9 @@ defmodule AshOnetime.Codec.JSONTest do
         ] do
       response = %AshOnetime.Resource.Response{
         codec: JSON,
-        opts: [fields: [], classify: AshOnetime.Test.StoreClassifier, limits: limits]
+        fields: [],
+        classify: AshOnetime.Test.StoreClassifier,
+        limits: limits
       }
 
       assert {:error, %Error{code: :response_contract_invalid}} =
@@ -78,7 +80,9 @@ defmodule AshOnetime.Codec.JSONTest do
   defp contract!(action, fields, limits \\ []) do
     response = %AshOnetime.Resource.Response{
       codec: JSON,
-      opts: [fields: fields, classify: AshOnetime.Test.StoreClassifier, limits: limits]
+      fields: fields,
+      classify: AshOnetime.Test.StoreClassifier,
+      limits: limits
     }
 
     {:ok, contract} = Response.contract(Account, action, response, %{})

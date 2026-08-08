@@ -17,7 +17,7 @@ mix credo --strict
 mix dialyzer
 mix deps.audit
 mix hex.audit
-mix spark.cheat_sheets
+mix spark.cheat_sheets --check --extensions AshOnetime.Resource
 mix docs --warnings-as-errors
 DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test \
   MIX_ENV=test mix run scripts/check_mutations.exs -- all

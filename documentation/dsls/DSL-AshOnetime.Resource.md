@@ -38,25 +38,25 @@ Protects one effectful action with explicit keyed-effect semantics.
 
 | Name | Type | Default | Docs |
 |------|------|---------|------|
-| [`action`](#onetime-protect-action){: #onetime-protect-action .spark-required} | `atom` |  |  |
+| [`action`](#onetime-protect-action){: #onetime-protect-action .spark-required} | `atom` |  | The name of the Ash action to protect (a create, update, destroy, or action). |
 ### Options
 
 | Name | Type | Default | Docs |
 |------|------|---------|------|
-| [`strategy`](#onetime-protect-strategy){: #onetime-protect-strategy } | `atom` |  |  |
-| [`scope`](#onetime-protect-scope){: #onetime-protect-scope } | `list(any)` |  |  |
-| [`key`](#onetime-protect-key){: #onetime-protect-key } | `any` |  |  |
-| [`fingerprint`](#onetime-protect-fingerprint){: #onetime-protect-fingerprint } | `keyword` |  |  |
-| [`retention`](#onetime-protect-retention){: #onetime-protect-retention } | `any` |  |  |
-| [`window`](#onetime-protect-window){: #onetime-protect-window } | `keyword` |  |  |
-| [`external_effect`](#onetime-protect-external_effect){: #onetime-protect-external_effect } | `module` |  |  |
-| [`on_definite_store_failure`](#onetime-protect-on_definite_store_failure){: #onetime-protect-on_definite_store_failure } | `:fail_closed \| :execute_untracked` | `:fail_closed` |  |
-| [`limits`](#onetime-protect-limits){: #onetime-protect-limits } | `keyword` | `[]` |  |
+| [`strategy`](#onetime-protect-strategy){: #onetime-protect-strategy } | `atom` |  | The keyed-effect strategy: `:idempotency` (replay-safe, stores a response) or `:one_time_nonce` (single-use, no stored response). Every protection must declare one. |
+| [`scope`](#onetime-protect-scope){: #onetime-protect-scope } | `list(any)` |  | The nonempty identity scope that partitions keyed effects. Components are static strings, tenant/attribute references, or resolver modules; missing scope is an error. |
+| [`key`](#onetime-protect-key){: #onetime-protect-key } | `any` |  | The key source that names a single keyed effect within the scope: a client idempotency argument, a verified proof, or a minted token. |
+| [`fingerprint`](#onetime-protect-fingerprint){: #onetime-protect-fingerprint } | `keyword` |  | Optional content fingerprint (`arguments:` / `attributes:` lists) that distinguishes distinct effects under the same key. |
+| [`retention`](#onetime-protect-retention){: #onetime-protect-retention } | `any` |  | How long a stored idempotent response is retained before it may be re-executed, as a `{count, unit}` tuple (e.g. `{24, :hour}`). |
+| [`window`](#onetime-protect-window){: #onetime-protect-window } | `keyword` |  | Nonce replay window bounds: `max_age:` and `clock_skew:` as `{count, unit}` tuples. Applies to `:one_time_nonce` strategies. |
+| [`external_effect`](#onetime-protect-external_effect){: #onetime-protect-external_effect } | `module` |  | Optional module exporting the external-effect contract for idempotent actions that must observe or reverse a side effect. Not available for nonce strategies. |
+| [`on_definite_store_failure`](#onetime-protect-on_definite_store_failure){: #onetime-protect-on_definite_store_failure } | `:fail_closed \| :execute_untracked` | `:fail_closed` | What to do when the authoritative store is definitively unavailable: `:fail_closed` (reject) or `:execute_untracked` (run once with telemetry, no replay safety). |
+| [`limits`](#onetime-protect-limits){: #onetime-protect-limits } | `keyword` | `[]` | Protect-level response-size bounds (e.g. `max_response_bytes`) applied unless the response declares its own `limits`. |
 
 
 ### onetime.protect.response
 ```elixir
-response codec, opts \\ []
+response codec
 ```
 
 
@@ -70,9 +70,15 @@ Declares the response codec, field allowlist, and result classifier.
 
 | Name | Type | Default | Docs |
 |------|------|---------|------|
-| [`codec`](#onetime-protect-response-codec){: #onetime-protect-response-codec .spark-required} | `module` |  |  |
-| [`opts`](#onetime-protect-response-opts){: #onetime-protect-response-opts } | `keyword` | `[]` |  |
+| [`codec`](#onetime-protect-response-codec){: #onetime-protect-response-codec .spark-required} | `module` |  | The module implementing the response codec. Must export `format_tag/0`, `encode/3`, and `decode/4` and yield a tag the store accepts. |
+### Options
 
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`fields`](#onetime-protect-response-fields){: #onetime-protect-response-fields } | `list(atom)` | `[]` | The resource attributes projected into the stored/replayed response payload. Acts as the field allowlist; attributes not named here never enter the response. |
+| [`classify`](#onetime-protect-response-classify){: #onetime-protect-response-classify } | `module` |  | The module exporting `classify/2` that decides whether a result is stored, rejected, or rolled back. Required for idempotency strategies. |
+| [`codec_opts`](#onetime-protect-response-codec_opts){: #onetime-protect-response-codec_opts } | `keyword` | `[]` | Codec-specific options forwarded to `encode/3` and `decode/4` as the fourth argument. |
+| [`limits`](#onetime-protect-response-limits){: #onetime-protect-response-limits } | `keyword \| nil` |  | Optional response-size bounds (e.g. `max_response_bytes`). When absent, the protect-level or trusted limits are used. |
 
 
 

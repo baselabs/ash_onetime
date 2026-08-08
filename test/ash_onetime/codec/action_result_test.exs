@@ -97,7 +97,8 @@ defmodule AshOnetime.Codec.ActionResultTest do
   defp contract!(action) do
     response = %AshOnetime.Resource.Response{
       codec: ActionResult,
-      opts: [fields: [], classify: AshOnetime.Test.StoreClassifier]
+      fields: [],
+      classify: AshOnetime.Test.StoreClassifier
     }
 
     {:ok, contract} = Response.contract(Account, action, response, %{})

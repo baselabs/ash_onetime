@@ -53,7 +53,8 @@ defmodule AshOnetime.Codec.ResourceTest do
   test "a configured max_response_bytes bounds the encoded resource payload" do
     response = %AshOnetime.Resource.Response{
       codec: Resource,
-      opts: [fields: [:id, :name, :amount], classify: AshOnetime.Test.StoreClassifier]
+      fields: [:id, :name, :amount],
+      classify: AshOnetime.Test.StoreClassifier
     }
 
     {:ok, capped} =
@@ -124,13 +125,15 @@ defmodule AshOnetime.Codec.ResourceTest do
     no_return =
       %AshOnetime.Resource.Response{
         codec: Resource,
-        opts: [fields: [], classify: AshOnetime.Test.StoreClassifier]
+        fields: [],
+        classify: AshOnetime.Test.StoreClassifier
       }
 
     returned =
       %AshOnetime.Resource.Response{
         codec: Resource,
-        opts: [fields: [:id, :name], classify: AshOnetime.Test.StoreClassifier]
+        fields: [:id, :name],
+        classify: AshOnetime.Test.StoreClassifier
       }
 
     assert {:ok, no_return_contract} =
@@ -168,7 +171,8 @@ defmodule AshOnetime.Codec.ResourceTest do
   defp contract!(fields) do
     response = %AshOnetime.Resource.Response{
       codec: Resource,
-      opts: [fields: fields, classify: AshOnetime.Test.StoreClassifier]
+      fields: fields,
+      classify: AshOnetime.Test.StoreClassifier
     }
 
     {:ok, contract} = Response.contract(Account, :create_account, response, %{})
@@ -178,11 +182,9 @@ defmodule AshOnetime.Codec.ResourceTest do
   defp custom_contract!(codec, codec_opts) do
     response = %AshOnetime.Resource.Response{
       codec: codec,
-      opts: [
-        fields: [:id, :name],
-        classify: AshOnetime.Test.StoreClassifier,
-        codec_opts: codec_opts
-      ]
+      fields: [:id, :name],
+      classify: AshOnetime.Test.StoreClassifier,
+      codec_opts: codec_opts
     }
 
     {:ok, contract} = Response.contract(Account, :create_account, response, %{})

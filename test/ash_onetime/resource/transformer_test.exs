@@ -9,9 +9,8 @@ defmodule AshOnetime.Resource.TransformerTest do
     redeem = Info.protection(Resource, :redeem)
 
     assert charge.retention == 86_400
-    assert charge.response.opts[:fields] == [:id, :account_id, :amount]
-    assert charge.response.opts[:classify] == AshOnetime.Test.Support.ResponseClassifier
-    assert charge.response.opts[:codec_option] == :preserved
+    assert charge.response.fields == [:id, :account_id, :amount]
+    assert charge.response.classify == AshOnetime.Test.Support.ResponseClassifier
     assert redeem.window == [max_age: 600, clock_skew: 15]
 
     action = Ash.Resource.Info.action(Resource, :charge)

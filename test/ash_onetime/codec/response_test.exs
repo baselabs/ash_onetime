@@ -106,7 +106,8 @@ defmodule AshOnetime.Codec.ResponseTest do
         ] do
       response = %AshOnetime.Resource.Response{
         codec: AshOnetime.Codec.Resource,
-        opts: [fields: fields, classify: StoreClassifier]
+        fields: fields,
+        classify: StoreClassifier
       }
 
       assert {:error, %Error{code: :response_fields_invalid}} =
@@ -118,7 +119,8 @@ defmodule AshOnetime.Codec.ResponseTest do
     response = fn fields ->
       %AshOnetime.Resource.Response{
         codec: AshOnetime.Codec.Resource,
-        opts: [fields: fields, classify: StoreClassifier]
+        fields: fields,
+        classify: StoreClassifier
       }
     end
 
@@ -209,7 +211,9 @@ defmodule AshOnetime.Codec.ResponseTest do
   defp contract!(action, codec, codec_opts) do
     response = %AshOnetime.Resource.Response{
       codec: codec,
-      opts: [fields: [], classify: StoreClassifier, codec_opts: codec_opts]
+      fields: [],
+      classify: StoreClassifier,
+      codec_opts: codec_opts
     }
 
     {:ok, contract} = Response.contract(Account, action, response, %{})

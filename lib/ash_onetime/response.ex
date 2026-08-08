@@ -52,15 +52,12 @@ defmodule AshOnetime.Response do
           {:ok, Contract.t()} | {:error, Error.t()}
   def contract(resource, action_name, %AshOnetime.Resource.Response{} = response, trusted)
       when is_atom(resource) and is_atom(action_name) and is_map(trusted) do
-    opts = response.opts
-
-    with true <- Keyword.keyword?(opts),
-         action when not is_nil(action) <- ResourceInfo.action(resource, action_name),
-         fields when is_list(fields) <- Keyword.get(opts, :fields, []),
-         classifier when is_atom(classifier) <- Keyword.get(opts, :classify),
-         codec_opts when is_list(codec_opts) <- Keyword.get(opts, :codec_opts, []),
+    with action when not is_nil(action) <- ResourceInfo.action(resource, action_name),
+         fields when is_list(fields) <- response.fields,
+         classifier when is_atom(classifier) <- response.classify,
+         codec_opts when is_list(codec_opts) <- response.codec_opts,
          true <- Keyword.keyword?(codec_opts),
-         {:ok, limits} <- normalize_limits(Keyword.get(opts, :limits, Map.get(trusted, :limits))),
+         {:ok, limits} <- normalize_limits(response.limits || Map.get(trusted, :limits)),
          :ok <- callbacks(response.codec),
          :ok <- callbacks(classifier, classify: 2),
          :ok <- Codec.validate_tag(response.codec.format_tag()),
