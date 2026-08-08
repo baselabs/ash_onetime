@@ -354,6 +354,17 @@ defmodule AshOnetime.MutationCheck do
       probe:
         {"response_unknown_opt.exs", "AshOnetime.CompileFixtures.ResponseUnknownOpt"}
     },
+    "response-limits-unknown-key" => %{
+      path: "lib/ash_onetime/response.ex",
+      original:
+        "    valid? =\n      unknown == [] and\n        Enum.all?(hard_limits,",
+      mutated:
+        "    valid? =\n      Enum.all?(hard_limits,",
+      test: "test/ash_onetime/codec/response_test.exs",
+      tag: "response_limits_unknown_key_mutation",
+      test_name: "response limits reject unknown option keys (no silent drop)",
+      assertion: "{:error, %Error{code: :response_contract_invalid}}"
+    },
     "unique-constraint" => %{
       path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
       original: "@collision_constraint \"UNIQUE (operation_hash, scope_hash, key_hash)\"",

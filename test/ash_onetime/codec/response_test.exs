@@ -208,6 +208,7 @@ defmodule AshOnetime.Codec.ResponseTest do
     end
   end
 
+  @tag response_limits_unknown_key_mutation: true
   test "response limits reject unknown option keys (no silent drop)" do
     # A typo'd limit key (max_respomse_bytes for max_response_bytes) must be rejected,
     # not silently dropped to the hard default. Mirrors the protect-level normalize_limits/2,

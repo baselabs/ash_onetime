@@ -434,7 +434,8 @@ defmodule AshOnetime.Response do
     if valid? do
       {:ok, Map.merge(hard_limits, limits)}
     else
-      invalid_contract("response limits are invalid")
+      message = if unknown != [], do: "unknown response limit options: #{inspect(unknown)}", else: "response limits are invalid"
+      invalid_contract(message)
     end
   end
 
