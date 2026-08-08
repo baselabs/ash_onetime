@@ -262,9 +262,24 @@ defmodule AshOnetime.CompileFixture.MatrixCases do
   defp definition(:limit_max_cache_entry_bytes),
     do: {[], idempotency(limits: [max_cache_entry_bytes: 16_777_217])}
 
+  defp definition(:limit_max_response_depth),
+    do: {[], idempotency(limits: [max_response_depth: 33])}
+
+  defp definition(:limit_max_response_nodes),
+    do: {[], idempotency(limits: [max_response_nodes: 100_001])}
+
+  defp definition(:limit_max_response_entries),
+    do: {[], idempotency(limits: [max_response_entries: 10_001])}
+
+  defp definition(:limit_max_response_scalar_bytes),
+    do: {[], idempotency(limits: [max_response_scalar_bytes: 16_777_217])}
+
   defp definition(:limit_zero), do: {[], idempotency(limits: [max_key_bytes: 0])}
   defp definition(:limit_negative), do: {[], idempotency(limits: [max_key_bytes: -1])}
   defp definition(:limit_unknown), do: {[], idempotency(limits: [unknown_bound: 1])}
+
+  defp definition(:limit_response_typo),
+    do: {[], idempotency(limits: [max_response_deph: 16])}
 
   defp definition(:scope_over_configured_limit),
     do:

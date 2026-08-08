@@ -355,8 +355,9 @@ defmodule AshOnetime.MutationCheck do
     },
     "response-limits-unknown-key" => %{
       path: "lib/ash_onetime/response.ex",
-      original: "    valid? =\n      unknown == [] and\n        Enum.all?(hard_limits,",
-      mutated: "    valid? =\n      Enum.all?(hard_limits,",
+      original:
+        "        if typos == [],\n          do: {:ok, selected},\n          else: {:error, :unknown, Enum.map(typos, &elem(&1, 0))}",
+      mutated: "        {:ok, selected}",
       test: "test/ash_onetime/codec/response_test.exs",
       tag: "response_limits_unknown_key_mutation",
       test_name: "response limits reject unknown option keys (no silent drop)",

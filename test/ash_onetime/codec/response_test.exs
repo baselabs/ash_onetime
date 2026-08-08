@@ -210,18 +210,37 @@ defmodule AshOnetime.Codec.ResponseTest do
 
   @tag response_limits_unknown_key_mutation: true
   test "response limits reject unknown option keys (no silent drop)" do
-    # A typo'd limit key (max_respomse_bytes for max_response_bytes) must be rejected,
-    # not silently dropped to the hard default. Mirrors the protect-level normalize_limits/2,
-    # which already rejects unknown limit keys. RED before the fix: silently accepted.
+    # After ARCH-8, the response entity no longer carries its own `limits`; the response-relevant
+    # limits flow through trusted[:limits] (the unified protect-level vocabulary). A typo'd key
+    # (max_respomse_bytes) is NEITHER a response key NOR a known protect-only key, so the
+    # response_limit/1 selector's typo-reject path fires — it is rejected, not silently dropped
+    # to the hard default (adversarial C1). RED if the selector's typo guard is removed.
     response = %AshOnetime.Resource.Response{
       codec: AshOnetime.Codec.Resource,
       fields: [:id, :name, :amount],
-      classify: StoreClassifier,
-      limits: [max_respomse_bytes: 1]
+      classify: StoreClassifier
     }
 
     assert {:error, %Error{code: :response_contract_invalid}} =
-             Response.contract(Account, :create_account, response, %{})
+             Response.contract(Account, :create_account, response, %{limits: [max_respomse_bytes: 1]})
+  end
+
+  test "the response contract selects out known protect-only limit keys but rejects typos" do
+    # A known protect-only key (max_key_bytes) is valid on protect — the selector selects it OUT
+    # (it bounds the key path, not the response codec), and the contract succeeds. A typo
+    # (max_respomse_bytes) is neither a response key nor a known protect-only key — rejected.
+    # This pins that the two selector paths (select-out vs reject) are distinct.
+    response = %AshOnetime.Resource.Response{
+      codec: AshOnetime.Codec.Resource,
+      fields: [:id, :name, :amount],
+      classify: StoreClassifier
+    }
+
+    assert {:ok, _contract} =
+             Response.contract(Account, :create_account, response, %{limits: [max_key_bytes: 4096]})
+
+    assert {:error, %Error{code: :response_contract_invalid}} =
+             Response.contract(Account, :create_account, response, %{limits: [max_respomse_bytes: 1]})
   end
 
   defp contract!(action, codec, codec_opts) do

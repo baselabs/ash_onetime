@@ -59,6 +59,10 @@ defmodule AshOnetime.Codec.JSONTest do
   end
 
   test "structural ceilings cannot be widened beyond package maxima" do
+    # After ARCH-8, response-structural ceilings are validated at COMPILE time on the protect
+    # entity (the matrix's limit_max_response_depth/nodes/entries/scalar_bytes rows pin this).
+    # At the contract boundary, an over-ceiling value in trusted[:limits] is still rejected by
+    # normalize_limits/1's bounds check — this test pins that runtime defense-in-depth.
     for limits <- [
           [max_response_depth: 33],
           [max_response_nodes: 100_001],
@@ -68,12 +72,11 @@ defmodule AshOnetime.Codec.JSONTest do
       response = %AshOnetime.Resource.Response{
         codec: JSON,
         fields: [],
-        classify: AshOnetime.Test.StoreClassifier,
-        limits: limits
+        classify: AshOnetime.Test.StoreClassifier
       }
 
       assert {:error, %Error{code: :response_contract_invalid}} =
-               Response.contract(Account, :array_result, response, %{})
+               Response.contract(Account, :array_result, response, %{limits: limits})
     end
   end
 
@@ -81,11 +84,10 @@ defmodule AshOnetime.Codec.JSONTest do
     response = %AshOnetime.Resource.Response{
       codec: JSON,
       fields: fields,
-      classify: AshOnetime.Test.StoreClassifier,
-      limits: limits
+      classify: AshOnetime.Test.StoreClassifier
     }
 
-    {:ok, contract} = Response.contract(Account, action, response, %{})
+    {:ok, contract} = Response.contract(Account, action, response, %{limits: limits})
     contract
   end
 end

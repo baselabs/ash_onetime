@@ -280,11 +280,20 @@ defmodule AshOnetime.CompileFixturesTest do
       {:charge, :limits, "limit overrides must be positive and cannot exceed package ceilings"},
     limit_max_cache_entry_bytes:
       {:charge, :limits, "limit overrides must be positive and cannot exceed package ceilings"},
+    limit_max_response_depth:
+      {:charge, :limits, "limit overrides must be positive and cannot exceed package ceilings"},
+    limit_max_response_nodes:
+      {:charge, :limits, "limit overrides must be positive and cannot exceed package ceilings"},
+    limit_max_response_entries:
+      {:charge, :limits, "limit overrides must be positive and cannot exceed package ceilings"},
+    limit_max_response_scalar_bytes:
+      {:charge, :limits, "limit overrides must be positive and cannot exceed package ceilings"},
     limit_zero:
       {:charge, :limits, "limit overrides must be positive and cannot exceed package ceilings"},
     limit_negative:
       {:charge, :limits, "limit overrides must be positive and cannot exceed package ceilings"},
     limit_unknown: {:charge, :limits, "unknown limit options: [:unknown_bound]"},
+    limit_response_typo: {:charge, :limits, "unknown limit options: [:max_response_deph]"},
     scope_over_configured_limit:
       {:charge, :scope, "scope has 2 components but max_scope_components is 1"},
     retention_negative: {:charge, :retention, "must be a positive bounded duration"},
@@ -549,7 +558,7 @@ defmodule AshOnetime.CompileFixturesTest do
     # Discriminate the intended defect (an unknown `field:` opt) from any unrelated
     # compile error — Spark names the rejected key and the valid option set.
     assert output =~ "unknown options [:field]"
-    assert output =~ "valid options are: [:codec, :fields, :classify, :codec_opts, :limits]"
+    assert output =~ "valid options are: [:codec, :fields, :classify, :codec_opts]"
   end
 
   def run_fixture(fixture, expected) do
