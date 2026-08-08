@@ -103,7 +103,10 @@ defmodule AshOnetime.Resource do
       limits: [
         type: {:or, [:keyword_list, {:literal, nil}]},
         doc:
-          "Optional response-size bounds (e.g. `max_response_bytes`). When absent, the " <>
+          "Optional response-size bounds. Valid keys: `max_response_bytes`, " <>
+            "`max_response_depth`, `max_response_nodes`, `max_response_entries`, and " <>
+            "`max_response_scalar_bytes` (each a positive integer at or below its package " <>
+            "ceiling). Unknown keys are rejected at contract time. When absent, the " <>
             "protect-level or trusted limits are used."
       ]
     ]
@@ -175,8 +178,12 @@ defmodule AshOnetime.Resource do
         type: :keyword_list,
         default: [],
         doc:
-          "Protect-level response-size bounds (e.g. `max_response_bytes`) applied unless the " <>
-            "response declares its own `limits`."
+          "Protect-level bounds applied unless the response declares its own `limits`. " <>
+            "Valid keys: `max_key_bytes`, `max_token_bytes`, `max_scope_components`, " <>
+            "`max_fingerprint_bytes`, `max_response_bytes`, `verifier_timeout_ms`, and " <>
+            "`max_cache_entry_bytes` (each a positive integer at or below its package ceiling). " <>
+            "Unknown keys are rejected at compile time. Of these, only `max_response_bytes` " <>
+            "also bounds the response payload; the rest bound the key/verification/cache paths."
       ]
     ]
   }

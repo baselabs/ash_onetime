@@ -51,7 +51,7 @@ Protects one effectful action with explicit keyed-effect semantics.
 | [`window`](#onetime-protect-window){: #onetime-protect-window } | `keyword` |  | Nonce replay window bounds: `max_age:` and `clock_skew:` as `{count, unit}` tuples. Applies to `:one_time_nonce` strategies. |
 | [`external_effect`](#onetime-protect-external_effect){: #onetime-protect-external_effect } | `module` |  | Optional module exporting the external-effect contract for idempotent actions that must observe or reverse a side effect. Not available for nonce strategies. |
 | [`on_definite_store_failure`](#onetime-protect-on_definite_store_failure){: #onetime-protect-on_definite_store_failure } | `:fail_closed \| :execute_untracked` | `:fail_closed` | What to do when the authoritative store is definitively unavailable: `:fail_closed` (reject) or `:execute_untracked` (run once with telemetry, no replay safety). |
-| [`limits`](#onetime-protect-limits){: #onetime-protect-limits } | `keyword` | `[]` | Protect-level response-size bounds (e.g. `max_response_bytes`) applied unless the response declares its own `limits`. |
+| [`limits`](#onetime-protect-limits){: #onetime-protect-limits } | `keyword` | `[]` | Protect-level bounds applied unless the response declares its own `limits`. Valid keys: `max_key_bytes`, `max_token_bytes`, `max_scope_components`, `max_fingerprint_bytes`, `max_response_bytes`, `verifier_timeout_ms`, and `max_cache_entry_bytes` (each a positive integer at or below its package ceiling). Unknown keys are rejected at compile time. Of these, only `max_response_bytes` also bounds the response payload; the rest bound the key/verification/cache paths. |
 
 
 ### onetime.protect.response
@@ -78,7 +78,7 @@ Declares the response codec, field allowlist, and result classifier.
 | [`fields`](#onetime-protect-response-fields){: #onetime-protect-response-fields } | `list(atom)` | `[]` | The resource attributes projected into the stored/replayed response payload. Acts as the field allowlist; attributes not named here never enter the response. |
 | [`classify`](#onetime-protect-response-classify){: #onetime-protect-response-classify } | `module` |  | The module exporting `classify/2` that decides whether a result is stored, rejected, or rolled back. Required for idempotency strategies. |
 | [`codec_opts`](#onetime-protect-response-codec_opts){: #onetime-protect-response-codec_opts } | `keyword` | `[]` | Codec-specific options forwarded to the codec: the third argument to `encode/3` and the fourth argument to `decode/4`. |
-| [`limits`](#onetime-protect-response-limits){: #onetime-protect-response-limits } | `keyword \| nil` |  | Optional response-size bounds (e.g. `max_response_bytes`). When absent, the protect-level or trusted limits are used. |
+| [`limits`](#onetime-protect-response-limits){: #onetime-protect-response-limits } | `keyword \| nil` |  | Optional response-size bounds. Valid keys: `max_response_bytes`, `max_response_depth`, `max_response_nodes`, `max_response_entries`, and `max_response_scalar_bytes` (each a positive integer at or below its package ceiling). Unknown keys are rejected at contract time. When absent, the protect-level or trusted limits are used. |
 
 
 

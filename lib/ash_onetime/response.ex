@@ -45,7 +45,24 @@ defmodule AshOnetime.Response do
       trusted: %{}
     ]
 
-    @type t :: %__MODULE__{}
+    @type t :: %__MODULE__{
+            resource: module(),
+            action_name: atom(),
+            action_type: atom(),
+            kind: atom(),
+            result_mode: term(),
+            type: term() | nil,
+            allow_nil?: boolean(),
+            fields: [atom()],
+            field_specs: [term()],
+            constraints: [term()],
+            codec: module(),
+            classifier: module() | nil,
+            codec_opts: Keyword.t(),
+            limits: %{optional(atom()) => non_neg_integer()},
+            trusted: map(),
+            digest: binary()
+          }
   end
 
   @spec contract(module(), atom(), AshOnetime.Resource.Response.t(), map()) ::
@@ -434,7 +451,11 @@ defmodule AshOnetime.Response do
     if valid? do
       {:ok, Map.merge(hard_limits, limits)}
     else
-      message = if unknown != [], do: "unknown response limit options: #{inspect(unknown)}", else: "response limits are invalid"
+      message =
+        if unknown != [],
+          do: "unknown response limit options: #{inspect(unknown)}",
+          else: "response limits are invalid"
+
       invalid_contract(message)
     end
   end
