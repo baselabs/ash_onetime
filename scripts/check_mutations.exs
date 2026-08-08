@@ -341,6 +341,19 @@ defmodule AshOnetime.MutationCheck do
         {"attribute_multitenant_wrong_attribute.exs",
          "AshOnetime.CompileFixtures.AttributeMultitenantWrongAttribute"}
     },
+    "dsl-response-unknown-opt" => %{
+      path: "lib/ash_onetime/resource.ex",
+      original:
+        "      fields: [\n        type: {:list, :atom},\n        default: [],\n        doc:\n          \"The resource attributes projected into the stored/replayed response payload. \" <>\n            \"Acts as the field allowlist; attributes not named here never enter the response.\"\n      ],",
+      mutated:
+        "      field: [\n        type: {:list, :atom},\n        default: [],\n        doc: \"mutant alias that accepts the typo the guard rejects.\"\n      ],\n      fields: [\n        type: {:list, :atom},\n        default: [],\n        doc:\n          \"The resource attributes projected into the stored/replayed response payload. \" <>\n            \"Acts as the field allowlist; attributes not named here never enter the response.\"\n      ],",
+      test: "test/compile_fixtures_test.exs",
+      tag: "response_unknown_opt_mutation",
+      test_name: "response rejects unknown options (no silent drop)",
+      assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
+      probe:
+        {"response_unknown_opt.exs", "AshOnetime.CompileFixtures.ResponseUnknownOpt"}
+    },
     "unique-constraint" => %{
       path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
       original: "@collision_constraint \"UNIQUE (operation_hash, scope_hash, key_hash)\"",
