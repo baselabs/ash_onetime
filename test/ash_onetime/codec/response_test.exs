@@ -208,6 +208,21 @@ defmodule AshOnetime.Codec.ResponseTest do
     end
   end
 
+  test "response limits reject unknown option keys (no silent drop)" do
+    # A typo'd limit key (max_respomse_bytes for max_response_bytes) must be rejected,
+    # not silently dropped to the hard default. Mirrors the protect-level normalize_limits/2,
+    # which already rejects unknown limit keys. RED before the fix: silently accepted.
+    response = %AshOnetime.Resource.Response{
+      codec: AshOnetime.Codec.Resource,
+      fields: [:id, :name, :amount],
+      classify: StoreClassifier,
+      limits: [max_respomse_bytes: 1]
+    }
+
+    assert {:error, %Error{code: :response_contract_invalid}} =
+             Response.contract(Account, :create_account, response, %{})
+  end
+
   defp contract!(action, codec, codec_opts) do
     response = %AshOnetime.Resource.Response{
       codec: codec,

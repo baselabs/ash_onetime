@@ -67,6 +67,19 @@ defmodule AshOnetime.Codec.ResourceTest do
     assert {:ok, _encoded} = Response.encode(account(), uncapped, [])
   end
 
+  test "a present-but-nil trusted limits key falls back to the hard default" do
+    # trusted[:limits] => nil (key present, value nil) must not raise or reject — it should
+    # fall back to the hard default, identical to trusted having no :limits key at all.
+    response = %AshOnetime.Resource.Response{
+      codec: Resource,
+      fields: [:id, :name, :amount],
+      classify: AshOnetime.Test.StoreClassifier
+    }
+
+    assert {:ok, _contract} =
+             Response.contract(Account, :create_account, response, %{limits: nil})
+  end
+
   test "custom codecs receive and return only the normalized resource projection" do
     contract = custom_contract!(AshOnetime.Test.ObservingCodec, observer: self())
 

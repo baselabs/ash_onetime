@@ -57,7 +57,7 @@ defmodule AshOnetime.Response do
          classifier when is_atom(classifier) <- response.classify,
          codec_opts when is_list(codec_opts) <- response.codec_opts,
          true <- Keyword.keyword?(codec_opts),
-         {:ok, limits} <- normalize_limits(response.limits || Map.get(trusted, :limits)),
+         {:ok, limits} <- normalize_limits(response_limits(response, trusted)),
          :ok <- callbacks(response.codec),
          :ok <- callbacks(classifier, classify: 2),
          :ok <- Codec.validate_tag(response.codec.format_tag()),
@@ -390,7 +390,27 @@ defmodule AshOnetime.Response do
     end
   end
 
-  defp normalize_limits(nil), do: {:ok, %{max_response_bytes: 16_777_216}}
+  # The response-level limits come from two sources with DIFFERENT vocabularies: the
+  # consumer-declared `response.limits` (response-level keys: max_response_*) and the trusted
+  # fallback `protection.limits` (protect-level keys: max_key_bytes, max_token_bytes,
+  # max_scope_components, max_fingerprint_bytes, max_response_bytes, verifier_timeout_ms,
+  # max_cache_entry_bytes). A consumer typo in `response.limits` must be rejected (F4); the
+  # protect-level fallback is filtered to the keys the response codec understands so the two
+  # vocabularies don't collide. The dual surface itself is ARCH-8's concern.
+  defp response_limits(response, trusted) do
+    case response.limits do
+      nil ->
+        known = Map.keys(Codec.hard_limits())
+
+        trusted
+        |> Map.get(:limits)
+        |> Kernel.||([])
+        |> Enum.filter(fn {key, _value} -> key in known end)
+
+      response_limits ->
+        response_limits
+    end
+  end
 
   defp normalize_limits(limits) when is_list(limits) do
     if Keyword.keyword?(limits),
@@ -400,17 +420,19 @@ defmodule AshOnetime.Response do
 
   defp normalize_limits(%{} = limits) do
     hard_limits = Codec.hard_limits()
+    unknown = Map.keys(limits) -- Map.keys(hard_limits)
 
     valid? =
-      Enum.all?(hard_limits, fn {name, maximum} ->
-        case Map.fetch(limits, name) do
-          :error -> true
-          {:ok, value} -> is_integer(value) and value > 0 and value <= maximum
-        end
-      end)
+      unknown == [] and
+        Enum.all?(hard_limits, fn {name, maximum} ->
+          case Map.fetch(limits, name) do
+            :error -> true
+            {:ok, value} -> is_integer(value) and value > 0 and value <= maximum
+          end
+        end)
 
     if valid? do
-      {:ok, Map.merge(hard_limits, Map.take(limits, Map.keys(hard_limits)))}
+      {:ok, Map.merge(hard_limits, limits)}
     else
       invalid_contract("response limits are invalid")
     end
