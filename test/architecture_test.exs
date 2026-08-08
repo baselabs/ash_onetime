@@ -84,6 +84,8 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.ReplaySafety,
     AshOnetime.Resource,
     AshOnetime.Resource.Info,
+    AshOnetime.Resource.Protection,
+    AshOnetime.Resource.Response,
     AshOnetime.ResponseClassifier,
     AshOnetime.Scope,
     AshOnetime.Signer,
@@ -187,6 +189,8 @@ defmodule AshOnetime.ArchitectureTest do
       verifiers: 0
     ],
     AshOnetime.Resource.Info => [protected?: 2, protection: 2, protections: 1, strategy: 2],
+    AshOnetime.Resource.Protection => [__struct__: 0, __struct__: 1],
+    AshOnetime.Resource.Response => [__struct__: 0, __struct__: 1],
     AshOnetime.ResponseClassifier => [classify: 3],
     AshOnetime.Scope => [normalize: 1, references: 1],
     AshOnetime.Signer => [],

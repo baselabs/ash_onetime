@@ -1,5 +1,11 @@
 defmodule AshOnetime.Resource.Response do
-  @moduledoc false
+  @moduledoc """
+  The normalized response contract for a protected action: the codec, the projected field
+  allowlist, the result classifier, codec options, and optional response-size limits.
+
+  Returned as the `:response` field of an `AshOnetime.Resource.Protection`. Built by the DSL
+  from the `response` entity on a `protect` block; read with `AshOnetime.Resource.Info`.
+  """
   defstruct [:codec, :classify, :limits, :__spark_metadata__, fields: [], codec_opts: []]
 
   @type t :: %__MODULE__{
@@ -13,8 +19,15 @@ defmodule AshOnetime.Resource.Response do
 end
 
 defmodule AshOnetime.Resource.Protection do
-  @moduledoc false
+  @moduledoc """
+  The normalized, per-action keyed-effect declaration produced by an `onetime` `protect` block.
 
+  One `Protection` exists per protected action, carrying its strategy (`:idempotency` or
+  `:one_time_nonce`), identity scope, key source, fingerprint, response contract, retention,
+  replay window, external-effect module, store-failure policy, and limits. The struct is the
+  return type of `AshOnetime.Resource.Info.protection/2` and `protections/1`; read its fields
+  directly for introspection.
+  """
   defstruct [
     :action,
     :strategy,

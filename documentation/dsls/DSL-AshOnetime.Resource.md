@@ -84,10 +84,16 @@ Declares the response codec, field allowlist, and result classifier.
 
 
 
+### Introspection
+
+Target: `AshOnetime.Resource.Response`
 
 
 
 
+### Introspection
+
+Target: `AshOnetime.Resource.Protection`
 
 
 
