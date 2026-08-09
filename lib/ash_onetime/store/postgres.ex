@@ -834,7 +834,8 @@ defmodule AshOnetime.Store.Postgres do
     with :ok <- arm_partition_roll_lock(target, lock_timeout),
          {:ok, schema, database_date} <- database_schema_and_date(target),
          {:ok, existing} <- payload_partition_names(target, schema),
-         {:ok, count} <- create_roll_partitions(target, database_date, months_ahead, existing) do
+         {:ok, count} <-
+           create_roll_partitions(target, schema, database_date, months_ahead, existing) do
       count
     else
       {:error, %Result{} = result} -> target.repo_module.rollback(result)
@@ -869,12 +870,12 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  defp create_roll_partitions(target, database_date, months_ahead, existing) do
+  defp create_roll_partitions(target, schema, database_date, months_ahead, existing) do
     database_date
     |> roll_partition_descriptors(months_ahead)
     |> Enum.reject(&MapSet.member?(existing, &1.name))
     |> Enum.reduce_while({:ok, 0}, fn descriptor, {:ok, count} ->
-      case create_one_partition(target, descriptor) do
+      case create_one_partition(target, schema, descriptor) do
         :ok -> {:cont, {:ok, count + 1}}
         {:error, %Result{} = result} -> {:halt, {:error, result}}
       end
@@ -896,7 +897,7 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  defp create_one_partition(target, %{name: name, from: from, to: to}) do
+  defp create_one_partition(target, schema, %{name: name, from: from, to: to}) do
     sql = """
     CREATE TABLE #{relation(target, name)} PARTITION OF #{relation(target, "ash_onetime_response_payloads")}
     FOR VALUES FROM ('#{Date.to_iso8601(from)}') TO ('#{Date.to_iso8601(to)}')
@@ -909,25 +910,31 @@ defmodule AshOnetime.Store.Postgres do
       # A duplicate_relation (42P07) is converted by dispatched_query to a store_invariant
       # Result. Under the advisory lock this should not happen (rolls serialize), but treat it
       # as idempotent success if it does — never fail a roll on a partition that already exists.
+      # partition_exists? is SCHEMA-SCOPED (joins pg_namespace + filters nspname) so a
+      # same-named partition in another tenant's schema never satisfies this check — the
+      # multitenant isolation invariant its sibling payload_partitions enforces.
       {:error, %Result{reason: :store_invariant} = result} ->
-        if partition_exists?(target, name), do: :ok, else: {:error, result}
+        if partition_exists?(target, schema, name), do: :ok, else: {:error, result}
 
       {:error, %Result{} = result} ->
         {:error, result}
     end
   end
 
-  defp partition_exists?(target, name) do
+  defp partition_exists?(target, schema, name) do
     sql = """
     SELECT 1
     FROM pg_inherits
     JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
+    JOIN pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
     JOIN pg_class child ON child.oid = pg_inherits.inhrelid
-    WHERE parent.relname = 'ash_onetime_response_payloads' AND child.relname = $1
+    WHERE parent_namespace.nspname = $1
+      AND parent.relname = 'ash_onetime_response_payloads'
+      AND child.relname = $2
     LIMIT 1
     """
 
-    case dispatched_query(target, sql, [name]) do
+    case dispatched_query(target, sql, [schema, name]) do
       {:ok, %{rows: [[1]]}} -> true
       _other -> false
     end

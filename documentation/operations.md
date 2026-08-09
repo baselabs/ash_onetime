@@ -86,6 +86,14 @@ past-retention payloads stranded in `_default` (a claim-scoped delete; the delet
 the payload). Within-retention stranded payloads are left — a retry under a new key is a new
 execution, and the rolled-forward partitions now route future inserts correctly.
 
+**Gap recovery:** `roll_partitions` only creates partitions ahead of the current month — it does
+not back-fill. If the worker/cron is down for a month or longer, that month's within-retention
+payloads strand in `_default` (which cleanup never drops). Re-running
+`mix ash_onetime.gen.roll_forward` is the recovery procedure: its drain is idempotent and removes
+any past-retention payloads that aged out while the roll was down. An exhausted `PartitionWorker`
+(`max_attempts: 3` discards persistent failures) leaves the same gap — monitor for discarded
+jobs and re-run the forward migration when the worker has been down across a month boundary.
+
 A context-multitenant tenant prefix must be 1..63 bytes — PostgreSQL truncates identifiers at
 63 bytes (NAMEDATALEN), so a longer prefix could route two tenants to the same schema. Both
 admission and cleanup reject an out-of-range prefix (admission fails closed with

@@ -103,7 +103,9 @@ defmodule AshOnetime.Store do
   def roll_partitions(target, months_ahead) do
     case Postgres.roll_partitions(target, months_ahead) do
       {:ok, %{partitions_created: count}} = success ->
-        emit_roll(target, count)
+        # Only emit when partitions were actually created — an idle scheduled roll (count: 0)
+        # is a no-op and should not fire a :partitions_created event that misleads dashboards.
+        if count > 0, do: emit_roll(target, count)
         success
 
       %Result{} = result ->
