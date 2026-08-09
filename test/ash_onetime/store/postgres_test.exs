@@ -40,7 +40,7 @@ defmodule AshOnetime.Store.PostgresTest do
     assert collided.id == claim.id
   end
 
-  @tag task5_composite_clock_mutation: true
+  @tag composite_clock_mutation: true
   test "composite nonce persists a coherent aggregate across crossed issuance and expiry", %{
     target: target
   } do
@@ -95,7 +95,7 @@ defmodule AshOnetime.Store.PostgresTest do
            ) == :eq
   end
 
-  @tag task5_composite_clock_mutation: true
+  @tag composite_clock_mutation: true
   test "a 3+ sibling composite breaks issued_at ties and collapses expiry unconditionally", %{
     target: target
   } do
@@ -190,7 +190,7 @@ defmodule AshOnetime.Store.PostgresTest do
     assert DateTime.diff(claim.retain_until, claim.admitted_at, :second) == margin
   end
 
-  @tag task5_composite_sibling_mutation: true
+  @tag composite_sibling_mutation: true
   test "one invalid composite nonce sibling rejects the entire admission", %{target: target} do
     evaluated_at = Clock.now() |> DateTime.truncate(:second)
 

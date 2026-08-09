@@ -4,7 +4,7 @@ defmodule AshOnetime.Resource.VerifierTest do
   alias AshOnetime.Resource.Info
   alias AshOnetime.Test.Support.Resource
 
-  @tag task5_wrapper_protection_mutation: true
+  @tag wrapper_protection_mutation: true
   test "postcompile verifier accepts exact normalized wrapper protection" do
     assert {:module, AshOnetime.Resource.Verifier} =
              Code.ensure_loaded(AshOnetime.Resource.Verifier)

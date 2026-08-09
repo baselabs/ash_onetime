@@ -18,7 +18,7 @@ defmodule AshOnetime.TelemetryTest do
     [:ash_onetime, :untracked_execution]
   ]
 
-  @tag task5_telemetry_builder_mutation: true
+  @tag telemetry_builder_mutation: true
   test "every event emits exact closed measurements and metadata" do
     handler = "ash-onetime-telemetry-#{System.unique_integer([:positive])}"
     parent = self()

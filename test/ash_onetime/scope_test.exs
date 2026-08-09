@@ -8,7 +8,7 @@ defmodule AshOnetime.ScopeTest do
   16-component limit and the `{:tenant,_}`/`{:argument,_}` forms — and `references/1`'s behavior
   were unproven. Scope-hash collision isolation is inherited from `AshOnetime.Fingerprint`'s
   canonical+SHA-256 injectivity (propertied in `fingerprint_test.exs`) and the claim-identity
-  `task5-scope-identity` mutation; this file locks the pure algebra that feeds it.
+  `scope-identity` mutation; this file locks the pure algebra that feeds it.
   """
   use ExUnit.Case, async: true
   use ExUnitProperties

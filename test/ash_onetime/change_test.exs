@@ -15,7 +15,7 @@ defmodule AshOnetime.ChangeTest do
     assert changed.valid?
   end
 
-  @tag task5_atomic_shape_mutation: true
+  @tag atomic_shape_mutation: true
   test "protected changes force transactional stream execution" do
     assert {:not_atomic, "keyed effects require transactional stream execution"} =
              AshOnetime.Change.atomic(nil, [], %{})

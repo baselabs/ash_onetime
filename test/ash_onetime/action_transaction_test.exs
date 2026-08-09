@@ -120,7 +120,7 @@ defmodule AshOnetime.ActionTransactionTest do
     :ok
   end
 
-  @tag task5_actual_telemetry_mutation: true
+  @tag actual_telemetry_mutation: true
   test "actual admission paths emit every closed telemetry family", %{prefix: prefix} do
     events = [
       [:ash_onetime, :admission],
@@ -194,7 +194,7 @@ defmodule AshOnetime.ActionTransactionTest do
     end
   end
 
-  @tag task5_crud_tuple_mutation: true
+  @tag crud_tuple_mutation: true
   test "CRUD execution, claim, response completion, and replay share one tenant transaction", %{
     prefix: prefix
   } do
@@ -237,7 +237,7 @@ defmodule AshOnetime.ActionTransactionTest do
     assert claim_transaction_id == transaction_id
   end
 
-  @tag task5_bulk_fallback_mutation: true
+  @tag bulk_fallback_mutation: true
   test "protected bulk create falls back to transactional stream execution", %{prefix: prefix} do
     inputs = [
       charge_input(Ecto.UUID.generate(), 10, "bulk-charge-a"),
@@ -265,8 +265,8 @@ defmodule AshOnetime.ActionTransactionTest do
     assert table_count(prefix, "ash_onetime_response_payloads") == 2
   end
 
-  @tag task5_replay_execution_mutation: true
-  @tag task5_marker_propagation_mutation: true
+  @tag replay_execution_mutation: true
+  @tag marker_propagation_mutation: true
   test "generic original runs once and its typed stored result replays", %{prefix: prefix} do
     Process.put({AshOnetime.Test.ActionExamples.GenericRun, :observer}, self())
     Process.put({AshOnetime.Test.ActionExamples.GenericRun, :notify?}, true)
@@ -398,7 +398,7 @@ defmodule AshOnetime.ActionTransactionTest do
     assert table_count(prefix, "ash_onetime_idempotency_claims") == 4
   end
 
-  @tag task5_state_confidentiality_mutation: true
+  @tag state_confidentiality_mutation: true
   test "verified nonce admits one generic execution then rejects reuse", %{
     prefix: prefix
   } do
@@ -472,7 +472,7 @@ defmodule AshOnetime.ActionTransactionTest do
     assert table_count(prefix, "ash_onetime_response_payloads") == 0
   end
 
-  @tag task5_corrupt_replay_mutation: true
+  @tag corrupt_replay_mutation: true
   test "corrupt authoritative replay is terminal and never repairs by executing again", %{
     prefix: prefix
   } do
@@ -549,7 +549,7 @@ defmodule AshOnetime.ActionTransactionTest do
     assert table_count(prefix, "ash_onetime_response_payloads") == 1
   end
 
-  @tag task5_untracked_siblings_mutation: true
+  @tag untracked_siblings_mutation: true
   test "exact checkout failure executes untracked only for opted-in idempotency" do
     protection = AshOnetime.Resource.Info.protection(Resource, :redeem)
 
@@ -630,7 +630,7 @@ defmodule AshOnetime.ActionTransactionTest do
     end
   end
 
-  @tag task5_completion_transaction_mutation: true
+  @tag completion_transaction_mutation: true
   test "completion outside the caller transaction fails before changing authoritative state", %{
     prefix: prefix
   } do
@@ -728,8 +728,8 @@ defmodule AshOnetime.ActionTransactionTest do
     assert table_count(prefix, "ash_onetime_nonce_claims") == 0
   end
 
-  @tag task5_claim_identity_mutation: true
-  @tag task5_fingerprint_identity_mutation: true
+  @tag claim_identity_mutation: true
+  @tag fingerprint_identity_mutation: true
   test "mutated admitted claim identity never grants execution" do
     protection = AshOnetime.Resource.Info.protection(Resource, :redeem)
 
@@ -781,7 +781,7 @@ defmodule AshOnetime.ActionTransactionTest do
     end
   end
 
-  @tag task5_completion_mutation: true
+  @tag completion_mutation: true
   test "completion failure rolls back a generic effect through the real wrapper", %{
     prefix: prefix
   } do
@@ -895,7 +895,7 @@ defmodule AshOnetime.ActionTransactionTest do
     end
   end
 
-  @tag task5_completion_identity_mutation: true
+  @tag completion_identity_mutation: true
   test "completion validates every local encoding and outer evidence field" do
     protection = AshOnetime.Resource.Info.protection(Resource, :redeem)
 
@@ -963,7 +963,7 @@ defmodule AshOnetime.ActionTransactionTest do
     assert {:ok, 4} = AshOnetime.Admission.complete(state, 4)
   end
 
-  @tag task5_completion_partition_clock_mutation: true
+  @tag completion_partition_clock_mutation: true
   test "completion trusts the PostgreSQL transaction date across an application date boundary", %{
     prefix: prefix
   } do

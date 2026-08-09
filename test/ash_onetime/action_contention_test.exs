@@ -22,7 +22,7 @@ defmodule AshOnetime.ActionContentionTest do
     {:ok, prefix: installation.schema, barrier_key: barrier_key}
   end
 
-  @tag task5_ledger_tamper_mutation: true
+  @tag ledger_tamper_mutation: true
   test "two protected Ash actions serialize at the authoritative claim and append one effect", %{
     prefix: prefix,
     barrier_key: barrier_key

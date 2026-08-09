@@ -65,7 +65,7 @@ defmodule AshOnetime.TenantPrefixTest do
              Postgres.target(Resource, tenant: "tenant_a")
   end
 
-  @tag task5_prefix_routing_mutation: true
+  @tag prefix_routing_mutation: true
   test "the same complete key is isolated across two tenant prefixes", %{
     prefix: prefix,
     second_prefix: second_prefix

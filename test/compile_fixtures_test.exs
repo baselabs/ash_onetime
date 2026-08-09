@@ -437,7 +437,7 @@ defmodule AshOnetime.CompileFixturesTest do
     assert output =~ "a minted nonce key must be the only key source"
   end
 
-  @tag task5_notifier_guard_mutation: true
+  @tag notifier_guard_mutation: true
   test "protected CRUD actions reject notifier delivery at compile time" do
     {output, status} = run_matrix_case(:crud_notifier)
 
@@ -446,7 +446,7 @@ defmodule AshOnetime.CompileFixturesTest do
     assert fixture_fact(output, "LOADED") == "false"
   end
 
-  @tag task5_around_guard_mutation: true
+  @tag around_guard_mutation: true
   test "protected CRUD actions reject every additional around-action producer" do
     for case_name <- [
           :local_around_action,
@@ -468,7 +468,7 @@ defmodule AshOnetime.CompileFixturesTest do
     assert fixture_fact(output, "LOADED") == "true"
   end
 
-  @tag task5_capability_guard_mutation: true
+  @tag capability_guard_mutation: true
   test "lifecycle notification and effect capability declarations fail closed" do
     for case_name <- [
           :pure_notification_producer,

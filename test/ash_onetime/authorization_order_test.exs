@@ -10,7 +10,7 @@ defmodule AshOnetime.AuthorizationOrderTest do
     {:ok, prefix: installation.schema}
   end
 
-  @tag task5_authorization_order_mutation: true
+  @tag authorization_order_mutation: true
   test "change registration performs no admission callback before Ash authorization" do
     protection = %Protection{strategy: :idempotency, action: :charge}
     changeset = Ash.Changeset.for_create(Resource, :charge, valid_input())
@@ -24,7 +24,7 @@ defmodule AshOnetime.AuthorizationOrderTest do
     Process.delete({AshOnetime.Admission, :test_store})
   end
 
-  @tag task5_reserved_mutation: true
+  @tag reserved_mutation: true
   test "reserved verification facts reject before callbacks and SQL", %{prefix: prefix} do
     protection = ResourceInfo.protection(Resource, :charge)
     event = Repo.config()[:telemetry_prefix] ++ [:query]
