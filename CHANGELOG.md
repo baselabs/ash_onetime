@@ -4,6 +4,28 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## v0.1.1 — 2026-08-08
+
+Adoption polish: a runnable Livebook walkthrough, richer Igniter installer, and adoption docs.
+No contract change; safe minor bump from v0.1.0.
+
+- Add a runnable [Livebook walkthrough](documentation/livebooks/idempotency-and-nonces.livemd)
+  covering idempotency (fresh, replay, fingerprint conflict) and one-time nonces (spend, reuse
+  rejection) end-to-end against a real PostgreSQL, plus the value-free telemetry surface. The
+  walkthrough is regression-pinned by `test/ash_onetime/livebook_walkthrough_test.exs`.
+- Extend the Igniter installer with a repeatable `--resource MyApp.MyResource` flag that wires
+  `AshOnetime.Resource` into a resource and scaffolds a starter `onetime` block. Non-resource
+  targets and missing modules are rejected loudly instead of silently no-op'ing.
+- Add adoption docs: [Recipes](documentation/recipes.md),
+  [Telemetry](documentation/telemetry.md), [Upgrading](documentation/upgrading.md), and
+  [FAQ](documentation/faq.md). Add a README "When to use this vs. hand-rolled idempotency"
+  section and a "Try it" livebook pointer.
+- Reorder [Getting started](documentation/getting-started.md) to lead with the consumer
+  quickstart (install → protect → handle the result); move the test-DB harness to
+  CONTRIBUTING. Fix the stale "not published yet" line (the package is live on Hex).
+
+## v0.1.0 — 2026-08-08
+
 - **Breaking (DSL):** collapse the dual `limits` surface into a single `protect`-level
   vocabulary. Response-size limits can no longer be declared on the `response` entity
   (`response ..., limits: [...]`); declare them on `protect` instead. The `protect limits:`
