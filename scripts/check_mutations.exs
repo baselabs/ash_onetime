@@ -579,8 +579,10 @@ defmodule AshOnetime.MutationCheck do
     },
     "task5-state-request-sanitization" => %{
       path: "lib/ash_onetime/admission.ex",
-      original: "request: sanitize_request(state.request)},\n        protection,\n        started,\n        :local_claim",
-      mutated: "request: state.request},\n        protection,\n        started,\n        :local_claim",
+      original:
+        "request: sanitize_request(state.request)},\n        protection,\n        started,\n        :local_claim",
+      mutated:
+        "request: state.request},\n        protection,\n        started,\n        :local_claim",
       test: "test/ash_onetime/action_transaction_test.exs",
       tag: "task5_state_confidentiality_mutation",
       test_name: "verified nonce admits one generic execution then rejects reuse",
