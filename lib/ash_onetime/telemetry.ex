@@ -63,20 +63,37 @@ defmodule AshOnetime.Telemetry do
 
   defp events, do: Map.keys(@classes)
 
+  @doc """
+  Emits `[:ash_onetime, :admission]` with `:duration` and `result_class` in
+  `[:admitted, :rejected, :failed]`. The classified outcome of an admission attempt.
+  """
   @spec admission(non_neg_integer(), atom(), module(), atom(), atom()) ::
           :ok | {:error, Error.t()}
   def admission(duration, strategy, resource, action, result_class),
     do: emit(:admission, %{duration: duration}, strategy, resource, action, result_class)
 
+  @doc """
+  Emits `[:ash_onetime, :conflict]` with `result_class` in
+  `[:complete, :processing, :nonce_used, :malformed]`. A collision on an in-flight or
+  completed claim under the same logical key.
+  """
   @spec conflict(atom(), module(), atom(), atom()) :: :ok | {:error, Error.t()}
   def conflict(strategy, resource, action, result_class),
     do: emit(:conflict, %{count: 1}, strategy, resource, action, result_class)
 
+  @doc """
+  Emits `[:ash_onetime, :replay]` with `:duration` and `result_class` in
+  `[:returned, :rejected]`. The replayed-vs-rejected decision on a stored response.
+  """
   @spec replay(non_neg_integer(), atom(), module(), atom(), atom()) ::
           :ok | {:error, Error.t()}
   def replay(duration, strategy, resource, action, result_class),
     do: emit(:replay, %{duration: duration}, strategy, resource, action, result_class)
 
+  @doc """
+  Emits `[:ash_onetime, :fingerprint_mismatch]` with `result_class: :rejected`. A stored
+  response whose fingerprint does not match the incoming request is rejected (no replay).
+  """
   @spec fingerprint_mismatch(atom(), module(), atom()) :: :ok | {:error, Error.t()}
   def fingerprint_mismatch(strategy, resource, action),
     do:
@@ -89,39 +106,77 @@ defmodule AshOnetime.Telemetry do
         :rejected
       )
 
+  @doc """
+  Emits `[:ash_onetime, :verification]` with `:duration` and `result_class` in
+  `[:verified, :rejected, :timeout]`. The outcome of a token/proof verification.
+  """
   @spec verification(non_neg_integer(), atom(), module(), atom(), atom()) ::
           :ok | {:error, Error.t()}
   def verification(duration, strategy, resource, action, result_class),
     do: emit(:verification, %{duration: duration}, strategy, resource, action, result_class)
 
+  @doc """
+  Emits `[:ash_onetime, :encoding]` with `:duration` and `result_class` in
+  `[:stored, :rejected, :rollback, :failed]`. The outcome of encoding a response payload
+  for storage/replay.
+  """
   @spec encoding(non_neg_integer(), atom(), module(), atom(), atom()) ::
           :ok | {:error, Error.t()}
   def encoding(duration, strategy, resource, action, result_class),
     do: emit(:encoding, %{duration: duration}, strategy, resource, action, result_class)
 
+  @doc """
+  Emits `[:ash_onetime, :cache]` with `result_class` in
+  `[:hit, :miss, :stale, :corrupt, :failure, :timeout, :stored, :expired, :oversized, :disabled]`.
+  The optional completed-response cache outcome for an idempotency admission.
+  """
   @spec cache(atom(), module(), atom(), atom()) :: :ok | {:error, Error.t()}
   def cache(strategy, resource, action, result_class),
     do: emit(:cache, %{count: 1}, strategy, resource, action, result_class)
 
+  @doc """
+  Emits `[:ash_onetime, :cleanup]` with `:count` and `result_class` in
+  `[:claims_deleted, :partitions_dropped, :partitions_created]`. A bounded cleanup run.
+  """
   @spec cleanup(atom(), module(), atom(), non_neg_integer(), atom()) ::
           :ok | {:error, Error.t()}
   def cleanup(strategy, resource, action, count, result_class),
     do: emit(:cleanup, %{count: count}, strategy, resource, action, result_class)
 
+  @doc """
+  Emits `[:ash_onetime, :reap]` with `:count` and `result_class: :claims_reaped`. The count
+  of abandoned `processing` recovery points reaped by a bounded reaper run.
+  """
   @spec reap(atom(), module(), atom(), non_neg_integer(), atom()) ::
           :ok | {:error, Error.t()}
   def reap(strategy, resource, action, count, result_class),
     do: emit(:reap, %{count: count}, strategy, resource, action, result_class)
 
+  @doc """
+  Emits `[:ash_onetime, :external_recovery]` with `:duration` and `result_class` in
+  `[:processing_committed, :execute_succeeded, :recover_succeeded, :absence_proven,
+  :outcome_unknown, :external_effect_unavailable, :finalize_locked, :replayed]`. The stage
+  outcomes of the committed external-effect recovery protocol.
+  """
   @spec external_recovery(non_neg_integer(), atom(), module(), atom(), atom()) ::
           :ok | {:error, Error.t()}
   def external_recovery(duration, strategy, resource, action, result_class),
     do: emit(:external_recovery, %{duration: duration}, strategy, resource, action, result_class)
 
+  @doc """
+  Emits `[:ash_onetime, :store_uncertainty]` with `result_class` in
+  `[:sent, :unknown, :disconnected, :lock_timeout, :worker_timeout]`. The authoritative-state-
+  unavailable conditions on the committed-claim path; all fail closed (see operations.md).
+  """
   @spec store_uncertainty(atom(), module(), atom(), atom()) :: :ok | {:error, Error.t()}
   def store_uncertainty(strategy, resource, action, result_class),
     do: emit(:store_uncertainty, %{count: 1}, strategy, resource, action, result_class)
 
+  @doc """
+  Emits `[:ash_onetime, :untracked_execution]` with `result_class: :checkout_unavailable`.
+  An idempotent action executed without a stored admission after a checkout failure — correct
+  by design but worth visibility (the optional `:execute_untracked` path).
+  """
   @spec untracked_execution(atom(), module(), atom()) :: :ok | {:error, Error.t()}
   def untracked_execution(strategy, resource, action),
     do:

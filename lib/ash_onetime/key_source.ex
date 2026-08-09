@@ -16,6 +16,15 @@ defmodule AshOnetime.KeySource do
   @callback algorithm() :: :hmac_sha256 | :ed25519
   @callback trust_model() :: :same_service | :separated
 
+  @doc """
+  Normalizes a key source or list of sources into a validated list.
+
+  Enforces five invariants: non-empty (at least one source), at most `16` sources, no nested
+  composites (a source cannot itself be a list), all sources unique, and every source a valid
+  tag (`:client`/`:argument`/`:attribute`/`:external`/`:verified`/`:minted`). A single source
+  is wrapped in a one-element list. Returns `{:ok, list}` verbatim on success, or
+  `{:error, message}` naming the violated invariant.
+  """
   @spec normalize(source() | [source()]) :: {:ok, [source()]} | {:error, String.t()}
   def normalize(value) do
     sources = if is_list(value), do: value, else: [value]
@@ -38,6 +47,14 @@ defmodule AshOnetime.KeySource do
     end
   end
 
+  @doc """
+  Extracts the argument and attribute names a list of sources binds, for reference-checking
+  against declared action inputs.
+
+  `:client`, `:argument`, `:external`, and `:verified` sources bind argument names;
+  `:attribute` sources bind attribute names; `:minted` binds neither (it is a freshly-minted
+  trusted source, not an action input). Returns `%{arguments: [atom], attributes: [atom]}`.
+  """
   @spec references([source()]) :: %{arguments: [atom()], attributes: [atom()]}
   def references(sources) do
     Enum.reduce(sources, %{arguments: [], attributes: []}, fn

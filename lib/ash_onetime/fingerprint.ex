@@ -6,6 +6,15 @@ defmodule AshOnetime.Fingerprint do
   alias AshOnetime.Canonical
   alias AshOnetime.Error
 
+  @doc """
+  Computes the SHA-256 fingerprint over the exact canonical encoding of `value`.
+
+  The fingerprint is the replay-binding digest: two admissions with the same logical key but
+  different request bodies produce different fingerprints, so a stale response cannot replay
+  against a mutated request. `max_bytes` (default `:infinity`) bounds the canonical encoding
+  size; an oversized value returns `{:error, :fingerprint_too_large}` without hashing.
+  Returns `{:ok, <<32-byte digest>>}`.
+  """
   @spec compute(term(), pos_integer() | :infinity) :: {:ok, <<_::256>>} | {:error, Error.t()}
   def compute(value, max_bytes \\ :infinity) do
     with {:ok, encoded} <- Canonical.encode(value),

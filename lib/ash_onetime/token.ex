@@ -39,6 +39,16 @@ defmodule AshOnetime.Token do
 
   @type result(value) :: {:ok, value} | {:error, Error.t()}
 
+  @doc """
+  Mints a token struct from a key and a keyword of binding options.
+
+  The options carry the security-relevant fields the signed body will bind: `:algorithm`
+  (`:hmac_sha256` or `:ed25519`), `:key_id` (the resolver-scoped key identifier, ≤128 bytes),
+  `:namespace` (the caller-supplied namespace, ≤128 bytes), `:issued_at` (a `DateTime`,
+  defaulting to `Clock.now/0`), and optional `:expires_at` (a `DateTime` strictly after
+  `issued_at`). Every field is validated before the struct is built; an invalid option or a
+  non-binary key returns `{:error, %AshOnetime.Error{}}` without minting.
+  """
   @spec mint(binary(), keyword()) :: result(t())
   def mint(key, options) when is_binary(key) and is_list(options) do
     with true <- Keyword.keyword?(options),
@@ -66,6 +76,16 @@ defmodule AshOnetime.Token do
   def mint(_key, _options),
     do: {:error, Error.new(:invalid_key, "token key must be bytes")}
 
+  @doc """
+  Signs a minted token into a self-identifying wire string under the resolved key material.
+
+  `resolver` is a module implementing the key-resolution callback (`resolve/4` for `:sign`),
+  invoked as `resolver.resolve(:sign, token, resolver_context)` to obtain the signing
+  material. The body is canonical-encoded, signed by the token's algorithm (`HMAC` or
+  `Ed25519`), and wrapped in a base64url envelope prefixed `ash_onetime.`. The signature
+  binds exactly the canonical body bytes — the algorithm, key identifier, namespace, key,
+  issuance instant, and expiry.
+  """
   @spec sign(t(), module(), term()) :: result(binary())
   def sign(%__MODULE__{} = token, resolver, resolver_context) when is_atom(resolver) do
     with :ok <- validate_token(token),
@@ -84,6 +104,17 @@ defmodule AshOnetime.Token do
   def sign(_token, _resolver, _resolver_context),
     do: {:error, Error.new(:invalid_token, "token struct is invalid")}
 
+  @doc """
+  Verifies a wire token against expected algorithm and namespace, returning the bound token.
+
+  `options` MUST supply `:algorithm` and `:namespace` from outside the token (these are
+  replay-binding expectations, not token-supplied facts), and MAY supply `:max_age`,
+  `:clock_skew`, and `:resolver_context`. The body is re-derived, the expected algorithm and
+  namespace are bound against the token's, the window is validated, and the signature is
+  verified under the resolved key material (`resolver.resolve(:verify, token, context)`).
+  Every field of the decoded body is re-validated before the signature check, so a tampered
+  body cannot reach verification. Returns `{:ok, token}` or `{:error, %AshOnetime.Error{}}`.
+  """
   @spec verify(binary(), module(), keyword()) :: result(t())
   def verify(encoded, resolver, options)
       when is_binary(encoded) and is_atom(resolver) and is_list(options) do

@@ -9,22 +9,27 @@ defmodule AshOnetime.Store do
   @callback complete_external(term(), Claim.t(), binary(), binary(), binary()) :: Result.t()
   @callback load(term(), Claim.t()) :: Result.t()
 
+  @doc false
   @spec claim(term(), Claim.Request.t()) :: Result.t()
   def claim(target, request), do: Postgres.claim(target, request)
 
+  @doc false
   @spec claim_committed(term(), Claim.Request.t()) :: Result.t()
   def claim_committed(target, request), do: Postgres.claim_committed(target, request)
 
+  @doc false
   @spec complete(term(), Claim.t(), binary(), binary(), binary()) :: Result.t()
   def complete(target, claim, codec, digest, encoded_response) do
     Postgres.complete(target, claim, codec, digest, encoded_response)
   end
 
+  @doc false
   @spec complete_external(term(), Claim.t(), binary(), binary(), binary()) :: Result.t()
   def complete_external(target, claim, codec, digest, encoded_response) do
     Postgres.complete_external(target, claim, codec, digest, encoded_response)
   end
 
+  @doc false
   @spec load(term(), Claim.t()) :: Result.t()
   def load(target, claim), do: Postgres.load(target, claim)
 
@@ -34,9 +39,11 @@ defmodule AshOnetime.Store do
           payload_partitions: non_neg_integer()
         }
 
+  @doc false
   @spec cleanup(term(), pos_integer()) :: {:ok, cleanup_counts()} | Result.t()
   def cleanup(target, batch_size), do: cleanup(target, batch_size, 8)
 
+  @doc false
   @spec cleanup(term(), pos_integer(), non_neg_integer()) ::
           {:ok, cleanup_counts()} | Result.t()
   def cleanup(target, batch_size, partition_limit) do
