@@ -1,0 +1,36 @@
+<!-- forge-roadmap-schema: 1 -->
+
+# Roadmap
+
+Authored definitions only; status is DERIVED from `.forge/` machine state by
+`~/.claude/scripts/forge-roadmap.py --report` (run it to see the board). A row with no
+matching metrics/spec/plan is `DEFINED` — that is the work-list, not a missing status.
+
+Rows are grouped by priority: **H1x** security/correctness (P0), **H2x** hardening/ops (P1),
+**H3x** enhancement/coverage (P2). `Depends` names row IDs; cross-row joins are deliberate.
+
+## Security / correctness (P0 — do first)
+
+| ID | What | Acceptance | Depends | Why |
+|---|---|---|---|---|
+| H10 | **External-recovery adversarial-absence proof** — prove the re-execution invariant holds against an adapter that returns a well-formed lying `:absent`; today `safe_recover` (`lib/ash_onetime/external_recovery.ex:204`) trusts it unconditionally. slug:h10-external-recovery-absence-proof | (1) a property/contract test that feeds a lying-`:absent` adapter and asserts no double-spend of the side effect under a committed claim id; (2) a normative callout in `documentation/external-effects.md` stating the adapter MUST prove absence (the trust is inherent to the design — the gap is the untested worst case + the undocumented normative requirement, not a code rewrite). | — | [ADR-0001](adr/0001-single-use-keyed-effects.md) (the idempotency guarantee reduces to adapter honesty); ADR TBD — external-recovery trust-boundary decision |
+| H11 | **Committed-claim worker: distinguish timeout from disconnect** — the DPoP fence's 30s `@committed_claim_timeout` (`lib/ash_onetime/store/postgres.ex:13`) surfaces as `:dispatched_unknown -> :unknown` in `store_uncertainty` (`admission.ex:1012`), indistinguishable from a real disconnect (`operations.md:131-135`). slug:h11-worker-timeout-telemetry | (1) a distinct `:worker_timeout` result_class threaded from the timeout path through `emit_uncertainty` so `store_uncertainty` separates timeout from disconnect; (2) the operations.md triage note updated to name the new distinction; (3) a test asserting the two paths emit different classes. | — | ADR TBD — committed-claim worker observability (the headline v0.2.0 fence's operational hot-spot) |
+
+## Hardening / ops (P1)
+
+| ID | What | Acceptance | Depends | Why |
+|---|---|---|---|---|
+| H20 | **Oban worker backoff + discard alert** — `oban/{cleanup,partition,reap}_worker.ex` ship `max_attempts: 3` with no `backoff/1`; a discarded `PartitionWorker` strands a month of retention (`operations.md:89-95`). slug:h20-oban-worker-backoff | (1) an explicit bounded, jittered `backoff/1` on each worker; (2) a documented Oban-discard alert in `operations.md` keyed on the `:ash_onetime_*` queues. | — | ADR TBD — operational retention-safety (the one worker where retry timing matters most has the least-controlled retry) |
+| H21 | **Telemetry default handler / out-of-box metrics** — the library emits (`telemetry.ex:126`) but attaches nothing (zero `:telemetry.attach` in `lib/`); a fresh consumer sees nothing until they hand-roll a handler. slug:h21-telemetry-default-handler | (1) an opt-in `AshOnetime.Telemetry` attach helper (mirror `Ash.Telemetry` / `Oban.Telemetry`) or a documented `telemetry_poller` measurement; (2) the cache-degradation and store-uncertainty counters surface in a standard dashboard without custom code. | H11 | AGENTS.md contract ("idempotency must surface unavailability via telemetry") is met by emitting; this closes the gap to operationally usable |
+| H22 | **Telemetry span (start/stop) structure** — every event is a point event with `:duration`; no `*.start`/`*.stop`/`*.exception`, and `:failed` carries no structured reason (value-free by design, `telemetry.md:10-12`). slug:h22-telemetry-span-structure | either (a) `:admission.start`/`:admission.stop`/`:admission.exception` span events (atoms-only metadata to preserve the value-free guarantee), or (b) an explicit "span-style out of scope" decision documented in `telemetry.md` with a recommended wrapping `:telemetry.span`. | — | ADR TBD — observability model (p99/SLO work on a security path needs spans, not point events) |
+| H23 | **operations.md runbook section** — the doc describes failure-mode characteristics (pool pressure, the 30s timeout, the partition-window gap) but no "if X then Y" procedures. slug:h23-operations-runbook | a Runbooks section with named procedures (backlog-stuck, partition-discard-detected, pool-saturated) and the exact SQL/telemetry query each uses; partition-discard detection includes a query/alert (currently absent). | H11, H20 | the ops doc for a security library; the gaps map to H11/H20 directly |
+
+## Enhancement / coverage (P2)
+
+| ID | What | Acceptance | Depends | Why |
+|---|---|---|---|---|
+| H30 | **Ship an ETS cache reference adapter** — only `cache/none.ex` ships; the cache-degradation path (timeout/stale/failure/corrupt, `cache.ex:69-100`) is well-engineered and tested but unrealized without a reference adapter (the only ETS cache is a test fixture). slug:h30-ets-cache-adapter | `AshOnetime.Cache.Ets` (bounded, TTL-aware) as an optional reference adapter under the existing `AshOnetime.Cache` behaviour; the test fixture already proves the contract. | — | the cache feature's value is unreachable without a consumer-usable adapter |
+| H31 | **Direct unit tests for `admission.ex`** — the 1,165-line most security-critical module is exercised only transitively via integration tests; no `admission_test.exs`. slug:h31-admission-unit-tests | a focused `admission_test.exs` covering the pure decision functions (`resolve/5` branches, `sanitize_request`/`sanitize_claim` stripping) independent of a live Postgres. | — | a regression in `emit_uncertainty` or `sanitize_request` should surface directly, not via integration |
+| H32 | **Direct tests for `key_source.ex` + `store/claim.ex`** — `key_source.normalize/1` enforces 5 security-relevant invariants (non-empty, ≤16, no nesting, unique, valid tags) with no property tests. slug:h32-key-source-claim-tests | property tests for each `key_source` invariant boundary + structural tests for the `Claim`/`Claim.Request` structs. | — | input-validation rules on the security boundary worth property-testing |
+| H33 | **Document the runtime security-surface API** — the DSL (`resource.ex`) is excellently documented, but `token.ex` (`mint/sign/verify`), `store.ex` callbacks, `key_source.ex`, `fingerprint.ex`, and `telemetry.ex` carry `@spec` without `@doc`. slug:h33-runtime-api-docs | `@doc` on every spec-bearing public function in `token.ex`, `store.ex`, `key_source.ex`, `fingerprint.ex`, `telemetry.ex`; the security contract these expose is not obvious from the spec alone. | — | an undocumented public security surface is open risk |
+| H34 | **Dep-bound / CI-matrix documentation** — Ash floor is CVE-justified and sound, but `ash_postgres ~> 2.11` and `spark ~> 2.7` allow future majors that could shift transaction-visibility semantics the fail-closed logic depends on; the CI matrix is the real guard. slug:h34-dep-bound-docs | CONTRIBUTING.md documents that compatibility is CI-matrix-asserted (not bound-asserted), OR the bounds tighten; the current state is undocumented. | — | nothing currently protects against a future AshPostgres/Spark major shifting semantics the fail-closed logic depends on |
