@@ -263,10 +263,12 @@ defmodule AshOnetime.ArchitectureTest do
   #
   # The fix declares the genuinely-framework-injected exports per module and applies
   # the exempt set to BOTH sides of the comparison. Two drift directions fail loud:
-  #   - a project-owned export added/removed/arity-changed -> census FAILS loud
-  #     (the guard property the census exists to enforce is preserved);
+  #   - a project-owned export added/removed/arity-changed (for a name/arity NOT in
+  #     the exempt set) -> census FAILS loud (the guard property the census exists to
+  #     enforce is preserved for the project's actual public surface);
   #   - a NEW framework injection not listed here -> census FAILS loud, prompting
   #     deliberate triage rather than silent absorption.
+  # (Two inert-entry directions do NOT fail loud — see the limitations block below.)
   # Membership rule for this set: the framework injects the function AND the project
   # does not author or override it — so `message/1` (the project's `@impl true def`
   # that Splode only wraps via `__before_compile__`) and `exception/1` (the project's
