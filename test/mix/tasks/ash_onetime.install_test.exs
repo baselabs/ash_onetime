@@ -81,6 +81,124 @@ defmodule Mix.Tasks.AshOnetime.InstallTest do
              GenerateMigrations.render(Test.Repo, options)
   end
 
+  test "installer wires the extension and scaffolds an onetime block into the named resource" do
+    igniter =
+      test_project(
+        files: %{
+          "lib/test/repo.ex" => """
+          defmodule Test.Repo do
+            use Ecto.Repo, otp_app: :test, adapter: Ecto.Adapters.Postgres
+          end
+          """,
+          "lib/test/charge.ex" => """
+          defmodule Test.Charge do
+            use Ash.Resource,
+              domain: Test.Domain,
+              data_layer: AshPostgres.DataLayer
+
+            attributes do
+              uuid_primary_key :id
+            end
+          end
+          """
+        }
+      )
+      |> Igniter.compose_task("ash_onetime.install", [
+        "--repo",
+        "Test.Repo",
+        "--resource",
+        "Test.Charge",
+        "--timestamp",
+        @timestamp,
+        "--partition-start",
+        Date.to_iso8601(@partition_start)
+      ])
+
+    assert igniter.issues == []
+
+    charge = source!(igniter, "lib/test/charge.ex")
+
+    assert charge =~ "extensions: [AshOnetime.Resource]"
+    assert charge =~ "onetime do"
+  end
+
+  test "installer --resource is idempotent across re-runs" do
+    igniter =
+      test_project(
+        files: %{
+          "lib/test/repo.ex" => """
+          defmodule Test.Repo do
+            use Ecto.Repo, otp_app: :test, adapter: Ecto.Adapters.Postgres
+          end
+          """,
+          "lib/test/charge.ex" => """
+          defmodule Test.Charge do
+            use Ash.Resource,
+              domain: Test.Domain,
+              data_layer: AshPostgres.DataLayer
+
+            attributes do
+              uuid_primary_key :id
+            end
+          end
+          """
+        }
+      )
+      |> Igniter.compose_task("ash_onetime.install", [
+        "--repo",
+        "Test.Repo",
+        "--resource",
+        "Test.Charge",
+        "--timestamp",
+        @timestamp,
+        "--partition-start",
+        Date.to_iso8601(@partition_start)
+      ])
+
+    assert igniter.issues == []
+
+    rerun =
+      igniter
+      |> apply_igniter!()
+      |> Igniter.compose_task("ash_onetime.install", [
+        "--repo",
+        "Test.Repo",
+        "--resource",
+        "Test.Charge",
+        "--timestamp",
+        @timestamp,
+        "--partition-start",
+        Date.to_iso8601(@partition_start)
+      ])
+
+    assert diff(rerun) == ""
+  end
+
+  test "installer --resource fails loudly when the named resource is absent" do
+    igniter =
+      test_project(
+        files: %{
+          "lib/test/repo.ex" => """
+          defmodule Test.Repo do
+            use Ecto.Repo, otp_app: :test, adapter: Ecto.Adapters.Postgres
+          end
+          """
+        }
+      )
+      |> Igniter.compose_task("ash_onetime.install", [
+        "--repo",
+        "Test.Repo",
+        "--resource",
+        "Test.Nonexistent",
+        "--timestamp",
+        @timestamp,
+        "--partition-start",
+        Date.to_iso8601(@partition_start)
+      ])
+
+    assert Enum.any?(igniter.issues, &(&1 =~ "Test.Nonexistent"))
+  end
+
   test "installer rejects invalid partition boundaries and calendar timestamps" do
     invalid_partition =
       test_project()

@@ -5,15 +5,30 @@ if Code.ensure_loaded?(Igniter) do
 
         mix igniter.install ash_onetime --repo MyApp.Repo
 
-    Plug and Oban remain opt-in through `--with-plug` and `--with-oban`.
+    Plug and Oban remain opt-in through `--with-plug` and `--with-oban`. Pass
+    `--resource MyApp.MyResource` (repeatable) to wire `AshOnetime.Resource` into a resource
+    and scaffold a starter `onetime` block there; per-resource opt-in stays the default.
     """
 
     use Igniter.Mix.Task
 
+    alias Igniter.Code.{Common, Function}
     alias Igniter.Project.{Deps, Formatter}
     alias Mix.Tasks.AshOnetime.Gen.Migrations, as: GenerateMigrations
 
     @shortdoc "Installs ash_onetime into an Ecto project"
+
+    # A scaffolded, commented `onetime` block. An empty `onetime do end` compiles to "no
+    # protected actions", so the starter never protects an action the consumer did not name.
+    @starter_onetime_block ~s"""
+    onetime do
+      # protect :your_action do
+      #   strategy :idempotency | :one_time_nonce
+      # end
+      #
+      # See documentation/getting-started.md for the full protect-block shape.
+    end
+    """
 
     @impl Igniter.Mix.Task
     def info(_argv, _composing_task) do
@@ -22,6 +37,7 @@ if Code.ensure_loaded?(Igniter) do
         required: [:repo],
         schema: [
           repo: :string,
+          resource: :keep,
           claims: :string,
           claim_partitions: :integer,
           partition_start: :string,
@@ -58,6 +74,7 @@ if Code.ensure_loaded?(Igniter) do
         |> add_optional_dependency(options[:with_plug], {:plug, "~> 1.20"})
         |> add_optional_dependency(options[:with_oban], {:oban, "~> 2.23"})
         |> Igniter.create_new_file(path, source)
+        |> wire_resources(List.wrap(options[:resource]))
       else
         {:error, message} -> Igniter.add_issue(igniter, message)
       end
@@ -125,6 +142,47 @@ if Code.ensure_loaded?(Igniter) do
       do: Deps.add_dep(igniter, dependency)
 
     defp add_optional_dependency(igniter, _false, _dependency), do: igniter
+
+    # `--resource` is opt-in and repeatable. Each named resource gets the extension injected
+    # into its `use Ash.Resource` call and a starter `onetime` block scaffolded when absent.
+    # Per-resource opt-in stays the default, so the block ships empty (an empty `onetime do
+    # end` compiles to "no protected actions"); the protect-block shape is documented in the
+    # getting-started guide rather than auto-generated, so the installer never protects an
+    # action the consumer did not name.
+    defp wire_resources(igniter, []), do: igniter
+
+    defp wire_resources(igniter, [name | rest]) do
+      resource = Igniter.Project.Module.parse(name)
+
+      igniter
+      |> wire_resource(resource)
+      |> wire_resources(rest)
+    end
+
+    defp wire_resource(igniter, resource) do
+      {exists?, igniter} = Igniter.Project.Module.module_exists(igniter, resource)
+
+      if exists? do
+        igniter
+        |> Spark.Igniter.add_extension(resource, Ash.Resource, :extensions, AshOnetime.Resource)
+        |> scaffold_onetime_block(resource)
+      else
+        Igniter.add_issue(
+          igniter,
+          "--resource #{inspect(resource)} does not match a module in this project"
+        )
+      end
+    end
+
+    defp scaffold_onetime_block(igniter, resource) do
+      Igniter.Project.Module.find_and_update_module!(igniter, resource, fn zipper ->
+        case Function.move_to_function_call_in_current_scope(zipper, :onetime, 1) do
+          # An `onetime do ... end` block already exists; leave it untouched.
+          {:ok, _zipper} -> {:ok, zipper}
+          :error -> {:ok, Common.add_code(zipper, @starter_onetime_block)}
+        end
+      end)
+    end
   end
 else
   defmodule Mix.Tasks.AshOnetime.Install do
