@@ -94,6 +94,25 @@ any past-retention payloads that aged out while the roll was down. An exhausted 
 (`max_attempts: 3` discards persistent failures) leaves the same gap — monitor for discarded
 jobs and re-run the forward migration when the worker has been down across a month boundary.
 
+**Worker backoff and discard alert.** Each Oban worker (`CleanupWorker`, `PartitionWorker`,
+`ReapWorker`) declares a bounded, jittered `backoff/1` (30–120 s across the three attempts) rather
+than Oban's default exponential, so a transient failure — lock contention on the unique index, a
+slow query, a momentary checkout pressure — retries within minutes instead of pushing the next
+attempt to hours. A job that exhausts its 3 attempts is discarded; for the retention-critical
+`PartitionWorker` a discard strands a month of bounded retention. **Alert on discarded jobs:**
+
+```sql
+SELECT queue, attempt, max_attempts, inserted_at, discarded_at
+FROM oban_jobs
+WHERE state = 'discarded' AND queue IN ('ash_onetime_cleanup', 'ash_onetime_reap')
+  AND discarded_at > now() - interval '24 hours';
+```
+
+A discarded `PartitionWorker` is the signal to run `mix ash_onetime.gen.roll_forward` (its drain is
+idempotent). A rising discard rate on any of the three queues is contention — inspect
+`pg_stat_activity` for lock waits during the worker's window and consider raising the pool or
+scheduling the worker off-peak.
+
 A context-multitenant tenant prefix must be 1..63 bytes — PostgreSQL truncates identifiers at
 63 bytes (NAMEDATALEN), so a longer prefix could route two tenants to the same schema. Both
 admission and cleanup reject an out-of-range prefix (admission fails closed with

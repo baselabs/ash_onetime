@@ -12,6 +12,19 @@ if Code.ensure_loaded?(Oban.Worker) do
     alias AshOnetime.Store
     alias AshOnetime.Store.Postgres
 
+    # Bounded jittered backoff — see CleanupWorker for the rationale. This worker is the
+    # retention-safety path: a discarded job strands a month of bounded retention
+    # (operations.md). A bounded backoff retries transient failures within minutes so a
+    # single contention event does not exhaust the 3 attempts and discard the roll.
+    @base_backoff_seconds 30
+    @max_backoff_seconds 120
+
+    @impl Oban.Worker
+    def backoff(%Oban.Job{attempt: attempt}) do
+      delay = (@base_backoff_seconds * attempt) + :rand.uniform(@base_backoff_seconds) - 1
+      min(delay, @max_backoff_seconds)
+    end
+
     @impl Oban.Worker
     def perform(%Oban.Job{args: arguments}) when is_map(arguments) do
       with {:ok, repo} <- repo(arguments["repo"]),

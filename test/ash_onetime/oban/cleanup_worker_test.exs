@@ -55,6 +55,16 @@ defmodule AshOnetime.Oban.CleanupWorkerTest do
              CleanupWorker.perform(%Oban.Job{args: %{"repo" => "Missing.Repo"}})
   end
 
+  test "backoff is bounded and jittered so transient failures retry within minutes" do
+    # ROADMAP H20: bounded linear+jitter backoff in [30,120]s, not the default exponential.
+    for attempt <- 1..3 do
+      backoff = CleanupWorker.backoff(%Oban.Job{attempt: attempt})
+      assert is_integer(backoff)
+      assert backoff >= 30 * attempt
+      assert backoff <= 120
+    end
+  end
+
   defp insert_expired_nonce(prefix, label) do
     SQL.query!(
       Repo,

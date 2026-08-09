@@ -63,6 +63,16 @@ defmodule AshOnetime.Oban.ReapWorkerTest do
              })
   end
 
+  test "backoff is bounded and jittered so transient failures retry within minutes" do
+    # ROADMAP H20: bounded linear+jitter backoff in [30,120]s, not the default exponential.
+    for attempt <- 1..3 do
+      backoff = ReapWorker.backoff(%Oban.Job{attempt: attempt})
+      assert is_integer(backoff)
+      assert backoff >= 30 * attempt
+      assert backoff <= 120
+    end
+  end
+
   defp insert_abandoned(prefix, label) do
     claim_id = Ecto.UUID.generate()
 

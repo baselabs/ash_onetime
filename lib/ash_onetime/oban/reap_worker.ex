@@ -16,6 +16,18 @@ if Code.ensure_loaded?(Oban.Worker) do
     @abandonment_floor_seconds 86_400
     @max_abandonment_seconds 2_147_483_647
 
+    # Bounded jittered backoff — see CleanupWorker for the rationale. The reaper bounds
+    # steady-state growth of abandoned processing claims; a transient failure should retry
+    # within minutes rather than lengthening the reap cadence.
+    @base_backoff_seconds 30
+    @max_backoff_seconds 120
+
+    @impl Oban.Worker
+    def backoff(%Oban.Job{attempt: attempt}) do
+      delay = (@base_backoff_seconds * attempt) + :rand.uniform(@base_backoff_seconds) - 1
+      min(delay, @max_backoff_seconds)
+    end
+
     @impl Oban.Worker
     def perform(%Oban.Job{args: arguments}) when is_map(arguments) do
       with {:ok, repo} <- repo(arguments["repo"]),

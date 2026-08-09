@@ -9,6 +9,21 @@ if Code.ensure_loaded?(Oban.Worker) do
     alias AshOnetime.Store
     alias AshOnetime.Store.Postgres
 
+    # Bounded jittered backoff for a maintenance job doing DDL on the authoritative store.
+    # These are not request-path jobs — a transient failure (lock contention, a slow query,
+    # a momentary checkout pressure) should retry within minutes, not days. The default
+    # exponential backoff would push attempt 3 to ~hours, lengthening the window a cleanup
+    # is delayed; this bounded linear+jitter backoff retries in 30-60s, 60-90s, 90-120s —
+    # well inside the retention horizons the worker protects.
+    @base_backoff_seconds 30
+    @max_backoff_seconds 120
+
+    @impl Oban.Worker
+    def backoff(%Oban.Job{attempt: attempt}) do
+      delay = (@base_backoff_seconds * attempt) + :rand.uniform(@base_backoff_seconds) - 1
+      min(delay, @max_backoff_seconds)
+    end
+
     @impl Oban.Worker
     def perform(%Oban.Job{args: arguments}) when is_map(arguments) do
       with {:ok, repo} <- repo(arguments["repo"]),
