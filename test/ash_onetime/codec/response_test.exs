@@ -280,7 +280,8 @@ defmodule AshOnetime.Codec.ResponseTest do
     }
 
     for malformed <- [[1, 2], [:max_response_bytes], [{:max_response_bytes, 1}, 2]] do
-      assert {:error, %Error{code: :response_contract_invalid, message: "response limits are invalid"}} =
+      assert {:error,
+              %Error{code: :response_contract_invalid, message: "response limits are invalid"}} =
                Response.contract(Account, :create_account, response, %{limits: malformed})
     end
   end

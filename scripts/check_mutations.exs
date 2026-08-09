@@ -365,7 +365,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "structural-limits-map-take" => %{
       path: "lib/ash_onetime/codec.ex",
-      original: "    Map.merge(known, Map.take(Map.get(contract, :limits, %{}), Map.keys(known)))",
+      original:
+        "    Map.merge(known, Map.take(Map.get(contract, :limits, %{}), Map.keys(known)))",
       mutated: "    Map.merge(known, Map.get(contract, :limits, %{}))",
       test: "test/ash_onetime/codec/resource_test.exs",
       tag: "structural_limits_map_take_mutation",
