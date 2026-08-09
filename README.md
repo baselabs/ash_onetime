@@ -2,7 +2,28 @@
 
 `ash_onetime` is an Ash extension for explicit keyed-effect semantics. It separates
 replay-safe idempotency from collision-rejecting one-time nonces and uses PostgreSQL as the
-authoritative admission store.
+authoritative admissions store.
+
+## What it does
+
+Every protected action declares one strategy and a nonempty scope. PostgreSQL admits exactly
+once per key under the declared scope; the unique constraint — not application code — decides
+concurrent races. There is no admission pre-read.
+
+- **`:idempotency`** — execute the effect once per key, store the classified response, and
+  replay it verbatim on retries within the retention boundary. A conflicting fingerprint
+  (same key, different request) is terminal and never re-executes. The effect, the admission
+  claim, and the encoded response commit or roll back together in the action's transaction.
+- **`:one_time_nonce`** — authenticate a single opportunity and reject every collision. The
+  spend lives and dies with the action transaction by default; a retry must bear a fresh proof.
+- **`commit: :independent`** (nonce, opt-in, RFC 9449 §11.1) — the DPoP replay fence. The
+  nonce claim commits in its own transaction *before* the action body runs, so a downstream
+  failure cannot make the proof reusable. A reused proof is rejected with `:nonce_already_used`
+  for the acceptance window. Default-off; existing nonce consumers are byte-for-byte unchanged.
+
+Optional, non-admitting surfaces: a response cache, a Plug, Oban workers for cleanup and
+forward partition creation, and an external-effect execute/recover protocol for peers that
+need to observe or reverse a side effect.
 
 ## When to use this vs. hand-rolled idempotency
 
@@ -26,6 +47,69 @@ not want to re-derive the failure modes a hand-rolled table-plus-flag approach s
   [External effects](documentation/external-effects.md)). If you have no effectful action to
   protect, there is nothing to admit.
 
+## Quick start
+
+```elixir
+defmodule MyApp.Charge do
+  use Ash.Resource,
+    domain: MyApp.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshOnetime.Resource]
+
+  postgres do
+    table "charges"
+    repo MyApp.Repo
+  end
+
+  attributes do
+    uuid_primary_key :id
+    attribute :account_id, :uuid, allow_nil?: false, public?: true
+    attribute :amount, :integer, allow_nil?: false, public?: true
+  end
+
+  actions do
+    defaults [:read]
+
+    create :charge do
+      transaction? true
+      argument :idempotency_key, :string, allow_nil?: false
+      accept [:account_id, :amount]
+    end
+
+    # A DPoP-protected redemption: the proof's spend survives a downstream failure.
+    action :redeem, :integer do
+      transaction? true
+      argument :value, :integer, allow_nil?: false
+      argument :proof, :string, allow_nil?: false
+      run MyApp.Redeem
+    end
+  end
+
+  onetime do
+    protect :charge do
+      strategy :idempotency
+      scope([{:static, "charge"}, {:attribute, :account_id}])
+      key({:client, :idempotency_key})
+      fingerprint(attributes: [:account_id, :amount])
+      response(MyApp.ChargeCodec, fields: [:id, :account_id, :amount], classify: MyApp.Classifier)
+      retention({24, :hour})
+    end
+
+    protect :redeem do
+      strategy :one_time_nonce
+      scope([{:static, "redeem"}])
+      key({:verified, :proof, MyApp.ProofVerifier})
+      window(max_age: {5, :minute}, clock_skew: {30, :second})
+      commit :independent   # RFC 9449 §11.1 replay fence (omit for the default :with_action)
+    end
+  end
+end
+```
+
+Install with `mix ash_onetime.install` (Igniter-powered) — it wires the repo, generates the
+migration, and sets up the schema. See the
+[Getting started guide](documentation/getting-started.md) for the full walkthrough.
+
 ## Try it
 
 Runnable Livebook notebooks — one per concern — walk through each strategy against a real
@@ -33,7 +117,7 @@ PostgreSQL. Open them in [Livebook](https://livebook.dev), set `DATABASE_URL`, a
 cell. Each notebook's code is regression-pinned so it never ships broken.
 
 - [Idempotency](documentation/livebooks/idempotency.livemd) — fresh execution, replay, fingerprint conflict.
-- [One-time nonces](documentation/livebooks/nonces.livemd) — spend and reuse rejection.
+- [One-time nonces](documentation/livebooks/nonces.livemd) — spend, reuse rejection, and the `commit: :independent` replay fence.
 - [External effects and recovery](documentation/livebooks/external-recovery.livemd) — the execute/recover protocol.
 
 See [Security model](documentation/security.md) for the authority and fail-closed contract,
@@ -42,15 +126,13 @@ patterns.
 
 ## Status
 
-The package is [published on Hex](https://hex.pm/packages/ash_onetime) as v0.1.0 and the
+The package is [published on Hex](https://hex.pm/packages/ash_onetime) as v0.2.0 and the
 [source is public](https://github.com/baselabs/ash_onetime). Every protected action chooses
 `:idempotency` or `:one_time_nonce` and declares a nonempty scope; there is no default
 strategy or global scope fallback. PostgreSQL-authoritative admission, transactional Ash
 execution, typed replay, fail-closed nonce spending, signed tokens, external-effect recovery,
-bounded cleanup, optional cache/Plug/Oban integrations, and release gates are present. Nonce
-protections may opt into `commit: :independent` for [RFC 9449 (DPoP)](https://datatracker.ietf.org/doc/html/rfc9449#section-11.1)
-§11.1 replay fencing — a proof's spend survives action-body failure and rejects reuse for the
-acceptance window.
+bounded cleanup, optional cache/Plug/Oban integrations, the DPoP replay fence, and release
+gates are present.
 
 ## Compatibility
 

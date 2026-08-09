@@ -4,11 +4,15 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: b
 or contract changes bump the minor version (the library is pre-1.0), and each breaking
 change lands here with the exact edit to make.
 
-The published package is [v0.1.0](https://hex.pm/packages/ash_onetime). Set your dependency
+The published package is [v0.2.0](https://hex.pm/packages/ash_onetime). Set your dependency
 to the minor range to pick up patches automatically and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 0.1"}
+{:ash_onetime, "~> 0.2"}
+```
+
+```elixir
+{:ash_onetime, "~> 0.2"}
 ```
 
 ## Forward response-partition maintenance (apply once to existing installs)
@@ -40,25 +44,10 @@ survive action-body failure (RFC 9449 §11.1). See ADR-0003 (Independent-commit 
 pool-sizing notes. Declaring `commit:` on `:idempotency` is now a compile error (idempotency
 commits with its effect).
 
-## v0.2.0 — single `limits` surface (planned)
+## Single `limits` surface (shipped in v0.1.0)
 
-The dual `limits` surface collapses to one `protect`-level vocabulary. Response-size limits
-can no longer be declared on the `response` entity; declare them on `protect` instead.
-
-**Before (v0.1):**
-
-```elixir
-protect :charge do
-  strategy :idempotency
-  # ...
-  response MyApp.ChargeCodec,
-    fields: [:id, :status],
-    classify: MyApp.ChargeClassifier,
-    limits: [max_response_bytes: 8_388_608]
-end
-```
-
-**After (v0.2):**
+The dual `limits` surface collapsed to one `protect`-level vocabulary in v0.1.0. Response-size
+limits are declared on the `protect` block, not the `response` entity:
 
 ```elixir
 protect :charge do
@@ -73,8 +62,9 @@ The `protect limits:` option accepts the full 11-key union — the key/verificat
 keys (`max_key_bytes`, `max_token_bytes`, `max_scope_components`, `max_fingerprint_bytes`,
 `verifier_timeout_ms`, `max_cache_entry_bytes`) and the response-payload keys
 (`max_response_bytes`, `max_response_depth`, `max_response_nodes`, `max_response_entries`,
-`max_response_scalar_bytes`). All keys are validated at compile time; move any
-`response ..., limits: [max_response_*: ...]` onto `protect ..., limits: [...]`.
+`max_response_scalar_bytes`). All keys are validated at compile time. If you are upgrading
+from a pre-v0.1.0 snapshot, move any `response ..., limits: [max_response_*: ...]` onto
+`protect ..., limits: [...]`.
 
 This change is additive in coverage (no limit is lost) and removes a redundant configuration
 surface where two places could spell overlapping limits.

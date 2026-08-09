@@ -2,7 +2,11 @@
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## v0.2.0 — 2026-08-09
+
+Feature release: the DPoP replay fence, forward response-partition maintenance (SEC-5/6), and
+notebook-per-concern docs. New user-facing capabilities (minor bump); no contract break since
+v0.1.1 — existing consumers are unchanged, all new surfaces are opt-in.
 
 - **DPoP replay fence (admission):** add `commit: :independent` (default `:with_action`) on
   `:one_time_nonce` protections. When set, the nonce claim commits in its own transaction before
