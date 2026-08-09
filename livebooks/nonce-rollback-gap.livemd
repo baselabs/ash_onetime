@@ -1,0 +1,250 @@
+<!--
+livebook:{"persist_outputs":true}
+-->
+
+# DPoP replay-fence gap — a nonce spend rolls back with the action transaction
+
+> **This notebook demonstrates a current LIMITATION, not a feature.** It lives under `livebooks/`
+> (not packaged `documentation/`) because it shows a gap that will be closed by the independent-
+> commit replay-fence API. When that fence ships, this notebook should be deleted or rewritten.
+> The durable proof is the failing regression test that flips to passing when the fence lands.
+
+```elixir
+Mix.install(
+  [
+    {:ash_onetime, "~> 0.1"},
+    {:ash_postgres, "~> 2.11"},
+    {:kino, "~> 0.14", only: :dev}
+  ],
+  consolidate_protocols: false
+)
+```
+
+## The requirement (RFC 9449 DPoP)
+
+A DPoP proof carries a `jti` that must be unique per request. RFC 9449 §§4.2–4.3 require the
+server to retain the `jti` during the acceptance window and reject reuse. Critically, **once a
+valid proof has been observed, a downstream failure (e.g. token minting) must NOT make that
+proof reusable** — otherwise a client that retries after a transient mint failure spends the
+same proof twice.
+
+This notebook shows that `ash_onetime`'s current `:one_time_nonce` strategy does NOT meet that
+requirement, because the nonce claim commits **inside the protected action's transaction**. A
+failure in the action body rolls the claim back, so the same proof is re-admitted on retry.
+
+## Connect to PostgreSQL
+
+```elixir
+database_url =
+  System.get_env(
+    "DATABASE_URL",
+    "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+  )
+
+:ok = Application.put_env(:ash, :disable_async?, true)
+:ok = Application.put_env(:ash_onetime_demo, AshOnetimeDemo.Repo, url: database_url, pool_size: 10)
+```
+
+## Define the Repo, verifier, and a nonce action whose body fails
+
+The `:mint` action is protected by `:one_time_nonce` (the DPoP `jti` is the proof). Its body
+always fails — simulating a downstream token-mint failure AFTER the proof is spent.
+
+```elixir
+defmodule AshOnetimeDemo.Repo do
+  use AshPostgres.Repo, otp_app: :ash_onetime_demo
+
+  @impl AshPostgres.Repo
+  def installed_extensions, do: ["ash-functions"]
+
+  @impl AshPostgres.Repo
+  def min_pg_version, do: %Version{major: 18, minor: 0, patch: 0}
+end
+
+{:ok, _} = AshOnetimeDemo.Repo.start_link()
+```
+
+```elixir
+defmodule AshOnetimeDemo.ProofVerifier do
+  # Stands in for DPoP jti validation: trusts the proof string as the verified key.
+  def verify(proof, _context) when is_binary(proof) do
+    {:ok, %AshOnetime.Verified{key: proof, issued_at: DateTime.utc_now(), verifier_id: "dpop"}}
+  end
+
+  def algorithm, do: :ed25519
+  def trust_model, do: :separated
+end
+
+# The action body always fails — simulates a downstream mint failure.
+defmodule AshOnetimeDemo.FailingMint do
+  use Ash.Resource.Actions.Implementation
+
+  @impl true
+  def run(_input, _opts, _context),
+    do: {:error, AshOnetime.Error.new(:downstream_failed, "the token mint failed")}
+end
+
+defmodule AshOnetimeDemo.Domain do
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshOnetimeDemo.Token
+  end
+end
+
+defmodule AshOnetimeDemo.Token do
+  use Ash.Resource,
+    domain: AshOnetimeDemo.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshOnetime.Resource]
+
+  postgres do
+    table "demo_tokens"
+    repo AshOnetimeDemo.Repo
+  end
+
+  multitenancy do
+    strategy :context
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read]
+
+    action :mint, :integer do
+      transaction? true
+      argument :value, :integer, allow_nil?: false
+      argument :proof, :string, allow_nil?: false
+      run {AshOnetimeDemo.FailingMint, []}
+    end
+  end
+
+  onetime do
+    protect :mint do
+      strategy :one_time_nonce
+      scope([{:static, "dpop"}])
+      key({:verified, :proof, AshOnetimeDemo.ProofVerifier})
+      window(max_age: {1, :hour}, clock_skew: {5, :second})
+    end
+  end
+end
+
+:ok
+```
+
+## Install the admission store
+
+```elixir
+alias AshOnetimeDemo.Repo
+alias Ecto.Adapters.SQL
+
+unique = System.unique_integer([:positive])
+schema = "ash_onetime_demo_#{unique}"
+temp = Path.join(System.tmp_dir!(), "ash_onetime_demo_#{unique}")
+File.mkdir_p!(temp)
+
+source =
+  Mix.Tasks.AshOnetime.Gen.Migrations.render(Repo,
+    hash_partitions: nil,
+    partition_start: Date.utc_today() |> Date.beginning_of_month()
+  )
+
+timestamp = "20260101000000"
+path = Path.join(temp, "#{timestamp}_install_ash_onetime.exs")
+File.write!(path, source)
+[{module, _}] = Code.compile_file(path)
+version = String.to_integer(timestamp)
+
+SQL.query!(Repo, ~s{CREATE SCHEMA "#{schema}"}, [])
+:ok = Ecto.Migrator.up(Repo, version, module, prefix: schema, log: false)
+
+SQL.query!(Repo, ~s{CREATE TABLE IF NOT EXISTS "#{schema}"."demo_tokens" (id uuid PRIMARY KEY)}, [])
+{schema, version, module}
+```
+
+## First attempt: the proof is spent, then the mint fails
+
+The proof is admitted in `before_action` (the nonce claim commits), then the action body fails.
+The whole transaction — **including the nonce claim** — rolls back.
+
+<!-- livebook:{"output":true} -->
+
+```elixir
+{:error, error} =
+  AshOnetimeDemo.Token
+  |> Ash.ActionInput.for_action(:mint, %{value: 1, proof: "dpop-proof-1"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+
+AshOnetime.Error.code(error)
+```
+
+```
+:downstream_failed
+```
+
+<!-- livebook:{"output":true} -->
+
+```elixir
+%{rows: [[nonce_claims_after_fail]]} =
+  SQL.query!(Repo, ~s{SELECT count(*) FROM "#{schema}"."ash_onetime_nonce_claims"}, [])
+
+nonce_claims_after_fail
+```
+
+```
+0
+```
+
+**`0`** — the nonce claim rolled back with the action transaction. The proof's spend did not
+survive the body failure.
+
+## Second attempt: the SAME proof is re-admitted
+
+Because the spend rolled back, the same proof is admitted again — the action body runs a second
+time (and fails again). Under RFC 9449, this proof should have been **rejected** as reused.
+
+<!-- livebook:{"output":true} -->
+
+```elixir
+second =
+  AshOnetimeDemo.Token
+  |> Ash.ActionInput.for_action(:mint, %{value: 1, proof: "dpop-proof-1"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+
+second
+```
+
+```
+{:error, %AshOnetime.Error{code: :downstream_failed, message: "the token mint failed", ...}}
+```
+
+The second attempt ran the body again (it returned `:downstream_failed`, not `:nonce_already_used`).
+The proof was reusable — the gap.
+
+## Clean up
+
+```elixir
+:ok = Ecto.Migrator.down(Repo, version, module, prefix: schema, log: false)
+SQL.query!(Repo, ~s{DROP SCHEMA IF EXISTS "#{schema}" CASCADE}, [])
+File.rm_rf!(temp)
+:ok
+```
+
+## Why this happens, and the fix
+
+The nonce claim commits via `before_action` on the protected action's transaction connection
+(`lib/ash_onetime/change.ex` → `lib/ash_onetime/admission.ex` → `lib/ash_onetime/store/postgres.ex`,
+no inner transaction). So any failure after `before_action` — the action body, `after_action`
+hooks, a downstream mint — rolls the claim back.
+
+The fix is an admission mode whose claim commits **independently** of the action transaction
+(a `replay_fence` strategy or a `commit: :independent` option on `:one_time_nonce`), so the
+proof's spend survives action rollback. That mode deliberately breaks the "claim commits with
+the effect" invariant the rest of the library relies on for idempotency, so it needs its own
+T2 design note (see the handoff). This notebook and its regression test are the proof that gap
+is real and the fence is needed.

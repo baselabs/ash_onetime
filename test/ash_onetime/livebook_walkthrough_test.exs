@@ -1,6 +1,7 @@
 defmodule AshOnetime.LivebookWalkthroughTest do
   @moduledoc """
-  Pins the runnable walkthrough in documentation/livebooks/idempotency-and-nonces.livemd.
+  Pins the runnable code shape shared by the per-concern Livebook notebooks
+  (documentation/livebooks/{idempotency,nonces,external-recovery}.livemd).
 
   The consumer modules live in `test/support/livebook_examples.ex` (mirroring the livebook).
   This test installs the store via the same render/2 path the livebook documents, then asserts

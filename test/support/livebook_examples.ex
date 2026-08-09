@@ -49,6 +49,17 @@ defmodule AshOnetime.Test.LivebookExamples do
     def run(input, _opts, _context), do: {:ok, Ash.ActionInput.get_argument(input, :value)}
   end
 
+  # A nonce action's body that always fails — used to demonstrate that a nonce spend rolls
+  # back with the action transaction when the body (e.g. a downstream mint) errors.
+  defmodule FailRun do
+    @moduledoc false
+    use Ash.Resource.Actions.Implementation
+
+    @impl true
+    def run(_input, _opts, _context),
+      do: {:error, AshOnetime.Error.new(:downstream_failed, "the action body failed")}
+  end
+
   defmodule Domain do
     @moduledoc false
     use Ash.Domain, validate_config_inclusion?: false
@@ -103,6 +114,15 @@ defmodule AshOnetime.Test.LivebookExamples do
         argument :proof, :string, allow_nil?: false
         run {RedeemRun, []}
       end
+
+      # A nonce action whose body always fails — used to demonstrate that a nonce spend
+      # rolls back with the action transaction when the body (e.g. a downstream mint) errors.
+      action :redeem_fail, :integer do
+        transaction? true
+        argument :value, :integer, allow_nil?: false
+        argument :proof, :string, allow_nil?: false
+        run {FailRun, []}
+      end
     end
 
     onetime do
@@ -118,6 +138,13 @@ defmodule AshOnetime.Test.LivebookExamples do
       protect :redeem do
         strategy :one_time_nonce
         scope([{:static, "redeem"}])
+        key({:verified, :proof, ProofVerifier})
+        window(max_age: {1, :hour}, clock_skew: {5, :second})
+      end
+
+      protect :redeem_fail do
+        strategy :one_time_nonce
+        scope([{:static, "redeem_fail"}])
         key({:verified, :proof, ProofVerifier})
         window(max_age: {1, :hour}, clock_skew: {5, :second})
       end

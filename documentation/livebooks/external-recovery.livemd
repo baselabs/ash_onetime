@@ -1,0 +1,279 @@
+<!--
+livebook:{"persist_outputs":true}
+-->
+
+# External effects and recovery
+
+```elixir
+Mix.install(
+  [
+    {:ash_onetime, "~> 0.1"},
+    {:ash_postgres, "~> 2.11"},
+    {:kino, "~> 0.14", only: :dev}
+  ],
+  consolidate_protocols: false
+)
+```
+
+## What this notebook covers
+
+When an idempotent action has a **side effect outside the database** (an HTTP call to a payment
+provider, a message publish), the local transaction can commit before you know whether the
+peer accepted the effect. `ash_onetime`'s external-effect protocol makes that safe: it commits
+a recovery point, executes the peer effect, and on retry *recovers* the committed result rather
+than re-executing — and treats every ambiguous outcome as a failure (never retries the peer
+effect under a new decision).
+
+This notebook walks through the execute/recover protocol against a real PostgreSQL, using an
+in-memory ETS-backed peer adapter that stands in for your real external system.
+
+> Requires PostgreSQL 18 reachable at `DATABASE_URL`.
+>
+> **Note on persisted outputs:** the external-effect path commits its claim in a spawned
+> transaction, so this notebook's result cells are not pre-filled — run it in Livebook to see
+> the outputs. The code is regression-pinned by `test/ash_onetime/external_recovery_test.exs`.
+
+## Connect to PostgreSQL
+
+```elixir
+database_url =
+  System.get_env(
+    "DATABASE_URL",
+    "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+  )
+
+:ok = Application.put_env(:ash, :disable_async?, true)
+:ok = Application.put_env(:ash_onetime_demo, AshOnetimeDemo.Repo, url: database_url, pool_size: 10)
+```
+
+## Define the Repo and an ETS-backed external-effect peer
+
+The `AshOnetime.ExternalEffect` behaviour: `execute/3` runs the peer effect (returning
+`{:ok, result}` or `{:error, :outcome_unknown}`), `recover/3` asks the peer whether a prior
+effect landed (returning `{:ok, result}`, `:absent` = authoritative proof of no effect, or
+`:unknown`). Here an ETS table stands in for the peer's durable state.
+
+```elixir
+defmodule AshOnetimeDemo.Repo do
+  use AshPostgres.Repo, otp_app: :ash_onetime_demo
+
+  @impl AshPostgres.Repo
+  def installed_extensions, do: ["ash-functions"]
+
+  @impl AshPostgres.Repo
+  def min_pg_version, do: %Version{major: 18, minor: 0, patch: 0}
+end
+
+{:ok, _} = AshOnetimeDemo.Repo.start_link()
+```
+
+```elixir
+defmodule AshOnetimeDemo.PeerAdapter do
+  @moduledoc """
+  An in-memory ETS-backed external-effect peer for the demo. A real adapter talks to your
+  payment provider / message broker; the contract (execute/recover) is identical.
+  """
+  @behaviour AshOnetime.ExternalEffect
+  @table __MODULE__
+
+  def init do
+    if :ets.whereis(@table) == :undefined, do: :ets.new(@table, [:set, :public, :named_table])
+    :ok
+  end
+
+  def reset do
+    if :ets.whereis(@table) != :undefined, do: :ets.delete_all_objects(@table)
+    :ok
+  end
+
+  @impl true
+  def execute(operation_key, input, _context) do
+    value = Ash.ActionInput.get_argument(input, :value)
+    :ets.insert(@table, {operation_key, value})
+    {:ok, value}
+  end
+
+  @impl true
+  def recover(operation_key, _input, _context) do
+    case :ets.lookup(@table, operation_key) do
+      [{^operation_key, value}] -> {:ok, value}
+      [] -> :absent
+    end
+  end
+end
+
+defmodule AshOnetimeDemo.ChargeCodec do
+  @behaviour AshOnetime.Codec
+  @impl true
+  def format_tag, do: "charge-v1"
+  @impl true
+  def encode(value, _contract, _opts), do: {:ok, format_tag(), :erlang.term_to_binary(value)}
+  @impl true
+  def decode("charge-v1", payload, _contract, _opts), do: {:ok, :erlang.binary_to_term(payload, [:safe])}
+end
+
+defmodule AshOnetimeDemo.ChargeClassifier do
+  def classify(value, _context), do: {:store, value}
+end
+
+defmodule AshOnetimeDemo.RedeemRun do
+  use Ash.Resource.Actions.Implementation
+  @impl true
+  def run(input, _opts, _context), do: {:ok, Ash.ActionInput.get_argument(input, :value)}
+end
+
+AshOnetimeDemo.PeerAdapter.init()
+:ok
+```
+
+## Define the protected resource
+
+The `external_effect` option wires the peer adapter into an idempotent action. The action's
+effect runs through `execute`; retries recover.
+
+```elixir
+defmodule AshOnetimeDemo.Domain do
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshOnetimeDemo.ExternalRedeem
+  end
+end
+
+defmodule AshOnetimeDemo.ExternalRedeem do
+  use Ash.Resource,
+    domain: AshOnetimeDemo.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshOnetime.Resource]
+
+  postgres do
+    table "demo_external_redeem"
+    repo AshOnetimeDemo.Repo
+  end
+
+  multitenancy do
+    strategy :context
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read]
+
+    action :redeem, :integer do
+      transaction? true
+      argument :value, :integer, allow_nil?: false
+      argument :request_key, :string, allow_nil?: false
+      run {AshOnetimeDemo.RedeemRun, []}
+    end
+  end
+
+  onetime do
+    protect :redeem do
+      strategy :idempotency
+      scope([{:static, "external"}])
+      key({:client, :request_key})
+      fingerprint(arguments: [:value])
+      response(AshOnetimeDemo.ChargeCodec, fields: [], classify: AshOnetimeDemo.ChargeClassifier)
+      retention({1, :hour})
+      external_effect(AshOnetimeDemo.PeerAdapter)
+    end
+  end
+end
+
+:ok
+```
+
+## Install the admission store
+
+```elixir
+alias AshOnetimeDemo.Repo
+alias Ecto.Adapters.SQL
+
+unique = System.unique_integer([:positive])
+schema = "ash_onetime_demo_#{unique}"
+temp = Path.join(System.tmp_dir!(), "ash_onetime_demo_#{unique}")
+File.mkdir_p!(temp)
+
+source =
+  Mix.Tasks.AshOnetime.Gen.Migrations.render(Repo,
+    hash_partitions: nil,
+    partition_start: Date.utc_today() |> Date.beginning_of_month()
+  )
+
+timestamp = "20260101000000"
+path = Path.join(temp, "#{timestamp}_install_ash_onetime.exs")
+File.write!(path, source)
+[{module, _}] = Code.compile_file(path)
+version = String.to_integer(timestamp)
+
+SQL.query!(Repo, ~s{CREATE SCHEMA "#{schema}"}, [])
+:ok = Ecto.Migrator.up(Repo, version, module, prefix: schema, log: false)
+
+SQL.query!(
+  Repo,
+  """
+  CREATE TABLE IF NOT EXISTS "#{schema}"."demo_external_redeem" (
+    id uuid PRIMARY KEY
+  )
+  """,
+  []
+)
+
+AshOnetimeDemo.PeerAdapter.reset()
+{schema, version, module}
+```
+
+## Execute: the first attempt runs the peer effect
+
+```elixir
+{:ok, value} =
+  AshOnetimeDemo.ExternalRedeem
+  |> Ash.ActionInput.for_action(:redeem, %{value: 42, request_key: "ext-1"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+
+value
+```
+
+## Retry: recover finds the committed peer effect (no second execute)
+
+A retry with the same `request_key` recovers the effect the peer already accepted. The peer's
+`execute` does NOT run a second time — `recover` returned the committed result.
+
+```elixir
+{:ok, replayed} =
+  AshOnetimeDemo.ExternalRedeem
+  |> Ash.ActionInput.for_action(:redeem, %{value: 42, request_key: "ext-1"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+
+%{value: replayed, replayed?: AshOnetime.replayed?(replayed)}
+```
+
+## The ambiguous-outcome contract
+
+If both `execute` and `recover` return unknown (the peer is unreachable and can't confirm
+whether the effect landed), the claim settles to `{:error, :outcome_unknown}` and stays
+`processing`. The library **never retries the peer effect under a new decision** — the claim
+is recovered later by retry or the reaper, never double-executed. This is the conservative
+contract that prevents a second side effect when the first's outcome is uncertain. (Simulating
+a broken peer requires a second adapter; see `test/ash_onetime/external_recovery_test.exs` for
+the full execute/recover/absent/ambiguous matrix.)
+
+## Clean up
+
+```elixir
+:ok = Ecto.Migrator.down(Repo, version, module, prefix: schema, log: false)
+SQL.query!(Repo, ~s{DROP SCHEMA IF EXISTS "#{schema}" CASCADE}, [])
+File.rm_rf!(temp)
+:ok
+```
+
+## Where to next
+
+- [Idempotency](idempotency.livemd) and [One-time nonces](nonces.livemd).
+- [External effects guide](https://hexdocs.pm/ash_onetime/external-effects.html).
+- [Security model](https://hexdocs.pm/ash_onetime/security.html) — the recovery contract.

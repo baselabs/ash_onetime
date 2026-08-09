@@ -100,8 +100,9 @@ end
   strategies in depth.
 - [External effects and recovery](external-effects.md) — committing side effects safely.
 - [Security model](security.md) — authority, fail-closed behavior, and the guarantees.
-- [Livebook walkthrough](livebooks/idempotency-and-nonces.livemd) — run both strategies
-  end-to-end in Livebook against a real PostgreSQL.
+- [Livebook notebooks](livebooks/idempotency.livemd) — run each strategy end-to-end in
+  Livebook against a real PostgreSQL: [idempotency](livebooks/idempotency.livemd),
+  [nonces](livebooks/nonces.livemd), [external recovery](livebooks/external-recovery.livemd).
 
 ## Developing on `ash_onetime` itself
 

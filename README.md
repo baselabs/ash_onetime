@@ -28,13 +28,13 @@ not want to re-derive the failure modes a hand-rolled table-plus-flag approach s
 
 ## Try it
 
-A complete, runnable walkthrough of both strategies lives in
-[the livebook](documentation/livebooks/idempotency-and-nonces.livemd). It installs the store
-into an isolated schema and walks through fresh idempotent execution, stored-result replay, a
-fingerprint conflict, one-time nonce spend and reuse, and telemetry — against a real
-PostgreSQL. Open it in [Livebook](https://livebook.dev), set `DATABASE_URL`, and run every
-cell. The walkthrough is regression-pinned by `test/ash_onetime/livebook_walkthrough_test.exs`
-so the livebook never ships broken.
+Runnable Livebook notebooks — one per concern — walk through each strategy against a real
+PostgreSQL. Open them in [Livebook](https://livebook.dev), set `DATABASE_URL`, and run every
+cell. Each notebook's code is regression-pinned so it never ships broken.
+
+- [Idempotency](documentation/livebooks/idempotency.livemd) — fresh execution, replay, fingerprint conflict.
+- [One-time nonces](documentation/livebooks/nonces.livemd) — spend and reuse rejection.
+- [External effects and recovery](documentation/livebooks/external-recovery.livemd) — the execute/recover protocol.
 
 See [Security model](documentation/security.md) for the authority and fail-closed contract,
 and [Recipes](documentation/recipes.md) for end-to-end payment, webhook, and redemption
@@ -122,7 +122,7 @@ end
 - [Telemetry](documentation/telemetry.md)
 - [Upgrading](documentation/upgrading.md)
 - [FAQ](documentation/faq.md)
-- [Livebook walkthrough](documentation/livebooks/idempotency-and-nonces.livemd)
+- Livebook notebooks: [Idempotency](documentation/livebooks/idempotency.livemd) · [Nonces](documentation/livebooks/nonces.livemd) · [External recovery](documentation/livebooks/external-recovery.livemd)
 - [Generated Spark DSL reference](documentation/dsls/DSL-AshOnetime.Resource.md)
 
 ## License

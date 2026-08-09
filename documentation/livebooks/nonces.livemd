@@ -1,0 +1,228 @@
+<!--
+livebook:{"persist_outputs":true}
+-->
+
+# One-time nonces — at-most-once admission
+
+```elixir
+Mix.install(
+  [
+    {:ash_onetime, "~> 0.1"},
+    {:ash_postgres, "~> 2.11"},
+    {:kino, "~> 0.14", only: :dev}
+  ],
+  consolidate_protocols: false
+)
+```
+
+## What this notebook covers
+
+A one-time nonce protects a request against replay. The first spend of a verified proof
+succeeds; every reuse is rejected. There is no stored result to replay — only a fail-closed
+spend. Use this when an action must run *at most once* even if the client retries (single-use
+redemptions, anti-replay of a captured request).
+
+This notebook walks through the spend and the reuse rejection — against a real PostgreSQL.
+
+> Requires PostgreSQL 18 reachable at `DATABASE_URL`.
+
+## Connect to PostgreSQL
+
+```elixir
+database_url =
+  System.get_env(
+    "DATABASE_URL",
+    "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+  )
+
+:ok = Application.put_env(:ash, :disable_async?, true)
+:ok = Application.put_env(:ash_onetime_demo, AshOnetimeDemo.Repo, url: database_url, pool_size: 10)
+```
+
+## Define the Repo, verifier, and resource
+
+```elixir
+defmodule AshOnetimeDemo.Repo do
+  use AshPostgres.Repo, otp_app: :ash_onetime_demo
+
+  @impl AshPostgres.Repo
+  def installed_extensions, do: ["ash-functions"]
+
+  @impl AshPostgres.Repo
+  def min_pg_version, do: %Version{major: 18, minor: 0, patch: 0}
+end
+
+{:ok, _} = AshOnetimeDemo.Repo.start_link()
+```
+
+```elixir
+# A verifier turns raw proof material into trusted AshOnetime.Verified facts.
+# In production this checks a real signature; here we trust the input for the demo.
+defmodule AshOnetimeDemo.ProofVerifier do
+  def verify(proof, _context) when is_binary(proof) do
+    {:ok,
+     %AshOnetime.Verified{
+       key: proof,
+       issued_at: DateTime.utc_now(),
+       verifier_id: "demo-verifier"
+     }}
+  end
+
+  def algorithm, do: :ed25519
+  def trust_model, do: :separated
+end
+
+# A protected generic action's `run` must be a module-based implementation.
+defmodule AshOnetimeDemo.RedeemRun do
+  use Ash.Resource.Actions.Implementation
+
+  @impl true
+  def run(input, _opts, _context), do: {:ok, Ash.ActionInput.get_argument(input, :value)}
+end
+
+defmodule AshOnetimeDemo.Domain do
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshOnetimeDemo.Redeemable
+  end
+end
+
+defmodule AshOnetimeDemo.Redeemable do
+  use Ash.Resource,
+    domain: AshOnetimeDemo.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshOnetime.Resource]
+
+  postgres do
+    table "demo_redeemables"
+    repo AshOnetimeDemo.Repo
+  end
+
+  multitenancy do
+    strategy :context
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read]
+
+    action :redeem, :integer do
+      transaction? true
+      argument :value, :integer, allow_nil?: false
+      argument :proof, :string, allow_nil?: false
+      run {AshOnetimeDemo.RedeemRun, []}
+    end
+  end
+
+  onetime do
+    protect :redeem do
+      strategy :one_time_nonce
+      scope([{:static, "redeem"}])
+      key({:verified, :proof, AshOnetimeDemo.ProofVerifier})
+      window(max_age: {1, :hour}, clock_skew: {5, :second})
+    end
+  end
+end
+
+:ok
+```
+
+## Install the admission store
+
+```elixir
+alias AshOnetimeDemo.Repo
+alias Ecto.Adapters.SQL
+
+unique = System.unique_integer([:positive])
+schema = "ash_onetime_demo_#{unique}"
+temp = Path.join(System.tmp_dir!(), "ash_onetime_demo_#{unique}")
+File.mkdir_p!(temp)
+
+source =
+  Mix.Tasks.AshOnetime.Gen.Migrations.render(Repo,
+    hash_partitions: nil,
+    partition_start: Date.utc_today() |> Date.beginning_of_month()
+  )
+
+timestamp = "20260101000000"
+path = Path.join(temp, "#{timestamp}_install_ash_onetime.exs")
+File.write!(path, source)
+[{module, _}] = Code.compile_file(path)
+version = String.to_integer(timestamp)
+
+SQL.query!(Repo, ~s{CREATE SCHEMA "#{schema}"}, [])
+:ok = Ecto.Migrator.up(Repo, version, module, prefix: schema, log: false)
+
+# The business resource table (the redeemable has only an id; the nonce action is a generic
+# action with no row, but the resource still needs its table for read defaults).
+SQL.query!(
+  Repo,
+  """
+  CREATE TABLE IF NOT EXISTS "#{schema}"."demo_redeemables" (
+    id uuid PRIMARY KEY
+  )
+  """,
+  []
+)
+
+{schema, version, module}
+```
+
+## Spend once
+
+The first `:redeem` spends the proof and runs the action body.
+
+<!-- livebook:{"output":true} -->
+
+```elixir
+{:ok, value} =
+  AshOnetimeDemo.Redeemable
+  |> Ash.ActionInput.for_action(:redeem, %{value: 7, proof: "proof-once"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+
+value
+```
+
+```
+7
+```
+
+## Reuse is rejected
+
+Reusing the same `proof` is rejected as `:nonce_already_used`. The action body does not run.
+
+<!-- livebook:{"output":true} -->
+
+```elixir
+{:error, error} =
+  AshOnetimeDemo.Redeemable
+  |> Ash.ActionInput.for_action(:redeem, %{value: 7, proof: "proof-once"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+
+AshOnetime.Error.code(error)
+```
+
+```
+:nonce_already_used
+```
+
+## Clean up
+
+```elixir
+:ok = Ecto.Migrator.down(Repo, version, module, prefix: schema, log: false)
+SQL.query!(Repo, ~s{DROP SCHEMA IF EXISTS "#{schema}" CASCADE}, [])
+File.rm_rf!(temp)
+:ok
+```
+
+## Where to next
+
+- [Idempotency](idempotency.livemd) — safe retries with stored-result replay.
+- [External effects and recovery](external-recovery.livemd) — committing side effects safely.
+- [One-time nonces guide](https://hexdocs.pm/ash_onetime/one-time-nonces.html).

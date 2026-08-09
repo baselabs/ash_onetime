@@ -1,0 +1,257 @@
+<!--
+livebook:{"persist_outputs":true}
+-->
+
+# Idempotency — store-and-replay
+
+```elixir
+Mix.install(
+  [
+    {:ash_onetime, "~> 0.1"},
+    {:ash_postgres, "~> 2.11"},
+    {:kino, "~> 0.14", only: :dev}
+  ],
+  consolidate_protocols: false
+)
+```
+
+## What this notebook covers
+
+Idempotency is for **safe retries of an effectful action**. The first execution runs the effect
+and stores its result; a retry with the same key replays the stored result without re-executing.
+A retry with the same key but a *changed* request is a terminal conflict, never a replay.
+
+This notebook walks through fresh execution, replay, and the fingerprint conflict — against a
+real PostgreSQL. Run each cell top to bottom.
+
+> Requires PostgreSQL 18 reachable at `DATABASE_URL`.
+
+## Connect to PostgreSQL
+
+```elixir
+database_url =
+  System.get_env(
+    "DATABASE_URL",
+    "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+  )
+
+:ok = Application.put_env(:ash, :disable_async?, true)
+:ok = Application.put_env(:ash_onetime_demo, AshOnetimeDemo.Repo, url: database_url, pool_size: 10)
+```
+
+## Define the Repo, codec, classifier, and resource
+
+```elixir
+defmodule AshOnetimeDemo.Repo do
+  use AshPostgres.Repo, otp_app: :ash_onetime_demo
+
+  @impl AshPostgres.Repo
+  def installed_extensions, do: ["ash-functions"]
+
+  @impl AshPostgres.Repo
+  def min_pg_version, do: %Version{major: 18, minor: 0, patch: 0}
+end
+
+{:ok, _} = AshOnetimeDemo.Repo.start_link()
+```
+
+```elixir
+defmodule AshOnetimeDemo.ChargeCodec do
+  @behaviour AshOnetime.Codec
+
+  @impl true
+  def format_tag, do: "charge-v1"
+
+  @impl true
+  def encode(value, _contract, _opts),
+    do: {:ok, format_tag(), :erlang.term_to_binary(value)}
+
+  @impl true
+  def decode("charge-v1", payload, _contract, _opts),
+    do: {:ok, :erlang.binary_to_term(payload, [:safe])}
+end
+
+defmodule AshOnetimeDemo.ChargeClassifier do
+  def classify(value, _context), do: {:store, value}
+end
+
+defmodule AshOnetimeDemo.Domain do
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshOnetimeDemo.Charge
+  end
+end
+
+defmodule AshOnetimeDemo.Charge do
+  use Ash.Resource,
+    domain: AshOnetimeDemo.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshOnetime.Resource]
+
+  postgres do
+    table "demo_charges"
+    repo AshOnetimeDemo.Repo
+  end
+
+  multitenancy do
+    strategy :context
+  end
+
+  attributes do
+    uuid_primary_key :id
+    attribute :account_id, :uuid, allow_nil?: false, public?: true
+    attribute :amount, :integer, allow_nil?: false, public?: true
+  end
+
+  actions do
+    defaults [:read]
+
+    create :charge do
+      transaction? true
+      argument :idempotency_key, :string, allow_nil?: false
+      accept [:account_id, :amount]
+    end
+  end
+
+  onetime do
+    protect :charge do
+      strategy :idempotency
+      scope([{:static, "charge"}, {:attribute, :account_id}])
+      key({:client, :idempotency_key})
+      fingerprint(attributes: [:account_id, :amount])
+      response(AshOnetimeDemo.ChargeCodec,
+        fields: [:id, :account_id, :amount],
+        classify: AshOnetimeDemo.ChargeClassifier
+      )
+      retention({1, :hour})
+    end
+  end
+end
+
+:ok
+```
+
+## Install the admission store
+
+```elixir
+alias AshOnetimeDemo.Repo
+alias Ecto.Adapters.SQL
+
+unique = System.unique_integer([:positive])
+schema = "ash_onetime_demo_#{unique}"
+temp = Path.join(System.tmp_dir!(), "ash_onetime_demo_#{unique}")
+File.mkdir_p!(temp)
+
+source =
+  Mix.Tasks.AshOnetime.Gen.Migrations.render(Repo,
+    hash_partitions: nil,
+    partition_start: Date.utc_today() |> Date.beginning_of_month()
+  )
+
+timestamp = "20260101000000"
+path = Path.join(temp, "#{timestamp}_install_ash_onetime.exs")
+File.write!(path, source)
+[{module, _}] = Code.compile_file(path)
+version = String.to_integer(timestamp)
+
+SQL.query!(Repo, ~s{CREATE SCHEMA "#{schema}"}, [])
+:ok = Ecto.Migrator.up(Repo, version, module, prefix: schema, log: false)
+
+SQL.query!(
+  Repo,
+  """
+  CREATE TABLE IF NOT EXISTS "#{schema}"."demo_charges" (
+    id uuid PRIMARY KEY,
+    account_id uuid NOT NULL,
+    amount bigint NOT NULL
+  )
+  """,
+  []
+)
+
+{schema, version, module}
+```
+
+## Fresh execution
+
+The first `:charge` runs the effect and stores its result. `replayed?/1` is `false`.
+
+<!-- livebook:{"output":true} -->
+
+```elixir
+account_id = "00000000-0000-0000-0000-000000000001"
+
+{:ok, fresh} =
+  AshOnetimeDemo.Charge
+  |> Ash.Changeset.for_create(:charge, %{account_id: account_id, amount: 10, idempotency_key: "key-1"})
+  |> Ash.Changeset.set_tenant(schema)
+  |> Ash.create()
+
+%{amount: fresh.amount, replayed?: AshOnetime.replayed?(fresh)}
+```
+
+```
+%{amount: 10, replayed?: false}
+```
+
+## Retry replays the stored result
+
+The same `idempotency_key` with the same content returns the *stored* record. `replayed?/1`
+flips to `true`, and only one row exists — the effect ran once.
+
+<!-- livebook:{"output":true} -->
+
+```elixir
+{:ok, replayed} =
+  AshOnetimeDemo.Charge
+  |> Ash.Changeset.for_create(:charge, %{account_id: account_id, amount: 10, idempotency_key: "key-1"})
+  |> Ash.Changeset.set_tenant(schema)
+  |> Ash.create()
+
+%{
+  same_record: replayed.id == fresh.id,
+  replayed?: AshOnetime.replayed?(replayed),
+  rows: SQL.query!(Repo, ~s{SELECT count(*) FROM "#{schema}"."demo_charges"}, []).rows |> hd() |> hd()
+}
+```
+
+```
+%{replayed?: true, rows: 1, same_record: true}
+```
+
+## Same key, different request → terminal conflict
+
+Reusing `idempotency_key` with a changed `amount` is rejected as
+`:key_reused_with_different_request`. The effect does not run again.
+
+<!-- livebook:{"output":true} -->
+
+```elixir
+{:error, error} =
+  AshOnetimeDemo.Charge
+  |> Ash.Changeset.for_create(:charge, %{account_id: account_id, amount: 99, idempotency_key: "key-1"})
+  |> Ash.Changeset.set_tenant(schema)
+  |> Ash.create()
+
+AshOnetime.Error.code(error)
+```
+
+```
+:key_reused_with_different_request
+```
+
+## Clean up
+
+```elixir
+:ok = Ecto.Migrator.down(Repo, version, module, prefix: schema, log: false)
+SQL.query!(Repo, ~s{DROP SCHEMA IF EXISTS "#{schema}" CASCADE}, [])
+File.rm_rf!(temp)
+:ok
+```
+
+## Where to next
+
+- [One-time nonces](nonces.livemd) — at-most-once admission, not replay.
+- [External effects and recovery](external-recovery.livemd) — committing side effects safely.
+- [Idempotency guide](https://hexdocs.pm/ash_onetime/idempotency.html).

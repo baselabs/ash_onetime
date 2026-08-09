@@ -25,10 +25,10 @@ All notable changes to this project are documented here.
 Adoption polish: a runnable Livebook walkthrough, richer Igniter installer, and adoption docs.
 No contract change; safe minor bump from v0.1.0.
 
-- Add a runnable [Livebook walkthrough](documentation/livebooks/idempotency-and-nonces.livemd)
-  covering idempotency (fresh, replay, fingerprint conflict) and one-time nonces (spend, reuse
-  rejection) end-to-end against a real PostgreSQL, plus the value-free telemetry surface. The
-  walkthrough is regression-pinned by `test/ash_onetime/livebook_walkthrough_test.exs`.
+- Add runnable [Livebook notebooks](documentation/livebooks/idempotency.livemd) — one per
+  concern (idempotency, one-time nonces, external recovery) — covering fresh execution, replay,
+  fingerprint conflict, nonce spend/reuse, and the external-effect protocol end-to-end against a
+  real PostgreSQL. Each notebook's code is regression-pinned by `test/ash_onetime/livebook_walkthrough_test.exs`.
 - Extend the Igniter installer with a repeatable `--resource MyApp.MyResource` flag that wires
   `AshOnetime.Resource` into a resource and scaffolds a starter `onetime` block. Non-resource
   targets and missing modules are rejected loudly instead of silently no-op'ing.
