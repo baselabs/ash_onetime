@@ -163,14 +163,50 @@ if Code.ensure_loaded?(Igniter) do
       {exists?, igniter} = Igniter.Project.Module.module_exists(igniter, resource)
 
       if exists? do
-        igniter
-        |> Spark.Igniter.add_extension(resource, Ash.Resource, :extensions, AshOnetime.Resource)
-        |> scaffold_onetime_block(resource)
+        # `resource?/2` may initialize the module index on the igniter it returns, so thread
+        # that igniter forward and fail loud if the target is not an Ash.Resource rather than
+        # silently injecting a non-compiling `onetime` block into it.
+        {is_resource?, igniter} = resource?(igniter, resource)
+
+        if is_resource? do
+          igniter
+          |> Spark.Igniter.add_extension(resource, Ash.Resource, :extensions, AshOnetime.Resource)
+          |> scaffold_onetime_block(resource)
+        else
+          Igniter.add_issue(
+            igniter,
+            "--resource #{inspect(resource)} is not an Ash.Resource"
+          )
+        end
       else
         Igniter.add_issue(
           igniter,
           "--resource #{inspect(resource)} does not match a module in this project"
         )
+      end
+    end
+
+    # A target qualifies for wiring only if it declares `use Ash.Resource`. This mirrors the
+    # `move_to_use` precondition that `Spark.Igniter.add_extension/5` silently no-ops without,
+    # so a non-resource (e.g. an Ash.Domain) is rejected explicitly instead of receiving a
+    # stray `onetime` block it cannot compile. Returns `{boolean, igniter}` because
+    # `find_module/2` may mutate the igniter (module index) and its contract forbids discarding
+    # it. Read-only on the source: `find_module` returns the zipper without staging an edit.
+    defp resource?(igniter, resource) do
+      case Igniter.Project.Module.find_module(igniter, resource) do
+        {:ok, {igniter, _source, zipper}} ->
+          is_resource? =
+            with {:ok, zipper} <- Common.move_to_do_block(zipper),
+                 {:ok, _} <- Igniter.Code.Module.move_to_use(zipper, Ash.Resource) do
+              true
+            else
+              _ -> false
+            end
+
+          {is_resource?, igniter}
+
+        {:error, igniter} ->
+          {false, igniter}
       end
     end
 

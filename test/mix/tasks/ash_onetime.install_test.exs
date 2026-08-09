@@ -199,6 +199,42 @@ defmodule Mix.Tasks.AshOnetime.InstallTest do
     assert Enum.any?(igniter.issues, &(&1 =~ "Test.Nonexistent"))
   end
 
+  test "installer --resource fails loudly when the named module is not an Ash.Resource" do
+    igniter =
+      test_project(
+        files: %{
+          "lib/test/repo.ex" => """
+          defmodule Test.Repo do
+            use Ecto.Repo, otp_app: :test, adapter: Ecto.Adapters.Postgres
+          end
+          """,
+          "lib/test/domain.ex" => """
+          defmodule Test.Domain do
+            use Ash.Domain
+          end
+          """
+        }
+      )
+      |> Igniter.compose_task("ash_onetime.install", [
+        "--repo",
+        "Test.Repo",
+        "--resource",
+        "Test.Domain",
+        "--timestamp",
+        @timestamp,
+        "--partition-start",
+        Date.to_iso8601(@partition_start)
+      ])
+
+    assert Enum.any?(igniter.issues, &(&1 =~ "Ash.Resource"))
+
+    # A non-resource must not be touched: no stray extension, no stray onetime block.
+    domain = source!(igniter, "lib/test/domain.ex")
+
+    refute domain =~ "extensions:"
+    refute domain =~ "onetime do"
+  end
+
   test "installer rejects invalid partition boundaries and calendar timestamps" do
     invalid_partition =
       test_project()
