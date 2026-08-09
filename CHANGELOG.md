@@ -2,6 +2,50 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.4.0 — 2026-08-09
+
+Hardening, ops-readiness, and enhancement release. No breaking contract change for existing
+consumers — the minor bump carries new public observability surfaces (the telemetry default
+attach helper, the `:worker_timeout` result class, the ETS cache reference adapter) and the
+span-events-out-of-scope decision. Existing consumers are unchanged; all new surfaces are
+opt-in.
+
+- **External-recovery adversarial-absence proof (H10):** a test proving the re-execution
+  invariant against a lying-`:absent` adapter, plus a normative section in
+  `documentation/external-effects.md` stating the adapter MUST prove absence and the peer
+  MUST enforce idempotency by operation key. No runtime guard — the trust is inherent to the
+  design (ADR-0001). The library's `:absent` trust is safe against a correct peer.
+- **Worker timeout distinguished from disconnect (H11):** the committed-claim worker's 30s
+  timeout now surfaces as a distinct `:worker_timeout` result_class on
+  `[:ash_onetime, :store_uncertainty]`, separate from `:disconnected` and `:unknown`. All
+  three fail closed; the distinction is operational triage (pool/lock contention vs network
+  partition).
+- **Oban worker backoff + discard alert (H20, ADR-0005):** the three maintenance workers
+  (Cleanup, Partition, Reap) declare a bounded, jittered `backoff/1` (30–120 s) instead of
+  the default exponential, so transient failures retry within the retention window. A
+  documented discard-alert SQL names the operational signal for a stranded partition roll.
+- **Telemetry default attach handler (H21):** `AshOnetime.Telemetry.attach/0` — an opt-in
+  helper routing the closed event surface into a downstream `:metric` stream for a
+  consumer's own aggregator. No `telemetry_metrics` dependency; the value-free invariant is
+  preserved.
+- **Telemetry span structure (H22):** documented that the library emits point events only
+  (never span events), with the reason (`:telemetry.span/3` cannot preserve the value-free
+  invariant — it force-injects `telemetry_span_context` and fires `:exception` inside the
+  span before any caller rescue) and a recommended consumer-applied `:telemetry.span/3`
+  wrapper.
+- **Operations runbook (H23):** three named procedures (backlog-stuck,
+  partition-discard-detected, pool-saturated) with exact SQL/telemetry queries.
+- **ETS cache reference adapter (H30):** `AshOnetime.Cache.Ets` — bounded, TTL-aware,
+  supervised, no third-party dependency. Makes the cache-degradation path reachable without
+  a Redis dependency.
+- **Admission unit tests (H31), key_source/claim property tests (H32):** direct test
+  coverage for the pure decision functions and the security-boundary invariants (the
+  suite grows from 500 to 553 tests).
+- **Runtime security-surface docs (H33):** `@doc` on `token.ex`, `key_source.ex`,
+  `fingerprint.ex`, `telemetry.ex` public functions.
+- **CI-matrix-asserted compatibility documented (H34):** CONTRIBUTING names the CI matrix
+  as the guard against transitive semantic drift (not the dep bounds).
+
 ## v0.3.0 — 2026-08-09
 
 Security release: raises the Ash floor to the CVE-patched 3.31.1 and makes the architecture

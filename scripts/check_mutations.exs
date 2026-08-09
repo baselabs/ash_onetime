@@ -870,8 +870,8 @@ defmodule AshOnetime.MutationCheck do
         {"unknown execute is recovered once immediately",
          "assert [[\"execute\", operation_key], [\"recover\", operation_key]] ="}
       ],
-      red_summary: "Result: 0/3 passed, 9 excluded",
-      green_summary: "Result: 3 passed, 9 excluded"
+      red_summary: "Result: 0/3 passed, 10 excluded",
+      green_summary: "Result: 3 passed, 10 excluded"
     },
     "external-operation-key" => %{
       path: "lib/ash_onetime/external_recovery.ex",

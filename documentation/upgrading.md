@@ -4,12 +4,51 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: b
 or contract changes bump the minor version (the library is pre-1.0), and each breaking
 change lands here with the exact edit to make.
 
-The published package is [v0.3.0](https://hex.pm/packages/ash_onetime). Set your dependency
+The published package is [v0.4.0](https://hex.pm/packages/ash_onetime). Set your dependency
 to the minor range to pick up patches automatically and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 0.3"}
+{:ash_onetime, "~> 0.4"}
 ```
+
+## v0.4.0 — hardening, ops-readiness, and enhancement
+
+v0.4.0 is a hardening + ops-readiness + enhancement release. No breaking contract change for
+existing consumers — the minor bump carries new public observability surfaces (the telemetry
+default attach helper, the `:worker_timeout` result class, the ETS cache reference adapter)
+and the span-events-out-of-scope decision (H22). Existing consumers are unchanged; all new
+surfaces are opt-in.
+
+- **External-recovery adversarial-absence proof + normative doc (H10):** a test proving the
+  re-execution invariant against a lying-`:absent` adapter, and a normative section in
+  `documentation/external-effects.md` stating the adapter MUST prove absence and the peer
+  MUST enforce idempotency by operation key. No runtime guard — the trust is inherent to the
+  design (ADR-0001).
+- **Worker timeout distinguished from disconnect (H11):** the committed-claim worker's 30s
+  timeout now surfaces as a distinct `:worker_timeout` result_class on
+  `[:ash_onetime, :store_uncertainty]`, separate from `:disconnected` and `:unknown`. All
+  three fail closed; the distinction is operational triage (pool/lock contention vs network
+  partition).
+- **Oban worker backoff + discard alert (H20, ADR-0005):** the three maintenance workers
+  (Cleanup, Partition, Reap) declare a bounded, jittered `backoff/1` (30–120 s) instead of
+  the default exponential, so transient failures retry within the retention window. A
+  documented discard-alert SQL names the operational signal for a stranded partition roll.
+- **Telemetry default attach handler (H21):** `AshOnetime.Telemetry.attach/0` — an opt-in
+  helper that routes the closed event surface into a downstream `:metric` stream for a
+  consumer's own aggregator. No `telemetry_metrics` dependency.
+- **Telemetry span structure (H22):** documented that the library emits point events only
+  (never span events), with the reason (`span/3` cannot preserve the value-free invariant)
+  and a recommended consumer-applied `:telemetry.span/3` wrapper.
+- **Operations runbook (H23):** three named procedures (backlog-stuck,
+  partition-discard-detected, pool-saturated) with exact SQL/telemetry queries.
+- **ETS cache reference adapter (H30):** `AshOnetime.Cache.Ets` — bounded, TTL-aware,
+  supervised, no third-party dependency. Makes the cache-degradation path reachable.
+- **Admission unit tests (H31), key_source/claim property tests (H32):** direct test
+  coverage for the pure decision functions and the security-boundary invariants.
+- **Runtime security-surface docs (H33):** `@doc` on `token.ex`, `key_source.ex`,
+  `fingerprint.ex`, `telemetry.ex` public functions.
+- **CI-matrix-asserted compatibility documented (H34):** CONTRIBUTING names the CI matrix as
+  the guard against transitive semantic drift (not the dep bounds).
 
 ## Ash floor raised to 3.31.1 (v0.3.0, security-driven)
 
