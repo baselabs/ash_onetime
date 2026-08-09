@@ -161,6 +161,146 @@ now exercised per-request rather than per-external-effect:
 The fence's fail-closed posture means neither characteristic can reopen the replay gap the fence
 exists to close — the worst case is rejection under stress, never a double-spend.
 
+## Runbooks
+
+Named procedures for the operational failure modes the library surfaces. Each names the
+symptom, the diagnostic query, and the remediation. Every procedure is safe to run against
+a live authoritative store unless noted.
+
+### backlog-stuck — abandoned `processing` recovery points accumulating
+
+**Symptom.** `[:ash_onetime, :external_recovery]` with `result_class: :outcome_unknown`
+sustained over time, or `processing_backlog/1` showing a growing `processing_count` whose
+`oldest_age_seconds` exceeds any legitimate in-flight window. Abandoned external-effect
+recovery points are immortal under cleanup (it skips `processing` claims) and the delete
+guard forbids deleting them; left unbounded this is a storage-exhaustion denial of service
+(ADR-0002).
+
+**Diagnose.** Observe the backlog before reaping:
+
+```elixir
+{:ok, %{processing_count: n, oldest_age_seconds: age}} =
+  AshOnetime.Store.processing_backlog(target)
+```
+
+Or directly in SQL (replace `:prefix`):
+
+```sql
+SELECT count(*) AS processing_count,
+       extract(epoch from now() - min(inserted_at))::int AS oldest_age_seconds
+FROM "ash_onetime_idempotency_claims"
+WHERE state = 'processing';
+```
+
+**Remediate.** If `oldest_age_seconds` is well beyond any legitimate in-flight window (e.g.
+days), run the bounded reaper with an `abandonment_seconds` sized above your longest
+legitimate in-flight claim but below the point where storage pressure bites:
+
+```sh
+mix ash_onetime.reap --repo MyApp.Repo --abandonment-seconds 1209600 --batch-size 500
+```
+
+`--abandonment-seconds` (default 604800 = 7 days, minimum 86400 = 1 day) must be at least the
+1-day floor; the reaper re-enforces both this floor and each claim's own retention horizon via
+the delete guard, so an in-flight or in-retention recovery point is never removed. Reaping an
+abandoned claim means a later retry re-inserts under a new claim id and executes as a new
+peer operation (ADR-0002). Schedule `AshOnetime.Oban.ReapWorker` on a slow cadence to keep
+this bounded steady-state rather than a manual fire drill.
+
+### partition-discard-detected — a PartitionWorker exhausted its retries
+
+**Symptom.** A discarded `PartitionWorker` job on the `ash_onetime_cleanup` queue. This
+strands a month of bounded retention: new payloads route to `_default` and are never dropped
+(ADR-0001). The bounded jittered backoff (ADR-0005) retries transient failures within minutes,
+so a discard means a persistent failure (a malformed argument, an unresolvable repo, a DDL
+error) — not a transient stall.
+
+**Diagnose.** Alert on discarded jobs:
+
+```sql
+SELECT queue, attempt, max_attempts, inserted_at, discarded_at, args
+FROM oban_jobs
+WHERE state = 'discarded' AND queue = 'ash_onetime_cleanup'
+  AND discarded_at > now() - interval '24 hours'
+ORDER BY discarded_at DESC;
+```
+
+Check whether the current month's partition exists:
+
+```sql
+SELECT count(*)
+FROM pg_inherits
+JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
+JOIN pg_namespace n ON n.oid = parent.relnamespace
+WHERE n.nspname = ':prefix'
+  AND parent.relname = 'ash_onetime_response_payloads'
+  AND pg_inherits.inhrelid::regclass::text LIKE '%_default';
+-- a non-zero count here means payloads are routing to _default (the catch-all),
+-- i.e. the forward window has lapsed.
+```
+
+**Remediate.** A discarded `PartitionWorker` triggers the idempotent forward migration, which
+both creates the elapsed+forward partitions AND drains past-retention payloads stranded in
+`_default`:
+
+```sh
+mix ash_onetime.gen.roll_forward --repo MyApp.Repo --months 18
+mix ecto.migrate
+```
+
+Then re-schedule the `PartitionWorker` (or cron) ahead of the retention horizon so the window
+does not lapse again. A rising discard rate on the partition or cleanup queues is contention
+— see pool-saturated.
+
+### pool-saturated — worker timeouts or checkout failures rising
+
+**Symptom.** `[:ash_onetime, :store_uncertainty]` with `result_class: :worker_timeout`
+climbing, or `:checkout_unavailable` (`[:ash_onetime, :untracked_execution]` may follow for
+opted-in idempotency). The committed-claim worker needs a +1 connection checkout per
+in-flight protected request (ADR-0003); under `pool_size N` concurrent protected actions the
+`(N+1)`th blocks, and at the limit the 30s worker timeout fires. All paths fail closed — the
+worst case is rejection under stress, never a double-spend — but a rising rate degrades the
+DPoP-protected endpoint.
+
+**Diagnose.** Confirm the timeout class is the dominant uncertainty signal (distinct from
+`:disconnected`, which is a network partition, and `:unknown`, which is an unspecified
+dispatch):
+
+```sql
+-- in your telemetry backend, filter the store_uncertainty stream:
+-- result_class = 'worker_timeout' (rising) vs 'disconnected' vs 'unknown'
+```
+
+Inspect live lock waits and checkout pressure during the worker's window:
+
+```sql
+SELECT activity.state, activity.wait_event_type, activity.wait_event,
+       count(*)
+FROM pg_stat_activity activity
+WHERE activity.state != 'idle'
+GROUP BY 1, 2, 3
+ORDER BY count(*) DESC;
+```
+
+```elixir
+# DBConnection checkout queue length (EctoMyApp.Repo substituted):
+{:ok, %{checkin_queue: q, total_connections: t}} =
+  MyXQL or Postgrex connection info # via DBConnection's :telemetry on [:db_connection, :checkout, *]
+```
+
+**Remediate.** Raise the pool size to accommodate the `(N+1)` checkout pattern for the
+expected concurrency of DPoP-protected endpoints:
+
+```elixir
+config :my_app, MyApp.Repo, pool_size: 20  # was 10, for example
+```
+
+If the timeout class is `:disconnected` instead, triage as a network partition (check
+`pg_stat_activity` for connection churn, the load balancer, the Postgres instance health) —
+not a pool-sizing issue. If it is `:unknown`, inspect the worker's exit reason in the Oban
+job or application logs; that class names an unspecified dispatch failure a pool raise will
+not fix.
+
 ## Key rotation
 
 Token verification resolves material by the signed key identifier. Add a new key before
