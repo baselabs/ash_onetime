@@ -98,3 +98,62 @@ counter("my_app.ash_onetime.admission_count.total",
 
 Events are deliberately low-cardinality: `resource`/`action`/`result_class` are atoms, so a
 high-cardinality label (a key value, a payload hash) can never leak through this surface.
+
+## Span-style events (start/stop)
+
+`ash_onetime` emits **point events**, not span events. There is no
+`*.start` / `*.stop` / `*.exception` triple on any event family: every event is a single
+`:telemetry.execute/3` carrying `:duration` (latency-bearing events) or `:count` (count
+events) plus the fixed atoms-only metadata described above. This is a deliberate invariant,
+not a gap to close.
+
+### Why no spans
+
+The value-free metadata guarantee — the four atoms `strategy` / `resource` / `action` /
+`result_class`, and nothing else — is enforced by the telemetry module's validator and
+pinned by the `forbidden-telemetry` mutation fixture in `scripts/check_mutations.exs`.
+`:telemetry.span/3` cannot satisfy it:
+
+1. **`span/3` force-injects `telemetry_span_context` onto every event's metadata**
+   unconditionally (`deps/telemetry/src/telemetry.erl:446-448`). The closed four-atom
+   metadata shape would gain a fifth key on every span event by construction.
+2. **`span/3` emits `:exception` with `kind` / `reason` / `stacktrace` merged onto the
+   metadata, *inside* the span, before any caller `rescue` can catch it**
+   (`telemetry.erl:378-387`). The span's `catch` fires the `:exception` event and then
+   re-raises; the admission entry points' `rescue`/`catch` coerce the re-raise to a typed
+   `:failed` result, but the event has already been dispatched. An exception `reason` or
+   `stacktrace` can carry secret-bearing terms (an `AshOnetime.Error` struct, a
+   `Postgrex.Error` with query text, a typed-argument mismatch carrying a token), and the
+   surface exists precisely to keep such terms out of telemetry.
+
+For the latency-bearing event families (`:admission`, `:replay`, `:verification`,
+`:encoding`, `:external_recovery`), `:duration` is already on the point event — p99/SLO
+measurement does not require spans.
+
+### Trace correlation: wrap at the consumer boundary
+
+If you need start/stop pairing for distributed-trace correlation (stitching an admission
+into a cross-service trace), apply `:telemetry.span/3` at **your** call site, where you own
+both the metadata and the exception handling:
+
+```elixir
+def MyApp.create_safely(input) do
+  {result, _} =
+    :telemetry.span(
+      [:my_app, :ash_onetime, :admission],
+      %{strategy: :idempotency, resource: MyResource, action: :create},
+      fn ->
+        case Ash.create(MyResource, input) do
+          {:ok, record} -> {{:ok, record}, %{result_class: :admitted}}
+          {:error, error} -> {{:error, error}, %{result_class: :rejected}}
+        end
+      end
+    )
+
+  result
+end
+```
+
+You control the `start`/`stop`/`exception` metadata at that boundary, so any values you
+emit are your decision, not the library's. The library's point events remain the
+authoritative, value-free record of the classified outcome.
