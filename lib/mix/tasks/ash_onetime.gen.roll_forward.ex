@@ -19,9 +19,11 @@ defmodule Mix.Tasks.AshOnetime.Gen.RollForward do
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: GenerateMigrations
 
   @shortdoc "Generates the ash_onetime SEC-5/SEC-6 forward migration"
+  # NOTE: --prefix is intentionally NOT a switch (unlike the runtime roll task). The generated
+  # migration resolves its prefix at RUN time via the Ecto migration's prefix()/0 callback, so a
+  # generation-time --prefix would be a dead switch. Use --tenants to target tenant migrations.
   @switches [
     repo: :string,
-    prefix: :string,
     months: :integer,
     partition_start: :string,
     migrations_path: :string,
@@ -58,13 +60,15 @@ defmodule Mix.Tasks.AshOnetime.Gen.RollForward do
   defp parse_repo!(nil), do: Mix.raise("--repo is required")
 
   defp parse_repo!(repo_name) do
-    repo = repo_name |> String.split(".") |> Module.concat()
+    repo = Module.safe_concat(String.split(repo_name, ".", trim: true))
 
     if Code.ensure_loaded?(repo) and function_exported?(repo, :config, 0) do
       repo
     else
       Mix.raise("repo #{repo_name} is not available")
     end
+  rescue
+    ArgumentError -> Mix.raise("repo #{repo_name} is not available")
   end
 
   defp parse_months!(nil), do: 13
