@@ -32,3 +32,35 @@ Adapters must make execute idempotent by operation key and make recover authorit
 stub that merely records the request proves only that the package produced a shape; peer
 conformance requires a live peer contract. External effects are idempotency-only because a
 nonce cannot safely recover or replay a response.
+
+## The adapter MUST prove absence (normative)
+
+`:absent` from `recover/3` is **authoritative proof**, not a default. The package trusts it
+unconditionally and re-executes under the same operation key when it arrives. This trust is
+inherent to the design — it is how the protocol recovers a caller that died before the peer
+recorded the effect — and it is not fixable at the library layer.
+
+An adapter that returns `:absent` for an effect that DID execute defeats the guarantee: the
+package will issue a redundant `execute` with the same operation key. Whether that redundant
+execute becomes a duplicate side effect depends on the peer:
+
+- A correct peer that enforces idempotency by operation key deduplicates the second execute
+  (its stored result is stable, and the duplicate is absorbed). This is the case the package
+  is safe against by construction.
+- A peer that does NOT enforce idempotency by operation key records the duplicate effect.
+  This is a double-spend, and it is the peer's failure, not the package's.
+
+The defenses are independent and both are required:
+
+1. **The adapter's `recover/3` MUST prove absence** by querying the peer's real idempotency
+   key store. Returning `:absent` without a real query (a stub, a default, a cached negative)
+   is a contract violation. Every uncertain, exceptional, or malformed outcome is `:unknown`,
+   never `:absent`.
+2. **The peer MUST enforce idempotency by operation key** so a redundant execute is absorbed.
+
+The package supplies the operation key (the authoritative committed claim UUID) to both
+callbacks; the adapter passes it unchanged to the peer's idempotency and recovery surfaces.
+The combination of (1) and (2) is what makes external effects safe: the package's `:absent`
+trust is correct because a correct adapter proves absence, and a correct peer deduplicates
+the redundant execute that a lying adapter would induce. Remove either defense and the
+guarantee degrades to the honesty of whichever remains.

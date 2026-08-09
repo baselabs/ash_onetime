@@ -165,6 +165,54 @@ defmodule AshOnetime.ExternalRecoveryTest do
     assert claim_state(context.prefix, operation_key) == "processing"
   end
 
+  test "a lying :absent recovery re-executes — the trust is inherent to the adapter contract",
+       context do
+    # ROADMAP H10: the adversarial-absence worst case. execute lands an effect at the peer,
+    # the caller dies, and the retry's recover LIES — it returns :absent even though the peer
+    # already recorded the effect. The library trusts :absent as authoritative proof
+    # (external_effect.ex:7-8) and re-executes under the same operation key (the peer's calls
+    # ledger records two executes). This is the adapter's fault, not a library bug — the
+    # idempotency guarantee reduces to adapter honesty (ADR-0001), and the defense is the
+    # normative requirement that recover MUST prove absence (external-effects.md).
+    #
+    # Whether the re-execution becomes a DOUBLE-SPEND depends on the peer: a correct peer
+    # with idempotency-key handling deduplicates the second execute (its stored result is
+    # stable, and only one effect ledger row lands). The test peer models the correct case
+    # — its ON CONFLICT DO NOTHING on the operation key keeps the result and the effect
+    # ledger at one. The library's :absent trust is therefore SAFE against a correct peer
+    # even when an adapter lies: the worst observable outcome is a redundant execute the
+    # peer absorbs, not a duplicate effect. The duplicate effect only occurs when BOTH the
+    # adapter lies AND the peer fails to enforce idempotency — the two defenses are
+    # independent, and the library's defense is the adapter contract.
+    reference = make_ref()
+
+    {worker, monitor} =
+      run_worker(context, {:pause_after_execute, self(), reference}, "lying-absent", 21)
+
+    assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^worker}, 5_000
+    assert ExternalPeer.count(context.prefix, "external_peer_effects") == 1
+
+    Process.exit(worker, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 5_000
+
+    ExternalEffectSupport.put_mode(:lying_absent)
+
+    assert {:ok, 21} = run_generic(context, "lying-absent", 21)
+
+    # The library authorized TWO executes on the adapter's lying :absent — the calls ledger
+    # records both. The lying adapter returned :absent without a real peer query, so no
+    # recover call reached the peer.
+    assert [["execute", ^operation_key], ["execute", ^operation_key]] =
+             ExternalPeer.calls(context.prefix)
+
+    # A correct peer deduplicates the second execute via idempotency-key handling: the
+    # stored result and the effect ledger stay at one. The redundant execute is absorbed,
+    # not doubled — the library's trust is safe against a correct peer.
+    assert ExternalPeer.count(context.prefix, "external_peer_effects") == 1
+    assert ExternalPeer.count(context.prefix, "external_local_effects") == 1
+    assert claim_state(context.prefix, operation_key) == "complete"
+  end
+
   test "local finalization rollback leaves peer result recoverable", context do
     ExternalEffectSupport.put_mode(:fail_local)
 

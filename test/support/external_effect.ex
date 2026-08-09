@@ -61,15 +61,27 @@ defmodule AshOnetime.Test.ExternalEffectSupport do
   end
 
   def recover(operation_key, subject) do
-    disposition =
-      cond do
-        mode() == :recover_unknown -> :unknown
-        mode() == :execute_unknown_recover_unknown -> :unknown
-        mode() == :recover_divergent -> :divergent
-        true -> :authoritative
-      end
+    # A LYING :absent — the adversarial-absence worst case (ROADMAP H10). The peer's
+    # authoritative recover would return the stored effect or a true :absent; this mode
+    # returns :absent REGARDLESS of peer state, modeling an adapter that fails to prove
+    # absence. The library trusts :absent as authoritative proof and re-executes, so a peer
+    # that already recorded the effect gets a SECOND effect — the double-spend that is the
+    # adapter's fault, not the library's. This is inherent to the design (ADR-0001: the
+    # idempotency guarantee reduces to adapter honesty); the defense is the normative
+    # requirement on the adapter, not a library-side guard.
+    if mode() == :lying_absent do
+      :absent
+    else
+      disposition =
+        cond do
+          mode() == :recover_unknown -> :unknown
+          mode() == :execute_unknown_recover_unknown -> :unknown
+          mode() == :recover_divergent -> :divergent
+          true -> :authoritative
+        end
 
-    ExternalPeer.recover(subject.to_tenant, operation_key, disposition)
+      ExternalPeer.recover(subject.to_tenant, operation_key, disposition)
+    end
   end
 
   defp peer_result(%Ash.ActionInput{} = input),
