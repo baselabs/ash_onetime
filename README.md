@@ -1,8 +1,34 @@
 # ash_onetime
 
 `ash_onetime` is an Ash extension for explicit keyed-effect semantics. It separates
-replay-safe idempotency from collision-rejecting one-time nonces and uses PostgreSQL as
-the authoritative admission store.
+replay-safe idempotency from collision-rejecting one-time nonces and uses PostgreSQL as the
+authoritative admission store.
+
+## When to use this vs. hand-rolled idempotency
+
+Use `ash_onetime` when you need a *correct* admission layer for effectful Ash actions and do
+not want to re-derive the failure modes a hand-rolled table-plus-flag approach ships with.
+
+- **The correctness guarantee:** a PostgreSQL-authoritative, once-per-key local effect and
+  typed replay within the declared retention boundary. The effect, the admission claim, and
+  the encoded response commit or roll back together in the action's existing transaction;
+  there is no admission pre-read, so the unique constraint — not application code — decides
+  concurrent races. A conflicting fingerprint is terminal and never re-executes.
+- **What it replaces:** the bespoke idempotency-key table, the "did this already run?"
+  pre-check that races under concurrency, the stored-response schema you have to version and
+  re-encode, the fingerprint binding you have to remember to update, and the silent
+  double-execution that lands when you forget. Each of these is a class of bug this library
+  was built to make impossible at the boundary.
+- **When NOT to use it:** read-only or non-transactional actions (the library rejects them),
+  resources without AshPostgres (PostgreSQL is the authoritative store; there is no
+  fallback), and workloads that need end-to-end exactly-once *delivery* rather than
+  once-per-key *local admission* (delivery is a separate concern — see
+  [External effects](documentation/external-effects.md)). If you have no effectful action to
+  protect, there is nothing to admit.
+
+See [Security model](documentation/security.md) for the authority and fail-closed contract,
+and [Recipes](documentation/recipes.md) for end-to-end payment, webhook, and redemption
+patterns.
 
 ## Status
 
@@ -82,6 +108,10 @@ end
 - [Errors and HTTP mapping](documentation/errors.md)
 - [Operations](documentation/operations.md)
 - [Security model](documentation/security.md)
+- [Recipes](documentation/recipes.md)
+- [Telemetry](documentation/telemetry.md)
+- [Upgrading](documentation/upgrading.md)
+- [FAQ](documentation/faq.md)
 - [Generated Spark DSL reference](documentation/dsls/DSL-AshOnetime.Resource.md)
 
 ## License

@@ -13,8 +13,10 @@ mix igniter.install ash_onetime --repo MyApp.Repo
 ```
 
 This imports `ash_onetime` into your `.formatter.exs`, writes the deterministic installation
-migration, and offers optional Plug (`--with-plug`) and Oban (`--with-oban`) dependencies. See
-[Operations](operations.md) for `--claims hash` partitioning and other migration options.
+migration, and offers optional Plug (`--with-plug`) and Oban (`--with-oban`) dependencies.
+Pass `--resource MyApp.MyResource` (repeatable) to wire `AshOnetime.Resource` into a resource
+and scaffold a starter `onetime` block there in the same step. See [Operations](operations.md)
+for `--claims hash` partitioning and other migration options.
 
 Then run the migration:
 
@@ -41,6 +43,8 @@ onetime do
     scope [{:attribute, :account_id}, {:static, "charge"}]
     key {:client, :idempotency_key}
     fingerprint arguments: [:amount], attributes: [:account_id]
+    # `arguments:` binds action arguments; `attributes:` binds resource attributes. Bind both
+    # to every input that changes the effect — see Recipes for runnable resource shapes.
     response MyApp.ChargeCodec, fields: [:id, :status], classify: MyApp.ChargeClassifier
     retention {24, :hour}
   end
