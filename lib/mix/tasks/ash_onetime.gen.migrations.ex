@@ -110,13 +110,15 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
   defp parse_repo!(nil), do: Mix.raise("--repo is required")
 
   defp parse_repo!(repo_name) do
-    repo = repo_name |> String.split(".") |> Module.concat()
+    repo = Module.safe_concat(String.split(repo_name, ".", trim: true))
 
     if Code.ensure_loaded?(repo) and function_exported?(repo, :config, 0) do
       repo
     else
       Mix.raise("repo #{repo_name} is not available")
     end
+  rescue
+    ArgumentError -> Mix.raise("repo #{repo_name} is not available")
   end
 
   defp parse_claim_partitioning!(options) do
