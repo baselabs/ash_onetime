@@ -1,37 +1,33 @@
 # Getting started
 
 `ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.2), Erlang/OTP 29, Ash `>= 3.29.3`,
-AshPostgres 2, and PostgreSQL 18.
+AshPostgres 2, and PostgreSQL 18. The package is published on
+[Hex](https://hex.pm/packages/ash_onetime) (`{:ash_onetime, "~> 0.1.0"}`).
 
-## Test database
+## Install
 
-The suite fails closed unless `DATABASE_URL` points to the dedicated database and port:
+Add the dependency and install the PostgreSQL objects with Igniter:
 
 ```sh
-docker run --name ash-onetime-postgres \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=ash_onetime_test \
-  -p 127.0.0.1:18841:5432 \
-  -d postgres:18
-
-export DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test
-mix deps.get
-mix test
+mix igniter.install ash_onetime --repo MyApp.Repo
 ```
 
-Before creating the container, verify that neither a container named
-`ash-onetime-postgres` nor a listener on port `18841` already exists. Reuse the existing
-dedicated container; do not start a second database on another port.
+This imports `ash_onetime` into your `.formatter.exs`, writes the deterministic installation
+migration, and offers optional Plug (`--with-plug`) and Oban (`--with-oban`) dependencies. See
+[Operations](operations.md) for `--claims hash` partitioning and other migration options.
 
-## Package dependency
+Then run the migration:
 
-The package is not published yet. After publication, consumers will add the released
-Hex requirement and enable `AshOnetime.Resource` on individual Ash resources.
+```sh
+mix ecto.migrate
+```
 
-## Resource DSL
+## Protect your first action
 
-Protection is declared per action. Strategy and scope have no defaults:
+Protection is declared per action on an AshPostgres resource. `AshOnetime.Resource` is an
+opt-in extension — add it to each resource you want to protect, then declare a `protect` block
+for each protected action. There is no default strategy and no global scope fallback: every
+`protect` chooses `:idempotency` or `:one_time_nonce` and declares a nonempty scope.
 
 ```elixir
 use Ash.Resource,
@@ -67,3 +63,42 @@ no stored-response, external-effect, or configurable failure-direction surface.
 
 See the generated [resource DSL reference](dsls/DSL-AshOnetime.Resource.md) for the complete
 option shape.
+
+## Handle the result
+
+A protected action's success carries a replayed-vs-fresh signal, and its failure carries a
+typed `:code` that survives the Ash pipeline. Both are observable after `Ash.create/2` /
+`Ash.run_action/2` returns:
+
+```elixir
+case Ash.create(changeset) do
+  {:ok, record} ->
+    # 201 on fresh execution (replayed? == false), 200 on retry (replayed? == true).
+    status = if AshOnetime.replayed?(record), do: 200, else: 201
+
+  {:error, error} ->
+    case AshOnetime.Error.code(error) do
+      :nonce_already_used -> {:conflict, "nonce was already used"}
+      :key_reused_with_different_request -> {:conflict, "key reused with a different request"}
+      :request_in_progress -> {:conflict, "request is already processing"}
+      nil -> {:internal_server_error, "unexpected error"}
+    end
+end
+```
+
+`AshOnetime.replayed?/1` is tri-state: `true` (tracked replay), `false` (tracked fresh), or
+`nil` (untracked execution, primitive-return action, or unprotected — see
+[Replay](replay.md)). The full code→HTTP table is in [Errors](errors.md).
+
+## Where to next
+
+- [Idempotency](idempotency.md) and [One-time nonces](one-time-nonces.md) — the two
+  strategies in depth.
+- [External effects and recovery](external-effects.md) — committing side effects safely.
+- [Security model](security.md) — authority, fail-closed behavior, and the guarantees.
+
+## Developing on `ash_onetime` itself
+
+Contributors and library maintainers need the test database harness, which is documented in
+[CONTRIBUTING.md](../CONTRIBUTING.md). The suite fails closed unless `DATABASE_URL` points at
+the dedicated database on port `18841`; the container is reusable across sessions.

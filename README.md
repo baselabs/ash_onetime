@@ -6,12 +6,12 @@ the authoritative admission store.
 
 ## Status
 
-The package implements its accepted public contract and is not yet published. Every
-protected action chooses `:idempotency` or `:one_time_nonce` and declares a nonempty scope;
-there is no default strategy or global scope fallback. PostgreSQL-authoritative admission,
-transactional Ash execution, typed replay, fail-closed nonce spending, signed tokens,
-external-effect recovery, bounded cleanup, optional cache/Plug/Oban integrations, and
-release gates are present.
+The package is [published on Hex](https://hex.pm/packages/ash_onetime) as v0.1.0 and the
+[source is public](https://github.com/baselabs/ash_onetime). Every protected action chooses
+`:idempotency` or `:one_time_nonce` and declares a nonempty scope; there is no default
+strategy or global scope fallback. PostgreSQL-authoritative admission, transactional Ash
+execution, typed replay, fail-closed nonce spending, signed tokens, external-effect recovery,
+bounded cleanup, optional cache/Plug/Oban integrations, and release gates are present.
 
 ## Compatibility
 
@@ -31,8 +31,8 @@ development runtime is Elixir 1.20.2 / Erlang/OTP 29 (`.tool-versions`).
 
 ## Development
 
-Start the dedicated test database described in [Getting started](documentation/getting-started.md),
-then run:
+Start the dedicated test database and run the suite as documented in
+[CONTRIBUTING.md](CONTRIBUTING.md), then:
 
 ```sh
 mix deps.get
@@ -41,7 +41,8 @@ DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test mix test
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete gate battery and
 [usage-rules.md](usage-rules.md) for non-negotiable integration boundaries.
-The [Getting started guide](documentation/getting-started.md) includes the resource DSL.
+The [Getting started guide](documentation/getting-started.md) covers installing the package
+and protecting your first action.
 
 ## Handling results at the call boundary
 

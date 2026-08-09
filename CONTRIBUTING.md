@@ -3,9 +3,26 @@
 Work directly from a clean checkout and keep changes focused on one behavior. New
 behavior starts with a test that fails for the intended reason.
 
-The test suite requires the dedicated PostgreSQL database documented in
-`documentation/getting-started.md`. Set `DATABASE_URL` explicitly; the test harness
-rejects any other database name or port.
+The test suite requires a dedicated PostgreSQL 18 database on `127.0.0.1:18841`. The suite
+fails closed unless `DATABASE_URL` points at exactly that database and port; it rejects any
+other name or port.
+
+Before creating the container, verify that neither a container named `ash-onetime-postgres`
+nor a listener on port `18841` already exists. Reuse the existing container across sessions;
+do not start a second database on another port.
+
+```sh
+docker run --name ash-onetime-postgres \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=ash_onetime_test \
+  -p 127.0.0.1:18841:5432 \
+  -d postgres:18
+
+export DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test
+mix deps.get
+mix test
+```
 
 Before reporting a change complete, run:
 
