@@ -68,6 +68,41 @@ defmodule MyApp.AshOnetimeMetrics do
 end
 ```
 
+## Out-of-the-box attach helper
+
+If you want the full closed event surface routed into a single downstream stream without
+hand-rolling the event list and the count/duration split, the library ships an opt-in helper
+mirroring `Oban.Telemetry.attach_default_logger/1`:
+
+```elixir
+# in your application startup, once per VM, after the repo is started
+AshOnetime.Telemetry.attach()
+```
+
+`attach/0` attaches a handler to every `[:ash_onetime, *]` event and re-emits each as a
+downstream `[:ash_onetime, event, :metric]` event carrying the same atoms-only metadata and a
+normalized `:count` or `:duration` measurement. Attach your own aggregator
+(`Telemetry.Metrics` reporter, a custom handler, an ETS counter) to the `:metric` events:
+
+```elixir
+:telemetry.attach_many(
+  "my-app.ash-onetime.metrics",
+  [
+    [:ash_onetime, :admission, :metric],
+    [:ash_onetime, :store_uncertainty, :metric],
+    # ...or the full [:ash_onetime, event, :metric] list
+  ],
+  &MyApp.Metrics.handle/4,
+  nil
+)
+```
+
+The handler is a pure router — no state, no new metadata, no dependency on `telemetry_metrics`
+— so the value-free guarantee is preserved. `attach/1` accepts a `:name` to attach alongside
+another consumer; `detach/1` undoes it. If you already maintain a `Telemetry.Metrics` reporter
+centrally, declare the counter/summary definitions in your own `MyApp.Telemetry` against the
+original events (the example above) rather than using `attach/0` — both paths are supported.
+
 Route these onward into your metrics backend (e.g. `:telemetry_metrics` statsd/prometheus
 reporters) by attaching `Telemetry.Metrics` definitions in your release or `MyAppWeb.Telemetry`:
 
