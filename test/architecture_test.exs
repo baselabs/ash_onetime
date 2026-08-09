@@ -262,16 +262,28 @@ defmodule AshOnetime.ArchitectureTest do
   # red-barred while the 0.3.1-committed lock stayed green locally.
   #
   # The fix declares the genuinely-framework-injected exports per module and applies
-  # the exempt set to BOTH sides of the comparison, so the census still fails loud on
-  # any project-owned export that is added/removed/arity-changed (the guard property
-  # is preserved), and fails loud on a NEW framework injection (forcing deliberate
-  # triage rather than silent absorption). Membership rule: the framework injects the
-  # function AND the project does not author or override it — so `message/1` (the
-  # project's `@impl true def` that Splode only wraps via `__before_compile__`) and
-  # `exception/1` (the project's override restoring the `details: %{}` default) are
-  # NOT exempt; they stay under the exact-export guard. Only `AshOnetime.Error`
-  # carries an exempt entry today; if another documented module adopts an injecting
-  # macro, the census will fail loud and the maintainer adds a key here.
+  # the exempt set to BOTH sides of the comparison. Two drift directions fail loud:
+  #   - a project-owned export added/removed/arity-changed -> census FAILS loud
+  #     (the guard property the census exists to enforce is preserved);
+  #   - a NEW framework injection not listed here -> census FAILS loud, prompting
+  #     deliberate triage rather than silent absorption.
+  # Membership rule for this set: the framework injects the function AND the project
+  # does not author or override it — so `message/1` (the project's `@impl true def`
+  # that Splode only wraps via `__before_compile__`) and `exception/1` (the project's
+  # override restoring the `details: %{}` default) are NOT exempt; they stay under the
+  # exact-export guard. Only `AshOnetime.Error` carries an exempt entry today; if
+  # another documented module adopts an injecting macro, the census will fail loud and
+  # the maintainer adds a key here.
+  #
+  # Two limitations of the two-sided subtraction, stated honestly (both guard inert
+  # snapshot entries, not project surface, so they are accepted rather than enforced
+  # by arity-aware source parsing that would be out of proportion to a test fixture):
+  #   - if the project ever authors a pair already listed here (e.g. overrides
+  #     `from_json/1`, which Splode marks `defoverridable`), the census is blind to
+  #     that pair — the membership rule above is enforced by review, not mechanically;
+  #   - if the framework REMOVES a listed injection, the matching `@exports` entry
+  #     becomes inert (subtracting it from both sides is a no-op), so the documented
+  #     surface shrinks without failing the census.
   @framework_injected %{
     AshOnetime.Error =>
       MapSet.new([
