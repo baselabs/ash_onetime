@@ -17,6 +17,7 @@ defmodule AshOnetime.Store.Result do
           | :lock_timeout
           | :disconnected
           | :dispatched_unknown
+          | :worker_timeout
           | :rolled_back
           | :corrupt_payload
           | :store_invariant

@@ -130,9 +130,14 @@ now exercised per-request rather than per-external-effect:
   admitted unsafely). Size the pool for the expected concurrency of DPoP-protected endpoints.
 - **30s worker timeout.** If the worker stalls (slow query, lock contention on the unique index,
   pool pressure), `before_action` blocks for up to 30s before the worker times out and returns
-  `:dispatched_unknown`, which surfaces as a `:store_uncertainty` telemetry event and a typed
-  store error. Both timeout and a genuine disconnect fail closed; an operator cannot
-  distinguish them from telemetry alone, but neither can cause a silent re-admit.
+  a `:worker_timeout` result, which surfaces as a `[:ash_onetime, :store_uncertainty]` telemetry
+  event with `result_class: :worker_timeout` and a typed store error. This is distinct from a
+  genuine disconnect (`result_class: :disconnected`) and from other unknown dispatches
+  (`result_class: :unknown`): all three fail closed and none can cause a silent re-admit, but the
+  `:worker_timeout` class names the stall condition an operator should triage as pool/lock/contention
+  (raise the pool, inspect the slow query) rather than a network partition (the `:disconnected`
+  triage). A rising `:worker_timeout` rate is the signal to size the pool for DPoP-protected
+  concurrency.
 
 The fence's fail-closed posture means neither characteristic can reopen the replay gap the fence
 exists to close — the worst case is rejection under stress, never a double-spend.

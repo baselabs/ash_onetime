@@ -28,7 +28,7 @@ All events are prefixed `[:ash_onetime, <event>]`. Each event's metadata include
 | `[:ash_onetime, :cleanup]` | `:count` | `:claims_deleted` `:partitions_dropped` `:partitions_created` |
 | `[:ash_onetime, :reap]` | `:count` | `:claims_reaped` |
 | `[:ash_onetime, :external_recovery]` | `:duration` | `:processing_committed` `:execute_succeeded` `:recover_succeeded` `:absence_proven` `:outcome_unknown` `:external_effect_unavailable` `:finalize_locked` `:replayed` |
-| `[:ash_onetime, :store_uncertainty]` | `:count` (always 1) | `:sent` `:unknown` `:disconnected` `:lock_timeout` |
+| `[:ash_onetime, :store_uncertainty]` | `:count` (always 1) | `:sent` `:unknown` `:disconnected` `:lock_timeout` `:worker_timeout` |
 | `[:ash_onetime, :untracked_execution]` | `:count` (always 1) | `:checkout_unavailable` |
 
 `strategy` is `:idempotency` or `:one_time_nonce`; `resource` and `action` are the module and

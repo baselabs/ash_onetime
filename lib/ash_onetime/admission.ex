@@ -1009,6 +1009,7 @@ defmodule AshOnetime.Admission do
       case reason do
         :lock_timeout -> :lock_timeout
         :disconnected -> :disconnected
+        :worker_timeout -> :worker_timeout
         :dispatched_unknown -> :unknown
         _other -> nil
       end

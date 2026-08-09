@@ -37,7 +37,7 @@ defmodule AshOnetime.Telemetry do
       :finalize_locked,
       :replayed
     ],
-    store_uncertainty: [:sent, :unknown, :disconnected, :lock_timeout],
+    store_uncertainty: [:sent, :unknown, :disconnected, :lock_timeout, :worker_timeout],
     untracked_execution: [:checkout_unavailable]
   }
 

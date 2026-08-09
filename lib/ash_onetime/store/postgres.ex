@@ -671,7 +671,7 @@ defmodule AshOnetime.Store.Postgres do
         after
           @committed_claim_timeout ->
             Process.demonitor(monitor_ref, [:flush])
-            Result.failure(:dispatched_unknown, :unknown, :unknown)
+            Result.failure(:worker_timeout, :unknown, :unknown)
         end
 
       {:DOWN, ^monitor_ref, :process, ^worker, _reason} ->
@@ -686,7 +686,7 @@ defmodule AshOnetime.Store.Postgres do
           1_000 -> Process.demonitor(monitor_ref, [:flush])
         end
 
-        Result.failure(:dispatched_unknown, :unknown, :unknown)
+        Result.failure(:worker_timeout, :unknown, :unknown)
     end
   end
 

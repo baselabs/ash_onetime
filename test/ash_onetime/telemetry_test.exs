@@ -77,6 +77,20 @@ defmodule AshOnetime.TelemetryTest do
              )
   end
 
+  test "store_uncertainty distinguishes worker timeout from disconnect and unknown dispatch" do
+    # ROADMAP H11: the committed-claim worker's 30s timeout must surface as a distinct
+    # result_class (:worker_timeout) so an operator can triage it as pool/lock contention
+    # rather than a network partition (:disconnected) or an unspecified dispatch failure
+    # (:unknown). Each class is an accepted closed-class atom; the three are distinct.
+    assert :ok = Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :worker_timeout)
+    assert :ok = Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :disconnected)
+    assert :ok = Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :unknown)
+
+    # An unknown class is rejected — the closed-class surface did not widen silently.
+    assert {:error, %AshOnetime.Error{code: :telemetry_invalid}} =
+             Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :not_a_real_class)
+  end
+
   test "public telemetry API exposes no caller-owned metadata map" do
     refute function_exported?(Telemetry, :admission, 3)
     refute function_exported?(Telemetry, :conflict, 2)
