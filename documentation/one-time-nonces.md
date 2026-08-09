@@ -25,6 +25,42 @@ Nonce admission always uses authoritative PostgreSQL state and always fails clos
 store is unavailable or uncertain. Caches are ignored. There is no configurable untracked
 execution, response replay, external-effect protocol, or retention override in nonce mode.
 
+## DPoP replay fencing (`commit: :independent`)
+
+By default a nonce spend commits **inside** the action's transaction, so an action-body
+failure rolls the spend back — correct when a retry will bear a fresh proof. For
+[RFC 9449 (DPoP)](https://datatracker.ietf.org/doc/html/rfc9449#section-11.1) §11.1 replay
+protection, declare `commit: :independent` so the claim commits in its own transaction
+**before** the action body runs (via the `claim_committed` worker). A body failure then
+leaves the proof spent for the acceptance window, and a retry with the same proof is rejected
+with `:nonce_already_used`:
+
+```elixir
+protect :redeem do
+  strategy :one_time_nonce
+  scope([{:static, "redeem"}])
+  key({:verified, :proof, MyApp.DPoPVerifier})
+  window(max_age: {5, :minute}, clock_skew: {30, :second})
+  commit :independent
+end
+```
+
+The fence reuses the independent-commit primitive the external-effect path already depends on
+(ADR-0001 "External recovery protocol"): the `claim_committed` worker spawns a process that
+commits on its own connection, nesting-guarded so it can never accidentally commit inside the
+action's transaction. The spend survives any downstream failure — a body raise, an
+`after_action` hook, a downstream token mint — because the worker's transaction already
+committed before the body ran.
+
+Operational characteristics apply per request (not just per external effect): the worker uses
+a second connection checkout while the caller holds one, and a 30s timeout that fails closed
+with `:dispatched_unknown` if the worker stalls. Size the pool for the expected concurrency of
+fenced endpoints. See the [operations guide](operations.md#dpop-replay-fence-operational-characteristics)
+and ADR-0003 (Independent-commit nonce).
+
+The option is nonce-only (declaring `commit:` on `:idempotency` is a compile error) and
+default-off, so existing nonce consumers are unchanged.
+
 `AshOnetime.Token` provides bounded canonical envelopes for package-owned nonces. HMAC-SHA-256
 requires explicit same-service trust. Ed25519 uses private signing material and public
 verification material for separated trust. Verification requires the expected algorithm and
