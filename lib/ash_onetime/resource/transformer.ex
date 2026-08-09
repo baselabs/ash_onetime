@@ -425,8 +425,23 @@ defmodule AshOnetime.Resource.Transformer do
            positive_duration(protection.retention, protection, context, :retention),
          :ok <-
            reject_present(protection.window, protection, context, :window, "window is nonce-only"),
+         :ok <- reject_explicit_commit(protection, context),
          :ok <- verify_external_effect(protection, context) do
       {:ok, %{protection | fingerprint: fingerprint, retention: retention, window: nil}}
+    end
+  end
+
+  # mutation sentinel: idempotency-rejects-commit-guard
+  defp reject_explicit_commit(protection, context) do
+    if Entity.property_anno(protection, :commit) do
+      error(
+        context.dsl_state,
+        protection,
+        :commit,
+        "commit is nonce-only; idempotency commits with its effect and cannot be configured"
+      )
+    else
+      :ok
     end
   end
 

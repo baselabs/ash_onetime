@@ -41,7 +41,7 @@ defmodule AshOnetime.Store.Result do
 
   @spec committed(t()) :: t()
   def committed(%__MODULE__{status: status, transaction: :open} = result)
-      when status in [:admitted, :processing, :complete],
+      when status in [:admitted, :processing, :complete, :collision],
       do: %{result | transaction: :committed}
 
   @spec failure(

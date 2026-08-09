@@ -212,6 +212,89 @@ AshOnetime.Error.code(error)
 :nonce_already_used
 ```
 
+## DPoP replay fencing (`commit: :independent`)
+
+By default the nonce spend commits **inside** the action's transaction, so an action-body
+failure rolls the spend back — correct when a retry will bear a fresh proof. For
+[RFC 9449 (DPoP)](https://datatracker.ietf.org/doc/html/rfc9449#section-11.1) §11.1 replay
+protection, declare `commit: :independent` so the claim commits in its own transaction **before**
+the body runs. A body failure then leaves the proof spent for the acceptance window, and a retry
+with the same `jti` is rejected:
+
+```elixir
+defmodule AshOnetimeDemo.RedeemableFail do
+  use Ash.Resource,
+    domain: AshOnetimeDemo.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshOnetime.Resource]
+
+  postgres do
+    table "demo_redeemable_fail"
+    repo AshOnetimeDemo.Repo
+  end
+
+  multitenancy do
+    strategy :context
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read]
+
+    action :redeem_fail, :integer do
+      transaction? true
+      argument :value, :integer, allow_nil?: false
+      argument :proof, :string, allow_nil?: false
+      run fn _input, _opts, _context ->
+        {:error, AshOnetime.Error.new(:downstream_failed, "the action body failed")}
+      end
+    end
+  end
+
+  onetime do
+    protect :redeem_fail do
+      strategy :one_time_nonce
+      scope([{:static, "redeem_fail"}])
+      key({:verified, :proof, AshOnetimeDemo.ProofVerifier})
+      window(max_age: {1, :hour}, clock_skew: {5, :second})
+      commit :independent
+    end
+  end
+end
+```
+
+The body fails, but the spend survived — a retry with the same proof is rejected:
+
+<!-- livebook:{"output":true} -->
+
+```elixir
+AshOnetimeDemo.Repo.transaction(fn ->
+  AshOnetimeDemo.RedeemableFail
+  |> Ash.ActionInput.for_action(:redeem_fail, %{value: 1, proof: "dpop-proof-fence"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+end)
+
+{:error, retry} =
+  AshOnetimeDemo.RedeemableFail
+  |> Ash.ActionInput.for_action(:redeem_fail, %{value: 1, proof: "dpop-proof-fence"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+
+AshOnetime.Error.code(retry)
+```
+
+```
+:nonce_already_used
+```
+
+See ADR-0003 (Independent-commit nonce) for the contract and the
+[operations guide](../operations.md#dpop-replay-fence-operational-characteristics) for
+pool-sizing notes.
+
 ## Clean up
 
 ```elixir

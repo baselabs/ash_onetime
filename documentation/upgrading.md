@@ -30,6 +30,16 @@ payloads stranded in `_default`. After that, schedule `mix ash_onetime.roll_part
 [Operations](operations.md#forward-response-partitions). This is additive (no DSL/contract
 change) and does not require a dependency version bump.
 
+## DPoP replay fence (`commit: :independent`)
+
+Additive: a new opt-in `commit:` option on `:one_time_nonce` protections (default
+`:with_action`). No migration, no schema change, no new error code. Existing nonce consumers are
+unchanged. Adopt by adding `commit :independent` to a nonce `protect` block whose proof should
+survive action-body failure (RFC 9449 §11.1). See ADR-0003 (Independent-commit nonce) and the
+[operational characteristics](operations.md#dpop-replay-fence-operational-characteristics) for
+pool-sizing notes. Declaring `commit:` on `:idempotency` is now a compile error (idempotency
+commits with its effect).
+
 ## v0.2.0 — single `limits` surface (planned)
 
 The dual `limits` surface collapses to one `protect`-level vocabulary. Response-size limits

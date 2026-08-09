@@ -17,5 +17,11 @@ defmodule AshOnetime.Resource.InfoTest do
 
     assert raw_charge.retention == {24, :hour}
     assert Info.protection(Resource, :charge).retention == 86_400
+
+    # The commit field exists on nonce protections and defaults to :with_action (the fence is
+    # opt-in — existing nonce consumers are byte-for-byte unchanged). Idempotency protections
+    # also carry the default :with_action structurally (the verifier rejects an explicit set).
+    assert Info.protection(Resource, :redeem).commit == :with_action
+    assert Info.protection(Resource, :charge).commit == :with_action
   end
 end

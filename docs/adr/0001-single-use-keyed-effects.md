@@ -37,7 +37,10 @@ PostgreSQL is authoritative for admission. Optional caches can return a response
 only after an authoritative collision binds that payload to the claim; they cannot grant
 execution or reject a nonce. Database effects reserve admission in the protected
 resource's current AshPostgres repository and transaction. There is no cross-repository
-router or independent admission transaction for database effects.
+router or independent admission transaction for database effects. (Two deliberate
+exceptions commit independently via the `claim_committed` worker: the external-recovery
+protocol below, and the opt-in nonce `commit: :independent` replay fence — see
+[3. Independent-commit nonce](0003-independent-commit-nonce.md).)
 
 ### External recovery protocol
 

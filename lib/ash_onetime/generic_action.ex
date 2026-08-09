@@ -46,12 +46,7 @@ defmodule AshOnetime.GenericAction do
   defp reserve(input, protection, context) do
     trusted = trusted_context(context)
 
-    reservation =
-      if protection.external_effect do
-        AshOnetime.ExternalRecovery.reserve(input, protection, trusted)
-      else
-        AshOnetime.Admission.reserve(input, protection, trusted)
-      end
+    reservation = dispatch_reservation(input, protection, trusted)
 
     case reservation do
       {:execute, state} -> AshOnetime.Admission.put_state(input, state)
@@ -59,6 +54,20 @@ defmodule AshOnetime.GenericAction do
       {:execute_untracked, state} -> AshOnetime.Admission.put_state(input, state)
       {:replay, _decoded, state} -> AshOnetime.Admission.put_replay(input, state)
       {:error, error} -> {:error, error}
+    end
+  end
+
+  # mutation sentinel: replay-fence-generic-dispatch
+  defp dispatch_reservation(subject, protection, trusted) do
+    cond do
+      protection.external_effect ->
+        AshOnetime.ExternalRecovery.reserve(subject, protection, trusted)
+
+      protection.strategy == :one_time_nonce and protection.commit == :independent ->
+        AshOnetime.Admission.reserve_committed(subject, protection, trusted)
+
+      true ->
+        AshOnetime.Admission.reserve(subject, protection, trusted)
     end
   end
 

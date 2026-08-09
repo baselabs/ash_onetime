@@ -40,6 +40,7 @@ defmodule AshOnetime.Resource.Protection do
     :window,
     :external_effect,
     on_definite_store_failure: :fail_closed,
+    commit: :with_action,
     limits: [],
     __spark_metadata__: nil
   ]
@@ -55,6 +56,7 @@ defmodule AshOnetime.Resource.Protection do
           window: Keyword.t() | nil,
           external_effect: module() | nil,
           on_definite_store_failure: :fail_closed | :execute_untracked,
+          commit: :with_action | :independent,
           limits: Keyword.t(),
           __spark_metadata__: Spark.Dsl.Entity.spark_meta()
         }
@@ -152,6 +154,18 @@ defmodule AshOnetime.Resource do
         doc:
           "Nonce replay window bounds: `max_age:` and `clock_skew:` as `{count, unit}` tuples. " <>
             "Applies to `:one_time_nonce` strategies."
+      ],
+      commit: [
+        type: {:in, [:with_action, :independent]},
+        default: :with_action,
+        doc:
+          "Nonce commit boundary. `:with_action` (default) commits the nonce claim inside the " <>
+            "protected action's transaction, so an action-body failure rolls the spend back " <>
+            "(correct for a single-use authenticator whose retry bears a fresh proof). " <>
+            "`:independent` commits the claim in its own transaction before the action body " <>
+            "runs, so a body failure leaves the proof spent for the acceptance window — " <>
+            "RFC 9449 §11.1 request-attempt scope (the DPoP replay fence). Applies to " <>
+            "`:one_time_nonce` only; rejected for `:idempotency`."
       ],
       external_effect: [
         type: :module,

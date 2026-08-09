@@ -123,6 +123,26 @@ defmodule AshOnetime.Test.LivebookExamples do
         argument :proof, :string, allow_nil?: false
         run {FailRun, []}
       end
+
+      # The same failing body, but with the nonce claim committed independently of the action
+      # transaction (commit: :independent, ADR-0003 DPoP replay fence). The spend survives the
+      # body failure, so a retry with the same proof is rejected with :nonce_already_used.
+      action :redeem_fail_fence, :integer do
+        transaction? true
+        argument :value, :integer, allow_nil?: false
+        argument :proof, :string, allow_nil?: false
+        run {FailRun, []}
+      end
+
+      # A fence-protected nonce action whose body SUCCEEDS — proves the burn-marker commits
+      # independently AND complete/2 drives NO response persistence (a fence marker is a one-way
+      # spend, not a stored-response idempotency claim). Guards execution_class → :nonce.
+      action :redeem_succeed_fence, :integer do
+        transaction? true
+        argument :value, :integer, allow_nil?: false
+        argument :proof, :string, allow_nil?: false
+        run {RedeemRun, []}
+      end
     end
 
     onetime do
@@ -147,6 +167,22 @@ defmodule AshOnetime.Test.LivebookExamples do
         scope([{:static, "redeem_fail"}])
         key({:verified, :proof, ProofVerifier})
         window(max_age: {1, :hour}, clock_skew: {5, :second})
+      end
+
+      protect :redeem_fail_fence do
+        strategy :one_time_nonce
+        scope([{:static, "redeem_fail_fence"}])
+        key({:verified, :proof, ProofVerifier})
+        window(max_age: {1, :hour}, clock_skew: {5, :second})
+        commit(:independent)
+      end
+
+      protect :redeem_succeed_fence do
+        strategy :one_time_nonce
+        scope([{:static, "redeem_succeed_fence"}])
+        key({:verified, :proof, ProofVerifier})
+        window(max_age: {1, :hour}, clock_skew: {5, :second})
+        commit(:independent)
       end
     end
   end

@@ -91,7 +91,11 @@ defmodule AshOnetime.Store.Postgres do
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
   @impl AshOnetime.Store
-  def claim_committed(%Target{} = target, %Request{strategy: :idempotency} = request) do
+  def claim_committed(
+        %Target{} = target,
+        %Request{strategy: strategy} = request
+      )
+      when strategy in [:idempotency, :one_time_nonce] do
     parent = self()
     message_ref = make_ref()
 
@@ -630,9 +634,14 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   defp claim_for_commit(target, request) do
+    # `:collision` is nonce-only by construction (collision_result/2 returns it only for
+    # :one_time_nonce; idempotency collisions resolve to :processing/:complete via loaded_result/2),
+    # so admitting it here introduces no idempotency-path change. It lets a committed nonce
+    # retry (a reused proof whose marker already committed independently) reach decide/5's
+    # :collision arm instead of being rolled back to :store_invariant. See ADR-0003.
     case claim(target, request) do
       %Result{status: status, transaction: :open} = result
-      when status in [:admitted, :processing, :complete] ->
+      when status in [:admitted, :processing, :complete, :collision] ->
         result
 
       %Result{} = result ->

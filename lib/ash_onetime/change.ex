@@ -38,12 +38,9 @@ defmodule AshOnetime.Change do
   defp reserve(changeset, protection, context) do
     trusted = trusted_context(context)
 
-    reservation =
-      if protection.external_effect do
-        AshOnetime.ExternalRecovery.reserve(changeset, protection, trusted)
-      else
-        AshOnetime.Admission.reserve(changeset, protection, trusted)
-      end
+    # Mirror of generic_action.ex's dispatch_reservation (the mutation sentinel
+    # "replay-fence-dispatch" targets generic_action.ex; this CRUD path is structurally identical).
+    reservation = dispatch_reservation(changeset, protection, trusted)
 
     case reservation do
       {:execute, state} ->
@@ -62,6 +59,19 @@ defmodule AshOnetime.Change do
 
       {:error, error} ->
         {:error, error}
+    end
+  end
+
+  defp dispatch_reservation(subject, protection, trusted) do
+    cond do
+      protection.external_effect ->
+        AshOnetime.ExternalRecovery.reserve(subject, protection, trusted)
+
+      protection.strategy == :one_time_nonce and protection.commit == :independent ->
+        AshOnetime.Admission.reserve_committed(subject, protection, trusted)
+
+      true ->
+        AshOnetime.Admission.reserve(subject, protection, trusted)
     end
   end
 

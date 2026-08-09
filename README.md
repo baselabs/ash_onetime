@@ -47,7 +47,10 @@ The package is [published on Hex](https://hex.pm/packages/ash_onetime) as v0.1.0
 `:idempotency` or `:one_time_nonce` and declares a nonempty scope; there is no default
 strategy or global scope fallback. PostgreSQL-authoritative admission, transactional Ash
 execution, typed replay, fail-closed nonce spending, signed tokens, external-effect recovery,
-bounded cleanup, optional cache/Plug/Oban integrations, and release gates are present.
+bounded cleanup, optional cache/Plug/Oban integrations, and release gates are present. Nonce
+protections may opt into `commit: :independent` for [RFC 9449 (DPoP)](https://datatracker.ietf.org/doc/html/rfc9449#section-11.1)
+§11.1 replay fencing — a proof's spend survives action-body failure and rejects reuse for the
+acceptance window.
 
 ## Compatibility
 

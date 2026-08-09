@@ -86,6 +86,64 @@ defmodule AshOnetime.Admission do
   def reserve(_subject, _protection, _trusted_context),
     do: {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
 
+  @doc """
+  Reserves a keyed-effect admission with the claim committed INDEPENDENTLY of the action
+  transaction (the DPoP §11.1 replay-fence path, ADR-0003).
+
+  Structurally identical to `reserve/3` except the claim commits in its own transaction via
+  `Store.claim_committed/2` (a worker process on its own connection, nesting-guarded at
+  `Store.Postgres.run_committed_claim_transaction/2`), so an action-body failure cannot roll
+  the spend back. The result resolves under `:committed_external_claim` — the existing,
+  ADR-0001-blessed mode for an independently-committed claim. A reused proof within the
+  acceptance window collides on retry and rejects with `:nonce_already_used` via the existing
+  `:collision` decide arm, exactly like the commit-with-action nonce path. See ADR-0003.
+  """
+  @spec reserve_committed(Ash.Changeset.t() | Ash.ActionInput.t(), struct(), map()) ::
+          {:execute, State.t()}
+          | {:execute_untracked, State.t()}
+          | {:replay, term(), State.t()}
+          | {:error, Error.t()}
+  def reserve_committed(subject, protection, trusted_context)
+      when is_map(subject) and is_map(protection) and is_map(trusted_context) do
+    started = System.monotonic_time()
+
+    with :ok <- reject_reserved(subject),
+         :ok <- reject_external_effect(protection),
+         {:ok, state} <- prepare_resolved(subject, protection, trusted_context),
+         %Result{} = result <- store().claim_committed(state.target, state.request) do
+      resolve(
+        result,
+        %{state | request: sanitize_request(state.request)},
+        protection,
+        started,
+        :committed_external_claim
+      )
+    else
+      {:error, %Error{} = error} ->
+        emit_admission(subject, protection, started, :rejected)
+        {:error, error}
+
+      %Result{} = result ->
+        emit_admission(subject, protection, started, :failed)
+        {:error, store_error(result)}
+
+      _other ->
+        emit_admission(subject, protection, started, :failed)
+        {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
+    end
+  rescue
+    _exception ->
+      emit_admission(subject, protection, System.monotonic_time(), :failed)
+      {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
+  catch
+    _kind, _reason ->
+      emit_admission(subject, protection, System.monotonic_time(), :failed)
+      {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
+  end
+
+  def reserve_committed(_subject, _protection, _trusted_context),
+    do: {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
+
   @doc false
   @spec prepare(Ash.Changeset.t() | Ash.ActionInput.t(), struct(), map()) ::
           {:ok, State.t()} | {:error, Error.t()} | Result.t()
@@ -718,6 +776,12 @@ defmodule AshOnetime.Admission do
     do: :open
 
   defp execution_class(:one_time_nonce, :local_claim), do: :nonce
+
+  # The committed-nonce burn-marker (ADR-0003 DPoP replay fence). Maps to :nonce, NOT
+  # :external_execute — a burn-marker has no stored response to persist, and :nonce routes
+  # through complete/2's nonce short-circuit (returns {:ok, result} with no persistence).
+  defp execution_class(:one_time_nonce, :committed_external_claim), do: :nonce
+
   defp execution_class(:idempotency, :committed_external_claim), do: :external_execute
   defp execution_class(:idempotency, :locked_external_finalize), do: :external_execute
   defp execution_class(:idempotency, :local_claim), do: :execute

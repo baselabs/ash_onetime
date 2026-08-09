@@ -58,6 +58,30 @@ onetime do
 end
 ```
 
+### DPoP replay fencing (`commit: :independent`)
+
+By default a nonce spend commits inside the action's transaction, so an action-body failure
+rolls the spend back — correct for a single-use authenticator whose retry bears a fresh proof.
+For [RFC 9449 (DPoP)](https://datatracker.ietf.org/doc/html/rfc9449#section-11.1) §11.1 replay
+protection, set `commit: :independent` so the claim commits in its own transaction before the
+body runs. A downstream failure then leaves the proof spent for the acceptance window, and a
+retry with the same `jti` is rejected with `:nonce_already_used`:
+
+```elixir
+  protect :dpop_protected do
+    strategy :one_time_nonce
+    scope [{:tenant, MyApp.TenantScope}]
+    key {:verified, :dpop_proof, MyApp.DPoPVerifier}
+    window max_age: {5, :minute}, clock_skew: {30, :second}
+    commit :independent
+  end
+```
+
+The option is nonce-only (rejected on `:idempotency`) and default-off. See ADR-0003
+(Independent-commit nonce) and the
+[operations guide](operations.md#dpop-replay-fence-operational-characteristics) for pool-sizing
+notes — the independent-commit worker uses a second connection checkout per in-flight request.
+
 Only AshPostgres actions with `transaction? true` can be protected. Read actions,
 duplicate protections, unsafe replay hooks, unresolved scope/key references, reserved
 verification inputs, and strategy-incompatible options fail during resource compilation

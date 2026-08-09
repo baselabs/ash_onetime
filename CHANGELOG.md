@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- **DPoP replay fence (admission):** add `commit: :independent` (default `:with_action`) on
+  `:one_time_nonce` protections. When set, the nonce claim commits in its own transaction before
+  the action body runs (via the existing `claim_committed` worker), so a body failure cannot make
+  the proof reusable — RFC 9449 §11.1 request-attempt scope. A reused proof within the acceptance
+  window is rejected with `:nonce_already_used` via the existing collision path. Opt-in: existing
+  nonce consumers are byte-for-byte unchanged. Rejected (compile error) on `:idempotency`. No new
+  table, migration, error code, or telemetry event. See ADR-0003 (Independent-commit nonce).
+  Operational note: the `claim_committed`
+  worker uses a +1 connection checkout per in-flight protected request and a 30s timeout (fails
+  closed); size the pool accordingly.
 - **SEC-5 (data-layer):** add forward monthly `response_payloads` partition creation
   (`Store.roll_partitions/2`, `mix ash_onetime.roll_partitions`,
   `AshOnetime.Oban.PartitionWorker`) plus a one-time forward migration

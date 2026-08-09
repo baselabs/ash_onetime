@@ -114,6 +114,29 @@ Telemetry events are `[:ash_onetime, event]`, where event is `:admission`, `:con
 `count`. Raw keys, scopes, tokens, fingerprints, payloads, signatures, resolver identities,
 exceptions, and store results are never telemetry fields.
 
+### DPoP replay fence operational characteristics
+
+A `:one_time_nonce` protection with `commit: :independent` (the DPoP §11.1 replay fence,
+ADR-0003) routes its claim through the
+`claim_committed` worker, which spawns a process that opens its own transaction on its own
+connection. Two operational characteristics apply, inherited from the external-effect path but
+now exercised per-request rather than per-external-effect:
+
+- **Connection-pool pressure.** The worker needs a checkout from the same pool while the
+  caller's `before_action` still holds one — effectively +1 connection per in-flight protected
+  request. Under `pool_size N` concurrent protected actions, the `(N+1)`th blocks waiting for a
+  checkout; under sustained burst this surfaces as latency and, at the limit, a
+  `:checkout_unavailable` rejection (which fails closed — the request is rejected, never
+  admitted unsafely). Size the pool for the expected concurrency of DPoP-protected endpoints.
+- **30s worker timeout.** If the worker stalls (slow query, lock contention on the unique index,
+  pool pressure), `before_action` blocks for up to 30s before the worker times out and returns
+  `:dispatched_unknown`, which surfaces as a `:store_uncertainty` telemetry event and a typed
+  store error. Both timeout and a genuine disconnect fail closed; an operator cannot
+  distinguish them from telemetry alone, but neither can cause a silent re-admit.
+
+The fence's fail-closed posture means neither characteristic can reopen the replay gap the fence
+exists to close — the worst case is rejection under stress, never a double-spend.
+
 ## Key rotation
 
 Token verification resolves material by the signed key identifier. Add a new key before

@@ -446,8 +446,7 @@ defmodule AshOnetime.MutationCheck do
       mutated: "cleanup: [:claims_deleted, :partitions_dropped]",
       test: "test/ash_onetime/store/partition_test.exs",
       tag: "partitions_created_telemetry_mutation",
-      test_name:
-        "emits a :cleanup :partitions_created telemetry event on a roll",
+      test_name: "emits a :cleanup :partitions_created telemetry event on a roll",
       assertion: ":partitions_created"
     },
     "payload-partition-lock" => %{
@@ -906,6 +905,18 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "ambiguous outcome from an unknown execute and recover never executes or finalizes",
       assertion: "assert Exception.message(error) =~ \"external effect outcome is unknown\""
+    },
+    "replay-fence-dispatch" => %{
+      path: "lib/ash_onetime/generic_action.ex",
+      original:
+        "      protection.strategy == :one_time_nonce and protection.commit == :independent ->\n        AshOnetime.Admission.reserve_committed(subject, protection, trusted)",
+      mutated:
+        "      protection.strategy == :one_time_nonce and protection.commit == :with_action ->\n        AshOnetime.Admission.reserve_committed(subject, protection, trusted)",
+      test: "test/ash_onetime/nonce_rollback_gap_test.exs",
+      tag: "replay_fence_dispatch_mutation",
+      test_name:
+        "a nonce spend survives action-body failure — the proof is NOT re-admitted (FENCE)",
+      assertion: ":nonce_already_used"
     },
     "completion-once" => %{
       path: "lib/ash_onetime/store/postgres.ex",

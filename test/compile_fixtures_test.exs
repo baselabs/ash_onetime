@@ -48,7 +48,8 @@ defmodule AshOnetime.CompileFixturesTest do
     "attribute_multitenant_unscoped.exs" =>
       AshOnetime.CompileFixtures.AttributeMultitenantUnscoped,
     "attribute_multitenant_wrong_attribute.exs" =>
-      AshOnetime.CompileFixtures.AttributeMultitenantWrongAttribute
+      AshOnetime.CompileFixtures.AttributeMultitenantWrongAttribute,
+    "commit_on_idempotency.exs" => AshOnetime.CompileFixtures.CommitOnIdempotency
   }
 
   @fixture_expectations %{
@@ -142,7 +143,10 @@ defmodule AshOnetime.CompileFixturesTest do
     "attribute_multitenant_wrong_attribute.exs" =>
       {:charge, :scope,
        "attribute multitenancy requires the tenant attribute :account_id or a {:tenant, module} resolver in scope",
-       9}
+       9},
+    "commit_on_idempotency.exs" =>
+      {:charge, :commit,
+       "commit is nonce-only; idempotency commits with its effect and cannot be configured", 18}
   }
 
   @matrix_expectations %{
