@@ -1,0 +1,404 @@
+<!--
+livebook:{"persist_outputs":true}
+-->
+
+# Idempotency and one-time nonces — a complete walkthrough
+
+```elixir
+Mix.install(
+  [
+    {:ash_onetime, "~> 0.1"},
+    {:ash_postgres, "~> 2.11"}
+  ],
+  consolidate_protocols: false
+)
+```
+
+## Introduction
+
+`ash_onetime` separates two effects that are easy to conflate:
+
+- **Idempotency** — an effectful action that may be safely *retried*. The first execution runs
+  and stores its result; a retry with the same key replays the stored result instead of
+  re-executing. A retry with the same key but a *different* request (a changed fingerprint) is a
+  terminal conflict, never a replay.
+- **One-time nonce** — an action that must run *at most once*. The first spend of a verified
+  proof succeeds; every reuse of that proof is rejected. There is no stored result to replay.
+
+This livebook walks through both end-to-end against a real PostgreSQL: installing the
+admission store, declaring a protected resource, executing fresh, replaying, hitting a
+fingerprint conflict, spending a nonce, and watching the reuse get rejected.
+
+> Requires PostgreSQL 18 reachable at `DATABASE_URL`. Set it in the next cell to point at a
+> database you control; the livebook creates and tears down its own isolated schema.
+
+## Connect to PostgreSQL
+
+Point this at a PostgreSQL 18 instance. The default is the repo's own test harness; any
+dedicated database works.
+
+```elixir
+database_url =
+  System.get_env(
+    "DATABASE_URL",
+    "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+  )
+
+:ok = Application.put_env(:ash, :disable_async?, true)
+:ok = Application.put_env(:ash_onetime_demo, AshOnetimeDemo.Repo, url: database_url, pool_size: 10)
+```
+
+## Define the Repo
+
+```elixir
+defmodule AshOnetimeDemo.Repo do
+  use AshPostgres.Repo, otp_app: :ash_onetime_demo
+
+  @impl AshPostgres.Repo
+  def installed_extensions, do: ["ash-functions"]
+
+  @impl AshPostgres.Repo
+  def min_pg_version, do: %Version{major: 18, minor: 0, patch: 0}
+end
+
+{:ok, _} = AshOnetimeDemo.Repo.start_link()
+```
+
+## The Codec, Classifier, and Verifier
+
+Idempotency needs a response codec (serialize the result for replay) and a classifier (decide
+whether to store, reject, or roll back). One-time nonces need a verifier (return trusted facts
+from a proof). These match the `AshOnetime.Codec` behaviour, the `classify/2` contract on
+`AshOnetime.ResponseClassifier`, and the `verify/2` callback returning `AshOnetime.Verified`.
+
+```elixir
+defmodule AshOnetimeDemo.ChargeCodec do
+  @behaviour AshOnetime.Codec
+
+  @impl true
+  def format_tag, do: "charge-v1"
+
+  @impl true
+  def encode(value, _contract, _opts),
+    do: {:ok, format_tag(), :erlang.term_to_binary(value)}
+
+  @impl true
+  def decode("charge-v1", payload, _contract, _opts),
+    do: {:ok, :erlang.binary_to_term(payload, [:safe])}
+end
+
+defmodule AshOnetimeDemo.ChargeClassifier do
+  # classify/2 returns {:store, value} | {:reject, value} | {:rollback, value}.
+  # We store every completed charge.
+  def classify(value, _context), do: {:store, value}
+end
+
+defmodule AshOnetimeDemo.ProofVerifier do
+  # A verifier turns raw proof material into trusted AshOnetime.Verified facts.
+  # In production this checks a real signature; here we trust the input for the demo.
+  def verify(proof, _context) when is_binary(proof) do
+    {:ok,
+     %AshOnetime.Verified{
+       key: proof,
+       issued_at: DateTime.utc_now(),
+       verifier_id: "demo-verifier"
+     }}
+  end
+
+  def algorithm, do: :ed25519
+  def trust_model, do: :separated
+end
+
+# A protected generic action's `run` must be a module-based implementation (an anonymous
+# function cannot be replayed safely). This one echoes the :value argument.
+defmodule AshOnetimeDemo.RedeemRun do
+  use Ash.Resource.Actions.Implementation
+
+  @impl true
+  def run(input, _opts, _context), do: {:ok, Ash.ActionInput.get_argument(input, :value)}
+end
+
+:ok
+```
+
+## The protected resource
+
+A `Charge` resource with an idempotent `:charge` action (store-and-replay) and a one-time
+`redeem` generic action (spend-once). The resource uses context multitenancy, so the Postgres
+schema we migrate into becomes the tenant.
+
+```elixir
+defmodule AshOnetimeDemo.Domain do
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshOnetimeDemo.Charge
+  end
+end
+
+defmodule AshOnetimeDemo.Charge do
+  use Ash.Resource,
+    domain: AshOnetimeDemo.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshOnetime.Resource]
+
+  postgres do
+    table "demo_charges"
+    repo AshOnetimeDemo.Repo
+  end
+
+  multitenancy do
+    strategy :context
+  end
+
+  attributes do
+    uuid_primary_key :id
+    attribute :account_id, :uuid, allow_nil?: false, public?: true
+    attribute :amount, :integer, allow_nil?: false, public?: true
+  end
+
+  actions do
+    defaults [:read]
+
+    create :charge do
+      transaction? true
+      argument :idempotency_key, :string, allow_nil?: false
+      accept [:account_id, :amount]
+    end
+
+    action :redeem, :integer do
+      transaction? true
+      argument :value, :integer, allow_nil?: false
+      argument :proof, :string, allow_nil?: false
+      run {AshOnetimeDemo.RedeemRun, []}
+    end
+  end
+
+  onetime do
+    protect :charge do
+      strategy :idempotency
+      scope([{:static, "charge"}, {:attribute, :account_id}])
+      key({:client, :idempotency_key})
+      # Bind the fingerprint to everything that changes the effect.
+      fingerprint(attributes: [:account_id, :amount])
+      response(AshOnetimeDemo.ChargeCodec,
+        fields: [:id, :account_id, :amount],
+        classify: AshOnetimeDemo.ChargeClassifier
+      )
+      retention({1, :hour})
+    end
+
+    protect :redeem do
+      strategy :one_time_nonce
+      scope([{:static, "redeem"}])
+      key({:verified, :proof, AshOnetimeDemo.ProofVerifier})
+      window(max_age: {1, :hour}, clock_skew: {5, :second})
+    end
+  end
+end
+
+:ok
+```
+
+## Install the admission store
+
+The deterministic installer writes the `ash_onetime` migration (claims, response payloads,
+constraints, cleanup). We generate it into a temp dir and run it into a fresh, isolated
+schema. That schema name becomes our tenant.
+
+```elixir
+alias AshOnetimeDemo.Repo
+alias Ecto.Adapters.SQL
+
+unique = System.unique_integer([:positive])
+schema = "ash_onetime_demo_#{unique}"
+temp = Path.join(System.tmp_dir!(), "ash_onetime_demo_#{unique}")
+File.mkdir_p!(temp)
+
+# Render the deterministic install migration and compile it. We call render/2 directly
+# (rather than the Mix task) because there is no mix.exs project in a livebook runtime.
+source =
+  Mix.Tasks.AshOnetime.Gen.Migrations.render(Repo,
+    hash_partitions: nil,
+    partition_start: Date.utc_today() |> Date.beginning_of_month()
+  )
+
+timestamp = "20260101000000"
+path = Path.join(temp, "#{timestamp}_install_ash_onetime.exs")
+File.write!(path, source)
+[{module, _}] = Code.compile_file(path)
+version = String.to_integer(timestamp)
+
+SQL.query!(Repo, ~s{CREATE SCHEMA "#{schema}"}, [])
+:ok = Ecto.Migrator.up(Repo, version, module, prefix: schema, log: false)
+
+# The business resource table is NOT created by the ash_onetime migration; create it here.
+SQL.query!(
+  Repo,
+  """
+  CREATE TABLE IF NOT EXISTS "#{schema}"."demo_charges" (
+    id uuid PRIMARY KEY,
+    account_id uuid NOT NULL,
+    amount bigint NOT NULL
+  )
+  """,
+  []
+)
+
+{schema, version, module}
+```
+
+## Part 1 — Idempotency
+
+### Fresh execution
+
+A first `:charge` runs the effect and stores its result.
+
+```elixir
+account_id = "00000000-0000-0000-0000-000000000001"
+
+{:ok, fresh} =
+  AshOnetimeDemo.Charge
+  |> Ash.Changeset.for_create(:charge, %{account_id: account_id, amount: 10, idempotency_key: "key-1"})
+  |> Ash.Changeset.set_tenant(schema)
+  |> Ash.create()
+
+IO.puts("Fresh amount: #{fresh.amount}")
+IO.puts("Replayed? #{inspect(AshOnetime.replayed?(fresh))}")
+```
+
+### Retry replays the stored result
+
+The same `idempotency_key` with the same content returns the *stored* record — the effect does
+not run a second time. `replayed?/1` flips from `false` to `true`.
+
+```elixir
+{:ok, replayed} =
+  AshOnetimeDemo.Charge
+  |> Ash.Changeset.for_create(:charge, %{account_id: account_id, amount: 10, idempotency_key: "key-1"})
+  |> Ash.Changeset.set_tenant(schema)
+  |> Ash.create()
+
+IO.puts("Replayed id == fresh id: #{replayed.id == fresh.id}")
+IO.puts("Replayed? #{inspect(AshOnetime.replayed?(replayed))}")
+
+%{rows: [[count]]} =
+  SQL.query!(Repo, ~s{SELECT COUNT(*) FROM "#{schema}"."demo_charges"}, [])
+
+IO.puts("Rows in demo_charges (effect ran once): #{count}")
+```
+
+### Same key, different request → conflict
+
+Reusing `idempotency_key` with a changed `amount` is a terminal conflict, never a replay. The
+typed `:code` survives the Ash pipeline; read it with `AshOnetime.Error.code/1`.
+
+```elixir
+{:error, error} =
+  AshOnetimeDemo.Charge
+  |> Ash.Changeset.for_create(:charge, %{account_id: account_id, amount: 99, idempotency_key: "key-1"})
+  |> Ash.Changeset.set_tenant(schema)
+  |> Ash.create()
+
+IO.puts("Code: #{inspect(AshOnetime.Error.code(error))}")
+
+%{rows: [[count]]} =
+  SQL.query!(Repo, ~s{SELECT COUNT(*) FROM "#{schema}"."demo_charges"}, [])
+
+IO.puts("Rows in demo_charges (no second mutation): #{count}")
+```
+
+## Part 2 — One-time nonce
+
+### Spend once
+
+A first `:redeem` spends the proof and runs the action.
+
+```elixir
+{:ok, value} =
+  AshOnetimeDemo.Charge
+  |> Ash.ActionInput.for_action(:redeem, %{value: 7, proof: "proof-once"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+
+IO.puts("Redeemed value: #{value}")
+```
+
+### Reuse is rejected
+
+Reusing the same `proof` is rejected as `:nonce_already_used` — the action body does not run.
+
+```elixir
+{:error, error} =
+  AshOnetimeDemo.Charge
+  |> Ash.ActionInput.for_action(:redeem, %{value: 7, proof: "proof-once"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+
+IO.puts("Code: #{inspect(AshOnetime.Error.code(error))}")
+```
+
+## Part 3 — Telemetry
+
+`ash_onetime` emits a closed, value-free telemetry surface. Attach a handler to observe
+admissions without leaking request data.
+
+```elixir
+:ok =
+  :telemetry.attach_many(
+    "demo.ash-onetime",
+    [[:ash_onetime, :admission], [:ash_onetime, :conflict]],
+    fn event, measurements, metadata, _config ->
+      IO.puts(
+        "#{Enum.join(event, ".")} result_class=#{metadata.result_class} " <>
+          "strategy=#{metadata.strategy} action=#{metadata.action}"
+      )
+    end,
+    nil
+  )
+
+# A fresh charge emits an :admitted admission; a reused nonce emits a :nonce_used conflict.
+{:ok, _} =
+  AshOnetimeDemo.Charge
+  |> Ash.Changeset.for_create(:charge, %{
+    account_id: "00000000-0000-0000-0000-000000000002",
+    amount: 5,
+    idempotency_key: "key-telemetry"
+  })
+  |> Ash.Changeset.set_tenant(schema)
+  |> Ash.create()
+
+{:ok, _} =
+  AshOnetimeDemo.Charge
+  |> Ash.ActionInput.for_action(:redeem, %{value: 1, proof: "proof-telemetry"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+
+{:error, _} =
+  AshOnetimeDemo.Charge
+  |> Ash.ActionInput.for_action(:redeem, %{value: 1, proof: "proof-telemetry"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+
+:telemetry.detach("demo.ash-onetime")
+:ok
+```
+
+## Clean up
+
+```elixir
+:ok = Ecto.Migrator.down(Repo, version, module, prefix: schema, log: false)
+SQL.query!(Repo, ~s{DROP SCHEMA IF EXISTS "#{schema}" CASCADE}, [])
+File.rm_rf!(temp)
+:ok
+```
+
+## Where to next
+
+- [Idempotency guide](https://hexdocs.pm/ash_onetime/idempotency.html) and
+  [One-time nonces](https://hexdocs.pm/ash_onetime/one-time-nonces.html) — the full contracts.
+- [Recipes](https://hexdocs.pm/ash_onetime/recipes.html) — payment, webhook, and redemption
+  patterns.
+- [Errors and HTTP mapping](https://hexdocs.pm/ash_onetime/errors.html) — the full code→status
+  table.
+- [Telemetry](https://hexdocs.pm/ash_onetime/telemetry.html) — the closed event surface.

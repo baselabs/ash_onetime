@@ -108,6 +108,7 @@ defmodule AshOnetime.MixProject do
         "documentation/telemetry.md",
         "documentation/upgrading.md",
         "documentation/faq.md",
+        "documentation/livebooks/idempotency-and-nonces.livemd",
         "documentation/dsls/DSL-AshOnetime.Resource.md",
         "CONTRIBUTING.md",
         "SECURITY.md",
