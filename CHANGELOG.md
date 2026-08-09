@@ -1,6 +1,24 @@
 # Changelog
 
-All notable changes to this project are documented here.
+All notable changes to this project are documented in this file.
+
+## Unreleased
+
+Security-driven dependency floor bump (breaking for consumers on the old floor).
+
+- **Ash floor raised to 3.31.1** (from 3.29.3). EEF-CVE-2026-70395 (predicate injection in
+  `manage_relationship` belongs_to lookup disclosing secret lookup keys) and
+  EEF-CVE-2026-69659 (memory exhaustion via unbounded keyset-cursor deserialization) affect
+  Ash below 3.31.1; both are patched in 3.31.1. `mix hex.audit` — a required gate — now fails
+  on the 3.29.3 lock. Consumers pinned to Ash 3.29.3–3.31.0 must bump Ash to ≥ 3.31.1. See
+  ADR-0004 (Security-driven Ash floor). The CI matrix narrows from
+  `[3.29.3, 3.30.1, latest]` to `[3.31.1, latest]`.
+- **Export census version-tolerance (test harness):** the documented public-export census no
+  longer breaks on Splode/Ash framework-injection drift. It derives each module's
+  project-authored exports from its own source AST, so framework-injected functions (e.g.
+  Splode 0.3.2's `keyword_list_options?/0`) are auto-classified rather than hand-maintained,
+  and the census guards exactly the project-owned public surface. This fixed a CI failure
+  present since v0.1.0 across all Ash-matrix cells.
 
 ## v0.2.0 — 2026-08-09
 

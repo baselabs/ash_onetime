@@ -23,9 +23,8 @@ jobs:
       fail-fast: false
       matrix:
         ash:
-          - "3.29.3" # declared floor (3.29.0-3.29.2 excluded: EEF-CVE-2026-55736)
-          - "3.30.1" # intermediate minor
-          - "latest" # floating >= 3.29.3, < 4.0.0 — newest published Ash 3.x
+          - "3.31.1" # declared floor (EEF-CVE-2026-55736/70395/69659 all fixed here)
+          - "latest" # floating >= 3.31.1, < 4.0.0 — newest published Ash 3.x
 
     services:
       postgres:
