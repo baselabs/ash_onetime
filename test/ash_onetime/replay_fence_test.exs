@@ -24,14 +24,14 @@ defmodule AshOnetime.ReplayFenceTest do
 
   alias AshOnetime.Store.Result
   alias AshOnetime.Test.{FaultStore, LivebookExamples, Repo}
-  alias Ecto.Adapters.SQL
+  alias Ecto.Adapters.{SQL, SQL.Sandbox}
   alias LivebookExamples.Charge
 
   @moduletag unboxed: true
 
   setup_all do
     installation = install_store!()
-    {:ok, prefix: installation.schema}
+    {:ok, prefix: installation.schema, migration_module: installation.module}
   end
 
   setup %{prefix: prefix} do
@@ -128,6 +128,132 @@ defmodule AshOnetime.ReplayFenceTest do
     end
   end
 
+  describe "the CRUD (changeset) dispatch path also fences (change.ex, not just generic_action.ex)" do
+    @tag replay_fence: true
+    @tag replay_fence_crud_dispatch_mutation: true
+    test "a nonce-protected CREATE with commit: :independent spends independently and rejects reuse",
+         %{prefix: prefix, fence_repo: repo} do
+      # Exercises change.ex's dispatch_reservation/3 (the CRUD path), NOT generic_action.ex.
+      # A succeeding create commits its marker via claim_committed; a retry with the same proof
+      # collides with :nonce_already_used. If the change.ex branch regressed (wrong guard /
+      # wrong function), the retry would re-admit instead of rejecting.
+      proof = "proof-crud-#{System.unique_integer([:positive])}"
+      account = Ash.UUID.generate()
+
+      assert {:ok, %AshOnetime.Test.LivebookExamples.Charge{}} =
+               run_crud_fence(repo, prefix, proof, account, 1)
+
+      # The retry rejects — the change.ex dispatch routed through reserve_committed.
+      assert {:error, retry} = run_crud_fence(repo, prefix, proof, account, 1)
+      assert AshOnetime.Error.code(retry) == :nonce_already_used
+    end
+  end
+
+  describe "concurrent retry races the unique constraint (tripwire #3)" do
+    @tag replay_fence: true
+    test "two concurrent attempts with the same proof: exactly one admits, one rejects",
+         %{prefix: prefix, fence_repo: repo} do
+      proof = "proof-race-#{System.unique_integer([:positive])}"
+
+      # Two in-flight attempts race the same (operation_hash, scope_hash, key_hash). The unique
+      # constraint arbitrates: exactly one admits, the other collides. Both see the committed
+      # claim independently. A real `Task.async` pair against the unboxed repo — not a sequential
+      # mock — so the race is genuine.
+      tasks =
+        Enum.map(1..2, fn _ ->
+          Task.async(fn ->
+            previous = Repo.get_dynamic_repo()
+            Repo.put_dynamic_repo(repo)
+
+            try do
+              Charge
+              |> Ash.ActionInput.for_action(:redeem_succeed_fence, %{value: 7, proof: proof})
+              |> Ash.ActionInput.set_tenant(prefix)
+              |> Ash.run_action()
+            after
+              Repo.put_dynamic_repo(previous)
+            end
+          end)
+        end)
+
+      results = Task.await_many(tasks, 30_000)
+
+      codes =
+        Enum.map(results, fn
+          {:ok, _} -> :ok
+          {:error, error} -> AshOnetime.Error.code(error)
+        end)
+
+      assert :ok in codes
+      assert :nonce_already_used in codes
+      assert Enum.count(codes, &(&1 == :ok)) == 1
+    end
+  end
+
+  describe "cross-tenant isolation (tripwire #7)" do
+    @tag replay_fence: true
+    test "the same proof admits independently in two tenants (no cross-tenant bleed)",
+         %{prefix: prefix, fence_repo: repo, migration_module: module} do
+      # Two tenants = two prefixes (context-multitenancy physical-schema isolation). The same
+      # proof in each admits independently — the fence keys on (operation, scope, key) and the
+      # scope/tenant differs. No collision across tenants. Second prefix via Ecto.Migrator.up
+      # with a bumped version (the tenant_prefix_test.exs pattern, since install_generated! can
+      # only run once per test module).
+      other_prefix = "ash_onetime_test_#{Ecto.UUID.generate() |> String.replace("-", "")}"
+      other_version = 9_999_999_999
+
+      Sandbox.mode(Repo, :auto)
+
+      previous_dyn = Repo.get_dynamic_repo()
+      Repo.put_dynamic_repo(repo)
+
+      try do
+        SQL.query!(Repo, ~s(CREATE SCHEMA "#{other_prefix}"), [])
+        Ecto.Migrator.up(Repo, other_version, module, prefix: other_prefix, log: false)
+      after
+        Repo.put_dynamic_repo(previous_dyn)
+        Sandbox.mode(Repo, :manual)
+      end
+
+      on_exit(fn ->
+        Sandbox.mode(Repo, :auto)
+
+        previous_dyn = Repo.get_dynamic_repo()
+        Repo.put_dynamic_repo(repo)
+
+        try do
+          Ecto.Migrator.down(Repo, other_version, module, prefix: other_prefix, log: false)
+          SQL.query!(Repo, ~s(DROP SCHEMA IF EXISTS "#{other_prefix}" CASCADE), [])
+        after
+          Repo.put_dynamic_repo(previous_dyn)
+          Sandbox.mode(Repo, :manual)
+        end
+      end)
+
+      SQL.query!(
+        repo,
+        """
+        CREATE TABLE IF NOT EXISTS "#{other_prefix}"."demo_charges" (
+          id uuid PRIMARY KEY, account_id uuid NOT NULL, amount bigint NOT NULL
+        )
+        """,
+        []
+      )
+
+      proof = "proof-tenant-#{System.unique_integer([:positive])}"
+
+      # Tenant A admits.
+      assert {:ok, _} = run_succeed_fence(repo, prefix, proof, 1)
+
+      # Tenant B with the SAME proof also admits — different physical schema, no collision.
+      assert {:ok, _} = run_succeed_fence(repo, other_prefix, proof, 1)
+
+      # But reusing the proof WITHIN tenant A rejects.
+      assert {:error, retry} = run_succeed_fence(repo, prefix, proof, 1)
+      assert AshOnetime.Error.code(retry) == :nonce_already_used
+    end
+  end
+
   describe "a successful fence admit persists NO response (execution_class → :nonce)" do
     @tag replay_fence: true
     test "the body succeeds, the result returns, and no response payload is stored",
@@ -190,14 +316,19 @@ defmodule AshOnetime.ReplayFenceTest do
       assert {:error, _} = run_fence(repo, prefix, proof, 1)
       key_hash = capture_key_hash(repo, prefix, proof)
 
-      # Force the marker to be cleanup-eligible by back-dating retain_until past the window,
-      # following the established window_cleanup_test.exs SQL-manipulation pattern (the Postgres
-      # clock cannot be advanced from Elixir).
+      # Force the marker to be cleanup-eligible by back-dating retain_until, admitted_at,
+      # inserted_at, AND issued_at past the window, following the established
+      # window_cleanup_test.exs SQL-manipulation pattern. All four timestamp fields must move
+      # together so the CHECKs (retain_until > admitted_at, retain_until > issued_at) hold;
+      # back-dating only retain_until on a just-admitted row violates them.
       SQL.query!(
         repo,
         """
         UPDATE "#{prefix}"."ash_onetime_nonce_claims"
-        SET retain_until = transaction_timestamp() - interval '1 microsecond'
+        SET retain_until = transaction_timestamp() - interval '2 hours',
+            admitted_at = transaction_timestamp() - interval '3 hours',
+            inserted_at = transaction_timestamp() - interval '3 hours',
+            issued_at = transaction_timestamp() - interval '4 hours'
         WHERE key_hash = $1
         """,
         [key_hash]
@@ -243,6 +374,24 @@ defmodule AshOnetime.ReplayFenceTest do
       |> Ash.ActionInput.for_action(:redeem_succeed_fence, %{value: value, proof: proof})
       |> Ash.ActionInput.set_tenant(prefix)
       |> Ash.run_action()
+    after
+      Repo.put_dynamic_repo(previous)
+    end
+  end
+
+  defp run_crud_fence(repo, prefix, proof, account_id, amount) do
+    previous = Repo.get_dynamic_repo()
+    Repo.put_dynamic_repo(repo)
+
+    try do
+      Charge
+      |> Ash.Changeset.for_create(:nonce_charge_fence, %{
+        proof: proof,
+        account_id: account_id,
+        amount: amount
+      })
+      |> Ash.Changeset.set_tenant(prefix)
+      |> Ash.create()
     after
       Repo.put_dynamic_repo(previous)
     end

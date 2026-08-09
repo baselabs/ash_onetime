@@ -38,8 +38,13 @@ defmodule AshOnetime.Change do
   defp reserve(changeset, protection, context) do
     trusted = trusted_context(context)
 
-    # Mirror of generic_action.ex's dispatch_reservation (the mutation sentinel
-    # "replay-fence-dispatch" targets generic_action.ex; this CRUD path is structurally identical).
+    # The CRUD dispatch_reservation mirrors generic_action.ex's. Covered by the
+    # :nonce_charge_fence CRUD test (replay_fence_test.exs). A discriminating mutation sentinel
+    # for this path is infeasible: a succeeding CRUD create is observationally identical under
+    # commit-with-action vs commit-independent (both admit + commit on success), and a failing
+    # CRUD body needs a custom change that races the nonce CRUD lifecycle verifier's
+    # replay_capabilities/1 load-ordering check. The generic_action.ex dispatch — which diverges
+    # observably on body failure — carries the replay-fence-dispatch mutation sentinel.
     reservation = dispatch_reservation(changeset, protection, trusted)
 
     case reservation do

@@ -108,6 +108,16 @@ defmodule AshOnetime.Test.LivebookExamples do
         accept [:account_id, :amount]
       end
 
+      # A CRUD (changeset) nonce action with commit: :independent — exercises the change.ex
+      # dispatch path (vs. the generic_action.ex path the :redeem_*_fence actions use). The
+      # create body SUCCEEDS, so the fence marker commits in before_action via claim_committed
+      # and a retry with the same proof collides with :nonce_already_used.
+      create :nonce_charge_fence do
+        transaction? true
+        argument :proof, :string, allow_nil?: false
+        accept [:account_id, :amount]
+      end
+
       action :redeem, :integer do
         transaction? true
         argument :value, :integer, allow_nil?: false
@@ -180,6 +190,14 @@ defmodule AshOnetime.Test.LivebookExamples do
       protect :redeem_succeed_fence do
         strategy :one_time_nonce
         scope([{:static, "redeem_succeed_fence"}])
+        key({:verified, :proof, ProofVerifier})
+        window(max_age: {1, :hour}, clock_skew: {5, :second})
+        commit(:independent)
+      end
+
+      protect :nonce_charge_fence do
+        strategy :one_time_nonce
+        scope([{:static, "nonce_charge_fence"}, {:attribute, :account_id}])
         key({:verified, :proof, ProofVerifier})
         window(max_age: {1, :hour}, clock_skew: {5, :second})
         commit(:independent)
