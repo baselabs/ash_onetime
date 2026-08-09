@@ -944,8 +944,10 @@ defmodule AshOnetime.MutationCheck do
     },
     "task5-reserved-input" => %{
       path: "lib/ash_onetime/admission.ex",
-      original: "with :ok <- reject_reserved(subject),",
-      mutated: "with :ok <- :ok,",
+      original:
+        "with :ok <- reject_reserved(subject),\n         :ok <- reject_external_effect(protection),\n         {:ok, state} <- prepare_resolved(subject, protection, trusted_context),\n         %Result{} = result <- store().claim(state.target, state.request) do",
+      mutated:
+        "with :ok <- :ok,\n         :ok <- reject_external_effect(protection),\n         {:ok, state} <- prepare_resolved(subject, protection, trusted_context),\n         %Result{} = result <- store().claim(state.target, state.request) do",
       test: "test/ash_onetime/authorization_order_test.exs",
       tag: "task5_reserved_mutation",
       test_name: "reserved verification facts reject before callbacks and SQL",
