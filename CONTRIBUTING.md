@@ -55,3 +55,24 @@ Spark reference and pass warnings as errors.
 
 Never commit secrets, provider-specific signature implementations, reference-project
 dependencies, or project-owned version suffixes in durable identifiers.
+
+## Dependency compatibility
+
+The published `mix.exs` bounds (`ash_postgres ~> 2.11`, `spark ~> 2.7`, and the Ash floor
+`>= 3.31.1`) allow forward drift within their major lines. They are NOT the primary guard
+against a transitive semantic shift — a future `ash_postgres` 2.x or `spark` 2.x minor that
+changes transaction-visibility semantics the fail-closed logic depends on would still satisfy
+the bound. The real guard is the **CI compatibility matrix** in `.github/workflows/ci.yml`:
+
+- the declared Ash floor (`3.31.1`, CVE-justified per ADR-0004);
+- a floating `latest` cell that resolves the newest published Ash 3.x on every run via
+  `deps.unlock ash` / `deps.update ash` and re-runs the full gate battery against it.
+
+Forward drift that breaks the fail-closed surface surfaces as a red `latest` cell, not as a
+bound violation. When updating a dependency bound, ensure the matrix still covers the new
+range; tightening a bound without matrix coverage is a regression in the guard. A breaking
+major bump of `ash_postgres` or `spark` (3.x for either) is a matrix-extension event first —
+add the cell, confirm green, then update the bound.
+
+Never commit secrets, provider-specific signature implementations, reference-project
+dependencies, or project-owned version suffixes in durable identifiers.
