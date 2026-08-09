@@ -2,9 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## v0.3.0 — 2026-08-09
 
-Security-driven dependency floor bump (breaking for consumers on the old floor).
+Security release: raises the Ash floor to the CVE-patched 3.31.1 and makes the architecture
+census robust to dependency framework-injection drift. **Breaking dependency change** —
+consumers on Ash 3.29.3–3.31.0 must bump Ash to ≥ 3.31.1 (the library is pre-1.0, so the
+minor version carries the break per the documented convention).
 
 - **Ash floor raised to 3.31.1** (from 3.29.3). EEF-CVE-2026-70395 (predicate injection in
   `manage_relationship` belongs_to lookup disclosing secret lookup keys) and
@@ -18,7 +21,8 @@ Security-driven dependency floor bump (breaking for consumers on the old floor).
   project-authored exports from its own source AST, so framework-injected functions (e.g.
   Splode 0.3.2's `keyword_list_options?/0`) are auto-classified rather than hand-maintained,
   and the census guards exactly the project-owned public surface. This fixed a CI failure
-  present since v0.1.0 across all Ash-matrix cells.
+  present since v0.1.0 across all Ash-matrix cells. Also fixes a seed-dependent flake in the
+  ARCH-1 Splode-membership assertion (force-loads the module before the check).
 
 ## v0.2.0 — 2026-08-09
 

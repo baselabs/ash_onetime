@@ -4,16 +4,28 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: b
 or contract changes bump the minor version (the library is pre-1.0), and each breaking
 change lands here with the exact edit to make.
 
-The published package is [v0.2.0](https://hex.pm/packages/ash_onetime). Set your dependency
+The published package is [v0.3.0](https://hex.pm/packages/ash_onetime). Set your dependency
 to the minor range to pick up patches automatically and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 0.2"}
+{:ash_onetime, "~> 0.3"}
 ```
 
+## Ash floor raised to 3.31.1 (v0.3.0, security-driven)
+
+v0.3.0 tightens the Ash requirement from `>= 3.29.3 and < 4.0.0` to
+`>= 3.31.1 and < 4.0.0`. Two Ash advisories published during the v0.2.0 window affect Ash
+below 3.31.1, both patched in 3.31.1: EEF-CVE-2026-70395 (predicate injection in
+`manage_relationship` belongs_to lookup disclosing secret lookup keys) and
+EEF-CVE-2026-69659 (memory exhaustion via unbounded keyset-cursor deserialization). A security
+library must not admit a vulnerable floor. **Bump Ash to ≥ 3.31.1**, then bump `ash_onetime`:
+
 ```elixir
-{:ash_onetime, "~> 0.2"}
+{:ash_onetime, "~> 0.3"}
 ```
+
+See ADR-0004 (Security-driven Ash floor). The CI compatibility matrix narrows from
+`[3.29.3, 3.30.1, latest]` to `[3.31.1, latest]`.
 
 ## Forward response-partition maintenance (apply once to existing installs)
 

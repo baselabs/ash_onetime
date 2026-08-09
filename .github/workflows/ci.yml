@@ -64,7 +64,7 @@ jobs:
 
       - name: Resolve the matrix Ash version
         # `== X` cells resolve to exactly X; the floating `latest` cell resolves to the
-        # newest Ash satisfying `>= 3.29.3 and < 4.0.0`. Unlock first so the committed
+        # newest Ash satisfying `>= 3.31.1 and < 4.0.0`. Unlock first so the committed
         # lock's floor pin never holds a cell back.
         run: |
           mix deps.unlock ash
