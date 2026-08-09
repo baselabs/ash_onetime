@@ -249,6 +249,42 @@ defmodule AshOnetime.ArchitectureTest do
     Mix.Tasks.AshOnetime.RollPartitions => [run: 1]
   }
 
+  # The exact-export census compares a hand-maintained `@exports` snapshot against
+  # `module.__info__(:functions)`. For modules built on an injecting framework,
+  # `__info__(:functions)` includes functions the framework's macros expand into the
+  # host module at compile time — and that injected set grows across dependency
+  # versions, breaking the census on drift the project does not own.
+  #
+  # Concretely: `AshOnetime.Error` is the only `use Splode.Error` module in the
+  # documented set. CI's compat matrix runs `mix deps.unlock ash && mix deps.update
+  # ash` (.github/workflows/ci.yml), which resolves the newest Splode satisfying
+  # `~> 0.3`; Splode 0.3.2 added `keyword_list_options?/0` to the injected set, so CI
+  # red-barred while the 0.3.1-committed lock stayed green locally.
+  #
+  # The fix declares the genuinely-framework-injected exports per module and applies
+  # the exempt set to BOTH sides of the comparison, so the census still fails loud on
+  # any project-owned export that is added/removed/arity-changed (the guard property
+  # is preserved), and fails loud on a NEW framework injection (forcing deliberate
+  # triage rather than silent absorption). Membership rule: the framework injects the
+  # function AND the project does not author or override it — so `message/1` (the
+  # project's `@impl true def` that Splode only wraps via `__before_compile__`) and
+  # `exception/1` (the project's override restoring the `details: %{}` default) are
+  # NOT exempt; they stay under the exact-export guard. Only `AshOnetime.Error`
+  # carries an exempt entry today; if another documented module adopts an injecting
+  # macro, the census will fail loud and the maintainer adds a key here.
+  @framework_injected %{
+    AshOnetime.Error =>
+      MapSet.new([
+        {:__struct__, 0},
+        {:__struct__, 1},
+        {:error_class?, 0},
+        {:from_json, 1},
+        {:splode_error?, 0},
+        {:exception, 0},
+        {:keyword_list_options?, 0}
+      ])
+  }
+
   test "the production module and public documentation censuses are exact" do
     {:ok, application_modules} = :application.get_key(:ash_onetime, :modules)
 
@@ -310,8 +346,22 @@ defmodule AshOnetime.ArchitectureTest do
   end
 
   test "documented public exports are exact" do
-    actual = Map.new(@documented_modules, &{&1, &1.__info__(:functions)})
-    assert actual == @exports
+    # Compare only the project-owned exports: subtract each module's
+    # `@framework_injected` set from BOTH the actual `__info__(:functions)` and the
+    # expected `@exports` snapshot, so framework-version drift in the injected set
+    # (e.g. Splode adding `keyword_list_options?/0` across a patch bump) cannot
+    # defeat the census while every project-owned export stays under the guard.
+    actual =
+      Map.new(@documented_modules, fn module ->
+        {module, reject_framework_injected(module, module.__info__(:functions))}
+      end)
+
+    expected =
+      Map.new(@exports, fn {module, exports} ->
+        {module, reject_framework_injected(module, exports)}
+      end)
+
+    assert actual == expected
   end
 
   test "AshOnetime.Error is a Splode error so its typed code survives the Ash pipeline" do
@@ -340,6 +390,16 @@ defmodule AshOnetime.ArchitectureTest do
           "ExAws"
         ] do
       refute String.contains?(String.downcase(source), String.downcase(forbidden))
+    end
+  end
+
+  # Drops a module's `@framework_injected` entries from an export keyword list so the
+  # exact-export census compares only the project-owned surface. No-op for modules
+  # with no exempt entry.
+  defp reject_framework_injected(module, exports) do
+    case Map.fetch(@framework_injected, module) do
+      {:ok, injected} -> Enum.reject(exports, &MapSet.member?(injected, &1))
+      :error -> exports
     end
   end
 end
