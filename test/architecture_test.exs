@@ -25,6 +25,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.KeyResolver,
     AshOnetime.KeySource,
     AshOnetime.Oban.CleanupWorker,
+    AshOnetime.Oban.PartitionWorker,
     AshOnetime.Oban.ReapWorker,
     AshOnetime.Plug,
     AshOnetime.ReplaySafety,
@@ -57,9 +58,11 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Verifier,
     AshOnetime.Window,
     Mix.Tasks.AshOnetime.Gen.Migrations,
+    Mix.Tasks.AshOnetime.Gen.RollForward,
     Mix.Tasks.AshOnetime.Install,
     Mix.Tasks.AshOnetime.Prune,
-    Mix.Tasks.AshOnetime.Reap
+    Mix.Tasks.AshOnetime.Reap,
+    Mix.Tasks.AshOnetime.RollPartitions
   ]
 
   @documented_modules [
@@ -79,6 +82,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.KeyResolver,
     AshOnetime.KeySource,
     AshOnetime.Oban.CleanupWorker,
+    AshOnetime.Oban.PartitionWorker,
     AshOnetime.Oban.ReapWorker,
     AshOnetime.Plug,
     AshOnetime.ReplaySafety,
@@ -97,9 +101,11 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Verifier,
     AshOnetime.Window,
     Mix.Tasks.AshOnetime.Gen.Migrations,
+    Mix.Tasks.AshOnetime.Gen.RollForward,
     Mix.Tasks.AshOnetime.Install,
     Mix.Tasks.AshOnetime.Prune,
-    Mix.Tasks.AshOnetime.Reap
+    Mix.Tasks.AshOnetime.Reap,
+    Mix.Tasks.AshOnetime.RollPartitions
   ]
 
   @exports %{
@@ -168,6 +174,14 @@ defmodule AshOnetime.ArchitectureTest do
       perform: 1,
       timeout: 1
     ],
+    AshOnetime.Oban.PartitionWorker => [
+      __opts__: 0,
+      backoff: 1,
+      new: 1,
+      new: 2,
+      perform: 1,
+      timeout: 1
+    ],
     AshOnetime.Oban.ReapWorker => [
       __opts__: 0,
       backoff: 1,
@@ -215,7 +229,13 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Verified => [__struct__: 0, __struct__: 1],
     AshOnetime.Verifier => [],
     AshOnetime.Window => [cleanup_after: 3, cleanup_skew_margin_seconds: 0, validate: 5],
-    Mix.Tasks.AshOnetime.Gen.Migrations => [render: 2, run: 1, timestamp: 0],
+    Mix.Tasks.AshOnetime.Gen.Migrations => [
+      render: 2,
+      render_roll_forward: 2,
+      run: 1,
+      timestamp: 0
+    ],
+    Mix.Tasks.AshOnetime.Gen.RollForward => [run: 1],
     Mix.Tasks.AshOnetime.Install => [
       igniter: 1,
       info: 2,
@@ -225,7 +245,8 @@ defmodule AshOnetime.ArchitectureTest do
       supports_umbrella?: 0
     ],
     Mix.Tasks.AshOnetime.Prune => [run: 1],
-    Mix.Tasks.AshOnetime.Reap => [run: 1]
+    Mix.Tasks.AshOnetime.Reap => [run: 1],
+    Mix.Tasks.AshOnetime.RollPartitions => [run: 1]
   }
 
   test "the production module and public documentation censuses are exact" do

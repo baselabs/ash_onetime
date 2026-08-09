@@ -4,6 +4,22 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- **SEC-5 (data-layer):** add forward monthly `response_payloads` partition creation
+  (`Store.roll_partitions/2`, `mix ash_onetime.roll_partitions`,
+  `AshOnetime.Oban.PartitionWorker`) plus a one-time forward migration
+  (`mix ash_onetime.gen.roll_forward`). The install migration generates a fixed 13-month window;
+  once retention exceeds it, payloads routed to `_default` and were never dropped (the drop path
+  excludes `_default`), silently defeating bounded retention (ADR-0001:65 "reuse after retention
+  is a new execution"). The roll keeps the window ahead of retention; the forward migration
+  back-fills elapsed partitions, adds the index, and drains past-retention payloads stranded in
+  `_default` via a claim-scoped delete. The roll is idempotent and concurrency-safe
+  (advisory-locked, bounded `lock_timeout`). Existing installs run the forward migration once.
+- **SEC-6 (data-layer):** add an index on `ash_onetime_idempotency_claims(response_partition)`.
+  Cleanup's partition-empty check was a full scan per partition per cycle.
+- Telemetry: add `:partitions_created` to the `[:ash_onetime, :cleanup]` event's result-class
+  enum (closed-schema extension, pinned by a mutation fixture). See
+  [Telemetry](documentation/telemetry.md).
+
 ## v0.1.1 — 2026-08-08
 
 Adoption polish: a runnable Livebook walkthrough, richer Igniter installer, and adoption docs.

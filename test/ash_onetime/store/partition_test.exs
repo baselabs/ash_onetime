@@ -1,6 +1,10 @@
 defmodule AshOnetime.Store.PartitionTest do
   use AshOnetime.Test.StoreCase, async: false
 
+  import ExUnit.CaptureIO
+
+  alias Mix.Tasks.AshOnetime.RollPartitions
+
   @moduletag :store
 
   setup_all do
@@ -57,6 +61,101 @@ defmodule AshOnetime.Store.PartitionTest do
     assert payload_partition(prefix, current_id) =~ "ash_onetime_response_payloads_"
     refute payload_partition(prefix, current_id) =~ "_default"
     assert payload_partition(prefix, default_id) =~ "ash_onetime_response_payloads_default"
+  end
+
+  test "the install creates an index on idempotency response_partition for cleanup's range scan",
+       %{
+         prefix: prefix
+       } do
+    # SEC-6: partition_empty?/2 scans WHERE response_partition >= $1 AND < $2; without an index
+    # this is a full scan per partition per cleanup cycle. Pin the index exists.
+    indexes = index_columns(prefix, "ash_onetime_idempotency_claims")
+
+    assert Enum.any?(indexes, fn {name, columns} ->
+             name =~ "response_partition" and columns == ["response_partition"]
+           end),
+           "expected a response_partition index; got #{inspect(indexes)}"
+  end
+
+  describe "roll_partitions/2 (SEC-5 forward partition creation)" do
+    test "creates the next N monthly response_payloads partitions", %{
+      prefix: prefix,
+      target: target
+    } do
+      before = partition_children(prefix, "ash_onetime_response_payloads")
+
+      # The install generates 13 months (offset 0..12); request 15 so months 14-15 are new.
+      assert {:ok, %{partitions_created: created}} = Store.roll_partitions(target, 15)
+      assert created >= 1
+
+      after_roll = partition_children(prefix, "ash_onetime_response_payloads")
+      new_partitions = after_roll -- before
+      assert length(new_partitions) == created
+      # The new partitions carry the canonical naming the drop logic reads back.
+      for name <- new_partitions do
+        assert name =~ ~r/^ash_onetime_response_payloads_\d{4}_\d{2}$/
+      end
+    end
+
+    test "is idempotent — a second roll creates nothing and does not raise", %{
+      prefix: prefix,
+      target: target
+    } do
+      Store.roll_partitions(target, 15)
+      before = partition_children(prefix, "ash_onetime_response_payloads")
+
+      assert {:ok, %{partitions_created: 0}} = Store.roll_partitions(target, 15)
+
+      after_roll = partition_children(prefix, "ash_onetime_response_payloads")
+      assert after_roll == before
+    end
+
+    @tag partitions_created_telemetry_mutation: true
+    test "emits a :cleanup :partitions_created telemetry event on a roll", %{
+      prefix: prefix,
+      target: target
+    } do
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach_many(
+          "roll-partitions-created-telemetry",
+          [[:ash_onetime, :cleanup]],
+          fn event, _measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, metadata})
+          end,
+          nil
+        )
+
+      Store.roll_partitions(target, 15)
+
+      :telemetry.detach("roll-partitions-created-telemetry")
+
+      events = flush_telemetry()
+
+      assert Enum.any?(events, fn
+               {[:ash_onetime, :cleanup], %{result_class: :partitions_created}} -> true
+               _other -> false
+             end),
+             "expected a :partitions_created :cleanup event; got #{inspect(events)}"
+    end
+  end
+
+  test "the roll_partitions mix task creates partitions and reports the count", %{
+    prefix: prefix
+  } do
+    Mix.Task.reenable("ash_onetime.roll_partitions")
+
+    args = ["--repo", inspect(Repo), "--prefix", prefix, "--months", "15"]
+
+    # Capture the task's stdout; assert it reports created partitions (>= 1, beyond the window).
+    {_result, output} =
+      with_io(fn ->
+        RollPartitions.run(args)
+      end)
+
+    assert output =~ "Created"
+    assert output =~ "partition(s)"
   end
 
   @tag cleanup_boundary_mutation: true
@@ -246,6 +345,28 @@ defmodule AshOnetime.Store.PartitionTest do
       )
 
     Enum.map(rows, &hd/1)
+  end
+
+  defp index_columns(prefix, table) do
+    %{rows: rows} =
+      SQL.query!(
+        Repo,
+        """
+        SELECT index_class.relname, array_agg(attribute.attname ORDER BY key.ordinality)
+        FROM pg_index
+        JOIN pg_class table_class ON table_class.oid = pg_index.indrelid
+        JOIN pg_class index_class ON index_class.oid = pg_index.indexrelid
+        JOIN pg_namespace namespace ON namespace.oid = table_class.relnamespace
+        JOIN unnest(pg_index.indkey) WITH ORDINALITY AS key(attnum, ordinality) ON true
+        JOIN pg_attribute attribute
+          ON attribute.attrelid = table_class.oid AND attribute.attnum = key.attnum
+        WHERE namespace.nspname = $1 AND table_class.relname = $2
+        GROUP BY index_class.oid, index_class.relname
+        """,
+        [prefix, table]
+      )
+
+    Enum.map(rows, fn [name, columns] -> {name, columns} end)
   end
 
   defp constraint_columns(prefix, table, type) do
@@ -466,4 +587,17 @@ defmodule AshOnetime.Store.PartitionTest do
   end
 
   defp relation(prefix, name), do: ~s("#{prefix}"."#{name}")
+
+  defp flush_telemetry do
+    Process.sleep(20)
+    flush_telemetry([])
+  end
+
+  defp flush_telemetry(acc) do
+    receive do
+      {:telemetry, event, meta} -> flush_telemetry(acc ++ [{event, meta}])
+    after
+      0 -> acc
+    end
+  end
 end

@@ -218,6 +218,46 @@ defmodule AshOnetime.Store.Postgres do
   def reap(_target, _batch_size, _abandonment_seconds),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
+  @max_months_ahead 24
+  @default_lock_timeout_seconds 5
+  # Fixed advisory-lock key for response-payload partition creation. pg_advisory_xact_lock
+  # serializes concurrent rolls within one transaction so two cannot race on CREATE PARTITION
+  # OF (Postgres has no CREATE PARTITION OF IF NOT EXISTS). The key is arbitrary but constant.
+  # "ASHOT"
+  @partition_roll_advisory_key 0x41_5348_4F54
+
+  @doc """
+  Creates the next `months_ahead` monthly `ash_onetime_response_payloads` range partitions,
+  from the current month forward, so retention stays bounded past the install window. Without
+  this, payloads whose `response_partition` falls outside the generated window route to the
+  `_default` partition and are never dropped (they are excluded from `prune_payload_partitions`),
+  silently defeating bounded retention (ADR-0001:65).
+
+  Idempotent and concurrency-safe: an transaction-scoped advisory lock serializes concurrent
+  rolls, and each partition is created only if absent (existence read from `pg_inherits` after
+  acquiring the lock, so no read/write race). A bounded `lock_timeout` (default 5s) makes a roll
+  blocked by a long cleanup fail closed rather than hang. Returns `{:ok,
+  %{partitions_created: n}}` or an `AshOnetime.Store.Result` failure.
+  """
+  @spec roll_partitions(Target.t(), pos_integer()) ::
+          {:ok, %{partitions_created: non_neg_integer()}} | Result.t()
+  def roll_partitions(%Target{} = target, months_ahead)
+      when is_integer(months_ahead) and months_ahead >= 1 and months_ahead <= @max_months_ahead do
+    with_dynamic_repo(target, fn -> roll_partitions_transaction(target, months_ahead) end)
+    |> case do
+      {:ok, count} when is_integer(count) -> {:ok, %{partitions_created: count}}
+      {:error, %Result{} = result} -> result
+      _other -> Result.failure(:dispatched_unknown, :unknown, :unknown)
+    end
+  rescue
+    _exception -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+  catch
+    :exit, _reason -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+  end
+
+  def roll_partitions(_target, _months_ahead),
+    do: Result.failure(:invalid_request, :not_started, :not_applicable)
+
   @spec processing_backlog(Target.t()) ::
           {:ok,
            %{processing_count: non_neg_integer(), oldest_age_seconds: non_neg_integer() | nil}}
@@ -783,6 +823,122 @@ defmodule AshOnetime.Store.Postgres do
       {:error, %Result{} = result} -> {:halt, {:error, result}}
     end
   end
+
+  defp roll_partitions_transaction(target, months_ahead) do
+    target.repo_module.transaction(fn -> roll_partitions_counts(target, months_ahead) end)
+  end
+
+  defp roll_partitions_counts(target, months_ahead) do
+    lock_timeout = partition_roll_lock_timeout()
+
+    with :ok <- arm_partition_roll_lock(target, lock_timeout),
+         {:ok, schema, database_date} <- database_schema_and_date(target),
+         {:ok, existing} <- payload_partition_names(target, schema),
+         {:ok, count} <- create_roll_partitions(target, database_date, months_ahead, existing) do
+      count
+    else
+      {:error, %Result{} = result} -> target.repo_module.rollback(result)
+    end
+  end
+
+  defp partition_roll_lock_timeout do
+    @default_lock_timeout_seconds * 1000
+  end
+
+  # Acquire a transaction-scoped advisory lock so concurrent rolls serialize (no CREATE PARTITION
+  # OF race), and set a bounded lock_timeout so a roll blocked by a long cleanup fails closed
+  # instead of hanging the worker. Both are scoped to this transaction and released on commit/
+  # rollback. lock_timeout is an integer in milliseconds (Postgres accepts the bare integer).
+  defp arm_partition_roll_lock(target, lock_timeout_ms) do
+    with {:ok, _} <-
+           dispatched_query(target, "SET LOCAL lock_timeout = #{lock_timeout_ms}", []),
+         {:ok, _} <-
+           dispatched_query(
+             target,
+             "SELECT pg_advisory_xact_lock($1::bigint)",
+             [@partition_roll_advisory_key]
+           ) do
+      :ok
+    end
+  end
+
+  defp payload_partition_names(target, schema) do
+    case payload_partitions(target, schema) do
+      {:ok, partitions} -> {:ok, MapSet.new(partitions, & &1.name)}
+      {:error, %Result{}} = error -> error
+    end
+  end
+
+  defp create_roll_partitions(target, database_date, months_ahead, existing) do
+    database_date
+    |> roll_partition_descriptors(months_ahead)
+    |> Enum.reject(&MapSet.member?(existing, &1.name))
+    |> Enum.reduce_while({:ok, 0}, fn descriptor, {:ok, count} ->
+      case create_one_partition(target, descriptor) do
+        :ok -> {:cont, {:ok, count + 1}}
+        {:error, %Result{} = result} -> {:halt, {:error, result}}
+      end
+    end)
+  end
+
+  defp roll_partition_descriptors(first_month, months_ahead) do
+    beginning = Date.beginning_of_month(first_month)
+
+    for offset <- 0..(months_ahead - 1) do
+      from = shift_month(beginning, offset)
+      to = shift_month(beginning, offset + 1)
+
+      %{
+        name: "ash_onetime_response_payloads_#{from.year}_#{pad_month(from.month)}",
+        from: from,
+        to: to
+      }
+    end
+  end
+
+  defp create_one_partition(target, %{name: name, from: from, to: to}) do
+    sql = """
+    CREATE TABLE #{relation(target, name)} PARTITION OF #{relation(target, "ash_onetime_response_payloads")}
+    FOR VALUES FROM ('#{Date.to_iso8601(from)}') TO ('#{Date.to_iso8601(to)}')
+    """
+
+    case dispatched_query(target, sql, []) do
+      {:ok, _result} ->
+        :ok
+
+      # A duplicate_relation (42P07) is converted by dispatched_query to a store_invariant
+      # Result. Under the advisory lock this should not happen (rolls serialize), but treat it
+      # as idempotent success if it does — never fail a roll on a partition that already exists.
+      {:error, %Result{reason: :store_invariant} = result} ->
+        if partition_exists?(target, name), do: :ok, else: {:error, result}
+
+      {:error, %Result{} = result} ->
+        {:error, result}
+    end
+  end
+
+  defp partition_exists?(target, name) do
+    sql = """
+    SELECT 1
+    FROM pg_inherits
+    JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
+    JOIN pg_class child ON child.oid = pg_inherits.inhrelid
+    WHERE parent.relname = 'ash_onetime_response_payloads' AND child.relname = $1
+    LIMIT 1
+    """
+
+    case dispatched_query(target, sql, [name]) do
+      {:ok, %{rows: [[1]]}} -> true
+      _other -> false
+    end
+  end
+
+  defp shift_month(date, offset) do
+    month_index = date.year * 12 + date.month - 1 + offset
+    Date.new!(div(month_index, 12), rem(month_index, 12) + 1, 1)
+  end
+
+  defp pad_month(month), do: String.pad_leading(Integer.to_string(month), 2, "0")
 
   defp validate_request(%Request{strategy: :idempotency, retention_seconds: retention_seconds})
        when is_integer(retention_seconds) and retention_seconds > 0 and

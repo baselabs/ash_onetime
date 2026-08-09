@@ -56,6 +56,11 @@ defmodule <%= inspect(module) %> do
     """)
 
     execute("""
+    CREATE INDEX ash_onetime_idempotency_claims_response_partition_index
+    ON #{q("ash_onetime_idempotency_claims")} (response_partition)
+    """)
+
+    execute("""
     CREATE TABLE #{q("ash_onetime_nonce_claims")} (
       id uuid <%= if hash_partitions, do: "NOT NULL", else: "PRIMARY KEY" %>,
       operation_hash bytea NOT NULL CHECK (octet_length(operation_hash) = 32),

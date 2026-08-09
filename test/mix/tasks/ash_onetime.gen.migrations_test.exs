@@ -77,7 +77,8 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
 
     assert templates == [
              "priv/templates/migrations/hash_partitioned.exs",
-             "priv/templates/migrations/install.exs"
+             "priv/templates/migrations/install.exs",
+             "priv/templates/migrations/roll_forward.exs"
            ]
   end
 

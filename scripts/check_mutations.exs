@@ -440,6 +440,16 @@ defmodule AshOnetime.MutationCheck do
         "manual cleanup retains the exact database-date boundary and drops only older empty partitions",
       assertion: "payload_partitions: 1"
     },
+    "partitions-created-telemetry" => %{
+      path: "lib/ash_onetime/telemetry.ex",
+      original: "cleanup: [:claims_deleted, :partitions_dropped, :partitions_created]",
+      mutated: "cleanup: [:claims_deleted, :partitions_dropped]",
+      test: "test/ash_onetime/store/partition_test.exs",
+      tag: "partitions_created_telemetry_mutation",
+      test_name:
+        "emits a :cleanup :partitions_created telemetry event on a roll",
+      assertion: ":partitions_created"
+    },
     "payload-partition-lock" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original: "IN SHARE MODE",

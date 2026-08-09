@@ -11,6 +11,25 @@ to the minor range to pick up patches automatically and review this page on each
 {:ash_onetime, "~> 0.1"}
 ```
 
+## Forward response-partition maintenance (apply once to existing installs)
+
+Two data-layer fixes shipped for the response store: the `response_partition` index (cleanup's
+partition-empty check was a full scan) and forward monthly partition creation (payloads past
+the install window routed to `_default` and were never dropped, silently defeating bounded
+retention). Greenfield installs on the current version get both automatically from the install
+migration. **Existing installs should generate and run the forward migration once:**
+
+```sh
+mix ash_onetime.gen.roll_forward --repo MyApp.Repo --months 18
+mix ecto.migrate
+```
+
+It adds the index, back-fills the elapsed+forward partitions, and drains past-retention
+payloads stranded in `_default`. After that, schedule `mix ash_onetime.roll_partitions` (or
+`AshOnetime.Oban.PartitionWorker`) on a cadence ahead of your retention horizon — see
+[Operations](operations.md#forward-response-partitions). This is additive (no DSL/contract
+change) and does not require a dependency version bump.
+
 ## v0.2.0 — single `limits` surface (planned)
 
 The dual `limits` surface collapses to one `protect`-level vocabulary. Response-size limits

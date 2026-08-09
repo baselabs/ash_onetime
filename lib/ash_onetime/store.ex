@@ -90,6 +90,27 @@ defmodule AshOnetime.Store do
     end
   end
 
+  @doc """
+  Creates the next `months_ahead` monthly `response_payloads` range partitions so retention
+  stays bounded past the install window. Idempotent and concurrency-safe (advisory-locked).
+  Operator-scheduled via `mix ash_onetime.roll_partitions` or `AshOnetime.Oban.PartitionWorker`;
+  without it, payloads past the install window route to `_default` and are never dropped.
+
+  Returns `{:ok, %{partitions_created: n}}` or an `AshOnetime.Store.Result` failure.
+  """
+  @spec roll_partitions(term(), pos_integer()) ::
+          {:ok, %{partitions_created: non_neg_integer()}} | Result.t()
+  def roll_partitions(target, months_ahead) do
+    case Postgres.roll_partitions(target, months_ahead) do
+      {:ok, %{partitions_created: count}} = success ->
+        emit_roll(target, count)
+        success
+
+      %Result{} = result ->
+        result
+    end
+  end
+
   defp emit_cleanup(%Postgres.Target{repo_module: repo}, counts) do
     _ =
       AshOnetime.Telemetry.cleanup(
@@ -117,6 +138,13 @@ defmodule AshOnetime.Store do
 
   defp emit_reap(%Postgres.Target{repo_module: repo}, count) do
     _ = AshOnetime.Telemetry.reap(:idempotency, repo, :reap, count, :claims_reaped)
+    :ok
+  end
+
+  defp emit_roll(%Postgres.Target{repo_module: repo}, count) do
+    _ =
+      AshOnetime.Telemetry.cleanup(:idempotency, repo, :cleanup, count, :partitions_created)
+
     :ok
   end
 end

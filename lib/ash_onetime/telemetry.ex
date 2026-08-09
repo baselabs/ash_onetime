@@ -25,7 +25,7 @@ defmodule AshOnetime.Telemetry do
       :oversized,
       :disabled
     ],
-    cleanup: [:claims_deleted, :partitions_dropped],
+    cleanup: [:claims_deleted, :partitions_dropped, :partitions_created],
     reap: [:claims_reaped],
     external_recovery: [
       :processing_committed,

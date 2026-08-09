@@ -74,6 +74,39 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     |> IO.iodata_to_binary()
   end
 
+  @doc """
+  Renders the SEC-5/SEC-6 forward migration deterministically for existing installs: the
+  response_partition index, a back-fill of monthly partitions from `partition_start` through
+  `partition_start + months`, and the past-retention DEFAULT drain. Pure (no filesystem writes).
+  """
+  @spec render_roll_forward(module(), keyword()) :: binary()
+  def render_roll_forward(repo, options) when is_atom(repo) and is_list(options) do
+    partition_start = render_partition_start!(Keyword.get(options, :partition_start))
+    months = render_months!(Keyword.get(options, :months))
+    module = Module.concat([repo, Migrations, RollForwardAshOnetime])
+
+    partitions =
+      for offset <- 0..(months - 1) do
+        from = shift_month(partition_start, offset)
+        to = shift_month(partition_start, offset + 1)
+
+        %{
+          name: "ash_onetime_response_payloads_#{from.year}_#{pad(from.month)}",
+          from: from,
+          to: to
+        }
+      end
+
+    source =
+      "roll_forward.exs"
+      |> template_path()
+      |> EEx.eval_file(module: module, partitions: partitions)
+
+    source
+    |> Code.format_string!()
+    |> IO.iodata_to_binary()
+  end
+
   defp parse_repo!(nil), do: Mix.raise("--repo is required")
 
   defp parse_repo!(repo_name) do
@@ -155,6 +188,10 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
   defp render_partition_start!(nil), do: Date.beginning_of_month(Date.utc_today())
   defp render_partition_start!(%Date{day: 1} = date), do: date
   defp render_partition_start!(_date), do: raise(ArgumentError, "invalid partition start")
+
+  defp render_months!(nil), do: 13
+  defp render_months!(months) when is_integer(months) and months >= 1 and months <= 24, do: months
+  defp render_months!(_months), do: raise(ArgumentError, "invalid months")
 
   defp render_partitioning!(nil), do: nil
   defp render_partitioning!(count), do: validate_partition_count!(count)
