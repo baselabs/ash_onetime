@@ -111,7 +111,7 @@ defmodule AshOnetime.ArchitectureTest do
   @exports %{
     AshOnetime => [replayed?: 1],
     AshOnetime.Cache => [authoritative_payload: 2, config: 1, store: 3],
-    AshOnetime.Cache.Entry => [__struct__: 0, __struct__: 1],
+    AshOnetime.Cache.Entry => [],
     AshOnetime.Cache.None => [delete: 1, get: 1, put: 3],
     AshOnetime.Canonical => [encode: 1],
     AshOnetime.Clock => [now: 0],
@@ -150,62 +150,25 @@ defmodule AshOnetime.ArchitectureTest do
       require_normalized: 2
     ],
     AshOnetime.Error => [
-      __struct__: 0,
-      __struct__: 1,
       code: 1,
-      error_class?: 0,
-      exception: 0,
       exception: 1,
-      from_json: 1,
       message: 1,
       new: 2,
-      new: 3,
-      splode_error?: 0
+      new: 3
     ],
     AshOnetime.ExternalEffect => [operation_key: 1, put_result: 3, result: 1],
     AshOnetime.Fingerprint => [compute: 1, compute: 2],
     AshOnetime.KeyResolver => [],
     AshOnetime.KeySource => [normalize: 1, references: 1],
-    AshOnetime.Oban.CleanupWorker => [
-      __opts__: 0,
-      backoff: 1,
-      new: 1,
-      new: 2,
-      perform: 1,
-      timeout: 1
-    ],
-    AshOnetime.Oban.PartitionWorker => [
-      __opts__: 0,
-      backoff: 1,
-      new: 1,
-      new: 2,
-      perform: 1,
-      timeout: 1
-    ],
-    AshOnetime.Oban.ReapWorker => [
-      __opts__: 0,
-      backoff: 1,
-      new: 1,
-      new: 2,
-      perform: 1,
-      timeout: 1
-    ],
+    AshOnetime.Oban.CleanupWorker => [perform: 1],
+    AshOnetime.Oban.PartitionWorker => [perform: 1],
+    AshOnetime.Oban.ReapWorker => [perform: 1],
     AshOnetime.Plug => [call: 2, init: 1],
     AshOnetime.ReplaySafety => [],
-    AshOnetime.Resource => [
-      __set_and_validate_options__: 4,
-      add_extensions: 0,
-      dsl_patches: 0,
-      module_imports: 0,
-      module_prefix: 0,
-      persisters: 0,
-      sections: 0,
-      transformers: 0,
-      verifiers: 0
-    ],
+    AshOnetime.Resource => [],
     AshOnetime.Resource.Info => [protected?: 2, protection: 2, protections: 1, strategy: 2],
-    AshOnetime.Resource.Protection => [__struct__: 0, __struct__: 1],
-    AshOnetime.Resource.Response => [__struct__: 0, __struct__: 1],
+    AshOnetime.Resource.Protection => [],
+    AshOnetime.Resource.Response => [],
     AshOnetime.ResponseClassifier => [classify: 3],
     AshOnetime.Scope => [normalize: 1, references: 1],
     AshOnetime.Signer => [],
@@ -225,8 +188,8 @@ defmodule AshOnetime.ArchitectureTest do
       untracked_execution: 3,
       verification: 5
     ],
-    AshOnetime.Token => [__struct__: 0, __struct__: 1, mint: 2, sign: 3, verify: 3],
-    AshOnetime.Verified => [__struct__: 0, __struct__: 1],
+    AshOnetime.Token => [mint: 2, sign: 3, verify: 3],
+    AshOnetime.Verified => [],
     AshOnetime.Verifier => [],
     AshOnetime.Window => [cleanup_after: 3, cleanup_skew_margin_seconds: 0, validate: 5],
     Mix.Tasks.AshOnetime.Gen.Migrations => [
@@ -239,10 +202,7 @@ defmodule AshOnetime.ArchitectureTest do
     Mix.Tasks.AshOnetime.Install => [
       igniter: 1,
       info: 2,
-      installer?: 0,
-      parse_argv: 1,
-      run: 1,
-      supports_umbrella?: 0
+      run: 1
     ],
     Mix.Tasks.AshOnetime.Prune => [run: 1],
     Mix.Tasks.AshOnetime.Reap => [run: 1],
@@ -250,54 +210,24 @@ defmodule AshOnetime.ArchitectureTest do
   }
 
   # The exact-export census compares a hand-maintained `@exports` snapshot against
-  # `module.__info__(:functions)`. For modules built on an injecting framework,
-  # `__info__(:functions)` includes functions the framework's macros expand into the
-  # host module at compile time — and that injected set grows across dependency
-  # versions, breaking the census on drift the project does not own.
-  #
-  # Concretely: `AshOnetime.Error` is the only `use Splode.Error` module in the
-  # documented set. CI's compat matrix runs `mix deps.unlock ash && mix deps.update
+  # `module.__info__(:functions)`. For modules built on an injecting framework
+  # (e.g. `use Splode.Error`), `__info__(:functions)` also lists functions the
+  # framework's macros expand into the host module at compile time — and that injected
+  # set grows across dependency versions, breaking the census on drift the project
+  # does not own. `AshOnetime.Error` is the only `use Splode.Error` module in the
+  # documented set; CI's compat matrix runs `mix deps.unlock ash && mix deps.update
   # ash` (.github/workflows/ci.yml), which resolves the newest Splode satisfying
-  # `~> 0.3`; Splode 0.3.2 added `keyword_list_options?/0` to the injected set, so CI
-  # red-barred while the 0.3.1-committed lock stayed green locally.
+  # `~> 0.3`, and Splode 0.3.2 added `keyword_list_options?/0` to the injected set —
+  # so CI red-barred while the 0.3.1-committed lock stayed green locally.
   #
-  # The fix declares the genuinely-framework-injected exports per module and applies
-  # the exempt set to BOTH sides of the comparison. Two drift directions fail loud:
-  #   - a project-owned export added/removed/arity-changed (for a name/arity NOT in
-  #     the exempt set) -> census FAILS loud (the guard property the census exists to
-  #     enforce is preserved for the project's actual public surface);
-  #   - a NEW framework injection not listed here -> census FAILS loud, prompting
-  #     deliberate triage rather than silent absorption.
-  # (Two inert-entry directions do NOT fail loud — see the limitations block below.)
-  # Membership rule for this set: the framework injects the function AND the project
-  # does not author or override it — so `message/1` (the project's `@impl true def`
-  # that Splode only wraps via `__before_compile__`) and `exception/1` (the project's
-  # override restoring the `details: %{}` default) are NOT exempt; they stay under the
-  # exact-export guard. Only `AshOnetime.Error` carries an exempt entry today; if
-  # another documented module adopts an injecting macro, the census will fail loud and
-  # the maintainer adds a key here.
-  #
-  # Two limitations of the two-sided subtraction, stated honestly (both guard inert
-  # snapshot entries, not project surface, so they are accepted rather than enforced
-  # by arity-aware source parsing that would be out of proportion to a test fixture):
-  #   - if the project ever authors a pair already listed here (e.g. overrides
-  #     `from_json/1`, which Splode marks `defoverridable`), the census is blind to
-  #     that pair — the membership rule above is enforced by review, not mechanically;
-  #   - if the framework REMOVES a listed injection, the matching `@exports` entry
-  #     becomes inert (subtracting it from both sides is a no-op), so the documented
-  #     surface shrinks without failing the census.
-  @framework_injected %{
-    AshOnetime.Error =>
-      MapSet.new([
-        {:__struct__, 0},
-        {:__struct__, 1},
-        {:error_class?, 0},
-        {:from_json, 1},
-        {:splode_error?, 0},
-        {:exception, 0},
-        {:keyword_list_options?, 0}
-      ])
-  }
+  # Rather than hand-maintain an exempt allowlist (which would rot the same way and
+  # could not mechanically detect a project override of an injected fn, or a framework
+  # removing one), the census derives the project-authored exports from each module's
+  # OWN source AST (`project_defined_arity_set/1`) and compares the snapshot only
+  # against those. `__info__(:functions)` minus the source-derived set is the live
+  # framework-injected surface — which closes both drift directions: a project
+  # override reclassifies the fn as authored (so it falls under the guard), and a
+  # framework removal drops it from `__info__` (so a stale snapshot entry fails loud).
 
   test "the production module and public documentation censuses are exact" do
     {:ok, application_modules} = :application.get_key(:ash_onetime, :modules)
@@ -360,28 +290,31 @@ defmodule AshOnetime.ArchitectureTest do
   end
 
   test "documented public exports are exact" do
-    # Compare only the project-owned exports: subtract each module's
-    # `@framework_injected` set from BOTH the actual `__info__(:functions)` and the
-    # expected `@exports` snapshot, so framework-version drift in the injected set
-    # (e.g. Splode adding `keyword_list_options?/0` across a patch bump) cannot
-    # defeat the census while every project-owned export stays under the guard.
+    # Compare the `@exports` snapshot only against the exports each module AUTHORS
+    # (parsed from its own source AST), not the framework-injected ones. This keeps
+    # the census robust to framework-version drift in the injected set (e.g. Splode
+    # adding `keyword_list_options?/0` across a patch bump) while still guarding every
+    # project-owned export — and a project override of an injected fn, or a framework
+    # removing one, both surface as a snapshot mismatch.
     actual =
       Map.new(@documented_modules, fn module ->
-        {module, reject_framework_injected(module, module.__info__(:functions))}
+        {module, project_owned_arity_set(module)}
       end)
 
-    expected =
-      Map.new(@exports, fn {module, exports} ->
-        {module, reject_framework_injected(module, exports)}
-      end)
-
-    assert actual == expected
+    assert actual == @exports
   end
 
   test "AshOnetime.Error is a Splode error so its typed code survives the Ash pipeline" do
     # ARCH-1: AshOnetime.Error must be a Splode leaf of class :invalid so Ash preserves it
     # (instead of wrapping it as an unknown error and losing the typed :code). A bare
     # defexception would make splode_error?/0 undefined and ash_error?/1 false.
+    #
+    # Force-load the module before the membership check: `function_exported?/3` reports
+    # the CURRENT beam state, so a module no other test has touched yet reads as
+    # unexported, which made this assertion seed-dependent (failed in isolation,
+    # passed once a neighboring test loaded the module).
+    Code.ensure_compiled(AshOnetime.Error)
+
     assert function_exported?(AshOnetime.Error, :splode_error?, 0)
     assert AshOnetime.Error.splode_error?() == true
     assert AshOnetime.Error.error_class?() == false
@@ -407,13 +340,47 @@ defmodule AshOnetime.ArchitectureTest do
     end
   end
 
-  # Drops a module's `@framework_injected` entries from an export keyword list so the
-  # exact-export census compares only the project-owned surface. No-op for modules
-  # with no exempt entry.
-  defp reject_framework_injected(module, exports) do
-    case Map.fetch(@framework_injected, module) do
-      {:ok, injected} -> Enum.reject(exports, &MapSet.member?(injected, &1))
-      :error -> exports
-    end
+  # The set of `{name, arity}` the module AUTHORS in its own source, parsed from the
+  # beam's recorded source path. Guards and default args (`\\`) are unwrapped so a
+  # multi-arity clause yields every effective arity. Used to separate project-owned
+  # exports from framework-injected ones without a hand-maintained allowlist.
+  defp project_defined_arity_set(module) do
+    source_path = List.to_string(module.__info__(:compile)[:source])
+    {:ok, source} = File.read(source_path)
+    {:ok, ast} = Code.string_to_quoted(source, columns: true)
+
+    {_, defined} =
+      Macro.prewalk(ast, [], fn
+        {:def, _, [head | _rest]} = node, acc ->
+          {node, arity_pairs(head) ++ acc}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    MapSet.new(defined)
+  end
+
+  # Unwraps a `def` head (which may be guarded by `when`) into its `{name, arity}`
+  # pairs, expanding default args: `def f(a, b \\ nil)` yields `{f, 2}` and `{f, 1}`.
+  defp arity_pairs({:when, _, [head | _guards]}), do: arity_pairs(head)
+
+  defp arity_pairs({name, _meta, args}) when is_atom(name) and is_list(args) do
+    base = length(args)
+    defaults = Enum.count(args, &match?({:\\, _, _}, &1))
+    Enum.map(0..defaults, fn delta -> {name, base - delta} end)
+  end
+
+  defp arity_pairs({name, _meta, nil}) when is_atom(name), do: [{name, 0}]
+  defp arity_pairs(_), do: []
+
+  # The exports the module owns: those present in `__info__(:functions)` AND authored
+  # in its source — i.e. excluding anything a framework macro injected.
+  defp project_owned_arity_set(module) do
+    module.__info__(:functions)
+    |> MapSet.new()
+    |> MapSet.intersection(project_defined_arity_set(module))
+    |> MapSet.to_list()
+    |> Enum.sort()
   end
 end
