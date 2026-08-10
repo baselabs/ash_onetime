@@ -109,7 +109,9 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
     roll_key = Postgres.roll_advisory_key(target)
 
     # Hold the advisory lock in a separate real connection so the worker cannot acquire it.
-    holder = LockContention.acquire(self(), "SELECT pg_advisory_xact_lock($1::bigint)", [roll_key])
+    holder =
+      LockContention.acquire(self(), "SELECT pg_advisory_xact_lock($1::bigint)", [roll_key])
+
     assert_receive {:held, ^holder}, 2_000
 
     try do

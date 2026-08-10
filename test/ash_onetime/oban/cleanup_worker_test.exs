@@ -102,6 +102,9 @@ defmodule AshOnetime.Oban.CleanupWorkerTest do
       assert {:error, {:cleanup_failed, :lock_timeout}} = CleanupWorker.perform(job)
     after
       LockContention.release(holder)
+      # Reset the session GUC so a later test reusing this sandbox:false connection does not
+      # inherit the 300ms lock_timeout.
+      {:ok, _} = SQL.query(Repo, "RESET lock_timeout")
     end
   end
 
