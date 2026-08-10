@@ -2,6 +2,7 @@ defmodule AshOnetime.Oban.CleanupWorkerTest do
   use AshOnetime.Test.StoreCase, async: false
 
   alias AshOnetime.Oban.CleanupWorker
+  alias AshOnetime.Test.LockContention
 
   setup_all do
     installation = install_store!()
@@ -65,22 +66,43 @@ defmodule AshOnetime.Oban.CleanupWorkerTest do
     end
   end
 
-  # L5: the worker error tuple embeds the Store Result.reason so Oban's job error carries the
-  # distinguishable cause past exhaustion, not an opaque :cleanup_failed. This is a STRUCTURAL
-  # LINT (source-grep), not a behavioral tripwire — it confirms the tuple shape is present and
-  # not collapsed to the bare atom. It is weaker than the behavioral tripwires (T1-T4): it
-  # stays green over a dead arm or a computed-atom refactor. A behavioral fault injection
-  # (force :lock_timeout via real lock contention) was not added per ADR-0001's real-Postgres
-  # doctrine (real committed connections, not stubs); see
-  # .forge/specs/2026-08-10-tripwire-hardening.md § T5.
-  test "worker error tuple carries the inner reason, not an opaque atom (L5)" do
-    source =
-      File.read!(
-        Path.join([__DIR__, "..", "..", "..", "lib", "ash_onetime", "oban", "cleanup_worker.ex"])
+  # L5 (behavioral): a cleanup whose first DELETE is blocked by a contended table lock
+  # surfaces as {:error, {:cleanup_failed, :lock_timeout}} — the worker embeds the Store
+  # Result.reason so Oban's job error carries the distinguishable cause past exhaustion, not an
+  # opaque :cleanup_failed. cleanup does not set its own lock_timeout, so the test sets a short
+  # session lock_timeout; an ACCESS EXCLUSIVE lock held on the idempotency claims table in a
+  # separate connection blocks cleanup_strategy(:idempotency)'s DELETE, which times out to
+  # :lock_timeout. Pins the error tuple behaviorally; a regression that collapses the tuple or
+  # drops the inner reason fails.
+  @tag unboxed: true
+  test "worker surfaces :lock_timeout from a contended cleanup (L5 behavioral)", %{
+    prefix: prefix
+  } do
+    # cleanup does not set its own lock_timeout; give the session a short one so contention times out.
+    {:ok, _} = SQL.query(Repo, "SET lock_timeout = 300")
+
+    holder =
+      LockContention.acquire(
+        self(),
+        ~s(LOCK TABLE "#{prefix}"."ash_onetime_idempotency_claims" IN ACCESS EXCLUSIVE MODE)
       )
 
-    assert source =~ "{:error, {:cleanup_failed, reason}}"
-    refute source =~ "{:error, :cleanup_failed}"
+    assert_receive {:held, ^holder}, 2_000
+
+    try do
+      job = %Oban.Job{
+        args: %{
+          "repo" => inspect(Repo),
+          "prefix" => prefix,
+          "batch_size" => 500,
+          "partition_limit" => 8
+        }
+      }
+
+      assert {:error, {:cleanup_failed, :lock_timeout}} = CleanupWorker.perform(job)
+    after
+      LockContention.release(holder)
+    end
   end
 
   defp insert_expired_nonce(prefix, label) do

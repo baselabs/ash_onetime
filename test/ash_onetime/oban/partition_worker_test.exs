@@ -2,6 +2,7 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
   use AshOnetime.Test.StoreCase, async: false
 
   alias AshOnetime.Oban.PartitionWorker
+  alias AshOnetime.Test.LockContention
   alias Ecto.Adapters.SQL
 
   setup_all do
@@ -92,26 +93,34 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
     assert Keyword.get(PartitionWorker.__opts__(), :queue) == :ash_onetime_partitions
   end
 
-  # L5: the worker error tuple embeds the Store Result.reason so Oban's job error carries the
-  # distinguishable cause past exhaustion, not an opaque :roll_partitions_failed. Pinned at
-  # the source level: a regression collapsing back to the opaque atom fails this assertion.
-  test "worker error tuple carries the inner reason, not an opaque atom (L5)" do
-    source =
-      File.read!(
-        Path.join([
-          __DIR__,
-          "..",
-          "..",
-          "..",
-          "lib",
-          "ash_onetime",
-          "oban",
-          "partition_worker.ex"
-        ])
-      )
+  # L5 (behavioral): a contended partition-roll advisory lock surfaces as
+  # {:error, {:roll_partitions_failed, :lock_timeout}} — the worker embeds the Store
+  # Result.reason so Oban's job error carries the distinguishable cause past exhaustion, not an
+  # opaque :roll_partitions_failed. Store.roll_partitions sets `SET LOCAL lock_timeout = 5s`
+  # internally (arm_partition_roll_lock), so a roll that cannot acquire the per-prefix advisory
+  # lock fails closed with reason :lock_timeout after 5s. This pins the error tuple
+  # BEHAVIORALLY (a real store fault -> the actual tuple returned to Oban); a regression that
+  # collapses the tuple to the opaque atom, or drops the inner reason, fails here.
+  @tag unboxed: true
+  test "worker surfaces :lock_timeout from a contended advisory lock (L5 behavioral)", %{
+    prefix: prefix
+  } do
+    target = Postgres.for_repo(Repo, prefix)
+    roll_key = Postgres.roll_advisory_key(target)
 
-    assert source =~ "{:error, {:roll_partitions_failed, reason}}"
-    refute source =~ "{:error, :roll_partitions_failed}"
+    # Hold the advisory lock in a separate real connection so the worker cannot acquire it.
+    holder = LockContention.acquire(self(), "SELECT pg_advisory_xact_lock($1::bigint)", [roll_key])
+    assert_receive {:held, ^holder}, 2_000
+
+    try do
+      job = %Oban.Job{
+        args: %{"repo" => inspect(Repo), "prefix" => prefix, "months" => 3}
+      }
+
+      assert {:error, {:roll_partitions_failed, :lock_timeout}} = PartitionWorker.perform(job)
+    after
+      LockContention.release(holder)
+    end
   end
 
   defp partition_child_count(prefix) do
