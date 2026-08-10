@@ -159,7 +159,8 @@ defmodule AshOnetime.CacheTest do
   end
 
   defp frame(components),
-    do: for(component <- components, into: "", do: <<byte_size(component)::32, component::binary>>)
+    do:
+      for(component <- components, into: "", do: <<byte_size(component)::32, component::binary>>)
 
   defp run_generic(prefix, action, arguments) do
     Resource

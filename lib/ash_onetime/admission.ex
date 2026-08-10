@@ -1112,17 +1112,12 @@ defmodule AshOnetime.Admission do
   defp target_context(subject),
     do: %{resource: subject.resource, action: subject.action.name}
 
-  # The bounded callback context is the trusted-facts surface a verifier/mint/scope
-  # callback receives. It is deliberately bounded to the local facts the admission path
-  # derives itself (`resource`, `action`) — AGENTS.md: "verification callbacks return
-  # trusted local facts; action input cannot supply pre-verified facts." Caller-supplied
-  # context (actor, tenant, etc.) is NOT forwarded: a callback that could bind the key to
-  # the actor would make actor-binding a latent contract, and the codebase's posture is
-  # least-privilege / fail-closed. If a future callback needs actor-binding, that is a
-  # deliberate, separately-approved decision, not a latent affordance shipped here.
-  defp bounded_callback_context(subject) do
-    target_context(subject)
-  end
+  # The bounded callback context exposed as a @doc false public function for deterministic
+  # contract testing (the verifier/mint/scope callbacks receive this map). Testing it through
+  # the full reserve path flakes under full-suite async DB contention; this direct entry lets
+  # the contract pin run with zero DB/Ash-action dependency.
+  @doc false
+  def bounded_callback_context(subject), do: target_context(subject)
 
   defp bounded_descriptor(source, name, value) do
     case AshOnetime.Canonical.encode(value) do

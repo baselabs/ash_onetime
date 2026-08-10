@@ -96,7 +96,20 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
   # distinguishable cause past exhaustion, not an opaque :roll_partitions_failed. Pinned at
   # the source level: a regression collapsing back to the opaque atom fails this assertion.
   test "worker error tuple carries the inner reason, not an opaque atom (L5)" do
-    source = File.read!(Path.join([__DIR__, "..", "..", "..", "lib", "ash_onetime", "oban", "partition_worker.ex"]))
+    source =
+      File.read!(
+        Path.join([
+          __DIR__,
+          "..",
+          "..",
+          "..",
+          "lib",
+          "ash_onetime",
+          "oban",
+          "partition_worker.ex"
+        ])
+      )
+
     assert source =~ "{:error, {:roll_partitions_failed, reason}}"
     refute source =~ "{:error, :roll_partitions_failed}"
   end

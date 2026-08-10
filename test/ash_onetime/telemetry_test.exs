@@ -103,7 +103,9 @@ defmodule AshOnetime.TelemetryTest do
     :telemetry.attach(
       handler,
       [:ash_onetime, :uncertain_exception],
-      fn event, measurements, metadata, _config -> send(parent, {:event, event, measurements, metadata}) end,
+      fn event, measurements, metadata, _config ->
+        send(parent, {:event, event, measurements, metadata})
+      end,
       nil
     )
 

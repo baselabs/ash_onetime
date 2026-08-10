@@ -1,5 +1,12 @@
 defmodule AshOnetime.Scope do
-  @moduledoc "Closed, explicit scope algebra for collision isolation."
+  @moduledoc """
+  Closed, explicit scope algebra for collision isolation.
+
+  The `context` map passed to the `resolve/2` callback is the BOUNDED callback context:
+  `%{resource:, action:}` — the trusted local facts the admission path derives itself
+  (AGENTS.md: "verification callbacks return trusted local facts"). Caller-supplied context
+  (actor, tenant, etc.) is NOT forwarded; see `AshOnetime.Verifier` for the same contract.
+  """
 
   @max_components 16
 

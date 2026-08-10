@@ -31,6 +31,14 @@ All events are prefixed `[:ash_onetime, <event>]`. Each event's metadata include
 | `[:ash_onetime, :store_uncertainty]` | `:count` (always 1) | `:sent` `:unknown` `:disconnected` `:lock_timeout` `:worker_timeout` |
 | `[:ash_onetime, :untracked_execution]` | `:count` (always 1) | `:checkout_unavailable` |
 
+`[:ash_onetime, :uncertain_exception]` is a store-internal diagnosis event (NOT admission-
+shaped — it has no `result_class`). Emitted when a committed-claim transaction raises before
+collapsing to `:dispatched_unknown`. Measurements `%{count: 1}`; metadata `%{strategy:,
+phase:, exception:}` where `exception` is the exception struct MODULE (e.g. `Postgrex.Error`)
+— the class only, not the struct, to avoid leaking request material. It bypasses the
+admission `emit/6` validator (which requires `resource`/`action`/`result_class`) and calls
+`:telemetry.execute/3` directly. A fresh application sees nothing unless it attaches a handler.
+
 `strategy` is `:idempotency` or `:one_time_nonce`; `resource` and `action` are the module and
 action atom the protection is declared on.
 

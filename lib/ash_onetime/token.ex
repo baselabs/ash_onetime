@@ -310,7 +310,8 @@ defmodule AshOnetime.Token do
            Error.new(
              :invalid_options,
              "verification clock override requires explicit " <>
-               "Application.get_env(:ash_onetime, :allow_clock_override) opt-in"
+               "config :ash_onetime, allow_clock_override: true (set BEFORE compiling ash_onetime; " <>
+               "the gate is read via Application.compile_env at build time)"
            )}
 
         :error ->

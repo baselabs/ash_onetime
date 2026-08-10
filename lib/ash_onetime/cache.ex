@@ -160,7 +160,9 @@ defmodule AshOnetime.Cache do
   defp key(%Claim{} = claim) do
     components = ["ash_onetime-cache", claim.operation_hash, claim.scope_hash, claim.key_hash]
 
-    framed = for component <- components, into: "", do: <<byte_size(component)::32, component::binary>>
+    framed =
+      for component <- components, into: "", do: <<byte_size(component)::32, component::binary>>
+
     :crypto.hash(:sha256, framed)
   end
 

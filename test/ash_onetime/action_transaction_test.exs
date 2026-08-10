@@ -1076,6 +1076,33 @@ defmodule AshOnetime.ActionTransactionTest do
     assert table_count(prefix, "ash_onetime_response_payloads") == 0
   end
 
+  # M1 (closeout fix): the bounded callback context is EXACTLY %{resource:, action:}. The
+  # prior admission_test pin (module_info(:functions) absence) was vacuous. This drives the
+  # REAL verifier (ActionExamples.Verifier, the same one the :consume path uses) through the
+  # bounded context directly — no DB, no Ash action machinery, deterministic under full-suite
+  # load. The verifier records the context keys it received; assert they are exactly
+  # [:action, :resource]. A regression that re-forwards caller context (actor/tenant/keys/
+  # now) into the bounded context fails this test.
+  @tag bounded_callback_context_contract: true
+  test "the bounded callback context carries exactly resource and action (M1)" do
+    verifier = AshOnetime.Test.ActionExamples.Verifier
+    Process.put({verifier, :observer}, self())
+
+    on_exit(fn -> Process.delete({verifier, :observer}) end)
+
+    subject = Ash.ActionInput.for_action(Resource, :consume, %{value: 1, proof: "m1-direct"})
+    context = AshOnetime.Admission.bounded_callback_context(subject)
+
+    # The context a verifier/mint/scope callback receives is exactly %{resource:, action:}.
+    assert Enum.sort(Map.keys(context)) == [:action, :resource]
+
+    # Drive the real verifier with this context to confirm it observes the same shape
+    # end-to-end (the verifier records Map.keys of its received context via the observer).
+    assert {:ok, _} = verifier.verify("m1-direct", context)
+    assert_received {:verifier, "m1-direct", context_keys}
+    assert Enum.sort(context_keys) == [:action, :resource]
+  end
+
   defp charge_input(account_id, amount, request_key) do
     %{
       account_id: account_id,

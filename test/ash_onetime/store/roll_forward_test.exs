@@ -44,6 +44,10 @@ defmodule AshOnetime.Store.RollForwardTest do
       assert source =~ "DELETE FROM"
       assert source =~ "ash_onetime_idempotency_claims"
       assert source =~ "ash_onetime_response_payloads_default"
+      # L8: the _default OID subquery is namespace-scoped (relnamespace = current_schema())
+      # so the tableoid IN (...) predicate does not match other tenants' _default partitions.
+      assert source =~ "relnamespace"
+      assert source =~ "current_schema()"
     end
   end
 
@@ -133,11 +137,13 @@ defmodule AshOnetime.Store.RollForwardTest do
           SELECT claim_id
           FROM "#{prefix}"."ash_onetime_response_payloads"
           WHERE tableoid IN (
-            SELECT oid FROM pg_class WHERE relname = 'ash_onetime_response_payloads_default'
+            SELECT oid FROM pg_class
+            WHERE relname = 'ash_onetime_response_payloads_default'
+              AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = $1)
           )
         )
       """,
-      []
+      [prefix]
     )
   end
 
