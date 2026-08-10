@@ -5,12 +5,18 @@ if Code.ensure_loaded?(Oban.Worker) do
     `mix ash_onetime.roll_partitions`. Schedule it ahead of the retention horizon (e.g. daily or
     weekly) so payloads never route to the `_default` partition; without it, bounded retention
     silently degrades past the install window.
+
+    Runs on a dedicated `:ash_onetime_partitions` queue (separate from `CleanupWorker`'s
+    `:ash_onetime_cleanup`) so forward partition creation — the retention-safety path — does
+    not compete with routine cleanup for queue slots under saturation. Configure the queue in
+    your Oban config (`queues: [ash_onetime_partitions: N]`) or jobs sit unscheduled.
     """
 
-    use Oban.Worker, queue: :ash_onetime_cleanup, max_attempts: 3
+    use Oban.Worker, queue: :ash_onetime_partitions, max_attempts: 3
 
     alias AshOnetime.Store
     alias AshOnetime.Store.Postgres
+    alias AshOnetime.Store.Result
 
     # Bounded jittered backoff — see CleanupWorker for the rationale. This worker is the
     # retention-safety path: a discarded job strands a month of bounded retention
@@ -34,8 +40,15 @@ if Code.ensure_loaded?(Oban.Worker) do
              Store.roll_partitions(Postgres.for_repo(repo, prefix), months) do
         :ok
       else
-        {:error, :invalid_arguments} -> {:discard, :invalid_arguments}
-        _store_failure -> {:error, :roll_partitions_failed}
+        {:error, :invalid_arguments} ->
+          {:discard, :invalid_arguments}
+
+        # Store.roll_partitions returns a bare %Result{} on failure (not {:error, %Result{}}),
+        # so it falls through here. Embed the Result.reason so Oban's job error carries the
+        # distinguishable cause (:lock_timeout / :disconnected / :store_invariant / ...) past
+        # exhaustion, not an opaque :roll_partitions_failed.
+        %Result{reason: reason} ->
+          {:error, {:roll_partitions_failed, reason}}
       end
     end
 

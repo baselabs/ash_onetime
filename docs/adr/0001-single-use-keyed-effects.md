@@ -118,6 +118,35 @@ payload cardinality is enforced at write time (`update_complete` rejects a secon
 with `:store_invariant`) and re-asserted by the cleanup delete guard; the read path
 returning the authoritative payload from the pruned partition is correct behavior.
 
+## Maintenance: per-tenant partition-roll concurrency
+
+*Added 2026-08-10 (L3). The partition-roll advisory lock was de-scoped from cluster-global
+to per-prefix to remove artificial cross-tenant serialization; this records the decision and
+the operational posture change.*
+
+`roll_partitions` serializes concurrent rolls within one transaction via
+`pg_advisory_xact_lock(bigint)` so two cannot race on `CREATE PARTITION OF` (Postgres has no
+`CREATE PARTITION OF IF NOT EXISTS`). The lock key was originally a single fixed constant,
+which — because `pg_advisory_xact_lock(bigint)` keys are cluster-global, not schema-scoped —
+serialized concurrent rolls across ALL tenants even though each tenant's `response_payloads`
+parent lives in its own PostgreSQL schema (distinct `pg_class` OIDs). Two tenants rolling
+concurrently can never race on the same `CREATE PARTITION OF` because they target different
+parent relations.
+
+The lock key is now derived per-prefix (a 63-bit positive bigint from the prefix's SHA-256),
+preserving within-tenant serialization (same prefix → same key) while letting distinct
+tenants roll concurrently. The nil-prefix (single-tenant) path keeps the historical constant.
+
+**Operational posture change:** two tenants rolling concurrently is now *expected
+concurrency*, not a contention bug to alert on. A birthday collision across prefixes would
+only over-serialize (two tenants sharing a key serialize — the prior behavior), never
+under-serialize: a benign degradation, not a correctness hole.
+
+`PartitionWorker` now runs on a dedicated `:ash_onetime_partitions` Oban queue (separate
+from `CleanupWorker`'s `:ash_onetime_cleanup`) so forward partition creation — the retention-
+safety path — does not compete with routine cleanup for queue slots under saturation. See
+ADR-0005.
+
 ## Consequences
 
 - Strategy-specific types, tables, options, and tests remain separate even where their

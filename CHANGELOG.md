@@ -4,6 +4,55 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- **Independent code-review fixes (M1–M5, L1–L11):** sixteen findings from the v0.4.0
+  independent code review, landed in four surface-cohesive clusters:
+  - **M1 — bounded callback context:** verifier/mint/scope callbacks now receive exactly
+    `%{resource:, action:}` (the prior code ran a dead `Map.take(trusted_context, [:keys,
+    :now])` and threaded caller actor/tenant that no callback read; both dead paths removed).
+    Least-privilege contract pinned by an admission test.
+  - **M2 — reserved-input compile check now matches the runtime guard:** a protected
+    resource declaring a reserved-named attribute (`:key`/`:issued_at`/...) with no accept
+    now fails to compile (previously caught only at runtime by `reject_reserved/1`).
+  - **M3 — `@reserved` single-source:** the reserved-input list is now
+    `AshOnetime.reserved_verification_inputs/0`, shared by the transformer (compile-time) and
+    `Admission.reject_reserved/1` (runtime); the two copies can no longer drift.
+  - **M4 — verifier defense-in-depth:** the Spark verifier now re-asserts strategy in
+    `[:idempotency, :one_time_nonce]`, non-nil scope, non-nil key (mirroring the transformer),
+    catching a transformer regression before runtime.
+  - **M5 — clock override gate:** `@allow_test_clock_override` (`Mix.env() == :test`,
+    deployment-fragile) replaced by `Application.compile_env(:ash_onetime,
+    :allow_clock_override, false)` — the verify-side `:clock` override is off by default in
+    every build; the test suite opts in via `config/test.exs`.
+  - **L1 — constant-time comparator consolidated** onto `:crypto.hash_equals/2` (the
+    hand-rolled XOR-reduce is gone); the `verify/3` rescue is documented as load-bearing for
+    wrong-length signatures (`hash_equals/2` raises on unequal length — verified empirically).
+  - **L2 — reap floor enforced at the guard:** `reap/3` rejects sub-86_400 callers with
+    `:invalid_request` (no DB round-trip) instead of the migration's `22023` misclassified as
+    `:store_invariant`.
+  - **L3 — per-tenant advisory lock:** the partition-roll lock key is derived per-prefix, so
+    distinct tenants roll concurrently (within-tenant serialization preserved). Cannot
+    reintroduce a `CREATE PARTITION OF` race (per-schema partitions, distinct OIDs).
+  - **L4 — dedicated `:ash_onetime_partitions` Oban queue (CONSUMER-VISIBLE):**
+    `PartitionWorker` moves off the shared cleanup queue so forward partition creation
+    (retention-safety) does not compete with routine cleanup under saturation. Operators must
+    configure the queue. `documentation/operations.md` updated.
+  - **L5 — worker error tuples carry the inner reason:** `{:error, :tag}` →
+    `{:error, {:tag, reason}}` so the distinguishable store cause survives Oban exhaustion.
+  - **L6 — store-transaction exception telemetry:** `committed_claim_transaction` rescue
+    emits `[:ash_onetime, :uncertain_exception]` with the exception class before collapsing
+    to `:dispatched_unknown`. Telemetry-only posture preserved (no Logger).
+  - **L7 — cache key length-prefix:** defense-in-depth framing for the cache key (today's
+    fixed-32-byte components have no ambiguity; the framing future-proofs against a
+    variable-length change).
+  - **L8 — roll_forward OID scoping:** the `_default` partition OID subquery is now
+    namespace-scoped (`pg_namespace`), matching the schema-scoped existence checks.
+  - **L9 — change/generic_action dedup:** `dispatch_reservation`/`trusted_context`/
+    `unavailable_error` hoisted to `Admission` (the near-verbatim duplicates removed).
+  - **L10 — ensure_callbacks cycle diagnostic:** `Code.ensure_compiled` now distinguishes the
+    `:unavailable`/`:module_unavailable` cycle case with clear ordering guidance.
+  - **L11 — `prepare/3` spec dead arm removed** (the `Result.t()` arm never matched);
+    dialyzer confirmed the downstream `store_error/1` was dead code and it was removed.
+
 - **Replay read prunes to the claim's payload partition (H1):** the idempotency replay
   read path (`load_payload/2`) now constrains its `ash_onetime_response_payloads` query by
   `partition_date` as well as `claim_id`, turning a replay of a completed claim into a

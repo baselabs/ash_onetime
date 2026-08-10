@@ -68,13 +68,35 @@ rate is contention, triaged via `pg_stat_activity` and pool sizing.
 - A transient failure retries within minutes, so a single contention event is far less likely to
   exhaust the 3 attempts and discard a retention-critical roll.
 - The discard-alert SQL is the operational contract: an operator monitoring `oban_jobs` for
-  discarded rows on the two queues has the signal ADR-0001's maintenance section requires.
+  discarded rows on the queues has the signal ADR-0001's maintenance section requires.
 - The backoff is bounded at 120 s; a job that is genuinely stuck (not transiently contended) still
   discards after 3 attempts at ~5 minutes total, preserving the fast-discard property for
   persistent failures.
 - The choice is per-worker and source-local; no Oban configuration or plugin dependency is added.
   A consumer running these workers under their own Oban instance inherits the backoff via the
   worker module; a consumer using a different scheduler applies the same shape at their boundary.
+
+## Dedicated partition-creation queue (L4, added 2026-08-10)
+
+`PartitionWorker` runs on a dedicated `:ash_onetime_partitions` queue, separate from
+`CleanupWorker`'s `:ash_onetime_cleanup` and `ReapWorker`'s `:ash_onetime_reap`. Forward
+partition creation is the retention-safety path (a discarded job strands a month of bounded
+retention, per ADR-0001); routine cleanup is not. A shared queue let saturation on the
+cleanup path delay or starve the retention-critical roll. Consumers configuring Oban queues
+must include `:ash_onetime_partitions` or `PartitionWorker` jobs sit unscheduled. The
+discard-alert SQL and the partition-discard triage section in `operations.md` name the new
+queue.
+
+## Worker error tuples carry the inner reason (L5, added 2026-08-10)
+
+The three workers' error tuples embed the store `Result.reason`: `{:error,
+{:roll_partitions_failed, reason}}`, `{:error, {:reap_failed, reason}}`, `{:error,
+{:cleanup_failed, reason}}` (previously opaque `{:error, :tag}`). Oban serializes the error
+tuple to the job's `errors` array, so the distinguishable cause (`:lock_timeout` /
+`:disconnected` / `:store_invariant` / ...) survives past exhaustion instead of collapsing
+to a single opaque atom. The retry/discard semantics are unchanged (still `{:error, _}` →
+retry). The store functions return bare `%Result{}` on failure (not `{:error, %Result{}}`),
+so the worker else-clauses match `%Result{reason: reason}` directly.
 
 ## Alternatives considered
 

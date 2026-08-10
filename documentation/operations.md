@@ -104,7 +104,7 @@ attempt to hours. A job that exhausts its 3 attempts is discarded; for the reten
 ```sql
 SELECT queue, attempt, max_attempts, inserted_at, discarded_at
 FROM oban_jobs
-WHERE state = 'discarded' AND queue IN ('ash_onetime_cleanup', 'ash_onetime_reap')
+WHERE state = 'discarded' AND queue IN ('ash_onetime_cleanup', 'ash_onetime_reap', 'ash_onetime_partitions')
   AND discarded_at > now() - interval '24 hours';
 ```
 
@@ -209,7 +209,7 @@ this bounded steady-state rather than a manual fire drill.
 
 ### partition-discard-detected — a PartitionWorker exhausted its retries
 
-**Symptom.** A discarded `PartitionWorker` job on the `ash_onetime_cleanup` queue. This
+**Symptom.** A discarded `PartitionWorker` job on the `ash_onetime_partitions` queue. This
 strands a month of bounded retention: new payloads route to `_default` and are never dropped
 (ADR-0001). The bounded jittered backoff (ADR-0005) retries transient failures within minutes,
 so a discard means a persistent failure (a malformed argument, an unresolvable repo, a DDL
@@ -220,7 +220,7 @@ error) — not a transient stall.
 ```sql
 SELECT queue, attempt, max_attempts, inserted_at, discarded_at, args
 FROM oban_jobs
-WHERE state = 'discarded' AND queue = 'ash_onetime_cleanup'
+WHERE state = 'discarded' AND queue = 'ash_onetime_partitions'
   AND discarded_at > now() - interval '24 hours'
 ORDER BY discarded_at DESC;
 ```

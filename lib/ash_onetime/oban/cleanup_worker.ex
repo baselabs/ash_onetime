@@ -8,6 +8,7 @@ if Code.ensure_loaded?(Oban.Worker) do
 
     alias AshOnetime.Store
     alias AshOnetime.Store.Postgres
+    alias AshOnetime.Store.Result
 
     # Bounded jittered backoff for a maintenance job doing DDL on the authoritative store.
     # These are not request-path jobs — a transient failure (lock contention, a slow query,
@@ -34,8 +35,13 @@ if Code.ensure_loaded?(Oban.Worker) do
              Store.cleanup(Postgres.for_repo(repo, prefix), batch_size, partition_limit) do
         :ok
       else
-        {:error, :invalid_arguments} -> {:discard, :invalid_arguments}
-        _store_failure -> {:error, :cleanup_failed}
+        {:error, :invalid_arguments} ->
+          {:discard, :invalid_arguments}
+
+        # Store.cleanup returns a bare %Result{} on failure (not {:error, %Result{}}). Embed
+        # the Result.reason so Oban's job error carries the distinguishable cause past exhaustion.
+        %Result{reason: reason} ->
+          {:error, {:cleanup_failed, reason}}
       end
     end
 

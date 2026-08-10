@@ -11,6 +11,7 @@ if Code.ensure_loaded?(Oban.Worker) do
 
     alias AshOnetime.Store
     alias AshOnetime.Store.Postgres
+    alias AshOnetime.Store.Result
 
     # Mirrors the migration's @abandonment_floor_seconds; the reap function re-enforces it.
     @abandonment_floor_seconds 86_400
@@ -44,8 +45,13 @@ if Code.ensure_loaded?(Oban.Worker) do
              Store.reap(Postgres.for_repo(repo, prefix), batch_size, abandonment_seconds) do
         :ok
       else
-        {:error, :invalid_arguments} -> {:discard, :invalid_arguments}
-        _store_failure -> {:error, :reap_failed}
+        {:error, :invalid_arguments} ->
+          {:discard, :invalid_arguments}
+
+        # Store.reap returns a bare %Result{} on failure (not {:error, %Result{}}). Embed the
+        # Result.reason so Oban's job error carries the distinguishable cause past exhaustion.
+        %Result{reason: reason} ->
+          {:error, {:reap_failed, reason}}
       end
     end
 

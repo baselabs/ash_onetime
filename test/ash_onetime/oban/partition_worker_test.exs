@@ -85,6 +85,22 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
     end
   end
 
+  # L4: PartitionWorker runs on a dedicated :ash_onetime_partitions queue (separate from
+  # CleanupWorker's :ash_onetime_cleanup) so forward partition creation — the retention-
+  # safety path — does not compete with routine cleanup under saturation.
+  test "worker declares the dedicated :ash_onetime_partitions queue" do
+    assert Keyword.get(PartitionWorker.__opts__(), :queue) == :ash_onetime_partitions
+  end
+
+  # L5: the worker error tuple embeds the Store Result.reason so Oban's job error carries the
+  # distinguishable cause past exhaustion, not an opaque :roll_partitions_failed. Pinned at
+  # the source level: a regression collapsing back to the opaque atom fails this assertion.
+  test "worker error tuple carries the inner reason, not an opaque atom (L5)" do
+    source = File.read!(Path.join([__DIR__, "..", "..", "..", "lib", "ash_onetime", "oban", "partition_worker.ex"]))
+    assert source =~ "{:error, {:roll_partitions_failed, reason}}"
+    refute source =~ "{:error, :roll_partitions_failed}"
+  end
+
   defp partition_child_count(prefix) do
     %{rows: [[count]]} =
       SQL.query!(
