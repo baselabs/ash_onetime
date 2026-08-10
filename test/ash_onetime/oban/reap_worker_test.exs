@@ -77,40 +77,30 @@ defmodule AshOnetime.Oban.ReapWorkerTest do
   # L5 (behavioral): a reaper whose DELETE is blocked by a contended table lock surfaces as
   # {:error, {:reap_failed, :lock_timeout}} — the worker embeds the Store Result.reason so
   # Oban's job error carries the distinguishable cause past exhaustion, not an opaque
-  # :reap_failed. reap does not set its own lock_timeout, so the test sets a short session
-  # lock_timeout; an ACCESS EXCLUSIVE lock held on the claims table in a separate connection
-  # blocks the reap SQL function's DELETE, which times out to :lock_timeout. Pins the error
-  # tuple behaviorally; a regression that collapses the tuple or drops the inner reason fails.
+  # :reap_failed. reap does not set its own lock_timeout, so a short session lock_timeout is
+  # set around the contention; an ACCESS EXCLUSIVE lock held on the claims table in a separate
+  # connection blocks the reap SQL function's DELETE, which times out to :lock_timeout. The
+  # SET/RESET + holder release are handled by with_contention so no GUC or connection leaks on
+  # any path (incl. an assertion failure).
   @tag unboxed: true
   test "worker surfaces :lock_timeout from a contended reap (L5 behavioral)", %{prefix: prefix} do
-    # reap does not set its own lock_timeout; give the session a short one so contention times out.
-    {:ok, _} = SQL.query(Repo, "SET lock_timeout = 300")
-
-    holder =
-      LockContention.acquire(
-        self(),
-        ~s(LOCK TABLE "#{prefix}"."ash_onetime_idempotency_claims" IN ACCESS EXCLUSIVE MODE)
-      )
-
-    assert_receive {:held, ^holder}, 2_000
-
-    try do
-      job = %Oban.Job{
-        args: %{
-          "repo" => inspect(Repo),
-          "prefix" => prefix,
-          "batch_size" => 100,
-          "abandonment_seconds" => @horizon
+    LockContention.with_contention(
+      ~s(LOCK TABLE "#{prefix}"."ash_onetime_idempotency_claims" IN ACCESS EXCLUSIVE MODE),
+      [],
+      [lock_timeout_ms: 300],
+      fn ->
+        job = %Oban.Job{
+          args: %{
+            "repo" => inspect(Repo),
+            "prefix" => prefix,
+            "batch_size" => 100,
+            "abandonment_seconds" => @horizon
+          }
         }
-      }
 
-      assert {:error, {:reap_failed, :lock_timeout}} = ReapWorker.perform(job)
-    after
-      LockContention.release(holder)
-      # Reset the session GUC so a later test reusing this sandbox:false connection does not
-      # inherit the 300ms lock_timeout.
-      {:ok, _} = SQL.query(Repo, "RESET lock_timeout")
-    end
+        assert {:error, {:reap_failed, :lock_timeout}} = ReapWorker.perform(job)
+      end
+    )
   end
 
   defp insert_abandoned(prefix, label) do

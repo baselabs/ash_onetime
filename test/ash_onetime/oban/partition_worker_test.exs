@@ -108,21 +108,20 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
     target = Postgres.for_repo(Repo, prefix)
     roll_key = Postgres.roll_advisory_key(target)
 
-    # Hold the advisory lock in a separate real connection so the worker cannot acquire it.
-    holder =
-      LockContention.acquire(self(), "SELECT pg_advisory_xact_lock($1::bigint)", [roll_key])
+    # Hold the per-prefix advisory lock in a separate real connection. Store.roll_partitions
+    # sets SET LOCAL lock_timeout = 5s internally, so a roll that cannot acquire the held lock
+    # fails closed with reason :lock_timeout. No session lock_timeout is needed here.
+    LockContention.with_contention(
+      "SELECT pg_advisory_xact_lock($1::bigint)",
+      [roll_key],
+      fn ->
+        job = %Oban.Job{
+          args: %{"repo" => inspect(Repo), "prefix" => prefix, "months" => 3}
+        }
 
-    assert_receive {:held, ^holder}, 2_000
-
-    try do
-      job = %Oban.Job{
-        args: %{"repo" => inspect(Repo), "prefix" => prefix, "months" => 3}
-      }
-
-      assert {:error, {:roll_partitions_failed, :lock_timeout}} = PartitionWorker.perform(job)
-    after
-      LockContention.release(holder)
-    end
+        assert {:error, {:roll_partitions_failed, :lock_timeout}} = PartitionWorker.perform(job)
+      end
+    )
   end
 
   defp partition_child_count(prefix) do
