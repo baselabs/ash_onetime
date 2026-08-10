@@ -129,8 +129,10 @@ defmodule AshOnetime.TelemetryTest do
       # A duration-event carries :duration; the metadata is the closed atoms-only shape.
       assert Map.keys(admission_meas) == [:duration]
       assert admission_meas.duration == 42
+
       assert Map.keys(admission_meta) |> Enum.sort() ==
                [:action, :resource, :result_class, :strategy]
+
       assert admission_meta.result_class == :admitted
 
       assert_receive {:metric, [:ash_onetime, :store_uncertainty, :metric], count_meas,

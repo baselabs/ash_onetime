@@ -929,6 +929,22 @@ defmodule AshOnetime.MutationCheck do
       test_name: "the completion state predicate is the effect-once backstop without a payload",
       assertion: "assert {:error, %Result{status: :failure, reason: :store_invariant}} ="
     },
+    "partition-pruning-predicate" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      # Span both the SQL predicate AND the param list so the mutant is a coherent pre-fix
+      # query (one placeholder, one param). Editing only the SQL line would leave two params
+      # bound to one placeholder, failing on param-count (`:dispatched_unknown`) rather than
+      # on the scan-cardinality the predicate exists to prevent -- a vacuous mutation.
+      original:
+        "    WHERE claim_id = $1::uuid AND partition_date = $2\n    \"\"\"\n\n    case dispatched_query(target, sql, [dump_uuid(claim.id), claim.response_partition]) do",
+      mutated:
+        "    WHERE claim_id = $1::uuid\n    \"\"\"\n\n    case dispatched_query(target, sql, [dump_uuid(claim.id)]) do",
+      test: "test/ash_onetime/store/postgres_test.exs",
+      tag: "partition_pruning_mutation",
+      test_name:
+        "load prunes to the authoritative partition and ignores an out-of-partition stray",
+      assertion: "assert {:ok, %Result{status: :complete, payload: ^payload}} ="
+    },
     "completion-invariant-rollback" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original: "WHERE claim_id = $7::uuid\n      ) = 1\n",

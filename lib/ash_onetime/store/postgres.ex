@@ -581,13 +581,27 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   defp load_payload(target, claim) do
+    # The `partition_date` predicate prunes the range-partitioned payload table to the
+    # single monthly child holding this claim's response (the PK is
+    # `(partition_date, claim_id)`), turning the replay read into a point lookup instead
+    # of a scan of every monthly partition. `claim.response_partition` is non-nil for a
+    # `:complete` idempotency claim by the write-path invariant (`update_complete/5` sets
+    # it atomically with `state = 'complete'`).
+    #
+    # The `partition_date == claim.response_partition` guard below is now logically dead on
+    # the authoritative path (the WHERE binds `partition_date` to `claim.response_partition`,
+    # so any returned row satisfies it by construction) and is retained as defense-in-depth.
+    # Note: a stale/corrupted claim struct whose `response_partition` disagrees with the
+    # stored row is NOT caught by this guard — it is caught by the no-row fallthrough below
+    # (a mismatched `response_partition` makes the WHERE match nothing → `num_rows: 0` →
+    # `:corrupt_payload`). Do not remove the guard expecting it to perform that detection.
     sql = """
     SELECT partition_date, encoded_response
     FROM #{relation(target, "ash_onetime_response_payloads")}
-    WHERE claim_id = $1::uuid
+    WHERE claim_id = $1::uuid AND partition_date = $2
     """
 
-    case dispatched_query(target, sql, [dump_uuid(claim.id)]) do
+    case dispatched_query(target, sql, [dump_uuid(claim.id), claim.response_partition]) do
       {:ok, %{num_rows: 1, rows: [[partition_date, payload]]}}
       when partition_date == claim.response_partition and is_binary(payload) and
              byte_size(payload) <= @payload_ceiling ->

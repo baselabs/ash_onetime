@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- **Replay read prunes to the claim's payload partition (H1):** the idempotency replay
+  read path (`load_payload/2`) now constrains its `ash_onetime_response_payloads` query by
+  `partition_date` as well as `claim_id`, turning a replay of a completed claim into a
+  primary-key point lookup on the single monthly child partition instead of a scan of every
+  monthly partition. The cost of a replay no longer grows with partition count (retention
+  age). No behavior change on the authoritative path — the returned payload and the
+  digest/partition-mismatch failure arms are unchanged. One incidental property changes: the
+  read no longer detects a stray payload row in a *different* partition from the claim's
+  authoritative one (this is necessarily dropped by partition pruning); cross-partition
+  cardinality remains enforced at write time (`update_complete`) and re-asserted by the
+  cleanup delete guard. ADR-0001 gains a read-path performance subsection. The production
+  predicate is pinned by a registered mutation test; an EXPLAIN-based mechanism proof
+  documents the pruning directly.
+
 ## v0.4.0 — 2026-08-09
 
 Hardening, ops-readiness, and enhancement release. No breaking contract change for existing

@@ -20,7 +20,7 @@ if Code.ensure_loaded?(Oban.Worker) do
 
     @impl Oban.Worker
     def backoff(%Oban.Job{attempt: attempt}) do
-      delay = (@base_backoff_seconds * attempt) + :rand.uniform(@base_backoff_seconds) - 1
+      delay = @base_backoff_seconds * attempt + :rand.uniform(@base_backoff_seconds) - 1
       min(delay, @max_backoff_seconds)
     end
 

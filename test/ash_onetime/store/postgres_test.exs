@@ -254,7 +254,27 @@ defmodule AshOnetime.Store.PostgresTest do
     assert byte_size(stored) == 16_777_216
   end
 
-  test "load rejects more than one payload row across all partitions", %{
+  # H1 production guard: this is the test that pins the production `load_payload/2`
+  # predicate. It seeds a stray payload row in a *different* partition (`~D[2100-01-01]`,
+  # which routes to `_default`) and asserts the replay returns the AUTHORITATIVE payload,
+  # ignoring the stray. Dropping the `partition_date` predicate from `load_payload/2`
+  # makes the read scan all partitions again, see both rows, and return `:corrupt_payload`
+  # — which fails this assertion. (Verified RED-then-GREEN: see the registered mutation
+  # `partition-pruning-predicate` in scripts/check_mutations.exs.)
+  #
+  # Partition pruning and cross-partition duplicate detection are mutually exclusive —
+  # once the read prunes, a stray payload row in a *different* partition is
+  # out-of-partition and invisible to the read. This is the correct behavior, not a hole:
+  # the write path (`update_complete`, see "completion rejects cross-partition payload
+  # duplication" below at the write-path test) is the authoritative guard that forbids a
+  # second payload from ever being written, and the cleanup delete guard re-asserts
+  # `payload_count = 1` on the delete path. A stray row can only exist via direct SQL
+  # bypass (operator error / a buggy migration), which the write path already forbids — so
+  # the read returning the authoritative payload is right. This test was previously named
+  # "load rejects more than one payload row across all partitions" and asserted the
+  # now-dropped incidental detection.
+  @tag partition_pruning_mutation: true
+  test "load prunes to the authoritative partition and ignores an out-of-partition stray", %{
     prefix: prefix,
     target: target
   } do
@@ -268,9 +288,95 @@ defmodule AshOnetime.Store.PostgresTest do
                Store.complete(target, admitted.claim, "test", digest, payload)
              end)
 
+    # A stray row in _default (2100-01-01 is outside the named window) — invisible to a
+    # pruning read. Its digest is wrong on purpose; if the read ever returned it, the
+    # digest check would catch it. The point is the read must NOT see it at all.
     insert_payload!(prefix, ~D[2100-01-01], complete.id, "extra")
 
-    assert {:ok, %Result{status: :failure, reason: :corrupt_payload}} =
+    assert {:ok, %Result{status: :complete, payload: ^payload}} =
+             Repo.transaction(fn -> Store.load(target, complete) end)
+  end
+
+  # H1 mechanism proof (NOT a production tripwire): this test proves the partition-pruning
+  # MECHANISM directly via EXPLAIN — the predicate query shape scans exactly one named
+  # child, while the pre-fix claim_id-only shape scans every named child. It does NOT pin
+  # production `load_payload/2` (it builds its own SQL via the payload_load_plan helper, so
+  # it would stay green if the production predicate were dropped). The behavioral test
+  # above is the production guard; this test exists to document and lock the mechanism the
+  # fix relies on. First EXPLAIN-based plan assertion in the repo.
+  test "the partition_date predicate prunes the payload read to one named child (EXPLAIN)", %{
+    prefix: prefix,
+    target: target
+  } do
+    request = idempotency_request("load-payload-pruning")
+    payload = "authoritative"
+    digest = :crypto.hash(:sha256, payload)
+
+    assert {:ok, %Result{status: :complete, claim: complete}} =
+             Repo.transaction(fn ->
+               admitted = Store.claim(target, request)
+               Store.complete(target, admitted.claim, "test", digest, payload)
+             end)
+
+    # The install creates months 0..12; roll forward so several named children exist
+    # beyond the current month, making a non-pruning scan observable in the plan. Assert the
+    # roll succeeded so a silent failure (lock timeout, etc.) does not let the test pass
+    # without its distinguishing premise.
+    assert {:ok, %{partitions_created: _}} = Store.roll_partitions(target, 15)
+
+    partition = complete.response_partition
+    pruned_plan = payload_load_plan(prefix, complete.id, partition, prune?: true)
+    unpruned_plan = payload_load_plan(prefix, complete.id, partition, prune?: false)
+
+    named_child_refs = fn plan ->
+      Enum.count(plan, fn line ->
+        # Count NAMED children only (ash_onetime_response_payloads_YYYY_MM). _default
+        # exists on every install and is not evidence of a scan.
+        line =~ ~r/ash_onetime_response_payloads_\d{4}_\d{2}/
+      end)
+    end
+
+    pruned_refs = named_child_refs.(pruned_plan)
+    unpruned_refs = named_child_refs.(unpruned_plan)
+
+    # The predicate query (what load_payload/2 executes) prunes to exactly one child.
+    assert pruned_refs == 1,
+           "expected the pruning query to reference one named child; got #{pruned_refs}.\n" <>
+             "plan:\n#{Enum.join(pruned_plan, "\n")}"
+
+    # The pre-fix claim_id-only query scans every named child — proving the predicate is
+    # what causes the pruning (the mechanism), not some other planner behavior.
+    assert unpruned_refs > 1,
+           "expected the non-pruning (claim_id-only) query to scan multiple named children " <>
+             "(proving the predicate is load-bearing); got #{unpruned_refs}.\n" <>
+             "plan:\n#{Enum.join(unpruned_plan, "\n")}"
+  end
+
+  # H1 behavioral regression: a replay after the payload's partition is no longer the
+  # newest (N partitions have rolled forward) still returns the correct payload. Guards
+  # that the pruning predicate did not break the read contract.
+  test "replay returns the authoritative payload after partitions have rolled forward", %{
+    target: target
+  } do
+    request = idempotency_request("load-payload-rolled")
+    payload = "rolled-authoritative"
+    digest = :crypto.hash(:sha256, payload)
+
+    assert {:ok, %Result{status: :complete, claim: complete}} =
+             Repo.transaction(fn ->
+               admitted = Store.claim(target, request)
+               Store.complete(target, admitted.claim, "test", digest, payload)
+             end)
+
+    # The claim's payload lives in the install-month partition; roll forward so later
+    # named partitions exist. The replay must still find the payload in its own partition.
+    # Assert the roll succeeded so a silent failure does not let the test pass without its
+    # distinguishing premise.
+    assert {:ok, %{partitions_created: _}} = Store.roll_partitions(target, 15)
+
+    assert complete.response_partition != nil
+
+    assert {:ok, %Result{status: :complete, payload: ^payload}} =
              Repo.transaction(fn -> Store.load(target, complete) end)
   end
 
@@ -658,6 +764,38 @@ defmodule AshOnetime.Store.PostgresTest do
       """,
       [date, Ecto.UUID.dump!(id), payload]
     )
+  end
+
+  # EXPLAIN of the load_payload/2 SELECT shape. `prune?: true` produces the fixed query
+  # shape (with the partition_date predicate); `prune?: false` produces the pre-fix
+  # claim_id-only shape, to prove the predicate is load-bearing for pruning. Verified on
+  # PG 18 (the version test_helper.exs pins) that the parameterized form prunes visibly in
+  # the plan text — both the pruned (1 named child) and unpruned (all named children)
+  # shapes are observable. Used by the H1 partition-pruning mechanism proof.
+  defp payload_load_plan(prefix, claim_id, %Date{} = partition_date, opts) do
+    prune? = Keyword.get(opts, :prune?, true)
+
+    {predicate, params} =
+      if prune? do
+        {"claim_id = $1::uuid AND partition_date = $2",
+         [Ecto.UUID.dump!(claim_id), partition_date]}
+      else
+        {"claim_id = $1::uuid", [Ecto.UUID.dump!(claim_id)]}
+      end
+
+    %{rows: rows} =
+      SQL.query!(
+        Repo,
+        """
+        EXPLAIN
+        SELECT partition_date, encoded_response
+        FROM #{relation(prefix, "ash_onetime_response_payloads")}
+        WHERE #{predicate}
+        """,
+        params
+      )
+
+    Enum.map(rows, &hd/1)
   end
 
   # Seeds an already-complete authoritative claim plus its single payload via

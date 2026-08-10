@@ -230,12 +230,17 @@ defmodule AshOnetime.Cache.Ets do
     oldest =
       :ets.foldl(
         fn
-          {:__config__, _}, acc -> acc
-          {key, _entry, expiry}, nil -> {key, expiry}
+          {:__config__, _}, acc ->
+            acc
+
+          {key, _entry, expiry}, nil ->
+            {key, expiry}
+
           {key, _entry, expiry}, {_acc_key, acc_expiry} when expiry < acc_expiry ->
             {key, expiry}
 
-          _row, acc -> acc
+          _row, acc ->
+            acc
         end,
         nil,
         @table

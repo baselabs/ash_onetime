@@ -89,6 +89,35 @@ claim-scoped delete (the delete guard removes the payload). Without scheduling t
 operator's retention boundary degrades silently — this is a documented operational
 requirement, not a library-managed one.
 
+### Read-path performance: replay reads prune to the claim's partition
+
+*Added 2026-08-09 (H1). This is a PERFORMANCE contract, independent of the retention
+correctness above — bounded retention works regardless of read-path pruning; only the drop
+path matters for retention correctness. This subsection records a performance property the
+partitioned design carries, not a new correctness guarantee.*
+
+The `ash_onetime_response_payloads` table's primary key is
+`(partition_date, claim_id)`. A replay of a completed idempotency claim reads its stored
+response by both columns — `WHERE claim_id = ? AND partition_date = ?` — so the planner
+prunes the range-partitioned table to the single monthly child holding that claim's payload
+and uses the child primary-key index for a point lookup. Confining the predicate to
+`claim_id` alone would leave the leading key column unconstrained: no primary-key use, no
+partition pruning, and a scan of every monthly child per replay — a cost that grows linearly
+with partition count (i.e. with retention age). The replay read path therefore MUST constrain
+`partition_date` to the claim's `response_partition`, which is non-nil for a `:complete`
+claim by the write-path invariant (`update_complete/5` sets it atomically with
+`state = 'complete'`).
+
+The retained `partition_date == claim.response_partition` guard in `load_payload/2` is
+logically dead on the authoritative path after the fix (the WHERE binds `partition_date` to
+`claim.response_partition`, so any returned row satisfies the guard by construction) and is
+kept as defense-in-depth. A stale or corrupted claim struct whose `response_partition`
+disagrees with the stored row is caught by the no-row fallthrough (the mismatched value
+makes the WHERE match nothing → `:corrupt_payload`), not by the guard. Cross-partition
+payload cardinality is enforced at write time (`update_complete` rejects a second payload
+with `:store_invariant`) and re-asserted by the cleanup delete guard; the read path
+returning the authoritative payload from the pruned partition is correct behavior.
+
 ## Consequences
 
 - Strategy-specific types, tables, options, and tests remain separate even where their
