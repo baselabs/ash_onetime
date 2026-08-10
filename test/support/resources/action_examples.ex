@@ -74,9 +74,8 @@ end
 defmodule AshOnetime.Test.ActionExamples.Verifier do
   @moduledoc false
 
-  def verify(token, context) when is_binary(token) do
-    if observer = Process.get({__MODULE__, :observer}),
-      do: send(observer, {:verifier, token, Map.keys(context)})
+  def verify(token, _context) when is_binary(token) do
+    if observer = Process.get({__MODULE__, :observer}), do: send(observer, {:verifier, token})
 
     {:ok,
      %AshOnetime.Verified{

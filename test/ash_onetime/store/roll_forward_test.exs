@@ -16,8 +16,7 @@ defmodule AshOnetime.Store.RollForwardTest do
   use AshOnetime.Test.StoreCase, async: false
 
   alias AshOnetime.Store
-  alias AshOnetime.Store.Postgres
-  alias AshOnetime.Test.{Migration, Repo}
+  alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: GenerateMigrations
 
