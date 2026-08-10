@@ -4,12 +4,68 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: b
 or contract changes bump the minor version (the library is pre-1.0), and each breaking
 change lands here with the exact edit to make.
 
-The published package is [v0.4.0](https://hex.pm/packages/ash_onetime). Set your dependency
+The published package is [v0.5.0](https://hex.pm/packages/ash_onetime). Set your dependency
 to the minor range to pick up patches automatically and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 0.4"}
+{:ash_onetime, "~> 0.5"}
 ```
+
+## v0.5.0 — security hardening from the independent code review
+
+v0.5.0 lands the sixteen findings (M1–M5, L1–L11) from the v0.4.0 independent code review.
+It is a **minor** bump because four changes are consumer-visible and require action on
+upgrade; the rest are internal hardening (no consumer action). Read the four items below
+before upgrading.
+
+- **CONSUMER-VISIBLE — PartitionWorker moved to a dedicated `:ash_onetime_partitions` Oban
+  queue (L4).** Forward partition creation is the retention-safety path; it previously shared
+  `:ash_onetime_cleanup` with routine cleanup. **Add the queue to your Oban config** or
+  `PartitionWorker` jobs sit unscheduled and bounded retention silently degrades past the
+  install window:
+
+  ```elixir
+  config :my_app, Oban,
+    queues: [ash_onetime_cleanup: 1, ash_onetime_reap: 1, ash_onetime_partitions: 1]
+  ```
+
+  The discard-alert SQL and the partition-discard triage in `operations.md` now name the new
+  queue.
+
+- **CONSUMER-VISIBLE — protected resources declaring a reserved-named attribute now fail to
+  compile (M2).** A protected resource that declares an attribute named `:key`, `:issued_at`,
+  `:expires_at`, `:verification_state`, or `:algorithm` — even with no `accept` on any action —
+  now fails compilation (it previously compiled and was caught only at runtime by
+  `reject_reserved/1`). If a protected resource has such an attribute, **rename it** (e.g.
+  `:idempotency_key` instead of `:key`); reserved names are trusted local facts the
+  verification path derives itself and may not come from caller input.
+
+- **CONSUMER-VISIBLE — the `:clock` verify-option override is off by default in every build
+  (M5).** The gate changed from `Mix.env() == :test` (which a `MIX_ENV=test mix deps.compile`
+  consumer could accidentally ship live) to `Application.compile_env(:ash_onetime,
+  :allow_clock_override, false)`. The override is now disabled unless explicitly configured,
+  regardless of `MIX_ENV`. If your test suite pins verification time via the `:clock` option,
+  set it in `config/test.exs`:
+
+  ```elixir
+  config :ash_onetime, allow_clock_override: true
+  ```
+
+  (set BEFORE compiling `ash_onetime` — the gate is read at build time).
+
+- **CONSUMER-VISIBLE — Oban worker error tuples now carry the inner reason (L5).**
+  `{:error, :reap_failed}` became `{:error, {:reap_failed, reason}}` (and likewise for
+  `:roll_partitions_failed`, `:cleanup_failed`). Oban serializes the tuple into `job.errors`;
+  the distinguishable store cause (`:lock_timeout` / `:disconnected` / `:store_invariant` / …)
+  now survives exhaustion. If you pattern-match the old bare atom, update to the 2-tuple
+  inner shape. Retry/discard semantics are unchanged.
+
+The remaining twelve findings (M1, M3, M4, L1, L2, L3, L6, L7, L8, L9, L10, L11) are internal
+hardening with no consumer action — the bounded callback context, the consolidated
+constant-time comparator, the per-tenant partition-roll lock, the reap floor, the store
+telemetry event, the cache-key framing, the roll-forward namespace scoping, the
+change/generic_action dedup, the compile-cycle diagnostic, and the dropped dead spec arm.
+See the CHANGELOG for the full list.
 
 ## v0.4.0 — hardening, ops-readiness, and enhancement
 

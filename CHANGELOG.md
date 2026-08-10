@@ -4,15 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## v0.5.0 — 2026-08-10
+
+Minor bump: sixteen findings (M1–M5, L1–L11) from the v0.4.0 independent code review. Four
+are CONSUMER-VISIBLE (read `documentation/upgrading.md` before upgrading); the rest are
+internal hardening.
+
 - **Independent code-review fixes (M1–M5, L1–L11):** sixteen findings from the v0.4.0
   independent code review, landed in four surface-cohesive clusters:
   - **M1 — bounded callback context:** verifier/mint/scope callbacks now receive exactly
     `%{resource:, action:}` (the prior code ran a dead `Map.take(trusted_context, [:keys,
     :now])` and threaded caller actor/tenant that no callback read; both dead paths removed).
     Least-privilege contract pinned by an admission test.
-  - **M2 — reserved-input compile check now matches the runtime guard:** a protected
+  - **M2 — reserved-input compile check now matches the runtime guard (CONSUMER-VISIBLE):** a protected
     resource declaring a reserved-named attribute (`:key`/`:issued_at`/...) with no accept
-    now fails to compile (previously caught only at runtime by `reject_reserved/1`).
+    now fails to compile (previously caught only at runtime by `reject_reserved/1`). Rename
+    any such attribute (e.g. `:idempotency_key`).
   - **M3 — `@reserved` single-source:** the reserved-input list is now
     `AshOnetime.reserved_verification_inputs/0`, shared by the transformer (compile-time) and
     `Admission.reject_reserved/1` (runtime); the two copies can no longer drift.
@@ -36,8 +43,9 @@ All notable changes to this project are documented in this file.
     `PartitionWorker` moves off the shared cleanup queue so forward partition creation
     (retention-safety) does not compete with routine cleanup under saturation. Operators must
     configure the queue. `documentation/operations.md` updated.
-  - **L5 — worker error tuples carry the inner reason:** `{:error, :tag}` →
+  - **L5 — worker error tuples carry the inner reason (CONSUMER-VISIBLE):** `{:error, :tag}` →
     `{:error, {:tag, reason}}` so the distinguishable store cause survives Oban exhaustion.
+    Consumers pattern-matching the old bare atom must update to the 2-tuple inner shape.
   - **L6 — store-transaction exception telemetry:** `committed_claim_transaction` rescue
     emits `[:ash_onetime, :uncertain_exception]` with the exception class before collapsing
     to `:dispatched_unknown`. Telemetry-only posture preserved (no Logger).

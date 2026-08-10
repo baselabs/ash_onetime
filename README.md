@@ -126,7 +126,7 @@ patterns.
 
 ## Status
 
-The package is [published on Hex](https://hex.pm/packages/ash_onetime) as v0.4.0 and the
+The package is [published on Hex](https://hex.pm/packages/ash_onetime) as v0.5.0 and the
 [source is public](https://github.com/baselabs/ash_onetime). Every protected action chooses
 `:idempotency` or `:one_time_nonce` and declares a nonempty scope; there is no default
 strategy or global scope fallback. PostgreSQL-authoritative admission, transactional Ash
