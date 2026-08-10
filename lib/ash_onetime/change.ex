@@ -36,7 +36,7 @@ defmodule AshOnetime.Change do
     do: {:not_atomic, "keyed effects require transactional stream execution"}
 
   defp reserve(changeset, protection, context) do
-    trusted = trusted_context(context)
+    trusted = AshOnetime.Admission.trusted_context(context)
 
     # The CRUD dispatch_reservation mirrors generic_action.ex's. Covered by the
     # :nonce_charge_fence CRUD test (replay_fence_test.exs). A discriminating mutation sentinel
@@ -45,7 +45,7 @@ defmodule AshOnetime.Change do
     # CRUD body needs a custom change that races the nonce CRUD lifecycle verifier's
     # replay_capabilities/1 load-ordering check. The generic_action.ex dispatch — which diverges
     # observably on body failure — carries the replay-fence-dispatch mutation sentinel.
-    reservation = dispatch_reservation(changeset, protection, trusted)
+    reservation = AshOnetime.Admission.dispatch_reservation(changeset, protection, trusted)
 
     case reservation do
       {:execute, state} ->
@@ -64,19 +64,6 @@ defmodule AshOnetime.Change do
 
       {:error, error} ->
         {:error, error}
-    end
-  end
-
-  defp dispatch_reservation(subject, protection, trusted) do
-    cond do
-      protection.external_effect ->
-        AshOnetime.ExternalRecovery.reserve(subject, protection, trusted)
-
-      protection.strategy == :one_time_nonce and protection.commit == :independent ->
-        AshOnetime.Admission.reserve_committed(subject, protection, trusted)
-
-      true ->
-        AshOnetime.Admission.reserve(subject, protection, trusted)
     end
   end
 
@@ -100,7 +87,7 @@ defmodule AshOnetime.Change do
         normalize_completion(state, result, final_changeset, instructions)
 
       :error ->
-        {:error, unavailable_error()}
+        {:error, AshOnetime.Admission.unavailable_error()}
     end
   end
 
@@ -118,16 +105,4 @@ defmodule AshOnetime.Change do
     do: Map.put(instructions, :notifications, [])
 
   defp suppress_notifications(instructions), do: instructions
-
-  defp trusted_context(context) do
-    context
-    |> Map.from_struct()
-    |> Map.take([:actor, :tenant])
-  rescue
-    _exception -> %{}
-  end
-
-  defp unavailable_error do
-    AshOnetime.Error.new(:admission_unavailable, "keyed-effect admission is unavailable")
-  end
 end

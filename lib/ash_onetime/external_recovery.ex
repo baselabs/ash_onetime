@@ -26,7 +26,6 @@ defmodule AshOnetime.ExternalRecovery do
       continue(decision, subject, protection, context, started)
     else
       {:error, %Error{} = error} -> {:error, error}
-      %Result{} = result -> {:error, store_error(result)}
     end
   rescue
     _exception -> unavailable()
@@ -239,9 +238,6 @@ defmodule AshOnetime.ExternalRecovery do
 
     :ok
   end
-
-  defp store_error(%Result{reason: reason}),
-    do: Error.new(reason || :store_failure, "authoritative admission store failed")
 
   defp unavailable,
     do: {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}

@@ -18,9 +18,41 @@ defmodule AshOnetime.Resource.Verifier do
       )
 
     case verify_index_count(dsl_state, raw, index) do
-      :ok -> verify_wrappers(dsl_state, index.ordered)
-      error -> error
+      :ok ->
+        with :ok <- verify_required_shape(dsl_state, index.ordered) do
+          verify_wrappers(dsl_state, index.ordered)
+        end
+
+      error ->
+        error
     end
+  end
+
+  # Defense-in-depth: the transformer's `required/2` already asserts strategy/scope/key
+  # presence and shape. The verifier runs after the transformer and re-asserts the same
+  # AGENTS.md load-bearing invariants ("every protected action declares :idempotency or
+  # :one_time_nonce; no default strategy; scope explicit; missing scope is an error; key
+  # required") so a future transformer regression that drops a check is caught here rather
+  # than letting a malformed protection through to runtime.
+  defp verify_required_shape(dsl_state, protections) do
+    Enum.reduce_while(protections, :ok, fn protection, :ok ->
+      cond do
+        is_nil(protection.strategy) ->
+          {:halt, verifier_error(dsl_state, "strategy is required and has no default")}
+
+        protection.strategy not in [:idempotency, :one_time_nonce] ->
+          {:halt, verifier_error(dsl_state, "strategy must be :idempotency or :one_time_nonce")}
+
+        is_nil(protection.scope) ->
+          {:halt, verifier_error(dsl_state, "scope is required and has no global fallback")}
+
+        is_nil(protection.key) ->
+          {:halt, verifier_error(dsl_state, "key is required")}
+
+        true ->
+          {:cont, :ok}
+      end
+    end)
   end
 
   defp verify_index_count(dsl_state, raw, index) do

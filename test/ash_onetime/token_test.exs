@@ -501,6 +501,10 @@ defmodule AshOnetime.TokenTest do
     IO.inspect(result, limit: :infinity)
     '''
 
+    # The dev subprocess inherits a clean env: config/config.exs imports test.exs ONLY for
+    # the test env, so in MIX_ENV=dev the allow_clock_override config is unset and
+    # Application.compile_env(:ash_onetime, :allow_clock_override, false) freezes to false
+    # at the dev build's compile time. The :clock override must fail closed there.
     build_path =
       Path.join([
         File.cwd!(),
@@ -524,7 +528,7 @@ defmodule AshOnetime.TokenTest do
     refute File.exists?(build_path)
     assert status == 0
     assert output =~ "code: :invalid_options"
-    assert output =~ "verification clock overrides are test-only"
+    assert output =~ "verification clock override requires explicit"
     refute output =~ "{:ok,"
   end
 

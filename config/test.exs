@@ -9,7 +9,8 @@ database_url =
 config :ash, :disable_async?, true
 
 config :ash_onetime,
-  ecto_repos: [AshOnetime.Test.Repo]
+  ecto_repos: [AshOnetime.Test.Repo],
+  allow_clock_override: true
 
 config :ash_onetime, AshOnetime.Test.Repo,
   url: database_url,

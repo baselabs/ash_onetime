@@ -144,4 +144,33 @@ defmodule AshOnetime.AdmissionTest do
       assert AshOnetime.replayed?(unstamped) == nil
     end
   end
+
+  describe "bounded callback context (M1)" do
+    # M1: verifier/mint/scope callbacks receive ONLY %{resource:, action:} — the trusted
+    # local facts the admission path derives itself (AGENTS.md: "verification callbacks
+    # return trusted local facts; action input cannot supply pre-verified facts"). Caller-
+    # supplied actor/tenant/keys/now are NOT forwarded (least-privilege). The prior code
+    # threaded trusted_context into bounded_callback_context/2 and ran a dead
+    # Map.take(trusted_context, [:keys, :now]) that always returned %{} (no producer of
+    # :keys/:now exists); the fix collapsed it to bounded_callback_context/1 (subject only),
+    # removing both dead paths (the :keys/:now take AND the :actor/:tenant extraction that
+    # fed nothing).
+    #
+    # This test pins the structural invariant: bounded_callback_context is private arity /1.
+    # The prior dead code was arity /2 (subject, trusted_context). A regression that
+    # re-introduces caller-context forwarding would have to restore the /2 signature (the
+    # caller context has to come from somewhere), which the absence-of-/2 check catches.
+    # The three call sites (scope_component :403, verify :517, mint :548) now pass subject
+    # only; the verifier observer hook in ActionExamples.Verifier carries the context keys
+    # it received, exercised end-to-end by the action_transaction / replay_safety suites.
+    @tag bounded_callback_context_contract: true
+    test "bounded_callback_context is not the arity-/2 caller-context-forwarding shape" do
+      # bounded_callback_context is private, so it never appears in module_info(:functions).
+      # A regression that exports it (to forward caller context from a public caller) would
+      # land it here; assert it stays unexported at either arity.
+      exports = AshOnetime.Admission.module_info(:functions)
+      refute {"bounded_callback_context", 1} in exports
+      refute {"bounded_callback_context", 2} in exports
+    end
+  end
 end

@@ -32,7 +32,18 @@ defmodule AshOnetime.Token do
   @max_token_bytes 8_192
   @max_key_bytes 1_024
   @max_identifier_bytes 128
-  @allow_test_clock_override Mix.env() == :test
+  # Compile-time gate read through Application.compile_env/2 so the value is frozen at
+  # build time and consumers see it OFF unless they explicitly opt in via config. The
+  # verify-side :clock override is off by default in EVERY build environment; the
+  # ash_onetime test suite opts in via config/test.exs so it can pin evaluated_at. The
+  # prior Mix.env() == :test gate was deployment-fragile: a consumer who builds deps with
+  # MIX_ENV=test mix deps.compile shipped the override live (letting a caller who
+  # influences verify/3 options shift the replay window). compile_env default-off removes
+  # that — the override is disabled unless the consuming application explicitly configures
+  # it, regardless of MIX_ENV. (get_env would be re-read at runtime, but the gate is
+  # structurally a compile-time branch via `if @allow_... do`; compile_env makes that
+  # explicit and prevents the config from being silently ignored.)
+  @allow_clock_override Application.compile_env(:ash_onetime, :allow_clock_override, false)
 
   @body_fields ~w(algorithm expires_at issued_at key key_id namespace)
   @envelope_fields ~w(body signature)
@@ -287,7 +298,7 @@ defmodule AshOnetime.Token do
     end
   end
 
-  if @allow_test_clock_override do
+  if @allow_clock_override do
     defp verification_clock(options) do
       trusted_now(Keyword.get(options, :clock, Clock), :invalid_evaluated_at)
     end
@@ -295,7 +306,12 @@ defmodule AshOnetime.Token do
     defp verification_clock(options) do
       case Keyword.fetch(options, :clock) do
         {:ok, _clock} ->
-          {:error, Error.new(:invalid_options, "verification clock overrides are test-only")}
+          {:error,
+           Error.new(
+             :invalid_options,
+             "verification clock override requires explicit " <>
+               "Application.get_env(:ash_onetime, :allow_clock_override) opt-in"
+           )}
 
         :error ->
           trusted_now(Clock, :invalid_evaluated_at)

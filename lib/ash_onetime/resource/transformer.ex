@@ -13,7 +13,6 @@ defmodule AshOnetime.Resource.Transformer do
   alias Spark.Error.DslError
 
   @max_seconds 2_147_483_647
-  @reserved_inputs [:key, :issued_at, :expires_at, :verification_state, :algorithm]
   @duration_factors [second: 1, minute: 60, hour: 3_600, day: 86_400]
   # The full limit vocabulary (11 keys) is the union of the protect-only ceilings (key/
   # verification/cache paths) and the response-structural ceilings (max_response_*, sourced
@@ -234,19 +233,40 @@ defmodule AshOnetime.Resource.Transformer do
   defp wrappable_run?(_run), do: false
 
   defp verify_reserved_inputs(protection, context) do
+    reserved_inputs = AshOnetime.reserved_verification_inputs()
     argument_names = Enum.map(context.action.arguments, & &1.name)
     accepted_names = List.wrap(Map.get(context.action, :accept))
-    reserved = Enum.filter(@reserved_inputs, &(&1 in argument_names or &1 in accepted_names))
+    attribute_names = Enum.map(ResourceInfo.attributes(context.dsl_state), & &1.name)
 
-    if reserved == [] do
-      :ok
-    else
-      error(
-        context.dsl_state,
-        protection,
-        :action,
-        "protected action exposes reserved verification inputs: #{inspect(reserved)}"
-      )
+    reserved_via_inputs =
+      Enum.filter(reserved_inputs, &(&1 in argument_names or &1 in accepted_names))
+
+    # A protected resource that DECLARES an attribute with a reserved name would let a
+    # caller set a trusted-local fact via the changeset attribute surface even with no
+    # action argument or `accept` entry (the runtime guard `Admission.reject_reserved/1`
+    # checks `changeset.attributes`). Reject it at compile time to match the runtime guard.
+    reserved_via_attributes =
+      Enum.filter(reserved_inputs, &(&1 in attribute_names and &1 not in accepted_names))
+
+    cond do
+      reserved_via_inputs != [] ->
+        error(
+          context.dsl_state,
+          protection,
+          :action,
+          "protected action exposes reserved verification inputs: #{inspect(reserved_via_inputs)}"
+        )
+
+      reserved_via_attributes != [] ->
+        error(
+          context.dsl_state,
+          protection,
+          :action,
+          "protected resource declares a reserved verification attribute: #{inspect(reserved_via_attributes)}"
+        )
+
+      true ->
+        :ok
     end
   end
 
@@ -1176,28 +1196,43 @@ defmodule AshOnetime.Resource.Transformer do
   defp package_preparation?(_preparation), do: false
 
   defp ensure_callbacks(module, callbacks) when is_atom(module) do
+    # Code.ensure_compiled/1 triggers the module's compilation if it has not run yet
+    # (needed: callback modules — resolvers, codecs, verifiers — are often defined in the
+    # same compile unit as the protected resource and not yet compiled when this
+    # transformer runs). The cycle hazard (L10) is when the callback module transitively
+    # depends on the protected resource itself: ensure_compiled returns
+    # {:error, :nofile | :unavailable | :module_unavailable}, and the cycle case surfaces
+    # as the opaque "is not compiled" message. Distinguish the cycle/unavailable case
+    # (give the ordering guidance) from the genuine missing-module case, and only THEN
+    # check the callbacks are exported.
     case Code.ensure_compiled(module) do
       {:module, ^module} ->
-        missing_callbacks(module, callbacks)
+        verify_exported_callbacks(module, callbacks)
 
-      _error ->
-        {:error, "#{inspect(module)} is not compiled"}
+      {:error, reason} when reason in [:unavailable, :module_unavailable] ->
+        # A compile cycle: the callback module is being compiled RIGHT NOW (it
+        # transitively depends on this resource). It must be compiled BEFORE the resource
+        # that protects an action it serves — move it to an earlier-compiled module.
+        {:error,
+         "#{inspect(module)} cannot be compiled while the protected resource is compiling " <>
+           "(#{inspect(reason)}); it must be compiled before the resource that protects an " <>
+           "action it serves — ensure it does not depend on the protected resource"}
+
+      _missing ->
+        {:error, "#{inspect(module)} is not a compiled module"}
     end
   end
 
   defp ensure_callbacks(module, _callbacks), do: {:error, "#{inspect(module)} is not a module"}
 
-  defp missing_callbacks(module, callbacks) do
-    missing =
-      Enum.reject(callbacks, fn {name, arity} ->
-        function_exported?(module, name, arity)
-      end)
+  defp missing_callbacks_message(module, missing),
+    do: "#{inspect(module)} is missing callbacks #{inspect(missing)}"
 
-    if missing == [] do
-      :ok
-    else
-      {:error, "#{inspect(module)} is missing callbacks #{inspect(missing)}"}
-    end
+  defp verify_exported_callbacks(module, callbacks) do
+    missing =
+      Enum.reject(callbacks, fn {name, arity} -> function_exported?(module, name, arity) end)
+
+    if missing == [], do: :ok, else: {:error, missing_callbacks_message(module, missing)}
   end
 
   defp invoke_declaration(module, name, args \\ []) do

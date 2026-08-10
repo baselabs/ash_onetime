@@ -7,7 +7,6 @@ defmodule AshOnetime.Admission do
 
   @private_state :ash_onetime_admission
   @private_replay :ash_onetime_replay
-  @reserved [:key, :issued_at, :expires_at, :verification_state, :algorithm]
 
   defmodule State do
     @moduledoc false
@@ -146,7 +145,7 @@ defmodule AshOnetime.Admission do
 
   @doc false
   @spec prepare(Ash.Changeset.t() | Ash.ActionInput.t(), struct(), map()) ::
-          {:ok, State.t()} | {:error, Error.t()} | Result.t()
+          {:ok, State.t()} | {:error, Error.t()}
   def prepare(subject, protection, trusted_context)
       when is_map(subject) and is_map(protection) and is_map(trusted_context) do
     with :ok <- reject_reserved(subject) do
@@ -162,6 +161,41 @@ defmodule AshOnetime.Admission do
 
   def prepare(_subject, _protection, _trusted_context),
     do: {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
+
+  # Shared reservation dispatch + helpers for the two runtime entry points (Change for
+  # create/update/destroy, GenericAction for generic actions). Previously duplicated
+  # near-verbatim in both modules (each carried the same mutation-sentinel-acknowledged
+  # copies); hoisted here so the two cannot drift. `trusted_context/1` bounds caller
+  # context to the keys the reservation paths actually consume (ExternalRecovery reads
+  # actor/tenant); it is NOT the bounded_callback_context (that is the verifier/mint/scope
+  # callback surface, which is resource/action only — see bounded_callback_context/1).
+
+  @doc false
+  def dispatch_reservation(subject, protection, trusted) do
+    cond do
+      protection.external_effect ->
+        AshOnetime.ExternalRecovery.reserve(subject, protection, trusted)
+
+      protection.strategy == :one_time_nonce and protection.commit == :independent ->
+        reserve_committed(subject, protection, trusted)
+
+      true ->
+        reserve(subject, protection, trusted)
+    end
+  end
+
+  @doc false
+  def trusted_context(context) do
+    context
+    |> Map.from_struct()
+    |> Map.take([:actor, :tenant])
+  rescue
+    _exception -> %{}
+  end
+
+  @doc false
+  def unavailable_error,
+    do: Error.new(:admission_unavailable, "keyed-effect admission is unavailable")
 
   @doc false
   def resolve(%Result{} = result, %State{} = state, protection, started, mode)
@@ -354,7 +388,7 @@ defmodule AshOnetime.Admission do
   end
 
   defp reserved_surface?(surface) when is_map(surface) do
-    Enum.any?(@reserved, fn key ->
+    Enum.any?(AshOnetime.reserved_verification_inputs(), fn key ->
       Map.has_key?(surface, key) or Map.has_key?(surface, to_string(key))
     end)
   end
@@ -401,8 +435,8 @@ defmodule AshOnetime.Admission do
     bounded_descriptor(:attribute, name, Ash.Changeset.get_attribute(subject, name))
   end
 
-  defp scope_component(subject, {:tenant, module}, trusted_context) when is_atom(module) do
-    context = bounded_callback_context(subject, trusted_context)
+  defp scope_component(subject, {:tenant, module}, _trusted_context) when is_atom(module) do
+    context = bounded_callback_context(subject)
 
     case safe_callback(module, :resolve, [subject, context]) do
       {:ok, value} -> bounded_descriptor(:tenant, inspect(module), value)
@@ -470,7 +504,7 @@ defmodule AshOnetime.Admission do
   defp key_component(
          subject,
          {:verified, name, module},
-         context,
+         _context,
          max_key,
          max_token,
          timeout,
@@ -484,7 +518,7 @@ defmodule AshOnetime.Admission do
            timed_callback(
              module,
              :verify,
-             [token, bounded_callback_context(subject, context)],
+             [token, bounded_callback_context(subject)],
              timeout
            ),
          :ok <- valid_verified(verified, max_key) do
@@ -506,7 +540,7 @@ defmodule AshOnetime.Admission do
   defp key_component(
          subject,
          {:minted, module},
-         context,
+         _context,
          max_key,
          _max_token,
          timeout,
@@ -515,7 +549,7 @@ defmodule AshOnetime.Admission do
     started = System.monotonic_time()
 
     with {:ok, %Verified{} = verified} <-
-           timed_callback(module, :mint, [bounded_callback_context(subject, context)], timeout),
+           timed_callback(module, :mint, [bounded_callback_context(subject)], timeout),
          :ok <- valid_verified(verified, max_key) do
       emit_verification(subject, strategy, started, :verified)
       {:ok, {%{source: :minted, module: inspect(module), value: verified.key}, verified}}
@@ -1078,8 +1112,16 @@ defmodule AshOnetime.Admission do
   defp target_context(subject),
     do: %{resource: subject.resource, action: subject.action.name}
 
-  defp bounded_callback_context(subject, trusted_context) do
-    Map.merge(target_context(subject), Map.take(trusted_context, [:keys, :now]))
+  # The bounded callback context is the trusted-facts surface a verifier/mint/scope
+  # callback receives. It is deliberately bounded to the local facts the admission path
+  # derives itself (`resource`, `action`) — AGENTS.md: "verification callbacks return
+  # trusted local facts; action input cannot supply pre-verified facts." Caller-supplied
+  # context (actor, tenant, etc.) is NOT forwarded: a callback that could bind the key to
+  # the actor would make actor-binding a latent contract, and the codebase's posture is
+  # least-privilege / fail-closed. If a future callback needs actor-binding, that is a
+  # deliberate, separately-approved decision, not a latent affordance shipped here.
+  defp bounded_callback_context(subject) do
+    target_context(subject)
   end
 
   defp bounded_descriptor(source, name, value) do

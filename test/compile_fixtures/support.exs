@@ -679,6 +679,20 @@ defmodule AshOnetime.CompileFixture do
     end
   end
 
+  # A reserved-named attribute DECLARED on the resource but NOT accepted by the protected
+  # action. M2: this must fail compilation (the runtime guard reject_reserved/1 checks
+  # changeset.attributes, but the attribute could be set by a change/default on another
+  # action — fail it at compile time to match the runtime guard).
+  defp actions_ast({:reserved_attribute_unaccepted, _name}) do
+    quote do
+      actions do
+        create :charge do
+          accept []
+        end
+      end
+    end
+  end
+
   defp multitenancy_ast(nil), do: nil
 
   defp multitenancy_ast(:attribute_account_id) do

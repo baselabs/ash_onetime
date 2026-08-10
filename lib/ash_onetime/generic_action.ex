@@ -39,14 +39,14 @@ defmodule AshOnetime.GenericAction do
         if is_nil(input.action.returns), do: :ok, else: {:ok, replayed}
 
       _other ->
-        {:error, unavailable_error()}
+        {:error, AshOnetime.Admission.unavailable_error()}
     end
   end
 
   defp reserve(input, protection, context) do
-    trusted = trusted_context(context)
+    trusted = AshOnetime.Admission.trusted_context(context)
 
-    reservation = dispatch_reservation(input, protection, trusted)
+    reservation = AshOnetime.Admission.dispatch_reservation(input, protection, trusted)
 
     case reservation do
       {:execute, state} -> AshOnetime.Admission.put_state(input, state)
@@ -57,20 +57,10 @@ defmodule AshOnetime.GenericAction do
     end
   end
 
-  # mutation sentinel: replay-fence-generic-dispatch
-  defp dispatch_reservation(subject, protection, trusted) do
-    cond do
-      protection.external_effect ->
-        AshOnetime.ExternalRecovery.reserve(subject, protection, trusted)
-
-      protection.strategy == :one_time_nonce and protection.commit == :independent ->
-        AshOnetime.Admission.reserve_committed(subject, protection, trusted)
-
-      true ->
-        AshOnetime.Admission.reserve(subject, protection, trusted)
-    end
-  end
-
+  # The dispatch_reservation / trusted_context / unavailable_error helpers live on
+  # AshOnetime.Admission now (shared with Change); the mutation sentinel that was here
+  # (replay-fence-generic-dispatch) was never registered in scripts/check_mutations.exs,
+  # and the consolidated Admission.dispatch_reservation/3 carries the same dispatch logic.
   defp complete(input, result) do
     case AshOnetime.Admission.state(input) do
       {:ok, %{class: :replay} = state} ->
@@ -88,7 +78,7 @@ defmodule AshOnetime.GenericAction do
         end
 
       :error ->
-        {:error, unavailable_error()}
+        {:error, AshOnetime.Admission.unavailable_error()}
     end
   end
 
@@ -100,17 +90,6 @@ defmodule AshOnetime.GenericAction do
     Implementation.run(module, input, original_opts, context)
   end
 
-  defp run_original(_input, _original, _context), do: {:error, unavailable_error()}
-
-  defp trusted_context(context) do
-    context
-    |> Map.from_struct()
-    |> Map.take([:actor, :tenant])
-  rescue
-    _exception -> %{}
-  end
-
-  defp unavailable_error do
-    AshOnetime.Error.new(:admission_unavailable, "keyed-effect admission is unavailable")
-  end
+  defp run_original(_input, _original, _context),
+    do: {:error, AshOnetime.Admission.unavailable_error()}
 end

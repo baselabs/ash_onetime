@@ -41,6 +41,8 @@ defmodule AshOnetime.CompileFixturesTest do
     "reserved_attribute_expires_at.exs" => AshOnetime.CompileFixtures.ReservedAttributeExpiresAt,
     "reserved_attribute_verification_state.exs" =>
       AshOnetime.CompileFixtures.ReservedAttributeVerificationState,
+    "reserved_attribute_unaccepted_key.exs" =>
+      AshOnetime.CompileFixtures.ReservedAttributeUnacceptedKey,
     "missing_key_reference.exs" => AshOnetime.CompileFixtures.MissingKeyReference,
     "missing_external_reference.exs" => AshOnetime.CompileFixtures.MissingExternalReference,
     "unsafe_builtin_option.exs" => AshOnetime.CompileFixtures.UnsafeBuiltinOption,
@@ -126,6 +128,9 @@ defmodule AshOnetime.CompileFixturesTest do
     "reserved_attribute_verification_state.exs" =>
       {:charge, :action,
        "protected action exposes reserved verification inputs: [:verification_state]", 8},
+    "reserved_attribute_unaccepted_key.exs" =>
+      {:charge, :action, "protected resource declares a reserved verification attribute: [:key]",
+       12},
     "missing_key_reference.exs" =>
       {:charge, :key, "references missing arguments [:missing_key] or attributes []", 9},
     "missing_external_reference.exs" =>

@@ -37,4 +37,18 @@ defmodule AshOnetime do
   end
 
   def replayed?(_other), do: nil
+
+  @doc """
+  The reserved verification-input names a protected action must never accept from caller
+  input — `:key`, `:issued_at`, `:expires_at`, `:verification_state`, `:algorithm`. These
+  are trusted local facts the verification path derives itself; accepting them as action
+  arguments, accepted attributes, or declared attributes would let caller input supply
+  pre-verified facts (AGENTS.md: "verification callbacks return trusted local facts;
+  action input cannot supply pre-verified facts").
+
+  Single source for the compile-time transformer check (`Resource.Transformer`) and the
+  runtime guard (`Admission.reject_reserved/1`) so the two cannot drift.
+  """
+  def reserved_verification_inputs,
+    do: [:key, :issued_at, :expires_at, :verification_state, :algorithm]
 end
