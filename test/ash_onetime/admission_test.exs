@@ -155,11 +155,10 @@ defmodule AshOnetime.AdmissionTest do
     # :keys/:now exists); the fix collapsed it to bounded_callback_context/1 (subject only),
     # removing both dead paths.
     #
-    # The behavioral tripwire (drives the verifier through the real :consume path and
-    # asserts the observed context keys are exactly [:action, :resource]) lives in
-    # ActionTransactionTest, where the verifier can be driven end-to-end with a live store.
-    # This unit suite cannot drive the verifier (no store); the contract is pinned there.
-    # See `test/ash_onetime/action_transaction_test.exs` "verifier callback receives exactly
-    # %{resource, action} (no caller keys) (M1)".
+    # The behavioral tripwire lives in ActionTransactionTest — "the bounded callback context
+    # carries exactly resource and action (M1)" — which drives the real verifier with the
+    # bounded context directly (deterministic, no DB) and asserts the keys are exactly
+    # [:action, :resource]. This unit suite cannot drive the verifier; the contract is pinned
+    # there.
   end
 end
