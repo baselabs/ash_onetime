@@ -36,7 +36,9 @@ defmodule <%= inspect(module) %> do
         SELECT claim_id
         FROM #{q("ash_onetime_response_payloads")}
         WHERE tableoid IN (
-          SELECT oid FROM pg_class WHERE relname = 'ash_onetime_response_payloads_default'
+          SELECT oid FROM pg_class
+          WHERE relname = 'ash_onetime_response_payloads_default'
+            AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())
         )
       )
     """)

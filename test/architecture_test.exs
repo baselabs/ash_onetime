@@ -208,6 +208,7 @@ defmodule AshOnetime.ArchitectureTest do
       reap: 5,
       replay: 5,
       store_uncertainty: 4,
+      uncertain_exception: 2,
       untracked_execution: 3,
       verification: 5
     ],

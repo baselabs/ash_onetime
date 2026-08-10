@@ -173,6 +173,26 @@ defmodule AshOnetime.Telemetry do
     do: emit(:store_uncertainty, %{count: 1}, strategy, resource, action, result_class)
 
   @doc """
+  Emits `[:ash_onetime, :uncertain_exception]` — a store-internal exception (a raise inside a
+  committed-claim transaction) before it is collapsed to `:dispatched_unknown`. This is a
+  diagnosis surface, NOT an admission/business event: it bypasses `emit/6` (which is shaped for
+  admission events with strategy/resource/action/result_class and validates a result-class
+  allowlist) and calls `:telemetry.execute/3` directly with a `%{strategy:, phase:, exception:}`
+  metadata map. The `exception` is the exception STRUCT MODULE (e.g. `Postgrex.Error`), not the
+  full struct — to avoid leaking request material that may be embedded in an exception message.
+
+  A fresh application sees nothing unless it attaches a handler (the lib's telemetry-only
+  posture). Consumers wanting store-transaction diagnosis attach to this event.
+  """
+  def uncertain_exception(strategy, opts) when is_atom(strategy) and is_list(opts) do
+    metadata = opts |> Map.new() |> Map.put(:strategy, strategy)
+    :telemetry.execute([:ash_onetime, :uncertain_exception], %{count: 1}, metadata)
+    :ok
+  rescue
+    _exception -> :ok
+  end
+
+  @doc """
   Emits `[:ash_onetime, :untracked_execution]` with `result_class: :checkout_unavailable`.
   An idempotent action executed without a stored admission after a checkout failure — correct
   by design but worth visibility (the optional `:execute_untracked` path).

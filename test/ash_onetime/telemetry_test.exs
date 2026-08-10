@@ -91,6 +91,36 @@ defmodule AshOnetime.TelemetryTest do
              Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :not_a_real_class)
   end
 
+  test "uncertain_exception emits the store-internal diagnosis event (L6)" do
+    # L6: a store-transaction exception (committed_claim_transaction rescue) emits
+    # [:ash_onetime, :uncertain_exception] with the exception CLASS (not struct, to avoid
+    # leaking request material) before collapsing to :dispatched_unknown. This event bypasses
+    # emit/6 (it is store-internal, not admission-shaped) and carries %{strategy:, phase:,
+    # exception:}. A fresh application sees nothing unless it attaches a handler.
+    handler = "ash-onetime-uncertain-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :telemetry.attach(
+      handler,
+      [:ash_onetime, :uncertain_exception],
+      fn event, measurements, metadata, _config -> send(parent, {:event, event, measurements, metadata}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert :ok =
+             Telemetry.uncertain_exception(:idempotency,
+               phase: :committed_claim,
+               exception: Postgrex.Error
+             )
+
+    assert_receive {:event, [:ash_onetime, :uncertain_exception], %{count: 1}, metadata}
+    assert metadata.strategy == :idempotency
+    assert metadata.phase == :committed_claim
+    assert metadata.exception == Postgrex.Error
+  end
+
   describe "default metrics handler (H21)" do
     # ROADMAP H21: the library emits but attaches nothing — a fresh consumer sees nothing
     # until they hand-roll a handler. attach/1 is the opt-in helper.

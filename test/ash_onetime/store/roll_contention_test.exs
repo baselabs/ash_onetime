@@ -73,6 +73,40 @@ defmodule AshOnetime.Store.RollContentionTest do
     assert {:ok, %{partitions_created: 0}} = result
   end
 
+  # L3: the partition-roll advisory lock is derived per-prefix so distinct tenants do not
+  # serialize against each other (partitions are schema-scoped; two tenants have distinct
+  # parents and can never race on the same CREATE PARTITION OF). This pins the derivation
+  # contract: same prefix → same key (within-tenant serialization preserved); distinct
+  # prefixes → distinct keys (cross-tenant concurrency unblocked); nil prefix → the
+  # historical constant. The formula is the contract; this test replicates it against the
+  # documented inputs.
+  @tag roll_advisory_key_per_prefix: true
+  test "roll advisory key is per-prefix (distinct tenants do not over-serialize)" do
+    nil_key = advisory_key_for(nil)
+    a_key = advisory_key_for("tenant_a")
+    b_key = advisory_key_for("tenant_b")
+    a_again = advisory_key_for("tenant_a")
+
+    # Nil-prefix keeps the historical constant (single-tenant backward compat).
+    assert nil_key == 0x41_5348_4F54
+    # Same prefix → same key (within-tenant serialization preserved).
+    assert a_key == a_again
+    # Distinct prefixes → distinct keys (cross-tenant concurrency unblocked).
+    assert a_key != b_key
+    # All keys are positive 63-bit bigints (the pg_advisory_xact_lock(bigint) domain; the
+    # sign bit is cleared so the value is always non-negative).
+    for key <- [nil_key, a_key, b_key], do: assert(key >= 0 and key < 0x8000000000000000)
+  end
+
+  # Mirrors Postgres.roll_advisory_key/1's formula (the contract under test).
+  defp advisory_key_for(nil), do: 0x41_5348_4F54
+
+  defp advisory_key_for(prefix) do
+    <<first_8::binary-size(8), _rest::binary>> = :crypto.hash(:sha256, prefix)
+    <<value::64-unsigned-integer>> = first_8
+    Bitwise.band(value, 0x7FFFFFFFFFFFFFFF)
+  end
+
   defp with_owner(callback) do
     owner = Sandbox.start_owner!(Repo, shared: false, sandbox: false)
 

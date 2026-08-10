@@ -202,11 +202,17 @@ defmodule AshOnetime.Store.Postgres do
   def cleanup(_target, _batch_size, _partition_limit),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
+  # Hard safety floor (seconds) for the abandoned-processing reaper, mirroring the migration's
+  # @abandonment_floor_seconds (install.exs) and the worker/task floors. A sub-floor caller hits
+  # :invalid_request here (without a DB round-trip) rather than the migration's 22023 raise
+  # misclassified as :store_invariant by classify_query_error.
+  @abandonment_floor_seconds 86_400
+
   @spec reap(Target.t(), pos_integer(), pos_integer()) ::
           {:ok, non_neg_integer()} | Result.t()
   def reap(%Target{} = target, batch_size, abandonment_seconds)
       when is_integer(batch_size) and batch_size > 0 and batch_size <= 10_000 and
-             is_integer(abandonment_seconds) and abandonment_seconds > 0 do
+             is_integer(abandonment_seconds) and abandonment_seconds >= @abandonment_floor_seconds do
     with_dynamic_repo(target, fn -> reap_transaction(target, batch_size, abandonment_seconds) end)
     |> case do
       {:ok, count} when is_integer(count) -> {:ok, count}
@@ -224,10 +230,13 @@ defmodule AshOnetime.Store.Postgres do
 
   @max_months_ahead 24
   @default_lock_timeout_seconds 5
-  # Fixed advisory-lock key for response-payload partition creation. pg_advisory_xact_lock
+  # Base advisory-lock key for response-payload partition creation. pg_advisory_xact_lock
   # serializes concurrent rolls within one transaction so two cannot race on CREATE PARTITION
-  # OF (Postgres has no CREATE PARTITION OF IF NOT EXISTS). The key is arbitrary but constant.
-  # "ASHOT"
+  # OF (Postgres has no CREATE PARTITION OF IF NOT EXISTS). The key is per-prefix (see
+  # roll_advisory_key/1): partitions are schema-scoped (per-tenant), so two tenants rolling
+  # concurrently target distinct parents (distinct pg_class OIDs) and need not serialize
+  # against each other — only within one tenant. The nil-prefix (single-tenant) path keeps
+  # this constant for backward compatibility. "ASHOT"
   @partition_roll_advisory_key 0x41_5348_4F54
 
   @doc """
@@ -632,7 +641,18 @@ defmodule AshOnetime.Store.Postgres do
   defp committed_claim_transaction(target, request) do
     with_dynamic_repo(target, fn -> run_committed_claim_transaction(target, request) end)
   rescue
-    _exception -> Result.failure(:dispatched_unknown, :unknown, :unknown)
+    exception ->
+      # Surface the original exception class via telemetry before collapsing to
+      # :dispatched_unknown. The lib's posture is telemetry-only (a fresh application sees
+      # nothing unless it attaches a handler); a Logger call would break that for consumers
+      # with a default backend. The event carries the exception CLASS only (not the struct)
+      # to avoid leaking request material that may be embedded in an exception message.
+      AshOnetime.Telemetry.uncertain_exception(request.strategy,
+        phase: :committed_claim,
+        exception: exception.__struct__
+      )
+
+      Result.failure(:dispatched_unknown, :unknown, :unknown)
   catch
     :exit, _reason -> Result.failure(:disconnected, :unknown, :unknown)
     _kind, _reason -> Result.failure(:dispatched_unknown, :unknown, :unknown)
@@ -880,10 +900,30 @@ defmodule AshOnetime.Store.Postgres do
            dispatched_query(
              target,
              "SELECT pg_advisory_xact_lock($1::bigint)",
-             [@partition_roll_advisory_key]
+             [roll_advisory_key(target)]
            ) do
       :ok
     end
+  end
+
+  # Per-prefix advisory-lock key. pg_advisory_xact_lock(bigint) keys are cluster-global (not
+  # schema-scoped), so a single constant key over-serialized cross-tenant rolls even though
+  # each tenant's partitions live in its own schema (distinct parents, distinct pg_class OIDs
+  # — two tenants can never race on the same CREATE PARTITION OF). Deriving the key from the
+  # prefix preserves within-tenant serialization (same prefix → same key) while letting
+  # distinct tenants roll concurrently. A birthday collision across prefixes would only
+  # over-serialize (two tenants sharing a key serialize — the prior behavior), never
+  # under-serialize: a benign degradation, not a correctness hole. The nil-prefix
+  # (single-tenant) path keeps the historical constant.
+  defp roll_advisory_key(%Target{prefix: nil}), do: @partition_roll_advisory_key
+
+  defp roll_advisory_key(%Target{prefix: prefix}) do
+    # 63-bit positive bigint from the prefix. Take the first 8 bytes of the SHA-256 and mask
+    # to 63 bits (clear the sign bit) so the result is always a non-negative bigint in the
+    # pg_advisory_xact_lock(bigint) domain.
+    <<first_8::binary-size(8), _rest::binary>> = :crypto.hash(:sha256, prefix)
+    <<value::64-unsigned-integer>> = first_8
+    Bitwise.band(value, 0x7FFFFFFFFFFFFFFF)
   end
 
   defp payload_partition_names(target, schema) do

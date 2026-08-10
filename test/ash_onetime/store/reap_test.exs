@@ -76,7 +76,10 @@ defmodule AshOnetime.Store.ReapTest do
   end
 
   test "rejects an abandonment horizon below the safe floor", %{target: target} do
-    assert %Result{status: :failure} = Store.reap(target, 100, 3_600)
+    # L2: a sub-floor reap is rejected at the guard (>= 86_400) without a DB round-trip,
+    # returning :invalid_request rather than the migration's 22023 raise misclassified as
+    # :store_invariant by classify_query_error.
+    assert %Result{status: :failure, reason: :invalid_request} = Store.reap(target, 100, 3_600)
   end
 
   test "rejects an out-of-range batch size before touching the database", %{target: target} do
