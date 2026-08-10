@@ -353,9 +353,10 @@ defmodule AshOnetime.Telemetry do
     # The metadata passes through unchanged — the value-free guarantee is preserved because
     # this handler emits nothing the upstream validator did not already permit.
     measurement =
-      cond do
-        event in @duration_events -> %{duration: Map.get(measurements, :duration, 0)}
-        true -> %{count: Map.get(measurements, :count, 1)}
+      if event in @duration_events do
+        %{duration: Map.get(measurements, :duration, 0)}
+      else
+        %{count: Map.get(measurements, :count, 1)}
       end
 
     :telemetry.execute([:ash_onetime, event, :metric], measurement, metadata)

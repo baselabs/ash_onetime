@@ -139,48 +139,42 @@ defmodule AshOnetime.Cache.Ets do
 
   @impl AshOnetime.Cache
   def get(key) when is_binary(key) do
-    try do
-      case :ets.lookup(@table, key) do
-        [{^key, %Entry{} = entry, expiry}] ->
-          if expiry > System.monotonic_time(:second) do
-            {:ok, entry}
-          else
-            # Lazy expiry: the entry's deadline passed. Delete and miss.
-            :ets.delete(@table, key)
-            :miss
-          end
-
-        [] ->
+    case :ets.lookup(@table, key) do
+      [{^key, %Entry{} = entry, expiry}] ->
+        if expiry > System.monotonic_time(:second) do
+          {:ok, entry}
+        else
+          # Lazy expiry: the entry's deadline passed. Delete and miss.
+          :ets.delete(@table, key)
           :miss
-      end
-    catch
-      :error, :badarg -> {:error, :unavailable}
+        end
+
+      [] ->
+        :miss
     end
+  catch
+    :error, :badarg -> {:error, :unavailable}
   end
 
   @impl AshOnetime.Cache
   def put(key, %Entry{} = entry, ttl_seconds)
       when is_binary(key) and is_integer(ttl_seconds) and ttl_seconds > 0 do
-    try do
-      maybe_evict()
-      expiry = System.monotonic_time(:second) + ttl_seconds
-      :ets.insert(@table, {key, entry, expiry})
-      :ok
-    catch
-      :error, :badarg -> {:error, :unavailable}
-    end
+    maybe_evict()
+    expiry = System.monotonic_time(:second) + ttl_seconds
+    :ets.insert(@table, {key, entry, expiry})
+    :ok
+  catch
+    :error, :badarg -> {:error, :unavailable}
   end
 
   def put(_key, _entry, _ttl_seconds), do: {:error, :invalid_entry}
 
   @impl AshOnetime.Cache
   def delete(key) when is_binary(key) do
-    try do
-      :ets.delete(@table, key)
-      :ok
-    catch
-      :error, :badarg -> :ok
-    end
+    :ets.delete(@table, key)
+    :ok
+  catch
+    :error, :badarg -> :ok
   end
 
   ## GenServer callbacks
@@ -215,12 +209,10 @@ defmodule AshOnetime.Cache.Ets do
   end
 
   defp entry_count do
-    try do
-      # Subtract 1 for the :__config__ row that is not a cache entry.
-      :ets.info(@table, :size) - 1
-    catch
-      :error, :badarg -> 0
-    end
+    # Subtract 1 for the :__config__ row that is not a cache entry.
+    :ets.info(@table, :size) - 1
+  catch
+    :error, :badarg -> 0
   end
 
   defp evict_oldest do
