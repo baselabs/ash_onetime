@@ -181,25 +181,25 @@ defmodule AshOnetime.MutationCheck do
       test_name: "verify re-validates the decoded body's key_id bound before the signature",
       assertion: "Token.verify(encoded, KeyResolver, verify_options())"
     },
-    "secure-equal-truncate" => %{
-      path: "lib/ash_onetime/signer/hmac.ex",
-      original: "|> :binary.bin_to_list()",
-      mutated: "|> :binary.bin_to_list() |> Enum.take(1)",
-      test: "test/ash_onetime/signer/hmac_test.exs",
-      tag: "secure_equal_full_length_mutation",
-      test_name:
-        "a tamper anywhere past the first byte fails closed (full-length constant-time compare)",
-      assertion: "HMAC.verify(\"Hi There\", last, material)"
-    },
+    # secure-equal-truncate was RETIRED: the full-length constant-time compare moved into
+    # the :crypto.hash_equals/2 NIF when secure_equal/2 became a one-line wrapper, so the
+    # property is no longer expressible as an Elixir-source mutation. The behavior test
+    # (secure_equal_full_length_mutation in hmac_test.exs) stays as a green-only check.
     "secure-equal-length" => %{
       path: "lib/ash_onetime/signer/hmac.ex",
-      original: "defp secure_equal(_left, _right), do: false",
-      mutated: "defp secure_equal(_left, _right), do: true",
+      original:
+        "_exception -> {:error, Error.new(:invalid_signature, \"HMAC signature is invalid\")}",
+      mutated: "_exception -> :ok",
       test: "test/ash_onetime/signer/hmac_test.exs",
       tag: "secure_equal_length_mutation",
       test_name: "invalid trusted keys and signature sizes fail closed",
       assertion: "HMAC.verify(\"message\", <<0>>, same_service(@rfc_key))"
     },
+    # signature-compare was RETIRED alongside secure-equal-truncate: it mutated the
+    # hand-rolled XOR-reduce's final `Kernel.==(0)`, which is gone now that secure_equal/2
+    # delegates to :crypto.hash_equals/2. The constant-time-compare property it pinned lives
+    # in the NIF; the system-level behavior test (signature_compare_mutation in
+    # package_consumer_test.exs) stays as a green-only check.
     "token-identifier-bound" => %{
       path: "lib/ash_onetime/token.ex",
       original: "  @max_identifier_bytes 128",
@@ -909,11 +909,11 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert Exception.message(error) =~ \"external effect outcome is unknown\""
     },
     "replay-fence-dispatch" => %{
-      path: "lib/ash_onetime/generic_action.ex",
+      path: "lib/ash_onetime/admission.ex",
       original:
-        "      protection.strategy == :one_time_nonce and protection.commit == :independent ->\n        AshOnetime.Admission.reserve_committed(subject, protection, trusted)",
+        "      protection.strategy == :one_time_nonce and protection.commit == :independent ->\n        reserve_committed(subject, protection, trusted)",
       mutated:
-        "      protection.strategy == :one_time_nonce and protection.commit == :with_action ->\n        AshOnetime.Admission.reserve_committed(subject, protection, trusted)",
+        "      protection.strategy == :one_time_nonce and protection.commit == :with_action ->\n        reserve_committed(subject, protection, trusted)",
       test: "test/ash_onetime/nonce_rollback_gap_test.exs",
       tag: "replay_fence_dispatch_mutation",
       test_name:
@@ -1052,15 +1052,6 @@ defmodule AshOnetime.MutationCheck do
       tag: "nonce_minted_composite_mutation",
       test_name: "a fresh minted nonce source cannot join a verified key",
       assertion: "assert status != 0, output"
-    },
-    "signature-compare" => %{
-      path: "lib/ash_onetime/signer/hmac.ex",
-      original: "    |> Kernel.==(0)",
-      mutated: "    |> Kernel.!=(0)",
-      test: "test/system/package_consumer_test.exs",
-      tag: "signature_compare_mutation",
-      test_name: "meaningful signature-byte tampering fails closed",
-      assertion: "assert {:error, %Error{code: :invalid_signature}} ="
     },
     "canonical-domain-tag" => %{
       path: "lib/ash_onetime/canonical.ex",

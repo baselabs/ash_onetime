@@ -45,7 +45,9 @@ defmodule AshOnetime.Signer.HMACTest do
   test "invalid trusted keys and signature sizes fail closed" do
     assert {:error, %Error{code: :invalid_key}} = HMAC.sign("message", same_service(<<>>))
 
-    # A wrong-length signature reaches secure_equal, whose length-mismatch fallback fails closed.
+    # A wrong-length signature reaches :crypto.hash_equals/2 which RAISES ArgumentError on
+    # unequal length; verify/3's rescue converts that to :invalid_signature (fail-closed).
+    # The rescue is load-bearing here — pinned by the secure-equal-length mutation.
     assert {:error, %Error{code: :invalid_signature}} =
              HMAC.verify("message", <<0>>, same_service(@rfc_key))
 

@@ -136,6 +136,31 @@ defmodule AshOnetime.CacheTest do
     assert :ok = None.delete(key)
   end
 
+  # L7: the cache key uses length-prefixed framing so a future variable-length component
+  # cannot create a concatenation ambiguity. Today all components are fixed 32-byte SHA-256
+  # outputs, so there is no ambiguity to remove — this is defense-in-depth, tested here with
+  # synthetic variable-length inputs that WOULD collide under naive concat. The framing
+  # function mirrors Cache.key/1's framing (extracted for testability; the production path
+  # feeds real 32-byte Claim hashes).
+  @tag cache_key_framing: true
+  test "length-prefixed framing distinguishes inputs naive concat would collide" do
+    # Two component lists whose naive concatenation is identical but whose components differ
+    # at the boundary: ["ab", "cd"] vs ["a", "bcd"] both concat to "abcd".
+    framed_a = frame(["prefix", "ab", "cd", "ef"])
+    framed_b = frame(["prefix", "a", "bcd", "ef"])
+
+    # Sanity: naive concat collides (the premise).
+    naive_a = IO.iodata_to_binary(["prefix", "ab", "cd", "ef"])
+    naive_b = IO.iodata_to_binary(["prefix", "a", "bcd", "ef"])
+    assert naive_a == naive_b
+
+    # The length-prefixed framing does NOT collide.
+    assert :crypto.hash(:sha256, framed_a) != :crypto.hash(:sha256, framed_b)
+  end
+
+  defp frame(components),
+    do: for(component <- components, into: "", do: <<byte_size(component)::32, component::binary>>)
+
   defp run_generic(prefix, action, arguments) do
     Resource
     |> Ash.ActionInput.for_action(action, arguments)

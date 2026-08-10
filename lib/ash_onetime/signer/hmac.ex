@@ -8,8 +8,6 @@ defmodule AshOnetime.Signer.HMAC do
 
   @behaviour AshOnetime.Signer
 
-  import Bitwise
-
   alias AshOnetime.Error
 
   @max_key_bytes 4_096
@@ -43,10 +41,12 @@ defmodule AshOnetime.Signer.HMAC do
   def verify(message, signature, %{key: key, trust: :same_service})
       when is_binary(message) and is_binary(signature) and is_binary(key) and
              byte_size(key) in 1..@max_key_bytes do
-    # secure_equal owns the length check: its equal-length clause runs the constant-time compare,
-    # and its fallback fails closed on any length mismatch (the mac is always 32 bytes). Keeping the
-    # length guard inside the comparator, rather than a separate byte_size prefix on this `if`, means
-    # the fallback is live and covered rather than dead, and a wrong-length signature still fails closed.
+    # Constant-time compare via the crypto NIF. :crypto.hash_equals/2 RAISES ArgumentError on
+    # unequal-length inputs (verified empirically against OTP 29); a caller-supplied signature
+    # of any length against the always-32-byte MAC hits that raise on a wrong-length signature.
+    # The rescue below is LOAD-BEARING for that case (not redundant defense-in-depth): it
+    # converts the raise — and any other crypto failure — to :invalid_signature. Keeping the
+    # compare inside the rescue boundary is what makes wrong-length signatures fail closed.
     if secure_equal(signature, :crypto.mac(:hmac, :sha256, key, message)) do
       :ok
     else
@@ -70,15 +70,10 @@ defmodule AshOnetime.Signer.HMAC do
          "HMAC material must explicitly prove same-service trust"
        )}
 
-  defp secure_equal(left, right) when byte_size(left) == byte_size(right) do
-    left
-    |> :binary.bin_to_list()
-    |> Enum.zip(:binary.bin_to_list(right))
-    |> Enum.reduce(0, fn {left_byte, right_byte}, difference ->
-      difference ||| bxor(left_byte, right_byte)
-    end)
-    |> Kernel.==(0)
-  end
-
-  defp secure_equal(_left, _right), do: false
+  # Constant-time compare delegated to the crypto NIF. :crypto.hash_equals/2 is constant-time
+  # over equal-length inputs and raises ArgumentError on unequal length (the raise is caught
+  # by verify/3's rescue). Kept as a NAMED wrapper (not an inline call) so the fail-closed
+  # contract reads at the call site and the registered mutation anchor
+  # (secure-equal-length, which mutates the rescue arm) has a stable function boundary.
+  defp secure_equal(left, right), do: :crypto.hash_equals(left, right)
 end
