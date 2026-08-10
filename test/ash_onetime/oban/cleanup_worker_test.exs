@@ -65,6 +65,24 @@ defmodule AshOnetime.Oban.CleanupWorkerTest do
     end
   end
 
+  # L5: the worker error tuple embeds the Store Result.reason so Oban's job error carries the
+  # distinguishable cause past exhaustion, not an opaque :cleanup_failed. This is a STRUCTURAL
+  # LINT (source-grep), not a behavioral tripwire — it confirms the tuple shape is present and
+  # not collapsed to the bare atom. It is weaker than the behavioral tripwires (T1-T4): it
+  # stays green over a dead arm or a computed-atom refactor. A behavioral fault injection
+  # (force :lock_timeout via real lock contention) was not added per ADR-0001's real-Postgres
+  # doctrine (real committed connections, not stubs); see
+  # .forge/specs/2026-08-10-tripwire-hardening.md § T5.
+  test "worker error tuple carries the inner reason, not an opaque atom (L5)" do
+    source =
+      File.read!(
+        Path.join([__DIR__, "..", "..", "..", "lib", "ash_onetime", "oban", "cleanup_worker.ex"])
+      )
+
+    assert source =~ "{:error, {:cleanup_failed, reason}}"
+    refute source =~ "{:error, :cleanup_failed}"
+  end
+
   defp insert_expired_nonce(prefix, label) do
     SQL.query!(
       Repo,

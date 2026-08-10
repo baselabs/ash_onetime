@@ -73,6 +73,24 @@ defmodule AshOnetime.Oban.ReapWorkerTest do
     end
   end
 
+  # L5: the worker error tuple embeds the Store Result.reason so Oban's job error carries the
+  # distinguishable cause (:lock_timeout / :disconnected / :store_invariant / ...) past
+  # exhaustion, not an opaque :reap_failed. This is a STRUCTURAL LINT (source-grep), not a
+  # behavioral tripwire — it confirms the tuple shape is present and not collapsed to the bare
+  # atom. It is weaker than the behavioral tripwires (T1-T4): it stays green over a dead arm
+  # or a computed-atom refactor. A behavioral fault injection (force :lock_timeout via real
+  # lock contention) was not added per ADR-0001's real-Postgres doctrine (real committed
+  # connections, not stubs); see .forge/specs/2026-08-10-tripwire-hardening.md § T5.
+  test "worker error tuple carries the inner reason, not an opaque atom (L5)" do
+    source =
+      File.read!(
+        Path.join([__DIR__, "..", "..", "..", "lib", "ash_onetime", "oban", "reap_worker.ex"])
+      )
+
+    assert source =~ "{:error, {:reap_failed, reason}}"
+    refute source =~ "{:error, :reap_failed}"
+  end
+
   defp insert_abandoned(prefix, label) do
     claim_id = Ecto.UUID.generate()
 

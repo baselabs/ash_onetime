@@ -1,3 +1,13 @@
+# Test stub: a repo whose get_dynamic_repo/0 raises, so committed_claim_transaction's rescue
+# (inside claim_committed/2's spawned worker) fires — exercising the rescue→telemetry wiring
+# through the PUBLIC claim_committed/2 entry without exposing the un-spawned inner fn.
+defmodule AshOnetime.Test.RaisingDynamicRepo do
+  @moduledoc false
+
+  def get_dynamic_repo, do: raise("forced committed_claim_transaction fault")
+  def put_dynamic_repo(_repo), do: :ok
+end
+
 defmodule AshOnetime.Store.UncertaintyTest do
   use AshOnetime.Test.StoreCase, async: false
 
@@ -151,6 +161,44 @@ defmodule AshOnetime.Store.UncertaintyTest do
     end
 
     assert Enum.count(failures, &(&1.admission_dispatch == :not_started)) == 1
+  end
+
+  # L6: a raise inside committed_claim_transaction emits [:ash_onetime, :uncertain_exception]
+  # (with the exception CLASS, not the struct) before collapsing to :dispatched_unknown. The
+  # prior telemetry_test exercised Telemetry.uncertain_exception/2 as an API unit; this drives
+  # the rescue through the PUBLIC claim_committed/2 entry so the spawn + rescue + telemetry
+  # wiring is exercised end-to-end. The fault is injected via a stub repo whose
+  # get_dynamic_repo/0 raises (with_dynamic_repo/2 calls it first inside the spawned worker),
+  # so committed_claim_transaction's rescue catches it, emits, and collapses.
+  @tag committed_claim_rescue_telemetry: true
+  test "committed_claim_transaction rescue emits uncertain_exception via claim_committed/2" do
+    handler = "ash-onetime-committed-rescue-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :telemetry.attach(
+      handler,
+      [:ash_onetime, :uncertain_exception],
+      fn event, measurements, metadata, _config ->
+        send(parent, {:event, event, measurements, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    target = %Postgres.Target{
+      repo_module: AshOnetime.Test.RaisingDynamicRepo,
+      dynamic_repo: Repo,
+      prefix: nil
+    }
+
+    assert %Result{status: :failure, reason: :dispatched_unknown} =
+             Store.claim_committed(target, idempotency_request("committed-rescue"))
+
+    assert_receive {:event, [:ash_onetime, :uncertain_exception], %{count: 1}, metadata}
+    assert metadata.phase == :committed_claim
+    assert metadata.exception == RuntimeError
+    assert metadata.strategy == :idempotency
   end
 
   defp relation(prefix, name), do: ~s("#{prefix}"."#{name}")
