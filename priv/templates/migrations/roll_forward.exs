@@ -38,7 +38,7 @@ defmodule <%= inspect(module) %> do
         WHERE tableoid IN (
           SELECT oid FROM pg_class
           WHERE relname = 'ash_onetime_response_payloads_default'
-            AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())
+            AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = #{schema_name()})
         )
       )
     """)
@@ -56,6 +56,20 @@ defmodule <%= inspect(module) %> do
     case prefix() do
       nil -> quote_identifier(name)
       prefix_value -> quote_identifier(prefix_value) <> "." <> quote_identifier(name)
+    end
+  end
+
+  # The namespace the drain's _default OID subquery scopes to. ecto_sql does NOT set
+  # search_path for prefixed migrations, so current_schema() resolves to the connection
+  # default (typically 'public'), NOT the migration's prefix — using current_schema() here
+  # would make a prefixed (multi-tenant) drain silently miss the tenant's _default partition
+  # and drain zero rows. Resolve from prefix() (the migration's actual schema), falling back
+  # to current_schema() only for the nil-prefix (single-tenant) case — mirroring the store's
+  # `target.prefix || schema` pattern (postgres.ex database_schema_and_date/1).
+  defp schema_name do
+    case prefix() do
+      nil -> "current_schema()"
+      prefix_value -> "'#{prefix_value}'"
     end
   end
 
