@@ -75,17 +75,18 @@ defmodule AshOnetime.Store.RollContentionTest do
 
   # L3: the partition-roll advisory lock is derived per-prefix so distinct tenants do not
   # serialize against each other (partitions are schema-scoped; two tenants have distinct
-  # parents and can never race on the same CREATE PARTITION OF). This pins the derivation
-  # contract: same prefix → same key (within-tenant serialization preserved); distinct
-  # prefixes → distinct keys (cross-tenant concurrency unblocked); nil prefix → the
-  # historical constant. The formula is the contract; this test replicates it against the
-  # documented inputs.
+  # parents and can never race on the same CREATE PARTITION OF). This drives the PRODUCTION
+  # Postgres.roll_advisory_key/1 directly (exposed @doc false) rather than mirroring its
+  # formula locally, so a production-formula regression (wrong mask, wrong hash input,
+  # dropped nil clause) fails here against the real function, not a replica. Pins: same
+  # prefix → same key (within-tenant serialization preserved); distinct prefixes → distinct
+  # keys (cross-tenant concurrency unblocked); nil prefix → the historical constant.
   @tag roll_advisory_key_per_prefix: true
   test "roll advisory key is per-prefix (distinct tenants do not over-serialize)" do
-    nil_key = advisory_key_for(nil)
-    a_key = advisory_key_for("tenant_a")
-    b_key = advisory_key_for("tenant_b")
-    a_again = advisory_key_for("tenant_a")
+    nil_key = Postgres.roll_advisory_key(advisory_target(nil))
+    a_key = Postgres.roll_advisory_key(advisory_target("tenant_a"))
+    b_key = Postgres.roll_advisory_key(advisory_target("tenant_b"))
+    a_again = Postgres.roll_advisory_key(advisory_target("tenant_a"))
 
     # Nil-prefix keeps the historical constant (single-tenant backward compat).
     assert nil_key == 0x41_5348_4F54
@@ -98,14 +99,10 @@ defmodule AshOnetime.Store.RollContentionTest do
     for key <- [nil_key, a_key, b_key], do: assert(key >= 0 and key < 0x8000000000000000)
   end
 
-  # Mirrors Postgres.roll_advisory_key/1's formula (the contract under test).
-  defp advisory_key_for(nil), do: 0x41_5348_4F54
-
-  defp advisory_key_for(prefix) do
-    <<first_8::binary-size(8), _rest::binary>> = :crypto.hash(:sha256, prefix)
-    <<value::64-unsigned-integer>> = first_8
-    Bitwise.band(value, 0x7FFFFFFFFFFFFFFF)
-  end
+  # roll_advisory_key/1 reads only the prefix; repo_module/dynamic_repo satisfy the Target
+  # enforce_keys and are otherwise unused on this path.
+  defp advisory_target(prefix),
+    do: %Postgres.Target{repo_module: Repo, dynamic_repo: Repo, prefix: prefix}
 
   defp with_owner(callback) do
     owner = Sandbox.start_owner!(Repo, shared: false, sandbox: false)

@@ -157,7 +157,13 @@ defmodule AshOnetime.Cache do
   # used), so this hardens a non-load-bearing surface. The cache key is an internal hash
   # input, not a wire format, so a direct length-prefix is lighter than Canonical.encode
   # (which allocates a response codec).
-  defp key(%Claim{} = claim) do
+  #
+  # Exposed as a @doc false public function so the framing can be pinned directly against
+  # synthetic variable-length components that would collide under naive concat — a
+  # production framing regression (dropped length prefix) fails here against the real
+  # function, not a local replica. Mirrors bounded_callback_context/1's test seam.
+  @doc false
+  def key(%Claim{} = claim) do
     components = ["ash_onetime-cache", claim.operation_hash, claim.scope_hash, claim.key_hash]
 
     framed =

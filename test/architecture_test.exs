@@ -112,7 +112,7 @@ defmodule AshOnetime.ArchitectureTest do
 
   @exports %{
     AshOnetime => [replayed?: 1, reserved_verification_inputs: 0],
-    AshOnetime.Cache => [authoritative_payload: 2, config: 1, store: 3],
+    AshOnetime.Cache => [authoritative_payload: 2, config: 1, key: 1, store: 3],
     AshOnetime.Cache.Entry => [],
     AshOnetime.Cache.Ets => [
       child_spec: 1,

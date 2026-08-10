@@ -915,9 +915,15 @@ defmodule AshOnetime.Store.Postgres do
   # over-serialize (two tenants sharing a key serialize — the prior behavior), never
   # under-serialize: a benign degradation, not a correctness hole. The nil-prefix
   # (single-tenant) path keeps the historical constant.
-  defp roll_advisory_key(%Target{prefix: nil}), do: @partition_roll_advisory_key
+  #
+  # Exposed as a @doc false public function so the per-prefix derivation can be pinned
+  # directly (nil→constant, same-prefix→same-key, distinct→distinct, 63-bit positive)
+  # rather than through a live pg_advisory_xact_lock roll. Mirrors the
+  # bounded_callback_context/1 test seam in admission.ex.
+  @doc false
+  def roll_advisory_key(%Target{prefix: nil}), do: @partition_roll_advisory_key
 
-  defp roll_advisory_key(%Target{prefix: prefix}) do
+  def roll_advisory_key(%Target{prefix: prefix}) do
     # 63-bit positive bigint from the prefix. Take the first 8 bytes of the SHA-256 and mask
     # to 63 bits (clear the sign bit) so the result is always a non-negative bigint in the
     # pg_advisory_xact_lock(bigint) domain.

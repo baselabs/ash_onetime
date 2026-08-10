@@ -139,28 +139,43 @@ defmodule AshOnetime.CacheTest do
   # L7: the cache key uses length-prefixed framing so a future variable-length component
   # cannot create a concatenation ambiguity. Today all components are fixed 32-byte SHA-256
   # outputs, so there is no ambiguity to remove — this is defense-in-depth, tested here with
-  # synthetic variable-length inputs that WOULD collide under naive concat. The framing
-  # function mirrors Cache.key/1's framing (extracted for testability; the production path
-  # feeds real 32-byte Claim hashes).
+  # synthetic variable-length inputs that WOULD collide under naive concat. This drives the
+  # PRODUCTION Cache.key/1 directly (exposed @doc false) rather than mirroring its framing
+  # locally, so a production framing regression (dropped length prefix) fails here against
+  # the real function, not a replica.
   @tag cache_key_framing: true
   test "length-prefixed framing distinguishes inputs naive concat would collide" do
-    # Two component lists whose naive concatenation is identical but whose components differ
-    # at the boundary: ["ab", "cd"] vs ["a", "bcd"] both concat to "abcd".
-    framed_a = frame(["prefix", "ab", "cd", "ef"])
-    framed_b = frame(["prefix", "a", "bcd", "ef"])
+    # Two claims whose component lists (operation_hash/scope_hash/key_hash) concatenate
+    # identically but differ at the boundary: ["ab","cd","ef"] vs ["a","bcd","ef"].
+    claim_a = cache_key_claim("ab", "cd", "ef")
+    claim_b = cache_key_claim("a", "bcd", "ef")
 
-    # Sanity: naive concat collides (the premise).
-    naive_a = IO.iodata_to_binary(["prefix", "ab", "cd", "ef"])
-    naive_b = IO.iodata_to_binary(["prefix", "a", "bcd", "ef"])
+    # Sanity: naive concat of the production component lists collides (the premise).
+    # Components are ["ash_onetime-cache", operation_hash, scope_hash, key_hash].
+    naive_a = IO.iodata_to_binary(["ash_onetime-cache", "ab", "cd", "ef"])
+    naive_b = IO.iodata_to_binary(["ash_onetime-cache", "a", "bcd", "ef"])
     assert naive_a == naive_b
 
-    # The length-prefixed framing does NOT collide.
-    assert :crypto.hash(:sha256, framed_a) != :crypto.hash(:sha256, framed_b)
+    # The production length-prefixed framing (CacheApi.key/1) does NOT collide.
+    assert CacheApi.key(claim_a) != CacheApi.key(claim_b)
   end
 
-  defp frame(components),
-    do:
-      for(component <- components, into: "", do: <<byte_size(component)::32, component::binary>>)
+  # Minimal claim carrying only the framing inputs (enforce_keys satisfied with stub
+  # timestamps; the remaining fields are unused by CacheApi.key/1).
+  defp cache_key_claim(operation_hash, scope_hash, key_hash) do
+    now = DateTime.utc_now()
+
+    %Claim{
+      strategy: :idempotency,
+      id: Ecto.UUID.generate(),
+      operation_hash: operation_hash,
+      scope_hash: scope_hash,
+      key_hash: key_hash,
+      admitted_at: now,
+      retain_until: now,
+      inserted_at: now
+    }
+  end
 
   defp run_generic(prefix, action, arguments) do
     Resource
