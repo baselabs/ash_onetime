@@ -50,7 +50,7 @@ defmodule AshOnetime.Admission do
 
     with :ok <- reject_reserved(subject),
          :ok <- reject_external_effect(protection),
-         {:ok, state} <- prepare_resolved(subject, protection, trusted_context),
+         {:ok, state} <- prepare_resolved(subject, protection),
          %Result{} = result <- store().claim(state.target, state.request) do
       resolve(
         result,
@@ -108,7 +108,7 @@ defmodule AshOnetime.Admission do
 
     with :ok <- reject_reserved(subject),
          :ok <- reject_external_effect(protection),
-         {:ok, state} <- prepare_resolved(subject, protection, trusted_context),
+         {:ok, state} <- prepare_resolved(subject, protection),
          %Result{} = result <- store().claim_committed(state.target, state.request) do
       resolve(
         result,
@@ -149,7 +149,7 @@ defmodule AshOnetime.Admission do
   def prepare(subject, protection, trusted_context)
       when is_map(subject) and is_map(protection) and is_map(trusted_context) do
     with :ok <- reject_reserved(subject) do
-      prepare_resolved(subject, protection, trusted_context)
+      prepare_resolved(subject, protection)
     end
   rescue
     _exception ->
@@ -340,17 +340,11 @@ defmodule AshOnetime.Admission do
     end
   end
 
-  defp prepare_resolved(subject, protection, trusted_context) do
+  defp prepare_resolved(subject, protection) do
     with {:ok, operation_hash} <- operation_hash(subject),
-         {:ok, scope_hash} <- scope_hash(subject, protection.scope, trusted_context),
+         {:ok, scope_hash} <- scope_hash(subject, protection.scope),
          {:ok, key_hash, verified} <-
-           key_hash(
-             subject,
-             protection.key,
-             protection.limits,
-             trusted_context,
-             protection.strategy
-           ),
+           key_hash(subject, protection.key, protection.limits, protection.strategy),
          {:ok, fingerprint} <- request_fingerprint(subject, protection),
          {:ok, contract} <- response_contract(subject, protection),
          {:ok, request} <-
@@ -410,32 +404,32 @@ defmodule AshOnetime.Admission do
     })
   end
 
-  defp scope_hash(subject, scope, trusted_context) when is_list(scope) do
+  defp scope_hash(subject, scope) when is_list(scope) do
     with {:ok, descriptors} <-
            map_ordered(scope, fn component ->
-             scope_component(subject, component, trusted_context)
+             scope_component(subject, component)
            end) do
       Fingerprint.compute(%{domain: :scope, ordered: descriptors})
     end
   end
 
-  defp scope_hash(_subject, _scope, _trusted_context),
+  defp scope_hash(_subject, _scope),
     do: {:error, Error.new(:scope_unavailable, "scope is unavailable")}
 
-  defp scope_component(_subject, {:static, value}, _context),
+  defp scope_component(_subject, {:static, value}),
     do: bounded_descriptor(:static, :static, value)
 
-  defp scope_component(subject, {:argument, name}, _context) do
+  defp scope_component(subject, {:argument, name}) do
     with {:ok, value} <- fetch_argument(subject, name) do
       bounded_descriptor(:argument, name, value)
     end
   end
 
-  defp scope_component(%Ash.Changeset{} = subject, {:attribute, name}, _context) do
+  defp scope_component(%Ash.Changeset{} = subject, {:attribute, name}) do
     bounded_descriptor(:attribute, name, Ash.Changeset.get_attribute(subject, name))
   end
 
-  defp scope_component(subject, {:tenant, module}, _trusted_context) when is_atom(module) do
+  defp scope_component(subject, {:tenant, module}) when is_atom(module) do
     context = bounded_callback_context(subject)
 
     case safe_callback(module, :resolve, [subject, context]) do
@@ -444,25 +438,17 @@ defmodule AshOnetime.Admission do
     end
   end
 
-  defp scope_component(_subject, _component, _context),
+  defp scope_component(_subject, _component),
     do: {:error, Error.new(:scope_unavailable, "scope is unavailable")}
 
-  defp key_hash(subject, key, limits, trusted_context, strategy) when is_list(key) do
+  defp key_hash(subject, key, limits, strategy) when is_list(key) do
     max_key_bytes = Keyword.get(limits || [], :max_key_bytes, 4_096)
     max_token_bytes = Keyword.get(limits || [], :max_token_bytes, 65_536)
     timeout = Keyword.get(limits || [], :verifier_timeout_ms, 30_000)
 
     with {:ok, resolved} <-
            map_ordered(key, fn source ->
-             key_component(
-               subject,
-               source,
-               trusted_context,
-               max_key_bytes,
-               max_token_bytes,
-               timeout,
-               strategy
-             )
+             key_component(subject, source, max_key_bytes, max_token_bytes, timeout, strategy)
            end),
          descriptors = Enum.map(resolved, &elem(&1, 0)),
          verified = resolved |> Enum.map(&elem(&1, 1)) |> Enum.reject(&is_nil/1),
@@ -471,10 +457,10 @@ defmodule AshOnetime.Admission do
     end
   end
 
-  defp key_hash(_subject, _key, _limits, _context, _strategy),
+  defp key_hash(_subject, _key, _limits, _strategy),
     do: {:error, Error.new(:key_unavailable, "key is unavailable")}
 
-  defp key_component(subject, {kind, name}, _context, max_key, _max_token, _timeout, _strategy)
+  defp key_component(subject, {kind, name}, max_key, _max_token, _timeout, _strategy)
        when kind in [:client, :argument, :external] do
     with {:ok, value} <- fetch_argument(subject, name),
          :ok <- bounded_binary(value, max_key) do
@@ -487,7 +473,6 @@ defmodule AshOnetime.Admission do
   defp key_component(
          %Ash.Changeset{} = subject,
          {:attribute, name},
-         _context,
          max_key,
          _max_token,
          _timeout,
@@ -504,7 +489,6 @@ defmodule AshOnetime.Admission do
   defp key_component(
          subject,
          {:verified, name, module},
-         _context,
          max_key,
          max_token,
          timeout,
@@ -540,7 +524,6 @@ defmodule AshOnetime.Admission do
   defp key_component(
          subject,
          {:minted, module},
-         _context,
          max_key,
          _max_token,
          timeout,
@@ -567,7 +550,6 @@ defmodule AshOnetime.Admission do
   defp key_component(
          _subject,
          _source,
-         _context,
          _max_key,
          _max_token,
          _timeout,
