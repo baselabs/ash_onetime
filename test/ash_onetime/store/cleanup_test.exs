@@ -75,10 +75,18 @@ defmodule AshOnetime.Store.CleanupTest do
              )
   end
 
-  test "cleanup rejects duplicate payload rows across partitions without deleting either row", %{
+  test "cleanup's delete-guard probe is partition-scoped (the H1 pruning tail)", %{
     prefix: prefix,
     target: target
   } do
+    # The :complete-branch delete-guard probe now constrains partition_date =
+    # OLD.response_partition (mirroring the partition-scoped DELETE and the H1 read-path
+    # pruning). Partition pruning and cross-partition duplicate detection are mutually
+    # exclusive — the write path (update_complete) is the authoritative guard that forbids a
+    # second payload; a stray row in a DIFFERENT partition can only exist via direct-SQL
+    # bypass, and the partition-scoped DELETE never touched it anyway. So cleanup proceeds on
+    # the authoritative partition and leaves an out-of-partition stray untouched (the write
+    # path is the real guard; this mirrors the H1 read-path test at postgres_test.exs:277).
     claim_id = Ecto.UUID.generate()
     insert_expired_complete(prefix, claim_id, Date.utc_today(), "current")
 
@@ -92,20 +100,26 @@ defmodule AshOnetime.Store.CleanupTest do
       [~D[2100-01-01], Ecto.UUID.dump!(claim_id), "extra"]
     )
 
-    assert %Result{status: :failure, reason: :store_invariant, transaction: :rolled_back} =
-             Store.cleanup(target, 100)
+    # Cleanup proceeds: the authoritative claim + its in-partition payload are deleted.
+    assert {:ok, _counts} = Store.cleanup(target, 100)
 
-    assert %{rows: [[1]]} =
+    assert %{rows: [[0]]} =
              SQL.query!(
                Repo,
                "SELECT count(*) FROM #{relation(prefix, "ash_onetime_idempotency_claims")} WHERE id = $1::uuid",
                [Ecto.UUID.dump!(claim_id)]
              )
 
-    assert %{rows: [[2]]} =
+    # The authoritative (in-partition) payload is gone; the out-of-partition stray remains
+    # (the partition-scoped DELETE never matched it). It is orphaned by direct-SQL bypass and
+    # is bounded by retention (the prune-partitions path drops empty past partitions).
+    assert %{rows: [[1]]} =
              SQL.query!(
                Repo,
-               "SELECT count(*) FROM #{relation(prefix, "ash_onetime_response_payloads")} WHERE claim_id = $1::uuid",
+               """
+               SELECT count(*) FROM #{relation(prefix, "ash_onetime_response_payloads")}
+               WHERE claim_id = $1::uuid
+               """,
                [Ecto.UUID.dump!(claim_id)]
              )
   end

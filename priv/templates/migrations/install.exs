@@ -199,7 +199,7 @@ defmodule <%= inspect(module) %> do
 
       SELECT count(*) INTO payload_count
       FROM #{q("ash_onetime_response_payloads")}
-      WHERE claim_id = OLD.id;
+      WHERE partition_date = OLD.response_partition AND claim_id = OLD.id;
       IF payload_count <> 1 THEN
         RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
           USING ERRCODE = '23514';
