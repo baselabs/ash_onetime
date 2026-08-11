@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## v0.5.1 — 2026-08-10
+
+Patch: test-only hardening. No consumer-visible change; no upgrade action required.
+
+- **Invariant tripwire hardening (test-only):** the five test-coverage residuals the v0.5.0
+  closeout accepted as documented gaps are closed. Each tripwire now observes the production
+  function it claims to pin, and every one is proven RED-capable by mutation (mutate the
+  production line, watch the test fail). The Oban worker error-tuple tests force a REAL
+  `:lock_timeout` through database lock contention rather than reading source text. No
+  production behavior change.
+- **Internal test seams:** three pure helpers are now `@doc false` public callables so their
+  contracts can be pinned directly — `Store.Postgres.roll_advisory_key/1`, `Cache.key/1`,
+  `Resource.Verifier.verify_required_shape/2`. Undocumented, not a supported API.
+- **Lint:** `mix credo --strict` now passes clean (implicit-`try` and `cond`→`if` refactors in
+  the ETS cache adapter and the telemetry default handler — behavior-identical).
+- **Dependency:** bumped `ash` from the retired `3.31.1` to `3.31.2` (within the existing
+  `>= 3.31.1 and < 4.0.0` pin). 3.31.1 was retired upstream for a breaking bug.
+
 ## v0.5.0 — 2026-08-10
 
 Minor bump: sixteen findings (M1–M5, L1–L11) from the v0.4.0 independent code review. Four

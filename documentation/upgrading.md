@@ -4,12 +4,23 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: b
 or contract changes bump the minor version (the library is pre-1.0), and each breaking
 change lands here with the exact edit to make.
 
-The published package is [v0.5.0](https://hex.pm/packages/ash_onetime). Set your dependency
+The published package is [v0.5.1](https://hex.pm/packages/ash_onetime). Set your dependency
 to the minor range to pick up patches automatically and review this page on each minor bump:
 
 ```elixir
 {:ash_onetime, "~> 0.5"}
 ```
+
+## v0.5.1 — internal patch (no upgrade action)
+
+v0.5.1 is a **patch**: test-only hardening of the v0.5.0 closeout's five documented test
+gaps, plus a behavior-identical lint cleanup. No consumer-visible change, no DSL/contract
+change, no upgrade action.
+
+- Three internal helpers are now `@doc false` public callables for deterministic contract
+  testing (`Store.Postgres.roll_advisory_key/1`, `Cache.key/1`,
+  `Resource.Verifier.verify_required_shape/2`). They are undocumented test seams, not a
+  supported API — do not depend on them.
 
 ## v0.5.0 — security hardening from the independent code review
 
