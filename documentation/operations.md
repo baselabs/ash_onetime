@@ -113,6 +113,25 @@ idempotent). A rising discard rate on any of the three queues is contention — 
 `pg_stat_activity` for lock waits during the worker's window and consider raising the pool or
 scheduling the worker off-peak.
 
+**Upgrade check — stuck `available` jobs (the unconfigured-queue hazard).** `PartitionWorker`
+runs on a dedicated `:ash_onetime_partitions` queue (separate from cleanup). If you upgrade
+without adding `:ash_onetime_partitions` to your Oban `queues` config, jobs are enqueued but
+never executed — forward partition creation silently stalls and bounded retention degrades
+past the install window, with NOTHING discarded (so the discard alert above stays green). This
+is the one queue whose silence is a retention-critical failure. Alert on stuck-available jobs:
+
+```sql
+SELECT queue, count(*) AS stuck, min(inserted_at) AS oldest
+FROM oban_jobs
+WHERE state = 'available' AND queue = 'ash_onetime_partitions'
+  AND inserted_at < now() - interval '1 hour'
+GROUP BY queue;
+```
+
+A nonzero `stuck` (or `oldest` older than your roll cadence) means the queue is not configured
+or its concurrency is zero — add `queues: [ash_onetime_partitions: 1]` (or higher) to your Oban
+config. A healthy install shows zero stuck rows.
+
 A context-multitenant tenant prefix must be 1..63 bytes — PostgreSQL truncates identifiers at
 63 bytes (NAMEDATALEN), so a longer prefix could route two tenants to the same schema. Both
 admission and cleanup reject an out-of-range prefix (admission fails closed with

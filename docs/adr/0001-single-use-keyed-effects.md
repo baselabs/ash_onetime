@@ -115,8 +115,11 @@ kept as defense-in-depth. A stale or corrupted claim struct whose `response_part
 disagrees with the stored row is caught by the no-row fallthrough (the mismatched value
 makes the WHERE match nothing → `:corrupt_payload`), not by the guard. Cross-partition
 payload cardinality is enforced at write time (`update_complete` rejects a second payload
-with `:store_invariant`) and re-asserted by the cleanup delete guard; the read path
-returning the authoritative payload from the pruned partition is correct behavior.
+with `:store_invariant`); the cleanup delete guard re-asserts `payload_count = 1` within the
+claim's authoritative partition (its probe is partition-scoped, mirroring the read-path
+pruning — the same mutual-exclusion trade: partition pruning and cross-partition duplicate
+detection are mutually exclusive). The read path returning the authoritative payload from the
+pruned partition is correct behavior.
 
 ## Maintenance: per-tenant partition-roll concurrency
 

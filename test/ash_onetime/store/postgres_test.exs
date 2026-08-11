@@ -267,8 +267,9 @@ defmodule AshOnetime.Store.PostgresTest do
   # out-of-partition and invisible to the read. This is the correct behavior, not a hole:
   # the write path (`update_complete`, see "completion rejects cross-partition payload
   # duplication" below at the write-path test) is the authoritative guard that forbids a
-  # second payload from ever being written, and the cleanup delete guard re-asserts
-  # `payload_count = 1` on the delete path. A stray row can only exist via direct SQL
+  # second payload from ever being written; the cleanup delete guard re-asserts
+  # `payload_count = 1` within the authoritative partition (its probe is partition-scoped,
+  # mirroring this read-path pruning). A stray row can only exist via direct SQL
   # bypass (operator error / a buggy migration), which the write path already forbids — so
   # the read returning the authoritative payload is right. This test was previously named
   # "load rejects more than one payload row across all partitions" and asserted the
