@@ -4,6 +4,31 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## v0.6.0 — 2026-08-10
+
+Minor bump: two additive enhancements (new Mix task + Phoenix guide) plus internal
+perf/cleanliness gap closures. No breaking change, no consumer upgrade action.
+
+- **`mix ash_onetime.doctor`** — a read-only upgrade-preflight that checks the Ash security
+  floor (fatal if below 3.31.1), Oban queue configuration (advisory — warns on a missing
+  `:ash_onetime_partitions` queue that strands the retention-safety path), and prefix validity.
+  Mirrors the runtime Mix task family; run after install and on each upgrade.
+- **Phoenix integration guide** (`documentation/phoenix.md`) — a runnable Phoenix controller
+  recipe wiring the Plug, the `replayed?/1` → 200/201 + `Idempotent-Replayed` header signal,
+  and the error-code → HTTP-status mapping into a complete controller pattern. Closes the gap
+  where every existing recipe stopped at plain Elixir tuples.
+- **Cleanup delete-guard probe partition-scoped** — the `:complete`-branch probe in the install
+  migration now constrains `partition_date = OLD.response_partition` (the H1 read-path tail),
+  turning an O(partitions) scan into a point lookup on every completed-claim delete. Same
+  property shift as H1 (partition pruning vs cross-partition detection are mutually exclusive);
+  the write path remains the authoritative guard.
+- **Dead `trusted_context` parameter removed** from the internal scope/key resolution path
+  (`admission.ex` `prepare_resolved`/`scope_hash`/`scope_component`/`key_hash`/`key_component`).
+  No behavior change — the parameter was threaded but never read after M1's collapse.
+- **L4 monitoring blind spot closed** — a stuck-`available` PartitionWorker query added to
+  `operations.md` (the discard-alert watched `discarded` only; an unconfigured queue leaves jobs
+  in `available` forever with no signal).
+
 ## v0.5.1 — 2026-08-10
 
 Patch: test-only hardening. No consumer-visible change; no upgrade action required.

@@ -4,12 +4,33 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: b
 or contract changes bump the minor version (the library is pre-1.0), and each breaking
 change lands here with the exact edit to make.
 
-The published package is [v0.5.1](https://hex.pm/packages/ash_onetime). Set your dependency
+The published package is [v0.6.0](https://hex.pm/packages/ash_onetime). Set your dependency
 to the minor range to pick up patches automatically and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 0.5"}
+{:ash_onetime, "~> 0.6"}
 ```
+
+## v0.6.0 — enhancements (no upgrade action)
+
+v0.6.0 is an **additive** minor bump: two new capabilities (a `mix ash_onetime.doctor`
+upgrade-preflight task and a Phoenix integration guide) plus internal perf/cleanliness gap
+closures. No breaking change, no DSL/contract change, no upgrade action for existing consumers.
+
+- **`mix ash_onetime.doctor --repo MyApp.Repo`** — a read-only preflight that checks the Ash
+  security floor, Oban queue configuration (advisory), and prefix validity. Run it after install
+  and after each upgrade to catch the silent-failure modes (e.g., a missing
+  `:ash_onetime_partitions` queue that strands the retention-safety path).
+- **[Phoenix integration guide](phoenix.md)** — a runnable Phoenix controller recipe wiring the
+  Plug, the `replayed?/1` signal, and the error-code → HTTP-status mapping into a complete
+  controller pattern.
+- **Cleanup delete-guard probe partition-scoped** — the `:complete`-branch cleanup probe
+  (`install.exs`) now constrains `partition_date = OLD.response_partition`, turning an
+  O(partitions) scan into a point lookup (the H1 read-path tail). Same property shift as H1:
+  partition pruning and cross-partition duplicate detection are mutually exclusive; the write
+  path remains the authoritative guard.
+- **Dead `trusted_context` parameter removed** from the internal scope/key resolution path
+  (`admission.ex`) — cleanliness; no behavior change.
 
 ## v0.5.1 — internal patch (no upgrade action)
 

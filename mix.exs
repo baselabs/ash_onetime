@@ -1,7 +1,7 @@
 defmodule AshOnetime.MixProject do
   use Mix.Project
 
-  @version "0.5.1"
+  @version "0.6.0"
   @source_url "https://github.com/baselabs/ash_onetime"
 
   def project do
@@ -108,6 +108,7 @@ defmodule AshOnetime.MixProject do
         "documentation/operations.md",
         "documentation/security.md",
         "documentation/recipes.md",
+        "documentation/phoenix.md",
         "documentation/telemetry.md",
         "documentation/upgrading.md",
         "documentation/faq.md",

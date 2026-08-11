@@ -58,6 +58,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Verified,
     AshOnetime.Verifier,
     AshOnetime.Window,
+    Mix.Tasks.AshOnetime.Doctor,
     Mix.Tasks.AshOnetime.Gen.Migrations,
     Mix.Tasks.AshOnetime.Gen.RollForward,
     Mix.Tasks.AshOnetime.Install,
@@ -102,6 +103,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Verified,
     AshOnetime.Verifier,
     AshOnetime.Window,
+    Mix.Tasks.AshOnetime.Doctor,
     Mix.Tasks.AshOnetime.Gen.Migrations,
     Mix.Tasks.AshOnetime.Gen.RollForward,
     Mix.Tasks.AshOnetime.Install,
@@ -228,6 +230,7 @@ defmodule AshOnetime.ArchitectureTest do
       info: 2,
       run: 1
     ],
+    Mix.Tasks.AshOnetime.Doctor => [run: 1],
     Mix.Tasks.AshOnetime.Prune => [run: 1],
     Mix.Tasks.AshOnetime.Reap => [run: 1],
     Mix.Tasks.AshOnetime.RollPartitions => [run: 1]
