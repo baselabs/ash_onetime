@@ -35,9 +35,12 @@ All events are prefixed `[:ash_onetime, <event>]`. Each event's metadata include
 shaped — it has no `result_class`). Emitted when a committed-claim transaction raises before
 collapsing to `:dispatched_unknown`. Measurements `%{count: 1}`; metadata `%{strategy:,
 phase:, exception:}` where `exception` is the exception struct MODULE (e.g. `Postgrex.Error`)
-— the class only, not the struct, to avoid leaking request material. It bypasses the
-admission `emit/6` validator (which requires `resource`/`action`/`result_class`) and calls
-`:telemetry.execute/3` directly. A fresh application sees nothing unless it attaches a handler.
+— the class only, not the struct, to avoid leaking request material. It bypasses the admission
+`emit/6` validator (which requires `resource`/`action`/`result_class`) and calls
+`:telemetry.execute/3` directly, but its own closed shape is validated: `strategy` must be one
+of the two strategies and `phase`/`exception` must be atoms — no other keys, no other value
+types, or the call returns `{:error, :telemetry_invalid}` without emitting. A fresh
+application sees nothing unless it attaches a handler.
 
 `strategy` is `:idempotency` or `:one_time_nonce`; `resource` and `action` are the module and
 action atom the protection is declared on.

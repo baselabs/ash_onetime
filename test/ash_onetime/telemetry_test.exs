@@ -14,6 +14,7 @@ defmodule AshOnetime.TelemetryTest do
     [:ash_onetime, :cache],
     [:ash_onetime, :cleanup],
     [:ash_onetime, :reap],
+    [:ash_onetime, :external_recovery],
     [:ash_onetime, :store_uncertainty],
     [:ash_onetime, :untracked_execution]
   ]
@@ -45,6 +46,10 @@ defmodule AshOnetime.TelemetryTest do
     assert :ok = Telemetry.cleanup(:idempotency, Resource, :redeem, 2, :claims_deleted)
     assert :ok = Telemetry.reap(:idempotency, Resource, :redeem, 2, :claims_reaped)
     assert :ok = Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :sent)
+
+    assert :ok =
+             Telemetry.external_recovery(5, :idempotency, Resource, :redeem, :execute_succeeded)
+
     assert :ok = Telemetry.untracked_execution(:idempotency, Resource, :redeem)
 
     for event <- @events do
@@ -121,6 +126,65 @@ defmodule AshOnetime.TelemetryTest do
     assert metadata.strategy == :idempotency
     assert metadata.phase == :committed_claim
     assert metadata.exception == Postgrex.Error
+  end
+
+  test "uncertain_exception enforces its closed metadata shape — no caller-owned values" do
+    # Cross-vendor review (codex blocking + claude should-fix, both observed live): the raw
+    # event accepted arbitrary opts, and routing through attach/0 widened the unvalidated
+    # metadata onto the default :metric stream. The closed shape is enforced at the emitter
+    # exactly as emit/6 enforces the admission shape — an atom cannot carry request material.
+    handler = "ash-onetime-uncertain-guard-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :telemetry.attach(
+      handler,
+      [:ash_onetime, :uncertain_exception],
+      fn event, measurements, metadata, _config ->
+        send(parent, {:event, event, measurements, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    # Extra keys (a secret-carrying token), invalid strategy, missing key, non-atom phase,
+    # exception struct instead of module, duplicate keys: every leg fails WITHOUT emission.
+    assert {:error, %AshOnetime.Error{code: :telemetry_invalid}} =
+             Telemetry.uncertain_exception(:idempotency,
+               phase: :committed_claim,
+               exception: Postgrex.Error,
+               token: "classified-secret"
+             )
+
+    assert {:error, %AshOnetime.Error{code: :telemetry_invalid}} =
+             Telemetry.uncertain_exception(:anything,
+               phase: :committed_claim,
+               exception: Postgrex.Error
+             )
+
+    assert {:error, %AshOnetime.Error{code: :telemetry_invalid}} =
+             Telemetry.uncertain_exception(:idempotency, phase: :committed_claim)
+
+    assert {:error, %AshOnetime.Error{code: :telemetry_invalid}} =
+             Telemetry.uncertain_exception(:idempotency,
+               phase: "claim",
+               exception: Postgrex.Error
+             )
+
+    assert {:error, %AshOnetime.Error{code: :telemetry_invalid}} =
+             Telemetry.uncertain_exception(:idempotency,
+               phase: :committed_claim,
+               exception: %{message: "request material"}
+             )
+
+    assert {:error, %AshOnetime.Error{code: :telemetry_invalid}} =
+             Telemetry.uncertain_exception(:idempotency,
+               phase: :claim,
+               exception: Postgrex.Error,
+               phase: :committed_claim
+             )
+
+    refute_receive {:event, _, _, _}
   end
 
   describe "default metrics handler (H21)" do
@@ -215,6 +279,23 @@ defmodule AshOnetime.TelemetryTest do
       assert metadata.phase == :committed_claim
       assert metadata.exception == Postgrex.Error
       refute Map.has_key?(metadata, :result_class)
+    end
+
+    test "attach/0 leaves no closed event unattached — the full 13-event surface is covered" do
+      # The coverage contract itself (D3: "all 13 events, no silent drops") as a gate: after
+      # attach/0, every closed event name has the default handler registered. The next event
+      # emitted outside emit/6 and missed in the attach list reds here instead of dropping
+      # silently. @events is the 12 admission/business events; the diagnosis event rides with it.
+      default = "h21-coverage-#{System.unique_integer([:positive])}"
+      assert :ok = Telemetry.attach(name: default)
+      on_exit(fn -> Telemetry.detach(name: default) end)
+
+      expected_id = Telemetry.handler_id(default)
+
+      for event <- @events ++ [[:ash_onetime, :uncertain_exception]] do
+        assert Enum.any?(:telemetry.list_handlers(event), fn %{id: id} -> id == expected_id end),
+               "attach/0 did not cover #{inspect(event)}"
+      end
     end
 
     test "attach is idempotent per name and detach removes the handler" do

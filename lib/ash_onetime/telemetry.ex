@@ -180,13 +180,26 @@ defmodule AshOnetime.Telemetry do
   metadata map. The `exception` is the exception STRUCT MODULE (e.g. `Postgrex.Error`), not the
   full struct — to avoid leaking request material that may be embedded in an exception message.
 
+  The closed metadata shape is validated, not conventional: `strategy` must be one of the two
+  strategies and `opts` must carry exactly `:phase` and `:exception`, both atoms — anything else
+  (extra keys, non-atom values) returns `{:error, :telemetry_invalid}` without emitting. This is
+  what keeps the value-free guarantee true for every downstream consumer, direct subscribers
+  and the default `:metric` router alike: an atom cannot carry request material.
+
   A fresh application sees nothing unless it attaches a handler (the lib's telemetry-only
   posture). Consumers wanting store-transaction diagnosis attach to this event.
   """
+  @spec uncertain_exception(atom(), keyword()) :: :ok | {:error, Error.t()}
   def uncertain_exception(strategy, opts) when is_atom(strategy) and is_list(opts) do
-    metadata = opts |> Map.new() |> Map.put(:strategy, strategy)
-    :telemetry.execute([:ash_onetime, :uncertain_exception], %{count: 1}, metadata)
-    :ok
+    case validate_diagnosis(strategy, opts) do
+      :ok ->
+        metadata = opts |> Map.new() |> Map.put(:strategy, strategy)
+        :telemetry.execute([:ash_onetime, :uncertain_exception], %{count: 1}, metadata)
+        :ok
+
+      :error ->
+        {:error, Error.new(:telemetry_invalid, "telemetry emission is invalid")}
+    end
   rescue
     _exception -> :ok
   end
@@ -232,6 +245,22 @@ defmodule AshOnetime.Telemetry do
 
   defp validate_context(strategy, resource, action) do
     if strategy in @strategies and is_atom(resource) and is_atom(action) do
+      :ok
+    else
+      :error
+    end
+  end
+
+  # The diagnosis event's closed shape: exactly :phase and :exception, both atoms, no
+  # duplicates. Atoms cannot carry request material, so this is the value-free guarantee
+  # for the one event that bypasses emit/6 — it holds for direct subscribers and the
+  # default :metric router alike.
+  defp validate_diagnosis(strategy, opts) do
+    keys = opts |> Keyword.keys() |> MapSet.new()
+
+    if strategy in @strategies and length(opts) == 2 and
+         MapSet.equal?(keys, MapSet.new([:phase, :exception])) and
+         is_atom(Keyword.get(opts, :phase)) and is_atom(Keyword.get(opts, :exception)) do
       :ok
     else
       :error
