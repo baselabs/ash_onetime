@@ -54,12 +54,30 @@ defmodule AshOnetime.MixAshPinValidationTest do
     assert exit == 0
   end
 
-  test "keeps the floating default when the variable is unset" do
-    if System.get_env(@pin_var) do
-      flunk("cannot assert the unset path: #{@pin_var} is set in the parent environment")
-    end
+  test "rejects a pre-release pin" do
+    {output, exit} = mix_compile("4.0.0-rc.0")
 
-    {output, exit} = System.cmd("mix", ["compile", "--no-deps-check"], stderr_to_stdout: true)
+    assert exit != 0
+    assert output =~ "4.0.0-rc.0"
+  end
+
+  test "rejects a build-metadata pin" do
+    {output, exit} = mix_compile("3.31.3+build5")
+
+    assert exit != 0
+    assert output =~ "3.31.3+build5"
+  end
+
+  test "keeps the floating default when the variable is unset" do
+    # CI exports ASH_ONETIME_ASH_VERSION at job level for both matrix cells, so the
+    # parent environment cannot prove the unset path — a nil value in the child env
+    # deterministically UNSETS the variable for the subprocess instead.
+    {output, exit} =
+      System.cmd("mix", ["compile", "--no-deps-check"],
+        env: %{@pin_var => nil},
+        stderr_to_stdout: true,
+        cd: File.cwd!()
+      )
 
     assert exit == 0
     refute output =~ "** (Mix)"

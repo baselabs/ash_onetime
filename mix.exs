@@ -73,17 +73,21 @@ defmodule AshOnetime.MixProject do
 
   defp pinned_ash_requirement(version) do
     with {:ok, parsed} <- Version.parse(version),
+         true <- parsed.pre == [],
+         true <- is_nil(parsed.build),
          true <- Version.compare(parsed, @ash_floor) != :lt,
          true <- Version.compare(parsed, "4.0.0") == :lt do
       "== #{version}"
     else
       _ ->
         Mix.raise("""
-        ASH_ONETIME_ASH_VERSION must be a version inside the published Ash range \
-        >= #{@ash_floor} and < 4.0.0, or "latest"/unset for the floating requirement; \
-        got: #{inspect(version)}. Unset the variable or pin an in-range version — \
-        publishing with an out-of-range pin exported would freeze a wrong exact \
-        requirement into the package.\
+        ASH_ONETIME_ASH_VERSION must be a plain release version inside the published \
+        Ash range >= #{@ash_floor} and < 4.0.0 (no pre-release or build-metadata \
+        suffix — SemVer orders them inside the range while Hex would never resolve \
+        them for the floating requirement), or "latest"/unset for the floating \
+        requirement; got: #{inspect(version)}. Unset the variable or pin an in-range \
+        release version — publishing with an out-of-range pin exported would freeze \
+        a wrong exact requirement into the package.\
         """)
     end
   end
