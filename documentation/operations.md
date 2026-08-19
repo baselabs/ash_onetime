@@ -195,19 +195,13 @@ recovery points are immortal under cleanup (it skips `processing` claims) and th
 guard forbids deleting them; left unbounded this is a storage-exhaustion denial of service
 (ADR-0002).
 
-**Diagnose.** Observe the backlog before reaping:
-
-```elixir
-{:ok, %{processing_count: n, oldest_age_seconds: age}} =
-  AshOnetime.Store.processing_backlog(target)
-```
-
-Or directly in SQL (replace `:prefix`):
+**Diagnose.** Observe the backlog before reaping — the `processing_backlog/1` figures
+from above as SQL (replace `:prefix` with the tenant schema, e.g. `public`):
 
 ```sql
 SELECT count(*) AS processing_count,
        extract(epoch from now() - min(inserted_at))::int AS oldest_age_seconds
-FROM "ash_onetime_idempotency_claims"
+FROM ":prefix".ash_onetime_idempotency_claims
 WHERE state = 'processing';
 ```
 
@@ -244,19 +238,17 @@ WHERE state = 'discarded' AND queue = 'ash_onetime_partitions'
 ORDER BY discarded_at DESC;
 ```
 
-Check whether the current month's partition exists:
+Count payloads stranded in `_default` (replace `:prefix` as above):
 
 ```sql
-SELECT count(*)
-FROM pg_inherits
-JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
-JOIN pg_namespace n ON n.oid = parent.relnamespace
-WHERE n.nspname = ':prefix'
-  AND parent.relname = 'ash_onetime_response_payloads'
-  AND pg_inherits.inhrelid::regclass::text LIKE '%_default';
--- a non-zero count here means payloads are routing to _default (the catch-all),
--- i.e. the forward window has lapsed.
+SELECT count(*) AS stranded_payloads
+FROM ":prefix".ash_onetime_response_payloads_default;
 ```
+
+The `_default` partition is created at install and always exists — counting partitions
+cannot detect a lapsed window. A non-zero row count means payloads are routing to
+`_default` (the catch-all), i.e. the forward window has lapsed; the forward migration
+below drains them.
 
 **Remediate.** A discarded `PartitionWorker` triggers the idempotent forward migration, which
 both creates the elapsed+forward partitions AND drains past-retention payloads stranded in
@@ -283,12 +275,27 @@ DPoP-protected endpoint.
 
 **Diagnose.** Confirm the timeout class is the dominant uncertainty signal (distinct from
 `:disconnected`, which is a network partition, and `:unknown`, which is an unspecified
-dispatch):
+dispatch). In your telemetry backend, filter the `[:ash_onetime, :store_uncertainty]`
+stream by `result_class`; to compare the classes live, tally them in IEx attached to the
+running release:
 
-```sql
--- in your telemetry backend, filter the store_uncertainty stream:
--- result_class = 'worker_timeout' (rising) vs 'disconnected' vs 'unknown'
+```elixir
+handler = fn _event, _measurements, %{result_class: result_class}, _config ->
+  Agent.update(AshOnetime.UncertaintyTally, fn tally ->
+    Map.update(tally, result_class, 1, &(&1 + 1))
+  end)
+end
+
+{:ok, _} = Agent.start_link(fn -> %{} end, name: AshOnetime.UncertaintyTally)
+:ok = :telemetry.attach("ash-onetime-uncertainty-tally", [:ash_onetime, :store_uncertainty], handler, nil)
+
+# under load, then read the distribution:
+Agent.get(AshOnetime.UncertaintyTally, & &1)
 ```
+
+`result_class` is `:sent`, `:unknown`, `:disconnected`, `:lock_timeout`, or
+`:worker_timeout` (see [Telemetry](telemetry.md)); a rising `:worker_timeout` share is
+the pool-pressure signal.
 
 Inspect live lock waits and checkout pressure during the worker's window:
 
@@ -301,11 +308,33 @@ GROUP BY 1, 2, 3
 ORDER BY count(*) DESC;
 ```
 
-```elixir
-# DBConnection checkout queue length (EctoMyApp.Repo substituted):
-{:ok, %{checkin_queue: q, total_connections: t}} =
-  MyXQL or Postgrex connection info # via DBConnection's :telemetry on [:db_connection, :checkout, *]
+Compare open connections against the configured pool:
+
+```sql
+SELECT count(*) AS open_connections
+FROM pg_stat_activity
+WHERE datname = current_database();
 ```
+
+At or near your repo's `pool_size` while `:worker_timeout` climbs, the pool is
+saturated — in-flight protected actions are holding connections. To watch checkout
+queueing over time, attach to your repo's query event and read `:queue_time` (the
+measurement is present only when the checkout actually waited):
+
+```elixir
+handler = fn _event, measurements, _metadata, _config ->
+  if queue_time = measurements[:queue_time] do
+    IO.puts("checkout waited #{System.convert_time_unit(queue_time, :native, :millisecond)}ms")
+  end
+end
+
+:ok = :telemetry.attach("checkout-queue-watch", [:my_app, :repo, :query], handler, nil)
+# exercise the DPoP-protected endpoint; sustained waits under load are pool pressure
+```
+
+The event prefix is your repo module's underscored path: `MyApp.Repo` publishes
+`[:my_app, :repo, :query]`, `MyApp.Accounts.Repo` publishes
+`[:my_app, :accounts, :repo, :query]`.
 
 **Remediate.** Raise the pool size to accommodate the `(N+1)` checkout pattern for the
 expected concurrency of DPoP-protected endpoints:
