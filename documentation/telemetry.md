@@ -79,15 +79,18 @@ end
 ## Out-of-the-box attach helper
 
 If you want the full closed event surface routed into a single downstream stream without
-hand-rolling the event list and the count/duration split, the library ships an opt-in helper
-mirroring `Oban.Telemetry.attach_default_logger/1`:
+hand-rolling the event list and the count/duration split, the library ships an opt-in
+helper:
 
 ```elixir
 # in your application startup, once per VM, after the repo is started
 AshOnetime.Telemetry.attach()
 ```
 
-`attach/0` attaches a handler to every `[:ash_onetime, *]` event and re-emits each as a
+`attach/0` attaches a handler to every `[:ash_onetime, *]` event — all 13, no silent drops:
+the 12 admission/business events and the `:uncertain_exception` diagnosis event (its
+`%{strategy, phase, exception}` metadata forwards unchanged, normalized to `count: 1`, so
+the diagnosis stream rides the same single attach point). Each event is re-emitted as a
 downstream `[:ash_onetime, event, :metric]` event carrying the same atoms-only metadata and a
 normalized `:count` or `:duration` measurement. Attach your own aggregator
 (`Telemetry.Metrics` reporter, a custom handler, an ETS counter) to the `:metric` events:
@@ -98,6 +101,7 @@ normalized `:count` or `:duration` measurement. Attach your own aggregator
   [
     [:ash_onetime, :admission, :metric],
     [:ash_onetime, :store_uncertainty, :metric],
+    [:ash_onetime, :uncertain_exception, :metric],
     # ...or the full [:ash_onetime, event, :metric] list
   ],
   &MyApp.Metrics.handle/4,

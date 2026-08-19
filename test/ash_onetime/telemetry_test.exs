@@ -175,6 +175,48 @@ defmodule AshOnetime.TelemetryTest do
       assert count_meta.result_class == :worker_timeout
     end
 
+    test "attach/0 routes the diagnosis event :uncertain_exception as a :metric event" do
+      # D3 (#4): attach/0 must cover the full closed surface — all 13 events, no silent
+      # drops. The diagnosis event fires precisely when the store is sick; unrouted, a
+      # consumer's diagnosis stream looks empty at the worst moment. The router forwards
+      # the result-class-less metadata unchanged and normalizes to count: 1.
+      observer = "h21-uncertain-observer-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :ok =
+        :telemetry.attach(
+          observer,
+          [:ash_onetime, :uncertain_exception, :metric],
+          fn event, measurements, metadata, _config ->
+            send(parent, {:metric, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(observer) end)
+
+      default = "h21-uncertain-default-#{System.unique_integer([:positive])}"
+      assert :ok = Telemetry.attach(name: default)
+      on_exit(fn -> Telemetry.detach(name: default) end)
+
+      assert :ok =
+               Telemetry.uncertain_exception(:idempotency,
+                 phase: :committed_claim,
+                 exception: Postgrex.Error
+               )
+
+      assert_receive {:metric, [:ash_onetime, :uncertain_exception, :metric], measurements,
+                      metadata}
+
+      # Count-normalized like every non-duration event; the diagnosis metadata shape
+      # passes through unchanged (no result_class by design).
+      assert measurements == %{count: 1}
+      assert metadata.strategy == :idempotency
+      assert metadata.phase == :committed_claim
+      assert metadata.exception == Postgrex.Error
+      refute Map.has_key?(metadata, :result_class)
+    end
+
     test "attach is idempotent per name and detach removes the handler" do
       name = "h21-idempotent-#{System.unique_integer([:positive])}"
       assert :ok = Telemetry.attach(name: name)

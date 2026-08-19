@@ -7,16 +7,15 @@ defmodule AshOnetime.Telemetry do
   The library emits events but does NOT attach a handler — a fresh application sees nothing
   until it attaches one. Call `attach/0` (or `attach/1` with options) from your application
   startup (e.g. your `start/2` callback's supervised children, after the repo is started) to
-  attach the default handler, which routes the closed event surface into standard
-  `Telemetry.Metrics` counter and summary definitions. This mirrors `Oban.Telemetry.attach_default_logger/1`
-  and `Ash.Telemetry` — an opt-in helper so a consumer does not hand-roll a handler.
+  attach the default handler. The handler is a pure router: it re-emits every closed event —
+  the 12 admission/business events and the `:uncertain_exception` diagnosis event — as a
+  downstream `[:ash_onetime, event, :metric]` event carrying the same atoms-only metadata and
+  a normalized `:count` or `:duration` measurement. It does NOT depend on `telemetry_metrics`;
+  attach your own `Telemetry.Metrics` reporter or custom aggregator to the `:metric` stream —
+  `documentation/telemetry.md` carries the runnable example.
 
       # in your application startup, once per VM
       AshOnetime.Telemetry.attach()
-
-  If you already maintain a `Telemetry.Metrics` reporter (StatsD, Prometheus), you may prefer
-  to declare the metric definitions in your own `MyApp.Telemetry` rather than using this
-  helper — see `metrics/0` for the canonical definition list the helper attaches.
   """
 
   alias AshOnetime.Error
@@ -279,7 +278,10 @@ defmodule AshOnetime.Telemetry do
   def handler_id(name), do: "#{@default_handler_id}-#{inspect(name)}"
 
   @doc """
-  Attaches the default metrics handler to the closed `[:ash_onetime, *]` event surface.
+  Attaches the default metrics handler to the closed `[:ash_onetime, *]` event surface —
+  all 13 events, no silent drops: the 12 admission/business events and the
+  `:uncertain_exception` diagnosis event (its `%{strategy:, phase:, exception:}` metadata
+  forwards unchanged, normalized to `count: 1`).
 
   The handler re-emits each event as a downstream `[:ash_onetime, event, :metric]` event
   carrying the same atoms-only metadata and a normalized `:count` or `:duration` measurement.
@@ -313,7 +315,10 @@ defmodule AshOnetime.Telemetry do
   @spec attach(keyword()) :: :ok | {:error, :already_exists}
   def attach(opts \\ []) do
     name = Keyword.get(opts, :name)
-    event_names = for event <- events(), do: [:ash_onetime, event]
+
+    # The full closed surface: the admission/business events derived from @classes plus the
+    # :uncertain_exception diagnosis event, which bypasses emit/6 and has no @classes key.
+    event_names = for event <- [:uncertain_exception | events()], do: [:ash_onetime, event]
 
     :telemetry.attach_many(
       handler_id(name),
