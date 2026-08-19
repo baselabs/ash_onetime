@@ -247,10 +247,12 @@ FROM ":prefix".ash_onetime_response_payloads_default;
 
 The `_default` partition is created at install and always exists — counting partitions
 cannot detect a lapsed window. A non-zero row count means payloads have routed to
-`_default` because the forward window lapsed. Re-run after the forward migration below:
-its drain removes past-retention payloads, while within-retention rows remain until
-their retention passes — a shrinking or steady count means inserts are routing to named
-partitions again; a growing count means the window is still lapsed.
+`_default` because the forward window lapsed. Read the trend asymmetrically: a GROWING
+count means the window is still lapsed (rows only enter `_default` while it is). A
+shrinking or steady count does not prove repair — cleanup also deletes past-retention
+payloads from `_default`, so the count can decay while the window is still lapsed. To
+confirm repair, run the idempotent `mix ash_onetime.roll_partitions --repo MyApp.Repo`
+(it creates any missing forward months) and re-check that the count stops growing.
 
 **Remediate.** A discarded `PartitionWorker` triggers the idempotent forward migration, which
 both creates the elapsed+forward partitions AND drains past-retention payloads stranded in
@@ -314,35 +316,36 @@ ORDER BY count(*) DESC;
 
 Watch checkout queueing on the repo's query event — `:queue_time` is measured on every
 pooled checkout (zero when the checkout was instant; it is absent only when the
-connection was already held, e.g. inside a transaction), so aggregate it and read the
-maximum, in IEx attached to the running release:
+connection was already held, e.g. inside a transaction). Tally it with `:counters` —
+atomic and process-free, so the diagnostic adds no serialization to the query path:
 
 ```elixir
-handler = fn _event, measurements, _metadata, _config ->
+counters = :counters.new(2, [:write_concurrency])
+
+handler = fn _event, measurements, _metadata, counters ->
   if queue_time = measurements[:queue_time] do
     ms = System.convert_time_unit(queue_time, :native, :millisecond)
-
-    Agent.update(AshOnetime.CheckoutWatch, fn %{checkouts: c, max_wait_ms: m} ->
-      %{checkouts: c + 1, max_wait_ms: max(m, ms)}
-    end)
+    :counters.add(counters, 1, 1)
+    if ms > 50, do: :counters.add(counters, 2, 1)
   end
 end
 
-{:ok, _} = Agent.start_link(fn -> %{checkouts: 0, max_wait_ms: 0} end, name: AshOnetime.CheckoutWatch)
-:ok = :telemetry.attach("checkout-queue-watch", [:my_app, :repo, :query], handler, nil)
+:ok = :telemetry.attach("checkout-queue-watch", [:my_app, :repo, :query], handler, counters)
 
-# exercise the DPoP-protected endpoint, then read the aggregates and clean up:
-Agent.get(AshOnetime.CheckoutWatch, & &1)
+# exercise the DPoP-protected endpoint, then read {checkouts, waits_over_50ms}:
+{:counters.get(counters, 1), :counters.get(counters, 2)}
+
+# when done, detach:
 :ok = :telemetry.detach("checkout-queue-watch")
-Agent.stop(AshOnetime.CheckoutWatch)
 ```
 
 Attaching an anonymous handler prints a one-time `local function ... performance
-penalty` warning — expected for a diagnostic session. A rising `max_wait_ms` under
-load while `:worker_timeout` climbs is pool pressure: in-flight protected actions are
-holding connections. Connection counts cannot establish this — the pool opens all
-`pool_size` connections eagerly, and `pg_stat_activity` counts every session on the
-database (other nodes, tooling, autovacuum) — the checkout wait can.
+penalty` warning — expected for a diagnostic session. A rising share of waits over
+50 ms (tune the threshold to your latency budget) while `:worker_timeout` climbs is
+pool pressure: in-flight protected actions are holding connections. Connection counts
+cannot establish this — the pool opens all `pool_size` connections eagerly, and
+`pg_stat_activity` counts every session on the database (other nodes, tooling,
+autovacuum) — the checkout wait can.
 
 The event prefix is your repo module's underscored path: `MyApp.Repo` publishes
 `[:my_app, :repo, :query]`, `MyApp.Accounts.Repo` publishes
