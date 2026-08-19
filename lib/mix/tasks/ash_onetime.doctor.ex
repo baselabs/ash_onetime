@@ -101,9 +101,11 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   end
 
   defp check_ash_floor do
-    case floor_status(running_ash_version()) do
+    version = running_ash_version()
+
+    case floor_status(version) do
       :ok ->
-        Mix.shell().info("[OK]  Ash #{running_ash_version()} >= floor #{@ash_floor}.")
+        Mix.shell().info("[OK]  Ash #{version} >= floor #{@ash_floor}.")
         :ok
 
       {:fail, message} ->
@@ -120,8 +122,14 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   end
 
   defp check_oban_queues do
-    oban_queue_status(Code.ensure_loaded?(Oban), collect_oban_queues())
-    |> render_oban_status()
+    # Short-circuit the queue scan when Oban is absent — collect_oban_queues/0 is wasted
+    # work without an Oban config to find.
+    status =
+      if Code.ensure_loaded?(Oban),
+        do: oban_queue_status(true, collect_oban_queues()),
+        else: oban_queue_status(false, MapSet.new())
+
+    render_oban_status(status)
   end
 
   defp render_oban_status({:ok, :oban_not_loaded}) do
