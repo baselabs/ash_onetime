@@ -18,8 +18,8 @@ if Code.ensure_loaded?(Oban.Worker) do
     @max_abandonment_seconds 2_147_483_647
 
     # Bounded jittered backoff — see CleanupWorker for the rationale. The reaper bounds
-    # steady-state growth of abandoned processing claims; a transient failure should retry
-    # within minutes rather than lengthening the reap cadence.
+    # steady-state growth of abandoned processing claims; its deletes share the store's
+    # contention profile, so the same spaced, jittered retry cadence applies.
     @base_backoff_seconds 30
     @max_backoff_seconds 120
 

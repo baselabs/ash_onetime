@@ -57,7 +57,8 @@ defmodule AshOnetime.Oban.CleanupWorkerTest do
   end
 
   test "backoff is bounded and jittered so transient failures retry within minutes" do
-    # ROADMAP H20: bounded linear+jitter backoff in [30,120]s, not the default exponential.
+    # ROADMAP H20: bounded linear+jitter backoff in [30,120]s — spaced DDL-class retries
+    # with a wide jitter (ADR-0005).
     for attempt <- 1..3 do
       backoff = CleanupWorker.backoff(%Oban.Job{attempt: attempt})
       assert is_integer(backoff)

@@ -72,10 +72,10 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
   end
 
   test "backoff is bounded and jittered within the retention window" do
-    # ROADMAP H20: a discarded PartitionWorker strands a month of retention. The backoff
-    # must retry transient failures within minutes (well inside the monthly window), not
-    # push attempt 3 to hours via the default exponential. Bounded to [30,120] seconds
-    # with jitter so simultaneous failures do not retry in lockstep.
+    # ROADMAP H20: a discarded PartitionWorker strands a month of retention. A failed roll
+    # returns fast under its own lock_timeout, so the backoff spaces retries [30,60)s /
+    # [60,90)s — wide enough for a contending lock holder to finish — with a ~0-30s jitter
+    # so simultaneous failures do not retry in lockstep. Bounded to [30,120] seconds.
     for attempt <- 1..3 do
       backoff = PartitionWorker.backoff(%Oban.Job{attempt: attempt})
       assert is_integer(backoff)

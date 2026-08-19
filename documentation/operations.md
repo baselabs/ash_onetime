@@ -95,11 +95,15 @@ any past-retention payloads that aged out while the roll was down. An exhausted 
 jobs and re-run the forward migration when the worker has been down across a month boundary.
 
 **Worker backoff and discard alert.** Each Oban worker (`CleanupWorker`, `PartitionWorker`,
-`ReapWorker`) declares a bounded, jittered `backoff/1` (30–120 s across the three attempts) rather
-than Oban's default exponential, so a transient failure — lock contention on the unique index, a
-slow query, a momentary checkout pressure — retries within minutes instead of pushing the next
-attempt to hours. A job that exhausts its 3 attempts is discarded; for the retention-critical
-`PartitionWorker` a discard strands a month of bounded retention. **Alert on discarded jobs:**
+`ReapWorker`) declares a bounded, jittered `backoff/1` (`30 × attempt + :rand.uniform(30) − 1`,
+capped at 120 s) instead of Oban's default (`15 + 2^attempt` seconds with 0–10% jitter, which
+spaces attempts 1→3 roughly 36–40 s apart). The custom shape suits DDL-class retries: a
+transient failure — lock contention, a slow query, momentary checkout pressure — retries after
+30–90 s, giving a still-holding contender time to finish (a failed roll returns fast under its
+own 5 s `lock_timeout`); the wide jitter decorrelates simultaneous failures, and the cap bounds
+the delay however far `max_attempts` is raised (ADR-0005). A job that exhausts its 3 attempts
+is discarded; for the retention-critical `PartitionWorker` a discard strands a month of bounded
+retention. **Alert on discarded jobs:**
 
 ```sql
 SELECT queue, attempt, max_attempts, inserted_at, discarded_at

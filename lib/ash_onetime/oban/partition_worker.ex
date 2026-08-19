@@ -20,8 +20,9 @@ if Code.ensure_loaded?(Oban.Worker) do
 
     # Bounded jittered backoff — see CleanupWorker for the rationale. This worker is the
     # retention-safety path: a discarded job strands a month of bounded retention
-    # (operations.md). A bounded backoff retries transient failures within minutes so a
-    # single contention event does not exhaust the 3 attempts and discard the roll.
+    # (operations.md). A failed roll returns fast under its own 5s lock_timeout, and the
+    # [30,60)s / [60,90)s spacing gives a still-holding contender time to finish instead of
+    # re-colliding with it at the default's ~17-21s.
     @base_backoff_seconds 30
     @max_backoff_seconds 120
 

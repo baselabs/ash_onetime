@@ -118,9 +118,10 @@ surfaces are opt-in.
   three fail closed; the distinction is operational triage (pool/lock contention vs network
   partition).
 - **Oban worker backoff + discard alert (H20, ADR-0005):** the three maintenance workers
-  (Cleanup, Partition, Reap) declare a bounded, jittered `backoff/1` (30–120 s) instead of
-  the default exponential, so transient failures retry within the retention window. A
-  documented discard-alert SQL names the operational signal for a stranded partition roll.
+  (Cleanup, Partition, Reap) declare a bounded, jittered `backoff/1` (30 s × attempt plus
+  up-to-30 s jitter, capped at 120 s) instead of the default exponential, spacing DDL-class
+  retries far enough apart that a contending lock holder can finish. A documented
+  discard-alert SQL names the operational signal for a stranded partition roll.
 - **Telemetry default attach handler (H21):** `AshOnetime.Telemetry.attach/0` — an opt-in
   helper that routes the closed event surface into a downstream `:metric` stream for a
   consumer's own aggregator. No `telemetry_metrics` dependency.
