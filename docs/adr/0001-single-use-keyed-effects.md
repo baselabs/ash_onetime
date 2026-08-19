@@ -150,6 +150,45 @@ from `CleanupWorker`'s `:ash_onetime_cleanup`) so forward partition creation —
 safety path — does not compete with routine cleanup for queue slots under saturation. See
 ADR-0005.
 
+## External recovery: the `:absent` trust boundary
+
+*Added 2026-08-19 (D5 amendment). The protocol above trusts a peer-reported absence
+unconditionally; this section records that trust as a deliberate design decision — the
+normative adapter contract lives in `documentation/external-effects.md`.*
+
+A well-formed `:absent` from `recover/3` **authorizes re-execution by design**. The package
+does not — and cannot — second-guess it: absence of evidence is the only negative signal a
+peer can give, and this is precisely how the protocol recovers a caller that died before
+the peer recorded the effect. Fail-closed treatment of an unverifiable peer is impossible
+at the library layer without also fail-closing the dead-caller recovery the protocol exists
+to provide. Every uncertain, exceptional, or malformed recovery outcome is `:unknown`,
+never `:absent` — `:absent` is reserved for authoritative proof.
+
+Safety therefore rests on two **independent** defenses, both required:
+
+1. **The adapter's `recover/3` MUST prove absence** by querying the peer's real idempotency
+   key store. Returning `:absent` without a real query (a stub, a default, a cached
+   negative) is a contract violation, not a library bug.
+2. **The peer MUST enforce idempotency by operation key** so the redundant execute that a
+   lying adapter induces is absorbed.
+
+The worst case is bounded by their independence: an adapter that lies (`:absent` for an
+effect that executed) induces a redundant `execute` under the same operation key — a
+correct peer deduplicates it (one stored result, one effect; proven in
+`test/ash_onetime/external_recovery_test.exs`, "a lying `:absent` recovery re-executes").
+A duplicate side effect requires BOTH the adapter lying AND the peer failing key
+idempotency; the guarantee reduces to the honesty of whichever defense remains. Remove
+either and the design is unsafe: absent adapter proof, `:absent` is a guess; absent peer
+idempotency, the redundant execute is a double-spend.
+
+**Rejected alternatives.** *Treat `:absent` as `:unknown` (fail closed on unverifiable
+peers)* — breaks dead-caller recovery: a peer that legitimately never saw the effect would
+strand the claim in `processing` until the reaper, converting the common recovery case
+into the rarest one. *Library-side verification (re-query the peer before re-executing)* —
+there is no verifiable negative: a second query that returns "not found" is the same
+`:absent` signal, now twice; a peer without a queryable idempotency store cannot be
+verified at all, and such peers are exactly the ones the protocol already rejects.
+
 ## Consequences
 
 - Strategy-specific types, tables, options, and tests remain separate even where their

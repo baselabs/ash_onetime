@@ -93,3 +93,23 @@ release; forward-drift detection through the floating `latest` cell is unaffecte
 Consumers on Ash 3.31.0–3.31.2 must bump to ≥ 3.31.3 — the same intentional,
 security-driven break as the original decision, landing in v0.7.0 with a CHANGELOG
 callout and an upgrading-guide section.
+
+## Amendment — forward-compatible floor posture (added 2026-08-19)
+
+*Transcribes the versioning decision's forward-compat posture (D1, #2, leg 5) next to its
+governing ADR so the compat story lives in the repo, not a GitHub comment.*
+
+How the floor moves after 1.0:
+
+- **Security-driven raises ship as a minor immediately** — never held for a major number —
+  each with an `upgrading.md` entry. The v0.7.0 CVE repair above is the precedent: a floor
+  fix waiting on a major number would hold consumers on an advised Ash.
+- **Non-security raises ship as a minor only when proven:** the CI compatibility matrix
+  (floor cell + floating `latest` cell) green on the new floor, and `upgrading.md`
+  documents the operator step.
+- **Breaking changes to ash_onetime's own DSL/API are major-only.** A floor raise is a
+  constraint tightening, not a break of this kind — the two axes are kept distinct.
+- **A breaking major bump of `ash_postgres` or `spark` is a matrix-extension event
+  first** — add the cell, confirm green, then update the bound (`CONTRIBUTING.md`);
+  adapting to a future Ash 4 follows the same path and only forces an ash_onetime 2.0 if
+  the DSL itself must break.

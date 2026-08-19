@@ -53,10 +53,12 @@ the `ash_onetime_nonce_delete_guard` BEFORE DELETE trigger).
 
 The option is rejected (compile-time `DslError`) on `:idempotency`, whose correct semantics are
 commit-with-effect. Nonce's fail-closed posture is preserved: the `:execute_untracked` arm is
-structurally unreachable for nonce (gated on `:idempotency`), and the three `claim_committed`
-failure shapes (`:checkout_unavailable` / `:dispatched_unknown` / `:disconnected`) all fall to
-the catch-all `decide` and surface as typed store errors. No new error code, no new telemetry
-event.
+structurally unreachable for nonce (gated on `:idempotency`), and every `claim_committed`
+failure shape falls to the catch-all `decide` and surfaces as a typed store error. (Corrected
+2026-08-19: this paragraph originally enumerated three failure shapes — `:checkout_unavailable`
+/ `:dispatched_unknown` / `:disconnected` — and claimed "no new telemetry event". Both the
+enumeration and that claim were overtaken by later work; the live public taxonomy is recorded
+in the amendment below.)
 
 Three surgical store-layer widenings let a committed nonce collision reach `decide` (the
 load-bearing mechanism): the `claim_committed/2` head guard widened to accept
@@ -95,3 +97,32 @@ unchanged; the external-recovery protocol remains the first exception, and this 
   failing closed. Both are documented in the operations guide.
 - The store-layer widenings are recorded here so future maintainers see they are the §11.1 "would
   be declined" clause made executable, not accidental broadening.
+
+## Committed-claim failure taxonomy (added 2026-08-19)
+
+*The failure shapes of the `claim_committed` worker are public operational semantics, not
+internals — they are the classes an operator triages from telemetry. At decision time three
+shapes existed; the surface has since grown, and this amendment records the live taxonomy as
+deliberate public semantics (D5, merging the stale-anchor correction above).*
+
+- `[:ash_onetime, :store_uncertainty]` — the closed allowlist is `:sent`, `:unknown`,
+  `:disconnected`, `:lock_timeout`, `:worker_timeout` (`lib/ash_onetime/telemetry.ex`).
+  Four are emitted by the live path (`emit_uncertainty/2` in `lib/ash_onetime/admission.ex`
+  maps store result reasons to classes): `:worker_timeout` is pool/lock contention (the
+  30 s worker timeout in Consequences above), `:disconnected` is a network partition,
+  `:lock_timeout` a lock-timeout rollback, `:unknown` an unspecified dispatch.
+  `:sent` is allowlisted reserved vocabulary with no emission path today. All fail
+  closed — none can cause a silent re-admit.
+- `[:ash_onetime, :uncertain_exception]` — the diagnosis event, emitted when a
+  committed-claim transaction raises before collapsing to a result class. Metadata is
+  `%{strategy, phase, exception}` with the exception **module** atom only — value-free by
+  the same rule as every other event. Routed by the default `attach/0` router with the
+  rest of the surface.
+- `[:ash_onetime, :untracked_execution]` — `result_class: :checkout_unavailable`, the
+  idempotency-only execute-untracked opt-out (structurally unreachable for nonce, as above).
+
+The three families are closed, documented (`documentation/telemetry.md`), and
+mutation-pinned. The original decision's "no new error code" claim stands — these are
+telemetry result classes, not caller-facing error codes — and every failure still falls to
+the catch-all `decide` and surfaces as a typed store error; what changed is that the
+uncertainty conditions now carry distinguishable public names.
