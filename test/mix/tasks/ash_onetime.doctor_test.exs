@@ -37,6 +37,46 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
     end
   end
 
+  describe "ash floor verdict (pure seam)" do
+    test "fails closed when Ash is not loaded" do
+      assert {:fail, message} = Doctor.floor_status(nil)
+      assert message =~ "Ash is not loaded"
+    end
+
+    test "rejects an Ash version below the floor" do
+      assert {:fail, message} = Doctor.floor_status(Version.parse!("3.29.3"))
+      assert message =~ "below the security floor"
+      assert message =~ "3.29.3"
+    end
+
+    test "accepts an Ash version at or above the floor" do
+      assert :ok = Doctor.floor_status(Version.parse!("3.31.1"))
+    end
+  end
+
+  describe "oban queue advisory verdict (pure seam)" do
+    test "needs no queue check when Oban is not loaded" do
+      assert {:ok, :oban_not_loaded} = Doctor.oban_queue_status(false, MapSet.new())
+    end
+
+    test "warns toward programmatic verification when no queue config is found" do
+      assert {:ok, :no_queue_config} = Doctor.oban_queue_status(true, MapSet.new())
+    end
+
+    test "reports all-clear when the three required queues are configured" do
+      queues = MapSet.new([:ash_onetime_cleanup, :ash_onetime_reap, :ash_onetime_partitions])
+
+      assert {:ok, :all_configured} = Doctor.oban_queue_status(true, queues)
+    end
+
+    test "names exactly the missing queues" do
+      partial = MapSet.new([:ash_onetime_cleanup, :ash_onetime_reap])
+
+      assert {:warn, {:missing, [:ash_onetime_partitions]}} =
+               Doctor.oban_queue_status(true, partial)
+    end
+  end
+
   describe "prefix check" do
     test "passes with a valid prefix" do
       Mix.Task.reenable("ash_onetime.doctor")

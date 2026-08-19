@@ -65,42 +65,104 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
     end
   end
 
+  # Pure verdicts for the Ash floor and the Oban queue advisory, extracted so the reject
+  # path and the not-loaded arm are directly testable — the running application's Ash
+  # version and Oban load state cannot be varied inside the test environment. The
+  # private check functions below only render these results.
+  @doc false
+  def floor_status(nil),
+    do: {:fail, "Ash is not loaded — ash_onetime requires Ash >= #{@ash_floor}."}
+
+  @doc false
+  def floor_status(version) do
+    if Version.compare(version, @ash_floor) == :lt do
+      {:fail,
+       "Ash #{version} is below the security floor #{@ash_floor}. " <>
+         "Upgrade Ash to >= #{@ash_floor} (CVE-justified, see mix.exs ash_requirement/0)."}
+    else
+      :ok
+    end
+  end
+
+  @doc false
+  def oban_queue_status(false, _configured_queues), do: {:ok, :oban_not_loaded}
+
+  @doc false
+  def oban_queue_status(true, configured_queues) do
+    missing = Enum.reject(@required_oban_queues, &MapSet.member?(configured_queues, &1))
+
+    cond do
+      Enum.empty?(configured_queues) -> {:ok, :no_queue_config}
+      missing == [] -> {:ok, :all_configured}
+      true -> {:warn, {:missing, missing}}
+    end
+  end
+
   defp check_ash_floor do
-    case Application.spec(:ash, :vsn) do
-      nil ->
-        Mix.shell().error("[FAIL] Ash is not loaded — ash_onetime requires Ash >= #{@ash_floor}.")
+    case floor_status(running_ash_version()) do
+      :ok ->
+        Mix.shell().info("[OK]  Ash #{running_ash_version()} >= floor #{@ash_floor}.")
+        :ok
+
+      {:fail, message} ->
+        Mix.shell().error("[FAIL] #{message}")
         :fail
+    end
+  end
 
-      vsn ->
-        version = Version.parse!(to_string(vsn))
-
-        cond do
-          Version.compare(version, @ash_floor) == :lt ->
-            Mix.shell().error(
-              "[FAIL] Ash #{version} is below the security floor #{@ash_floor}. " <>
-                "Upgrade Ash to >= #{@ash_floor} (CVE-justified, see mix.exs ash_requirement/0)."
-            )
-
-            :fail
-
-          true ->
-            Mix.shell().info("[OK]  Ash #{version} >= floor #{@ash_floor}.")
-            :ok
-        end
+  defp running_ash_version do
+    case Application.spec(:ash, :vsn) do
+      nil -> nil
+      vsn -> Version.parse!(to_string(vsn))
     end
   end
 
   defp check_oban_queues do
-    if not Code.ensure_loaded?(Oban) do
-      Mix.shell().info(
-        "[OK]  Oban not loaded — optional workers compile out; no queue check needed."
-      )
+    oban_queue_status(Code.ensure_loaded?(Oban), collect_oban_queues())
+    |> render_oban_status()
+  end
 
-      :ok
-    else
-      configured_queues = collect_oban_queues()
-      check_configured_queues(configured_queues)
+  defp render_oban_status({:ok, :oban_not_loaded}) do
+    Mix.shell().info(
+      "[OK]  Oban not loaded — optional workers compile out; no queue check needed."
+    )
+
+    :ok
+  end
+
+  defp render_oban_status({:ok, :no_queue_config}) do
+    Mix.shell().info(
+      "[WARN] Oban is loaded but no queues found in Application config. " <>
+        "If you configure Oban programmatically, verify these three queues exist: " <>
+        "#{inspect(@required_oban_queues)}. " <>
+        "See documentation/operations.md#upgrade-check for the stuck-available SQL."
+    )
+
+    :ok
+  end
+
+  defp render_oban_status({:ok, :all_configured}) do
+    Mix.shell().info(
+      "[OK]  All three required Oban queues configured: #{inspect(@required_oban_queues)}."
+    )
+
+    :ok
+  end
+
+  defp render_oban_status({:warn, {:missing, missing}}) do
+    for queue <- missing do
+      Mix.shell().info(
+        "[WARN] Oban queue #{inspect(queue)} is not in the Application config. " <>
+          "Add it to your Oban `queues:` config or the corresponding worker's jobs will sit unscheduled."
+      )
     end
+
+    Mix.shell().info(
+      "      See documentation/operations.md#upgrade-check for the stuck-available SQL " <>
+        "to detect an unconfigured queue."
+    )
+
+    :ok
   end
 
   defp collect_oban_queues do
@@ -111,61 +173,18 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
     for app <- [:oban | Enum.map(Application.loaded_applications(), &elem(&1, 0))],
         reduce: MapSet.new() do
       acc ->
-        case Application.get_env(app, Oban) do
-          opts when is_list(opts) ->
-            case Keyword.get(opts, :queues) do
-              queues when is_list(queues) ->
-                queues
-                |> Keyword.keys()
-                |> Enum.reduce(acc, &MapSet.put(&2, &1))
-
-              _other ->
-                acc
-            end
-
-          _other ->
-            acc
-        end
+        MapSet.union(acc, configured_queue_keys(Application.get_env(app, Oban)))
     end
   end
 
-  defp check_configured_queues(configured) do
-    missing = Enum.reject(@required_oban_queues, &MapSet.member?(configured, &1))
-
-    cond do
-      Enum.empty?(configured) ->
-        Mix.shell().info(
-          "[WARN] Oban is loaded but no queues found in Application config. " <>
-            "If you configure Oban programmatically, verify these three queues exist: " <>
-            "#{inspect(@required_oban_queues)}. " <>
-            "See documentation/operations.md#upgrade-check for the stuck-available SQL."
-        )
-
-        :ok
-
-      missing == [] ->
-        Mix.shell().info(
-          "[OK]  All three required Oban queues configured: #{inspect(@required_oban_queues)}."
-        )
-
-        :ok
-
-      true ->
-        for queue <- missing do
-          Mix.shell().info(
-            "[WARN] Oban queue #{inspect(queue)} is not in the Application config. " <>
-              "Add it to your Oban `queues:` config or the corresponding worker's jobs will sit unscheduled."
-          )
-        end
-
-        Mix.shell().info(
-          "      See documentation/operations.md#upgrade-check for the stuck-available SQL " <>
-            "to detect an unconfigured queue."
-        )
-
-        :ok
+  defp configured_queue_keys(opts) when is_list(opts) do
+    case Keyword.get(opts, :queues) do
+      queues when is_list(queues) -> MapSet.new(Keyword.keys(queues))
+      _other -> MapSet.new()
     end
   end
+
+  defp configured_queue_keys(_other), do: MapSet.new()
 
   defp check_prefix(nil), do: :ok
 

@@ -230,7 +230,7 @@ defmodule AshOnetime.ArchitectureTest do
       info: 2,
       run: 1
     ],
-    Mix.Tasks.AshOnetime.Doctor => [run: 1],
+    Mix.Tasks.AshOnetime.Doctor => [floor_status: 1, oban_queue_status: 2, run: 1],
     Mix.Tasks.AshOnetime.Prune => [run: 1],
     Mix.Tasks.AshOnetime.Reap => [run: 1],
     Mix.Tasks.AshOnetime.RollPartitions => [run: 1]
