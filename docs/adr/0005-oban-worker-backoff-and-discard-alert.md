@@ -27,8 +27,9 @@ maintenance work on a contended, retention-critical store this is the wrong shap
 - Its jitter is narrow (0–10% incremental), so simultaneous failures from one contention
   event (lock contention on the unique index, a slow query, momentary checkout pressure)
   retry nearly in lockstep and re-contend together.
-- It is uncapped at higher attempt counts (`15 + 2^n` reaches ~17 min by attempt 10), so
-  any future raise of `max_attempts` would silently re-introduce long windows.
+- It grows as `15 + 2^n` with the attempt count (`~17 min` by attempt 10; Oban clamps the
+  exponent only at attempt 20, ≈ 12 days), so any future raise of `max_attempts` would
+  silently re-introduce long windows.
 
 There was also no documented discard alert. An operator whose `PartitionWorker` exhausted its
 attempts had no surfaced signal — the gap would surface only when retention silently degraded
@@ -60,8 +61,9 @@ to hours, which is false at Oban 2.23.1, and derived the rationale from that pre
 - **Wider jitter.** A uniform ~0–30 s spread per delay (vs the default's 0–10%
   incremental) decorrelates simultaneous failures (a contention event hitting a
   scheduled batch) so they do not retry in lockstep and re-contend.
-- **Capped.** The 120 s ceiling bounds the delay however far `max_attempts` is ever
-  raised (the default's `15 + 2^n` reaches ~17 min by attempt 10).
+- **Capped.** The 120 s ceiling bounds the delay however far `max_attempts` is ever raised
+  (the default's `15 + 2^n` reaches ~17 min by attempt 10, bounded only at Oban's
+  attempt-20 clamp).
 - **Three attempts unchanged.** `max_attempts: 3` stays — persistent failures (a misconfigured
   repo, an out-of-range argument) discard fast rather than retrying a known-bad input. The
   `{:discard, :invalid_arguments}` arm is unchanged; the backoff only governs the retryable
@@ -120,8 +122,8 @@ so the worker else-clauses match `%Result{reason: reason}` directly.
 
 - **Keep the default exponential backoff.** Rejected — its ~17–21 s re-collision can arrive
   while a DDL contender still holds (rolls fail fast under their own 5 s `lock_timeout`), its
-  narrow 0–10% jitter re-contends in lockstep, and it is uncapped if `max_attempts` is ever
-  raised.
+  narrow 0–10% jitter re-contends in lockstep, and its `15 + 2^n` growth re-introduces long
+  windows if `max_attempts` is ever raised (bounded only at Oban's attempt-20 clamp).
 - **Raise `max_attempts`.** Rejected — it lengthens the total window and masks persistent failures
   (a misconfigured repo retrying 10 times is worse, not better). The bounded backoff fixes the
   retry-timing problem without changing the attempt count.
