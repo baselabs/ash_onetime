@@ -467,6 +467,15 @@ defmodule AshOnetime.MutationCheck do
       test_name: "rejects the retired and advised Ash releases inside the 0.6.0 published range",
       assertion: "assert {:fail, message_3311} = Doctor.floor_status(Version.parse!(\"3.31.1\"))"
     },
+    "mixpin-ash-floor" => %{
+      path: "mix.exs",
+      original: "@ash_floor \"3.31.3\"",
+      mutated: "@ash_floor \"3.31.0\"",
+      test: "test/mix/ash_pin_validation_test.exs",
+      tag: "mixpin_ash_floor_mutation",
+      test_name: "rejects a below-floor pin at config evaluation",
+      assertion: "assert exit != 0"
+    },
     "operation-hash-select" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:

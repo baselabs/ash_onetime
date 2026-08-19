@@ -59,11 +59,32 @@ defmodule AshOnetime.MixProject do
   # one exact Ash per cell (the floor and each later minor); `latest`/unset keeps the floating
   # requirement so the newest published Ash is exercised. The namespaced var name is extremely
   # unlikely to collide with anything in a consumer's environment, so a published build sees
-  # the full requirement.
+  # the full requirement. A pin is validated at project-config evaluation time: it must be a
+  # version inside the published range, else Mix.raise fires — a publish with an out-of-range
+  # pin exported would otherwise silently freeze a wrong exact requirement into the package.
+  @ash_floor "3.31.3"
+
   defp ash_requirement do
     case System.get_env("ASH_ONETIME_ASH_VERSION") do
-      version when version in [nil, "", "latest"] -> ">= 3.31.3 and < 4.0.0"
-      version -> "== #{version}"
+      version when version in [nil, "", "latest"] -> ">= #{@ash_floor} and < 4.0.0"
+      version -> pinned_ash_requirement(version)
+    end
+  end
+
+  defp pinned_ash_requirement(version) do
+    with {:ok, parsed} <- Version.parse(version),
+         true <- Version.compare(parsed, @ash_floor) != :lt,
+         true <- Version.compare(parsed, "4.0.0") == :lt do
+      "== #{version}"
+    else
+      _ ->
+        Mix.raise("""
+        ASH_ONETIME_ASH_VERSION must be a version inside the published Ash range \
+        >= #{@ash_floor} and < 4.0.0, or "latest"/unset for the floating requirement; \
+        got: #{inspect(version)}. Unset the variable or pin an in-range version — \
+        publishing with an out-of-range pin exported would freeze a wrong exact \
+        requirement into the package.\
+        """)
     end
   end
 
