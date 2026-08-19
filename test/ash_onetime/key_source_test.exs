@@ -3,8 +3,8 @@ defmodule AshOnetime.KeySourceTest do
   use ExUnitProperties
 
   # ROADMAP H32: key_source.normalize/1 enforces 5 security-relevant invariants on the key
-  # (non-empty, <=16 sources, no nesting, unique, valid tags) with no property tests. Property-
-  # test each boundary so a regression in any invariant surfaces directly.
+  # (non-empty, <=16 sources, no nesting, unique, valid tags). The iff-property below covers
+  # all five through one generator so a regression in any invariant surfaces directly.
 
   alias AshOnetime.KeySource
 
