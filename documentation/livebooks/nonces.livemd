@@ -7,7 +7,7 @@ livebook:{"persist_outputs":true}
 ```elixir
 Mix.install(
   [
-    {:ash_onetime, "~> 0.6"},
+    {:ash_onetime, "~> 0.7"},
     {:ash_postgres, "~> 2.11"},
     {:kino, "~> 0.14", only: :dev}
   ],
