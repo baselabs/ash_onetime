@@ -458,6 +458,15 @@ defmodule AshOnetime.MutationCheck do
       test_name: "cleanup locks an empty partition before deciding to drop it",
       assertion: "payload_partitions: 0"
     },
+    "doctor-ash-floor" => %{
+      path: "lib/mix/tasks/ash_onetime.doctor.ex",
+      original: "@ash_floor Version.parse!(\"3.31.3\")",
+      mutated: "@ash_floor Version.parse!(\"3.31.1\")",
+      test: "test/mix/tasks/ash_onetime.doctor_test.exs",
+      tag: "doctor_ash_floor_mutation",
+      test_name: "rejects the retired and advised Ash releases inside the 0.6.0 published range",
+      assertion: "assert {:fail, message_3311} = Doctor.floor_status(Version.parse!(\"3.31.1\"))"
+    },
     "operation-hash-select" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:

@@ -4,10 +4,11 @@ Date: 2026-08-09
 
 ## Status
 
-Accepted. Supersedes the `>= 3.29.3` floor documented in the v0.1.x/v0.2.0 README and `mix.exs`
+Accepted (amended 2026-08-18 — floor raised to 3.31.3; see the amendment at the end).
+Supersedes the `>= 3.29.3` floor documented in the v0.1.x/v0.2.0 README and `mix.exs`
 (not a prior ADR — the floor was an inline documented constraint, not an architecture decision).
 Tightens the published dependency requirement from `>= 3.29.3 and < 4.0.0` to
-`>= 3.31.1 and < 4.0.0`.
+`>= 3.31.1 and < 4.0.0` (and, by the amendment below, to `>= 3.31.3 and < 4.0.0`).
 
 ## Context
 
@@ -70,3 +71,25 @@ census skew in the same release window).
   is an Ash extension.
 - **Wait for Ash 4.0 to raise the floor:** rejected. The advisories are live now; waiting
   leaves consumers exposed for the 3.x→4.0 window of unknown length.
+
+## Amendment — floor raised to 3.31.3 (2026-08-18, v0.7.0)
+
+After 3.31.1 shipped, `EEF-CVE-2026-67579` (filter expression injection via a forged
+keyset pagination cursor; HIGH, CVSS 7.5, CWE-89/502, no application-side workaround —
+an unauthenticated forged `after`/`before` cursor reaches SQL injection on AshPostgres or
+code execution on the ETS/Simple data layers) was published against Ash: it affects
+`>= 1.17.0` and is fixed only in 3.31.3. Hex additionally retired 3.31.1 ("breaking
+change"). The published `>= 3.31.1 and < 4.0.0` requirement therefore let consumers
+resolve a retired or advised Ash — the exact defect this ADR exists to prevent, and the
+state `mix hex.audit` red-barred on the locked 3.31.2.
+
+The decision rule is unchanged — the floor is the lowest Ash version with no known
+unpatched advisory — so this is an amendment, not a supersession. The complete OSV
+inventory for hex `ash` (11 advisories) has its maximum fixed-version at 3.31.3, and
+3.31.3 is not retired. The requirement becomes `>= 3.31.3 and < 4.0.0`, the committed
+lock moves to 3.31.3, and the CI matrix floor cell moves to 3.31.3. The matrix
+transiently collapses (floor cell == `latest` cell == 3.31.3) until the next Ash
+release; forward-drift detection through the floating `latest` cell is unaffected.
+Consumers on Ash 3.31.0–3.31.2 must bump to ≥ 3.31.3 — the same intentional,
+security-driven break as the original decision, landing in v0.7.0 with a CHANGELOG
+callout and an upgrading-guide section.

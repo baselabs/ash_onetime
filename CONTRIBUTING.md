@@ -59,12 +59,12 @@ dependencies, or project-owned version suffixes in durable identifiers.
 ## Dependency compatibility
 
 The published `mix.exs` bounds (`ash_postgres ~> 2.11`, `spark ~> 2.7`, and the Ash floor
-`>= 3.31.1`) allow forward drift within their major lines. They are NOT the primary guard
+`>= 3.31.3`) allow forward drift within their major lines. They are NOT the primary guard
 against a transitive semantic shift — a future `ash_postgres` 2.x or `spark` 2.x minor that
 changes transaction-visibility semantics the fail-closed logic depends on would still satisfy
 the bound. The real guard is the **CI compatibility matrix** in `.github/workflows/ci.yml`:
 
-- the declared Ash floor (`3.31.1`, CVE-justified per ADR-0004);
+- the declared Ash floor (`3.31.3`, CVE-justified per ADR-0004);
 - a floating `latest` cell that resolves the newest published Ash 3.x on every run via
   `deps.unlock ash` / `deps.update ash` and re-runs the full gate battery against it.
 

@@ -23,8 +23,8 @@ jobs:
       fail-fast: false
       matrix:
         ash:
-          - "3.31.1" # declared floor (EEF-CVE-2026-55736/70395/69659 all fixed here)
-          - "latest" # floating >= 3.31.1, < 4.0.0 — newest published Ash 3.x
+          - "3.31.3" # declared floor (EEF-CVE-2026-67579 fixed only here; 55736/70395/69659 fixed at or below it)
+          - "latest" # floating >= 3.31.3, < 4.0.0 — newest published Ash 3.x
 
     services:
       postgres:
@@ -64,7 +64,7 @@ jobs:
 
       - name: Resolve the matrix Ash version
         # `== X` cells resolve to exactly X; the floating `latest` cell resolves to the
-        # newest Ash satisfying `>= 3.31.1 and < 4.0.0`. Unlock first so the committed
+        # newest Ash satisfying `>= 3.31.3 and < 4.0.0`. Unlock first so the committed
         # lock's floor pin never holds a cell back.
         run: |
           mix deps.unlock ash
@@ -83,7 +83,8 @@ jobs:
       - run: mix docs --warnings-as-errors
       - run: mix hex.build
 
-  # Version-independent release gates from CONTRIBUTING.md, run once on the floor.
+  # Version-independent release gates from CONTRIBUTING.md, run once against the
+  # committed lock (the floating requirement — no ASH_ONETIME_ASH_VERSION pin here).
   release-checks:
     name: "Release gates"
     runs-on: ubuntu-latest
