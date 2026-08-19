@@ -246,9 +246,11 @@ FROM ":prefix".ash_onetime_response_payloads_default;
 ```
 
 The `_default` partition is created at install and always exists — counting partitions
-cannot detect a lapsed window. A non-zero row count means payloads are routing to
-`_default` (the catch-all), i.e. the forward window has lapsed; the forward migration
-below drains them.
+cannot detect a lapsed window. A non-zero row count means payloads have routed to
+`_default` because the forward window lapsed. Re-run after the forward migration below:
+its drain removes past-retention payloads, while within-retention rows remain until
+their retention passes — a shrinking or steady count means inserts are routing to named
+partitions again; a growing count means the window is still lapsed.
 
 **Remediate.** A discarded `PartitionWorker` triggers the idempotent forward migration, which
 both creates the elapsed+forward partitions AND drains past-retention payloads stranded in
@@ -289,8 +291,10 @@ end
 {:ok, _} = Agent.start_link(fn -> %{} end, name: AshOnetime.UncertaintyTally)
 :ok = :telemetry.attach("ash-onetime-uncertainty-tally", [:ash_onetime, :store_uncertainty], handler, nil)
 
-# under load, then read the distribution:
+# under load, then read the distribution and clean up:
 Agent.get(AshOnetime.UncertaintyTally, & &1)
+:ok = :telemetry.detach("ash-onetime-uncertainty-tally")
+Agent.stop(AshOnetime.UncertaintyTally)
 ```
 
 `result_class` is `:sent`, `:unknown`, `:disconnected`, `:lock_timeout`, or
@@ -308,29 +312,37 @@ GROUP BY 1, 2, 3
 ORDER BY count(*) DESC;
 ```
 
-Compare open connections against the configured pool:
-
-```sql
-SELECT count(*) AS open_connections
-FROM pg_stat_activity
-WHERE datname = current_database();
-```
-
-At or near your repo's `pool_size` while `:worker_timeout` climbs, the pool is
-saturated — in-flight protected actions are holding connections. To watch checkout
-queueing over time, attach to your repo's query event and read `:queue_time` (the
-measurement is present only when the checkout actually waited):
+Watch checkout queueing on the repo's query event — `:queue_time` is measured on every
+pooled checkout (zero when the checkout was instant; it is absent only when the
+connection was already held, e.g. inside a transaction), so aggregate it and read the
+maximum, in IEx attached to the running release:
 
 ```elixir
 handler = fn _event, measurements, _metadata, _config ->
   if queue_time = measurements[:queue_time] do
-    IO.puts("checkout waited #{System.convert_time_unit(queue_time, :native, :millisecond)}ms")
+    ms = System.convert_time_unit(queue_time, :native, :millisecond)
+
+    Agent.update(AshOnetime.CheckoutWatch, fn %{checkouts: c, max_wait_ms: m} ->
+      %{checkouts: c + 1, max_wait_ms: max(m, ms)}
+    end)
   end
 end
 
+{:ok, _} = Agent.start_link(fn -> %{checkouts: 0, max_wait_ms: 0} end, name: AshOnetime.CheckoutWatch)
 :ok = :telemetry.attach("checkout-queue-watch", [:my_app, :repo, :query], handler, nil)
-# exercise the DPoP-protected endpoint; sustained waits under load are pool pressure
+
+# exercise the DPoP-protected endpoint, then read the aggregates and clean up:
+Agent.get(AshOnetime.CheckoutWatch, & &1)
+:ok = :telemetry.detach("checkout-queue-watch")
+Agent.stop(AshOnetime.CheckoutWatch)
 ```
+
+Attaching an anonymous handler prints a one-time `local function ... performance
+penalty` warning — expected for a diagnostic session. A rising `max_wait_ms` under
+load while `:worker_timeout` climbs is pool pressure: in-flight protected actions are
+holding connections. Connection counts cannot establish this — the pool opens all
+`pool_size` connections eagerly, and `pg_stat_activity` counts every session on the
+database (other nodes, tooling, autovacuum) — the checkout wait can.
 
 The event prefix is your repo module's underscored path: `MyApp.Repo` publishes
 `[:my_app, :repo, :query]`, `MyApp.Accounts.Repo` publishes
