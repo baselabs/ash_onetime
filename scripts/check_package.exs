@@ -35,6 +35,7 @@ defmodule AshOnetime.PackageCheck do
       File.mkdir_p!(package)
       assert_outer!(archive)
       extract!(archive, outer, false)
+      assert_floating_ash_requirement!(Path.join(outer, "metadata.config"))
       contents = Path.join(outer, "contents.tar.gz")
       entries = table!(contents, true) |> file_entries()
       expected = source_entries()
@@ -215,6 +216,24 @@ defmodule AshOnetime.PackageCheck do
 
   defp assert_equal!(value, value, _message), do: :ok
   defp assert_equal!(_actual, _expected, message), do: raise(message)
+
+  # The published ash requirement is security surface (D2): a release built with an exact
+  # ASH_ONETIME_ASH_VERSION pin exported freezes "== x.y.z" into the hex metadata in place
+  # of the floating range. mix.exs rejects out-of-range pins at config evaluation; this
+  # asserts the FROZEN METADATA of the archive the battery is about to approve actually
+  # carries the floating requirement, whatever the current shell holds.
+  @floating_ash_requirement ">= 3.31.3 and < 4.0.0"
+
+  defp assert_floating_ash_requirement!(metadata_path) do
+    metadata = File.read!(metadata_path)
+
+    unless metadata =~ "<<\"#{@floating_ash_requirement}\">>" do
+      raise "archive ash requirement is not the floating #{@floating_ash_requirement} — the " <>
+              "release was built with ASH_ONETIME_ASH_VERSION exported (frozen exact pin); " <>
+              "rebuild with the variable unset"
+    end
+  end
+
   defp digest_file(path), do: path |> File.read!() |> then(&:crypto.hash(:sha256, &1))
   defp unique, do: System.unique_integer([:positive, :monotonic])
 end
