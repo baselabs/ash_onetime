@@ -13,9 +13,13 @@ env:
   DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
 
 jobs:
-  # Compatibility matrix: the full per-version gate battery across the supported
-  # Ash range — the declared floor, each intermediate minor, and a floating
-  # `latest` cell that auto-exercises the newest published Ash on every run.
+  # Compatibility matrix: the per-cell gate battery (format, compile
+  # warnings-as-errors, hex.audit, deps.audit, test, credo --strict, dialyzer,
+  # docs --warnings-as-errors, hex.build) across the supported Ash range —
+  # the declared floor plus a floating `latest` cell that auto-exercises the
+  # newest published Ash on every run. The release battery (mutation matrix,
+  # unpacked-package check, DSL cheat-sheet freshness) is deliberately not
+  # per-cell: it runs once in the release-checks job against the committed lock.
   compat:
     name: "Ash ${{ matrix.ash }}"
     runs-on: ubuntu-latest

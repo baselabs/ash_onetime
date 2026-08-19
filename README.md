@@ -150,8 +150,13 @@ lookup disclosing secret lookup keys, fixed in 3.31.1), EEF-CVE-2026-69659
 3.31.1), and EEF-CVE-2026-67579 (filter expression injection via a forged
 keyset pagination cursor — HIGH, fixed only in 3.31.3) all affect Ash below
 3.31.3 — a security library must not admit a vulnerable floor. Compatibility
-across the range is verified by the full gate battery — including
-`mix hex.audit` — run against the 3.31.3 floor and the latest published Ash 3.x.
+across the range is verified per matrix cell by the standard gate battery — format,
+compile with warnings-as-errors, `mix hex.audit` (Hex security advisories),
+`mix deps.audit`, the full test suite, `mix credo --strict`, `mix dialyzer`,
+`mix docs --warnings-as-errors`, and `mix hex.build` — run against the 3.31.3 floor
+and the latest published Ash 3.x. The release battery (mutation matrix,
+unpacked-package check, DSL cheat-sheet freshness) runs once per push in the
+`release-checks` job against the committed lock, not per cell.
 `.github/workflows/ci.yml` is configured to re-run this matrix on every push and
 pull request. The pinned development runtime is Elixir 1.20.2 / Erlang/OTP 29
 (`.tool-versions`).

@@ -66,7 +66,13 @@ the bound. The real guard is the **CI compatibility matrix** in `.github/workflo
 
 - the declared Ash floor (`3.31.3`, CVE-justified per ADR-0004);
 - a floating `latest` cell that resolves the newest published Ash 3.x on every run via
-  `deps.unlock ash` / `deps.update ash` and re-runs the full gate battery against it.
+  `deps.unlock ash` / `deps.update ash` and re-runs the per-cell gate battery against it
+  (format, compile warnings-as-errors, hex.audit, deps.audit, test, credo --strict,
+  dialyzer, docs --warnings-as-errors, hex.build).
+
+The release battery (mutation matrix, unpacked-package check, DSL cheat-sheet freshness)
+is deliberately lock-pinned: it runs once in the `release-checks` job against the
+committed lock, not per matrix cell.
 
 Forward drift that breaks the fail-closed surface surfaces as a red `latest` cell, not as a
 bound violation. When updating a dependency bound, ensure the matrix still covers the new
