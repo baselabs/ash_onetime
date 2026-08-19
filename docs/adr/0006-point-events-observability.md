@@ -70,7 +70,9 @@ value is that it cannot be misconfigured into one.
   measurements. `documentation/telemetry.md` is the contract; drift between it and the
   emitters is a contract defect, not a docs nit.
 - Handlers attach by event name and branch on `result_class` — an atom that is always
-  present; a handler indexing into value-bearing fields would get `nil` by design.
+  present on the 12 admission events; the diagnosis event carries
+  `%{strategy, phase, exception}` instead, and its handlers branch on `phase` and the
+  exception module. A handler indexing into value-bearing fields gets `nil` by design.
 - Operational alerting (admission failures, store uncertainty, outcome-unknown recovery,
   untracked executions) is fully served by point events; nothing observable is lost by
   the absence of spans.
