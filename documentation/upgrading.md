@@ -138,6 +138,23 @@ surfaces are opt-in.
 - **CI-matrix-asserted compatibility documented (H34):** CONTRIBUTING names the CI matrix as
   the guard against transitive semantic drift (not the dep bounds).
 
+## Ash floor raised to 3.31.3 (v0.7.0, security-driven)
+
+v0.7.0 tightens the Ash requirement from `>= 3.31.1 and < 4.0.0` to
+`>= 3.31.3 and < 4.0.0`. EEF-CVE-2026-67579 (filter expression injection via a forged
+keyset pagination cursor — HIGH, CVSS 7.5, unauthenticated, no application-side
+workaround) affects Ash below 3.31.3 and is fixed only in 3.31.3; Hex additionally
+retired 3.31.1 ("breaking change"). A security library must not admit a vulnerable
+floor. **Bump Ash to ≥ 3.31.3**, then bump `ash_onetime`:
+
+```elixir
+{:ash_onetime, "~> 0.7"}
+```
+
+See ADR-0004 (Security-driven Ash floor, amended 2026-08-18). The CI compatibility matrix
+moves from `[3.31.1, latest]` to `[3.31.3, latest]` (transiently both cells resolve to
+3.31.3 until the next Ash release).
+
 ## Ash floor raised to 3.31.1 (v0.3.0, security-driven)
 
 v0.3.0 tightens the Ash requirement from `>= 3.29.3 and < 4.0.0` to

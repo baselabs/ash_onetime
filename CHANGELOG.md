@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## v0.7.0 — 2026-08-18
+
+Security release: raises the Ash floor to 3.31.3 after EEF-CVE-2026-67579. **Breaking
+dependency change** — consumers on Ash 3.29.3–3.31.2 must bump Ash to ≥ 3.31.3 (the
+library is pre-1.0, so the minor version carries the break per the documented convention).
+
+- **Ash floor raised to 3.31.3** (from 3.31.1). EEF-CVE-2026-67579 (filter expression
+  injection via a forged keyset pagination cursor — HIGH, CVSS 7.5, unauthenticated, no
+  application-side workaround) affects Ash below 3.31.3 and is fixed only in 3.31.3; Hex
+  additionally retired 3.31.1. The published `>= 3.31.1` requirement let consumers resolve
+  a retired or advised Ash, and `mix hex.audit` — a required gate — failed on the 3.31.2
+  lock. The floor was derived from the complete OSV advisory inventory for hex `ash`
+  (11 advisories; maximum fixed-version 3.31.3; 3.31.3 not retired), not from the absence
+  of a Hex label. See ADR-0004 (Security-driven Ash floor, amended). The CI matrix moves
+  from `[3.31.1, latest]` to `[3.31.3, latest]` — transiently both cells resolve to 3.31.3
+  until the next Ash release.
+- **Doctor floor guard directly tested:** the doctor's Ash-floor verdict is extracted as a
+  pure `floor_status/1` seam with reject tests for the retired 3.31.1 and the advised
+  3.31.2 (red-proven before the floor bump), plus a mutation-battery entry
+  (`doctor-ash-floor`) that re-proves the guard red-capable on every release run. The Oban
+  queue advisory verdict is likewise a pure seam (`oban_queue_status/2`) with both arms —
+  Oban loaded and not loaded — covered. Doctor output is unchanged; the three strict-Credo
+  findings that red-barred the latest-Ash CI cell are fixed.
+- **Lock:** `ash` 3.31.2 → 3.31.3 (with `ecto` 3.14.2 and `reactor` 1.0.6 riding the
+  resolution).
+
 ## v0.6.0 — 2026-08-10
 
 Minor bump: two additive enhancements (new Mix task + Phoenix guide) plus internal
