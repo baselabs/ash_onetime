@@ -14,9 +14,14 @@ defmodule AshOnetime.Store.PartitionTest do
 
   test "hash parents use PostgreSQL-compatible primary keys", %{prefix: prefix} do
     for table <- ["ash_onetime_idempotency_claims", "ash_onetime_nonce_claims"] do
-      assert constraint_columns(prefix, table, "p") == ["operation_hash", "id"]
+      assert constraint_columns(prefix, table, "p") == [
+               "operation_hash",
+               "logical_partition",
+               "id"
+             ]
 
       assert constraint_columns(prefix, table, "u") == [
+               "logical_partition",
                "operation_hash",
                "scope_hash",
                "key_hash"
@@ -112,7 +117,6 @@ defmodule AshOnetime.Store.PartitionTest do
 
     @tag partitions_created_telemetry_mutation: true
     test "emits a :cleanup :partitions_created telemetry event on a roll", %{
-      prefix: prefix,
       target: target
     } do
       test_pid = self()

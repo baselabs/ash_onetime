@@ -66,6 +66,7 @@ defmodule AshOnetime.Store.ClaimTest do
       claim = %Claim{
         strategy: :idempotency,
         id: Ecto.UUID.generate(),
+        logical_partition: "global",
         operation_hash: :crypto.hash(:sha256, "op"),
         scope_hash: :crypto.hash(:sha256, "scope"),
         key_hash: :crypto.hash(:sha256, "key"),
@@ -132,6 +133,7 @@ defmodule AshOnetime.Store.ClaimTest do
     %Claim{
       strategy: :idempotency,
       id: Ecto.UUID.generate(),
+      logical_partition: "global",
       operation_hash: :crypto.hash(:sha256, "op"),
       scope_hash: :crypto.hash(:sha256, "scope"),
       key_hash: :crypto.hash(:sha256, "key"),

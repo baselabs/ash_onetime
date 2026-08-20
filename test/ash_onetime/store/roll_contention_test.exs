@@ -102,7 +102,12 @@ defmodule AshOnetime.Store.RollContentionTest do
   # roll_advisory_key/1 reads only the prefix; repo_module/dynamic_repo satisfy the Target
   # enforce_keys and are otherwise unused on this path.
   defp advisory_target(prefix),
-    do: %Postgres.Target{repo_module: Repo, dynamic_repo: Repo, prefix: prefix}
+    do: %Postgres.Target{
+      repo_module: Repo,
+      dynamic_repo: Repo,
+      prefix: prefix,
+      logical_partition: "global"
+    }
 
   defp with_owner(callback) do
     owner = Sandbox.start_owner!(Repo, shared: false, sandbox: false)

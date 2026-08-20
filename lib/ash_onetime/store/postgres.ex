@@ -11,26 +11,37 @@ defmodule AshOnetime.Store.Postgres do
   @max_retention_seconds 2_147_483_647
   @max_codec_bytes 128
   @committed_claim_timeout 30_000
+  @default_logical_partition "global"
+  @max_logical_partition_bytes 255
   @phase_key {__MODULE__, :admission_phase}
-  @logical_key_predicate "operation_hash = $1 AND scope_hash = $2 AND key_hash = $3"
-  @completion_key_predicate "operation_hash = $4 AND scope_hash = $5 AND key_hash = $6"
+  @logical_key_predicate "logical_partition = $1 AND operation_hash = $2 AND scope_hash = $3 AND key_hash = $4"
+  @completion_key_predicate "logical_partition = $4 AND operation_hash = $5 AND scope_hash = $6 AND key_hash = $7"
 
   defmodule Target do
     @moduledoc false
 
-    @enforce_keys [:repo_module, :dynamic_repo]
-    defstruct [:repo_module, :dynamic_repo, :prefix, context_multitenant?: false]
+    @enforce_keys [:repo_module, :dynamic_repo, :logical_partition]
+    defstruct [
+      :repo_module,
+      :dynamic_repo,
+      :prefix,
+      :logical_partition,
+      context_multitenant?: false
+    ]
 
     @type t :: %__MODULE__{
             repo_module: Ecto.Repo.t(),
             dynamic_repo: atom() | pid(),
             prefix: binary() | nil,
+            logical_partition: binary(),
             context_multitenant?: boolean()
           }
   end
 
-  @spec for_repo(Ecto.Repo.t(), binary() | nil) :: Target.t()
-  def for_repo(repo, prefix \\ nil) when is_atom(repo) do
+  @spec for_repo(Ecto.Repo.t(), binary() | nil, keyword()) :: Target.t()
+  def for_repo(repo, prefix \\ nil, options \\ [])
+
+  def for_repo(repo, prefix, options) when is_atom(repo) and is_list(options) do
     # mutation sentinel: for-repo-prefix-bound
     # target/2 already fails closed on an over-long context-tenant prefix. This is the parallel
     # construction path — the shared entry every ops surface uses (reap/prune/cleanup tasks and
@@ -43,7 +54,19 @@ defmodule AshOnetime.Store.Postgres do
               "PostgreSQL silently truncates identifiers at NAMEDATALEN (63 bytes)"
     end
 
-    %Target{repo_module: repo, dynamic_repo: repo.get_dynamic_repo(), prefix: prefix}
+    logical_partition = Keyword.get(options, :logical_partition, @default_logical_partition)
+
+    unless valid_logical_partition?(logical_partition) do
+      raise ArgumentError,
+            "ash_onetime logical partition must be a valid 1..#{@max_logical_partition_bytes}-byte UTF-8 binary"
+    end
+
+    %Target{
+      repo_module: repo,
+      dynamic_repo: repo.get_dynamic_repo(),
+      prefix: prefix,
+      logical_partition: logical_partition
+    }
   end
 
   @spec target(Ash.Resource.t(), keyword()) :: {:ok, Target.t()} | Result.t()
@@ -51,6 +74,7 @@ defmodule AshOnetime.Store.Postgres do
     repo = AshPostgres.DataLayer.Info.repo(resource, :mutate)
     dynamic_repo = data_layer_repo(options) || repo.get_dynamic_repo()
     context_multitenant? = Ash.Resource.Info.multitenancy_strategy(resource) == :context
+    logical_partition = Keyword.get(options, :logical_partition, @default_logical_partition)
 
     prefix =
       if context_multitenant? do
@@ -59,7 +83,8 @@ defmodule AshOnetime.Store.Postgres do
         AshPostgres.DataLayer.Info.schema(resource)
       end
 
-    if context_multitenant? and not valid_prefix?(prefix) do
+    if (context_multitenant? and not valid_prefix?(prefix)) or
+         not valid_logical_partition?(logical_partition) do
       Result.failure(:missing_prefix, :not_started, :not_applicable)
     else
       {:ok,
@@ -67,6 +92,7 @@ defmodule AshOnetime.Store.Postgres do
          repo_module: repo,
          dynamic_repo: dynamic_repo,
          prefix: prefix,
+         logical_partition: logical_partition,
          context_multitenant?: context_multitenant?
        }}
     end
@@ -381,7 +407,7 @@ defmodule AshOnetime.Store.Postgres do
     do: Result.success(:admitted, claim: claim)
 
   defp resolve_insert(target, request, :conflict, attempt) do
-    case select_claim(target, request.strategy, logical_key(request)) do
+    case select_claim(target, request.strategy, logical_key(target, request)) do
       {:ok, claim} ->
         collision_result(target, claim)
 
@@ -430,14 +456,14 @@ defmodule AshOnetime.Store.Postgres do
   defp insert_claim(target, %Request{strategy: :idempotency} = request, _cleanup_after) do
     sql = """
     INSERT INTO #{relation(target, "ash_onetime_idempotency_claims")}
-      (id, operation_hash, scope_hash, key_hash, fingerprint, state,
+      (id, logical_partition, operation_hash, scope_hash, key_hash, fingerprint, state,
        admitted_at, retain_until, inserted_at)
-    VALUES ($1::uuid, $2, $3, $4, $5, 'processing',
+    VALUES ($1::uuid, $2, $3, $4, $5, $6, 'processing',
             transaction_timestamp(),
-            transaction_timestamp() + ($6::bigint * interval '1 second'),
+            transaction_timestamp() + ($7::bigint * interval '1 second'),
             transaction_timestamp())
     ON CONFLICT DO NOTHING
-    RETURNING id, operation_hash, scope_hash, key_hash, fingerprint, state,
+    RETURNING id, logical_partition, operation_hash, scope_hash, key_hash, fingerprint, state,
               response_partition, response_codec, response_digest,
               admitted_at, retain_until, inserted_at
     """
@@ -447,6 +473,7 @@ defmodule AshOnetime.Store.Postgres do
       sql,
       [
         dump_uuid(request.id),
+        target.logical_partition,
         request.operation_hash,
         request.scope_hash,
         request.key_hash,
@@ -464,17 +491,17 @@ defmodule AshOnetime.Store.Postgres do
        ) do
     sql = """
     INSERT INTO #{relation(target, "ash_onetime_nonce_claims")}
-      (id, operation_hash, scope_hash, key_hash, issued_at, expires_at, verifier_id,
+      (id, logical_partition, operation_hash, scope_hash, key_hash, issued_at, expires_at, verifier_id,
        admitted_at, retain_until, inserted_at)
-    VALUES ($1::uuid, $2, $3, $4, $5, $6, $7,
+    VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8,
             transaction_timestamp(),
             GREATEST(
-              $8::timestamptz,
+              $9::timestamptz,
               transaction_timestamp() + (#{AshOnetime.Window.cleanup_skew_margin_seconds()} * interval '1 second')
             ),
             transaction_timestamp())
     ON CONFLICT DO NOTHING
-    RETURNING id, operation_hash, scope_hash, key_hash, issued_at, expires_at, verifier_id,
+    RETURNING id, logical_partition, operation_hash, scope_hash, key_hash, issued_at, expires_at, verifier_id,
               admitted_at, retain_until, inserted_at
     """
 
@@ -483,6 +510,7 @@ defmodule AshOnetime.Store.Postgres do
       sql,
       [
         dump_uuid(request.id),
+        target.logical_partition,
         request.operation_hash,
         request.scope_hash,
         request.key_hash,
@@ -504,18 +532,22 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  defp select_claim(target, strategy, {operation_hash, scope_hash, key_hash}) do
+  defp select_claim(
+         target,
+         strategy,
+         {logical_partition, operation_hash, scope_hash, key_hash}
+       ) do
     {table, columns} =
       case strategy do
         :idempotency ->
           {"ash_onetime_idempotency_claims",
-           "id, operation_hash, scope_hash, key_hash, fingerprint, state, " <>
+           "id, logical_partition, operation_hash, scope_hash, key_hash, fingerprint, state, " <>
              "response_partition, response_codec, response_digest, " <>
              "admitted_at, retain_until, inserted_at"}
 
         :one_time_nonce ->
           {"ash_onetime_nonce_claims",
-           "id, operation_hash, scope_hash, key_hash, issued_at, expires_at, verifier_id, " <>
+           "id, logical_partition, operation_hash, scope_hash, key_hash, issued_at, expires_at, verifier_id, " <>
              "admitted_at, retain_until, inserted_at"}
       end
 
@@ -526,7 +558,7 @@ defmodule AshOnetime.Store.Postgres do
     FOR UPDATE
     """
 
-    case dispatched_query(target, sql, [operation_hash, scope_hash, key_hash]) do
+    case dispatched_query(target, sql, [logical_partition, operation_hash, scope_hash, key_hash]) do
       {:ok, %{num_rows: 1, rows: [row]}} -> {:ok, decode_claim(strategy, row)}
       {:ok, %{num_rows: 0}} -> {:error, :missing}
       {:ok, _result} -> {:error, Result.failure(:store_invariant, :sent, :open)}
@@ -537,13 +569,18 @@ defmodule AshOnetime.Store.Postgres do
   defp insert_payload(target, partition_date, id, encoded_response) do
     sql = """
     INSERT INTO #{relation(target, "ash_onetime_response_payloads")}
-      (partition_date, claim_id, encoded_response)
-    VALUES ($1, $2::uuid, $3)
+      (logical_partition, partition_date, claim_id, encoded_response)
+    VALUES ($1, $2, $3::uuid, $4)
     ON CONFLICT DO NOTHING
     RETURNING claim_id
     """
 
-    case dispatched_query(target, sql, [partition_date, dump_uuid(id), encoded_response]) do
+    case dispatched_query(target, sql, [
+           target.logical_partition,
+           partition_date,
+           dump_uuid(id),
+           encoded_response
+         ]) do
       {:ok, %{num_rows: 1}} -> :ok
       {:ok, _result} -> {:error, Result.failure(:store_invariant, :sent, :open)}
       {:error, %Result{} = result} -> {:error, result}
@@ -562,18 +599,18 @@ defmodule AshOnetime.Store.Postgres do
     SET state = 'complete', response_partition = $1, response_codec = $2,
         response_digest = $3#{retention_update}
     WHERE #{@completion_key_predicate}
-      AND id = $7::uuid AND state = 'processing'
+      AND id = $8::uuid AND state = 'processing'
       AND (
         SELECT count(*)
         FROM #{relation(target, "ash_onetime_response_payloads")}
-        WHERE claim_id = $7::uuid
+        WHERE logical_partition = $4 AND claim_id = $8::uuid
       ) = 1
       AND EXISTS (
         SELECT 1
         FROM #{relation(target, "ash_onetime_response_payloads")}
-        WHERE claim_id = $7::uuid AND partition_date = $1
+        WHERE logical_partition = $4 AND claim_id = $8::uuid AND partition_date = $1
       )
-    RETURNING id, operation_hash, scope_hash, key_hash, fingerprint, state,
+    RETURNING id, logical_partition, operation_hash, scope_hash, key_hash, fingerprint, state,
               response_partition, response_codec, response_digest,
               admitted_at, retain_until, inserted_at
     """
@@ -607,10 +644,14 @@ defmodule AshOnetime.Store.Postgres do
     sql = """
     SELECT partition_date, encoded_response
     FROM #{relation(target, "ash_onetime_response_payloads")}
-    WHERE claim_id = $1::uuid AND partition_date = $2
+    WHERE logical_partition = $1 AND claim_id = $2::uuid AND partition_date = $3
     """
 
-    case dispatched_query(target, sql, [dump_uuid(claim.id), claim.response_partition]) do
+    case dispatched_query(target, sql, [
+           claim.logical_partition,
+           dump_uuid(claim.id),
+           claim.response_partition
+         ]) do
       {:ok, %{num_rows: 1, rows: [[partition_date, payload]]}}
       when partition_date == claim.response_partition and is_binary(payload) and
              byte_size(payload) <= @payload_ceiling ->
@@ -1219,6 +1260,7 @@ defmodule AshOnetime.Store.Postgres do
 
   defp decode_claim(:idempotency, [
          id,
+         logical_partition,
          operation_hash,
          scope_hash,
          key_hash,
@@ -1234,6 +1276,7 @@ defmodule AshOnetime.Store.Postgres do
     %Claim{
       strategy: :idempotency,
       id: decode_uuid(id),
+      logical_partition: logical_partition,
       operation_hash: operation_hash,
       scope_hash: scope_hash,
       key_hash: key_hash,
@@ -1250,6 +1293,7 @@ defmodule AshOnetime.Store.Postgres do
 
   defp decode_claim(:one_time_nonce, [
          id,
+         logical_partition,
          operation_hash,
          scope_hash,
          key_hash,
@@ -1263,6 +1307,7 @@ defmodule AshOnetime.Store.Postgres do
     %Claim{
       strategy: :one_time_nonce,
       id: decode_uuid(id),
+      logical_partition: logical_partition,
       operation_hash: operation_hash,
       scope_hash: scope_hash,
       key_hash: key_hash,
@@ -1281,8 +1326,21 @@ defmodule AshOnetime.Store.Postgres do
   defp dump_uuid(<<_::128>> = binary), do: binary
   defp dump_uuid(uuid), do: Ecto.UUID.dump!(uuid)
 
-  defp logical_key(%{operation_hash: operation_hash, scope_hash: scope_hash, key_hash: key_hash}) do
-    {operation_hash, scope_hash, key_hash}
+  defp logical_key(%{
+         logical_partition: logical_partition,
+         operation_hash: operation_hash,
+         scope_hash: scope_hash,
+         key_hash: key_hash
+       }) do
+    {logical_partition, operation_hash, scope_hash, key_hash}
+  end
+
+  defp logical_key(%Target{logical_partition: logical_partition}, %{
+         operation_hash: operation_hash,
+         scope_hash: scope_hash,
+         key_hash: key_hash
+       }) do
+    {logical_partition, operation_hash, scope_hash, key_hash}
   end
 
   defp relation(%Target{prefix: nil}, name), do: quote_identifier(name)
@@ -1305,6 +1363,11 @@ defmodule AshOnetime.Store.Postgres do
   # tenants sharing a 63-byte prefix would route to the same physical schema. Fail closed
   # on an over-long prefix, matching the cleanup-side bound (cleanup_worker.ex, prune task).
   defp valid_prefix?(value), do: is_binary(value) and byte_size(value) in 1..63
+
+  defp valid_logical_partition?(value) do
+    is_binary(value) and byte_size(value) in 1..@max_logical_partition_bytes and
+      String.valid?(value) and not String.contains?(value, <<0>>)
+  end
 
   defp restore_process_value(key, nil), do: Process.delete(key)
   defp restore_process_value(key, value), do: Process.put(key, value)

@@ -163,6 +163,7 @@ defmodule AshOnetime.Store.ReapContentionTest do
     %Claim{
       strategy: :idempotency,
       id: claim_id,
+      logical_partition: "global",
       operation_hash: hash("operation:" <> label),
       scope_hash: hash("scope:" <> label),
       key_hash: hash("key:" <> label),

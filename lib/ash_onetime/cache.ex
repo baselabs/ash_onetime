@@ -164,7 +164,13 @@ defmodule AshOnetime.Cache do
   # function, not a local replica. Mirrors bounded_callback_context/1's test seam.
   @doc false
   def key(%Claim{} = claim) do
-    components = ["ash_onetime-cache", claim.operation_hash, claim.scope_hash, claim.key_hash]
+    components = [
+      "ash_onetime-cache",
+      claim.logical_partition,
+      claim.operation_hash,
+      claim.scope_hash,
+      claim.key_hash
+    ]
 
     framed =
       for component <- components, into: "", do: <<byte_size(component)::32, component::binary>>

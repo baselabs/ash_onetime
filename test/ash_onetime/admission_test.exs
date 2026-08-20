@@ -10,6 +10,7 @@ defmodule AshOnetime.AdmissionTest do
 
   alias AshOnetime.Admission
   alias AshOnetime.Admission.State
+  alias AshOnetime.Store.{Claim, Postgres, Result}
 
   # A minimal Ash struct that carries the private context the admission functions read/write.
   # Both Ash.Changeset and Ash.ActionInput expose set_context/2 and a context field, so a
@@ -123,6 +124,59 @@ defmodule AshOnetime.AdmissionTest do
     test ":replay returns the result without encoding" do
       assert {:ok, :the_result} = Admission.complete(state(:replay), :the_result)
     end
+  end
+
+  test "an admitted claim from another logical partition fails closed" do
+    now = DateTime.utc_now()
+
+    {:ok, request} =
+      Claim.idempotency(
+        operation_hash: :crypto.hash(:sha256, "operation"),
+        scope_hash: :crypto.hash(:sha256, "scope"),
+        key_hash: :crypto.hash(:sha256, "key"),
+        fingerprint: :crypto.hash(:sha256, "fingerprint"),
+        retention_seconds: 60
+      )
+
+    target = %Postgres.Target{
+      repo_module: AshOnetime.Test.Repo,
+      dynamic_repo: AshOnetime.Test.Repo,
+      logical_partition: "tenant-a"
+    }
+
+    claim = %Claim{
+      strategy: :idempotency,
+      id: request.id,
+      logical_partition: "tenant-b",
+      operation_hash: request.operation_hash,
+      scope_hash: request.scope_hash,
+      key_hash: request.key_hash,
+      fingerprint: request.fingerprint,
+      state: :processing,
+      admitted_at: now,
+      retain_until: DateTime.add(now, 60),
+      inserted_at: now
+    }
+
+    state = %State{
+      class: :pending,
+      strategy: :idempotency,
+      resource: AshOnetime.Test.ActionExamples.Resource,
+      action: :charge,
+      request: request,
+      target: target
+    }
+
+    result = Result.success(:admitted, claim: claim)
+
+    assert {:error, %AshOnetime.Error{code: :store_invariant}} =
+             Admission.resolve(
+               result,
+               state,
+               %{strategy: :idempotency},
+               System.monotonic_time(),
+               :local_claim
+             )
   end
 
   describe "replayed?/1 (the caller-visible signal)" do

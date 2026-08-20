@@ -581,7 +581,13 @@ defmodule AshOnetime.Store.PostgresTest do
     refute "response_partition" in nonce_columns
     refute "response_codec" in nonce_columns
     refute "response_digest" in nonce_columns
-    assert payload_columns == ["claim_id", "encoded_response", "partition_date"]
+
+    assert payload_columns == [
+             "claim_id",
+             "encoded_response",
+             "logical_partition",
+             "partition_date"
+           ]
   end
 
   test "database rejects malformed hashes and invalid response state", %{prefix: prefix} do
@@ -838,6 +844,7 @@ defmodule AshOnetime.Store.PostgresTest do
     %Claim{
       strategy: :idempotency,
       id: request.id,
+      logical_partition: "global",
       operation_hash: request.operation_hash,
       scope_hash: request.scope_hash,
       key_hash: request.key_hash,

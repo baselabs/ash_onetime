@@ -4,6 +4,27 @@ defmodule AshOnetime.MutationCheck do
   @database_url "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
 
   @mutations %{
+    "source-site-audit-proof" => %{
+      path: "scripts/check_mutations.exs",
+      original: "    audit_registered_" <> "sites!()",
+      mutated: "    :ok",
+      test: "test/mutation_check_test.exs",
+      tag: "mutation_checker_source_site_mutation",
+      test_name:
+        "mutation checker self-test proves restoration requires an executed ExUnit result",
+      assertion:
+        "assert output =~ \"mutation checker self-test: every registered mutation has exactly one source site\""
+    },
+    "restoration-execution-proof" => %{
+      path: "scripts/check_mutations.exs",
+      original: "    unless executed_" <> "exunit_result?(output) do",
+      mutated: "    if false do",
+      test: "test/mutation_check_test.exs",
+      tag: "mutation_checker_execution_proof_mutation",
+      test_name:
+        "mutation checker self-test proves restoration requires an executed ExUnit result",
+      assertion: "assert status == 0, output"
+    },
     "canonical" => %{
       path: "lib/ash_onetime/canonical.ex",
       original: "  @integer_tag 0x02",
@@ -375,7 +396,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "unique-constraint" => %{
       path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
-      original: "@collision_constraint \"UNIQUE (operation_hash, scope_hash, key_hash)\"",
+      original:
+        "@collision_constraint \"UNIQUE (logical_partition, operation_hash, scope_hash, key_hash)\"",
       mutated: "@collision_constraint \"CHECK (true)\"",
       test: "test/system/contention_test.exs",
       tag: "unique_constraint_mutation",
@@ -423,8 +445,9 @@ defmodule AshOnetime.MutationCheck do
     },
     "reap-skips-locked-recovery" => %{
       path: "priv/templates/migrations/install.exs",
-      original: "ORDER BY inserted_at, operation_hash, id\n        FOR UPDATE SKIP LOCKED",
-      mutated: "ORDER BY inserted_at, operation_hash, id\n        FOR UPDATE",
+      original:
+        "ORDER BY inserted_at, logical_partition, operation_hash, id\n        FOR UPDATE SKIP LOCKED",
+      mutated: "ORDER BY inserted_at, logical_partition, operation_hash, id\n        FOR UPDATE",
       test: "test/ash_onetime/store/reap_contention_test.exs",
       tag: "reap_skips_locked_recovery_mutation",
       test_name: "the reaper skips a recovery point locked by an in-flight finalization",
@@ -479,9 +502,9 @@ defmodule AshOnetime.MutationCheck do
     "operation-hash-select" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:
-        "@logical_key_predicate \"operation_hash = $1 AND scope_hash = $2 AND key_hash = $3\"",
+        "@logical_key_predicate \"logical_partition = $1 AND operation_hash = $2 AND scope_hash = $3 AND key_hash = $4\"",
       mutated:
-        "@logical_key_predicate \"$1::bytea IS NOT NULL AND operation_hash = operation_hash AND scope_hash = $2 AND key_hash = $3\"",
+        "@logical_key_predicate \"logical_partition = $1 AND $2::bytea IS NOT NULL AND operation_hash = operation_hash AND scope_hash = $3 AND key_hash = $4\"",
       test: "test/ash_onetime/store/uncertainty_test.exs",
       tag: "operation_hash_select_mutation",
       test_name: "operation hash remains part of the shared command-two and load sink",
@@ -490,9 +513,9 @@ defmodule AshOnetime.MutationCheck do
     "operation-hash-completion" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:
-        "@completion_key_predicate \"operation_hash = $4 AND scope_hash = $5 AND key_hash = $6\"",
+        "@completion_key_predicate \"logical_partition = $4 AND operation_hash = $5 AND scope_hash = $6 AND key_hash = $7\"",
       mutated:
-        "@completion_key_predicate \"$4::bytea IS NOT NULL AND operation_hash = operation_hash AND scope_hash = $5 AND key_hash = $6\"",
+        "@completion_key_predicate \"logical_partition = $4 AND $5::bytea IS NOT NULL AND operation_hash = operation_hash AND scope_hash = $6 AND key_hash = $7\"",
       test: "test/ash_onetime/store/partition_test.exs",
       tag: "operation_hash_completion_mutation",
       test_name: "completion update keeps operation identity when hash partitions share an id",
@@ -501,9 +524,9 @@ defmodule AshOnetime.MutationCheck do
     "operation-hash-cleanup" => %{
       path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
       original:
-        "@cleanup_delete_predicate \"claims.operation_hash = candidates.operation_hash AND claims.id = candidates.id\"",
+        "@cleanup_delete_predicate \"claims.logical_partition = candidates.logical_partition AND claims.operation_hash = candidates.operation_hash AND claims.id = candidates.id\"",
       mutated:
-        "@cleanup_delete_predicate \"candidates.operation_hash = candidates.operation_hash AND claims.id = candidates.id\"",
+        "@cleanup_delete_predicate \"claims.logical_partition = candidates.logical_partition AND candidates.operation_hash = candidates.operation_hash AND claims.id = candidates.id\"",
       test: "test/ash_onetime/store/partition_test.exs",
       tag: "operation_hash_cleanup_mutation",
       test_name: "cleanup delete keeps operation identity when hash partitions share an id",
@@ -836,8 +859,9 @@ defmodule AshOnetime.MutationCheck do
     "dynamic-repo" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:
-        "%Target{repo_module: repo, dynamic_repo: repo.get_dynamic_repo(), prefix: prefix}",
-      mutated: "%Target{repo_module: repo, dynamic_repo: repo, prefix: prefix}",
+        "    %Target{\n      repo_module: repo,\n      dynamic_repo: repo.get_dynamic_repo(),\n      prefix: prefix,\n      logical_partition: logical_partition\n    }",
+      mutated:
+        "    %Target{\n      repo_module: repo,\n      dynamic_repo: repo,\n      prefix: prefix,\n      logical_partition: logical_partition\n    }",
       test: "test/ash_onetime/store/transaction_test.exs",
       tag: "dynamic_repo_mutation",
       test_name: "two live dynamic repo instances preserve their transaction and quoted prefix",
@@ -940,8 +964,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "completion-once" => %{
       path: "lib/ash_onetime/store/postgres.ex",
-      original: "      AND id = $7::uuid AND state = 'processing'\n",
-      mutated: "      AND id = $7::uuid AND state = 'complete'\n",
+      original: "      AND id = $8::uuid AND state = 'processing'\n",
+      mutated: "      AND id = $8::uuid AND state = 'complete'\n",
       test: "test/ash_onetime/store/postgres_test.exs",
       tag: "completion_once_mutation",
       test_name: "the completion state predicate is the effect-once backstop without a payload",
@@ -954,9 +978,9 @@ defmodule AshOnetime.MutationCheck do
       # bound to one placeholder, failing on param-count (`:dispatched_unknown`) rather than
       # on the scan-cardinality the predicate exists to prevent -- a vacuous mutation.
       original:
-        "    WHERE claim_id = $1::uuid AND partition_date = $2\n    \"\"\"\n\n    case dispatched_query(target, sql, [dump_uuid(claim.id), claim.response_partition]) do",
+        "    WHERE logical_partition = $1 AND claim_id = $2::uuid AND partition_date = $3\n    \"\"\"\n\n    case dispatched_query(target, sql, [\n           claim.logical_partition,\n           dump_uuid(claim.id),\n           claim.response_partition\n         ]) do",
       mutated:
-        "    WHERE claim_id = $1::uuid\n    \"\"\"\n\n    case dispatched_query(target, sql, [dump_uuid(claim.id)]) do",
+        "    WHERE logical_partition = $1 AND claim_id = $2::uuid\n    \"\"\"\n\n    case dispatched_query(target, sql, [\n           claim.logical_partition,\n           dump_uuid(claim.id)\n         ]) do",
       test: "test/ash_onetime/store/postgres_test.exs",
       tag: "partition_pruning_mutation",
       test_name:
@@ -965,8 +989,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "completion-invariant-rollback" => %{
       path: "lib/ash_onetime/store/postgres.ex",
-      original: "WHERE claim_id = $7::uuid\n      ) = 1\n",
-      mutated: "WHERE claim_id = $7::uuid\n      ) >= 1\n",
+      original: "WHERE logical_partition = $4 AND claim_id = $8::uuid\n      ) = 1\n",
+      mutated: "WHERE logical_partition = $4 AND claim_id = $8::uuid\n      ) >= 1\n",
       test: "test/ash_onetime/action_transaction_test.exs",
       tag: "completion_invariant_rollback_mutation",
       test_name:
@@ -1299,6 +1323,23 @@ defmodule AshOnetime.MutationCheck do
 
         System.halt(1)
     end
+
+    audit_registered_sites!()
+
+    execution_guard_closed? =
+      try do
+        assert_exunit_execution!("self-test", "SIGTERM received - shutting down")
+        false
+      rescue
+        RuntimeError -> true
+      end
+
+    if execution_guard_closed? do
+      IO.puts("mutation checker self-test: restoration requires an executed ExUnit result")
+    else
+      IO.puts(:stderr, "mutation checker self-test failed: restoration receipt guard opened")
+      System.halt(1)
+    end
   end
 
   def main(["--" | names]), do: main(names)
@@ -1374,6 +1415,8 @@ defmodule AshOnetime.MutationCheck do
       raise "mutation #{name} did not return green after restoration"
     end
 
+    assert_exunit_execution!(name, restored_output)
+
     assert_summary!(name, :restored, restored_output, Map.get(mutation, :green_summary))
 
     IO.puts("mutation #{name}: RED confirmed; exact source bytes restored; tagged test GREEN")
@@ -1386,12 +1429,42 @@ defmodule AshOnetime.MutationCheck do
     end
   end
 
+  defp audit_registered_sites! do
+    Enum.each(@mutations, fn {name, mutation} ->
+      source = File.read!(mutation.path)
+
+      case :binary.matches(source, mutation.original) do
+        [_single] ->
+          :ok
+
+        matches ->
+          raise "mutation #{name} site count for #{mutation.path} was #{length(matches)}, expected 1"
+      end
+    end)
+
+    IO.puts("mutation checker self-test: every registered mutation has exactly one source site")
+  end
+
   defp assert_summary!(_name, _phase, _output, nil), do: :ok
 
   defp assert_summary!(name, phase, output, expected) do
     unless String.contains?(output, expected) do
       raise "mutation #{name} #{phase} output omitted required summary #{inspect(expected)}"
     end
+  end
+
+  defp assert_exunit_execution!(name, output) do
+    unless executed_exunit_result?(output) do
+      raise "mutation #{name} restoration did not execute a complete green ExUnit result"
+    end
+  end
+
+  defp executed_exunit_result?(output) do
+    String.contains?(output, "Running ExUnit") and
+      String.contains?(output, "Finished in") and
+      Regex.match?(~r/Result: [1-9][0-9]* passed/, output) and
+      not String.contains?(output, "Failed:") and
+      not String.contains?(output, "SIGTERM received")
   end
 
   defp probe_fixture!(_name, %{probe: nil}), do: :ok

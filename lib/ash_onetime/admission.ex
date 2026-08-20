@@ -688,7 +688,7 @@ defmodule AshOnetime.Admission do
   defp decide(%Result{status: :admitted} = result, state, _protection, started, mode) do
     transaction = expected_transaction(mode)
 
-    with :ok <- validate_admitted(result, state.request, transaction) do
+    with :ok <- validate_admitted(result, state.request, state.target, transaction) do
       class = execution_class(state.strategy, mode)
       state = %{state | class: class, claim: sanitize_claim(result.claim)}
       emit_admission(state, started, :admitted)
@@ -704,7 +704,7 @@ defmodule AshOnetime.Admission do
          mode
        ) do
     with {:ok, disposition} <-
-           validate_collision(result, state.request, expected_transaction(mode)),
+           validate_collision(result, state.request, state.target, expected_transaction(mode)),
          :match <- disposition,
          {:ok, replayed} <- replay(result, state, started) do
       emit_conflict(state, :complete)
@@ -732,7 +732,7 @@ defmodule AshOnetime.Admission do
          mode
        ) do
     with {:ok, disposition} <-
-           validate_collision(result, state.request, expected_transaction(mode)),
+           validate_collision(result, state.request, state.target, expected_transaction(mode)),
          :match <- disposition do
       emit_conflict(state, :processing)
 
@@ -765,7 +765,7 @@ defmodule AshOnetime.Admission do
          _started,
          mode
        ) do
-    case validate_collision(result, state.request, expected_transaction(mode)) do
+    case validate_collision(result, state.request, state.target, expected_transaction(mode)) do
       {:ok, :match} ->
         emit_conflict(state, :nonce_used)
         {:error, Error.new(:nonce_already_used, "nonce was already used")}
@@ -846,10 +846,11 @@ defmodule AshOnetime.Admission do
            claim: %Claim{} = claim
          },
          request,
+         target,
          expected_transaction
        ) do
     with true <- transaction == expected_transaction,
-         :ok <- validate_locator(claim, request),
+         :ok <- validate_locator(claim, request, target),
          true <- claim.id == request.id,
          :match <- fingerprint_disposition(claim, request),
          :ok <- validate_claim_state(claim, :admitted) do
@@ -859,7 +860,7 @@ defmodule AshOnetime.Admission do
     end
   end
 
-  defp validate_admitted(_result, _request, _expected_transaction),
+  defp validate_admitted(_result, _request, _target, _expected_transaction),
     do: {:error, Error.new(:store_invariant, "store result violated an invariant")}
 
   defp validate_collision(
@@ -872,12 +873,13 @@ defmodule AshOnetime.Admission do
            claim: %Claim{} = claim
          } = result,
          request,
+         target,
          expected_transaction
        ) do
     with true <- transaction == expected_transaction,
          true <- valid_uuid?(claim.id),
          :ok <- validate_collision_payload(status, payload),
-         :ok <- validate_locator(claim, request),
+         :ok <- validate_locator(claim, request, target),
          :ok <- validate_claim_state(claim, result.status) do
       {:ok, fingerprint_disposition(claim, request)}
     else
@@ -885,7 +887,7 @@ defmodule AshOnetime.Admission do
     end
   end
 
-  defp validate_collision(_result, _request, _expected_transaction),
+  defp validate_collision(_result, _request, _target, _expected_transaction),
     do: {:error, Error.new(:store_invariant, "store result violated an invariant")}
 
   defp validate_collision_payload(:complete, payload) when is_binary(payload), do: :ok
@@ -905,7 +907,7 @@ defmodule AshOnetime.Admission do
          encoded
        )
        when is_binary(payload) do
-    with :ok <- validate_locator(claim, state.request),
+    with :ok <- validate_locator(claim, state.request, state.target),
          true <- claim.id == state.claim.id,
          :match <- fingerprint_disposition(claim, state.request),
          :ok <- validate_claim_state(claim, :complete),
@@ -929,8 +931,9 @@ defmodule AshOnetime.Admission do
 
   defp fixed_digest_equal?(_left, _right), do: false
 
-  defp validate_locator(claim, request) do
-    if claim.strategy == request.strategy and valid_locator_hashes?(claim, request) and
+  defp validate_locator(claim, request, target) do
+    if claim.strategy == request.strategy and claim.logical_partition == target.logical_partition and
+         valid_locator_hashes?(claim, request) and
          equal_locator_hashes?(claim, request) do
       :ok
     else

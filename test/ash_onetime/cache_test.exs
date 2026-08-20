@@ -151,13 +151,21 @@ defmodule AshOnetime.CacheTest do
     claim_b = cache_key_claim("a", "bcd", "ef")
 
     # Sanity: naive concat of the production component lists collides (the premise).
-    # Components are ["ash_onetime-cache", operation_hash, scope_hash, key_hash].
-    naive_a = IO.iodata_to_binary(["ash_onetime-cache", "ab", "cd", "ef"])
-    naive_b = IO.iodata_to_binary(["ash_onetime-cache", "a", "bcd", "ef"])
+    # Components are ["ash_onetime-cache", logical_partition, operation_hash, scope_hash,
+    # key_hash]. Both claims use the same global partition here.
+    naive_a = IO.iodata_to_binary(["ash_onetime-cache", "global", "ab", "cd", "ef"])
+    naive_b = IO.iodata_to_binary(["ash_onetime-cache", "global", "a", "bcd", "ef"])
     assert naive_a == naive_b
 
     # The production length-prefixed framing (CacheApi.key/1) does NOT collide.
     assert CacheApi.key(claim_a) != CacheApi.key(claim_b)
+  end
+
+  test "cache keys are isolated by logical partition" do
+    global = cache_key_claim("operation", "scope", "key")
+    tenant = %{global | logical_partition: "tenant-a"}
+
+    refute CacheApi.key(global) == CacheApi.key(tenant)
   end
 
   # Minimal claim carrying only the framing inputs (enforce_keys satisfied with stub
@@ -168,6 +176,7 @@ defmodule AshOnetime.CacheTest do
     %Claim{
       strategy: :idempotency,
       id: Ecto.UUID.generate(),
+      logical_partition: "global",
       operation_hash: operation_hash,
       scope_hash: scope_hash,
       key_hash: key_hash,
@@ -202,6 +211,7 @@ defmodule AshOnetime.CacheTest do
     claim = %Claim{
       strategy: :idempotency,
       id: Ecto.UUID.generate(),
+      logical_partition: "global",
       operation_hash: :crypto.hash(:sha256, "operation"),
       scope_hash: :crypto.hash(:sha256, "scope"),
       key_hash: :crypto.hash(:sha256, "key"),

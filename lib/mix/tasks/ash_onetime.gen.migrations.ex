@@ -13,9 +13,9 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
   import Mix.Generator, only: [create_directory: 1, create_file: 2]
 
   @shortdoc "Generates ash_onetime PostgreSQL migrations"
-  @collision_constraint "UNIQUE (operation_hash, scope_hash, key_hash)"
+  @collision_constraint "UNIQUE (logical_partition, operation_hash, scope_hash, key_hash)"
   @cleanup_comparator ">"
-  @cleanup_delete_predicate "claims.operation_hash = candidates.operation_hash AND claims.id = candidates.id"
+  @cleanup_delete_predicate "claims.logical_partition = candidates.logical_partition AND claims.operation_hash = candidates.operation_hash AND claims.id = candidates.id"
   @switches [
     repo: :string,
     claims: :string,
@@ -101,6 +101,24 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
       "roll_forward.exs"
       |> template_path()
       |> EEx.eval_file(module: module, partitions: partitions)
+
+    source
+    |> Code.format_string!()
+    |> IO.iodata_to_binary()
+  end
+
+  @doc "Renders the reversible logical-partition upgrade for an existing installation."
+  @spec render_logical_partition_upgrade(module(), keyword()) :: binary()
+  def render_logical_partition_upgrade(repo, options)
+      when is_atom(repo) and is_list(options) do
+    if options != [], do: raise(ArgumentError, "logical partition upgrade accepts no options")
+
+    module = Module.concat([repo, Migrations, AddAshOnetimeLogicalPartitions])
+
+    source =
+      "logical_partitions.exs"
+      |> template_path()
+      |> EEx.eval_file(module: module)
 
     source
     |> Code.format_string!()

@@ -8,6 +8,20 @@ mix ash_onetime.gen.migrations --repo MyApp.Repo
 mix ecto.migrate
 ```
 
+Existing 1.0 installations must add the logical-partition key before using
+`AshOnetime.Transaction`:
+
+```sh
+mix ash_onetime.gen.logical_partitions --repo MyApp.Repo
+mix ecto.migrate
+```
+
+The generated migration backfills existing claims and payloads into the exact `global`
+partition, then widens collision authority to include `logical_partition`. Its down migration
+refuses while any non-global row exists; distinct tenant authorities are never merged during
+rollback. Generate and apply it once per installation/prefix family before transaction-owned
+callers admit non-global work.
+
 The migration creates authoritative idempotency claims, nonce claims, response payload
 partitions, collision constraints, cleanup functions, and deletion guards. Claim parents may
 be unpartitioned or hash-partitioned by `operation_hash`; response payloads use date

@@ -4,12 +4,36 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: f
 breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
 land in a minor), and each breaking change lands here with the exact edit to make.
 
-The published package is [v1.0.0](https://hex.pm/packages/ash_onetime). Set your dependency
-to the minor range to pick up patches automatically and review this page on each minor bump:
+The latest published package is [v1.0.0](https://hex.pm/packages/ash_onetime); this source tree
+prepares v1.1.0. Pin the v1 minor you have qualified and review this page on each minor bump:
 
 ```elixir
 {:ash_onetime, "~> 1.0"}
 ```
+
+## v1.1.0 — transaction-owned admission and logical partitions
+
+v1.1.0 adds `AshOnetime.Transaction` for hosts that already own the authoritative Ecto
+transaction. The public boundary admits idempotency and one-time nonce claims without starting
+or committing a transaction, and completes exact replay bytes in that same transaction.
+
+Fresh installs already include the bounded `logical_partition` column in all claim and response
+payload tables. Existing 1.0 installs must generate and run the additive upgrade before calling
+the new API:
+
+```sh
+mix ash_onetime.gen.logical_partitions --repo MyApp.Repo
+mix ecto.migrate
+```
+
+All existing rows are backfilled to `global`; existing Ash DSL callers therefore preserve their
+locator authority byte-for-byte. The new collision identity is
+`(logical_partition, operation_hash, scope_hash, key_hash)`. The generated down migration
+refuses while any non-global claim or payload exists because collapsing those rows would merge
+distinct authorities. Remove or migrate non-global rows through the owning application before
+attempting rollback; never edit the generated refusal guard.
+
+This is an additive minor release. Existing resource DSL call sites require no code changes.
 
 ## v1.0.0 — the stability contract
 

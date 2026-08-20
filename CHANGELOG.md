@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented in this file.
 
+## v1.1.0 — 2026-08-20
+
+Additive transaction-owned admission for applications whose effect boundary is an existing
+Ecto transaction rather than an Ash action.
+
+### Added
+
+- **`AshOnetime.Transaction`** — public `idempotency/2`, `nonce/2`, and `complete/2`
+  operations that require an existing PostgreSQL `READ COMMITTED` transaction and never start
+  or commit one. Idempotency replays exact response bytes; nonce collisions reject; typed errors
+  and all claims remain bound to the caller transaction.
+- **Logical partitions** — a bounded UTF-8 authority component included in every claim,
+  collision identity, response payload locator, cleanup path, and cache key. Identical
+  operation/scope/key triples in distinct partitions are independent without importing a host
+  application's tenant types.
+- **`mix ash_onetime.gen.logical_partitions`** — reversible upgrade migration for 1.0 installs.
+  Existing rows backfill to `global`; rollback refuses while non-global authority exists.
+
+### Compatibility
+
+- Existing Ash resource protections continue in the `global` logical partition and retain
+  their existing public behavior.
+- Fresh generated installs include logical partitions. Existing installs run the new upgrade
+  task once before admitting non-global transaction-owned work.
+
 ## v1.0.0 — 2026-08-19
 
 The 1.0 stability release: the surface contract is frozen (published in full in

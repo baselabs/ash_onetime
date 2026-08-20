@@ -27,7 +27,12 @@ defmodule AshOnetime.Store.UncertaintyTest do
     monitor = Process.monitor(dead_repo)
     assert_receive {:DOWN, ^monitor, :process, ^dead_repo, :normal}
 
-    target = %Postgres.Target{repo_module: Repo, dynamic_repo: dead_repo, prefix: prefix}
+    target = %Postgres.Target{
+      repo_module: Repo,
+      dynamic_repo: dead_repo,
+      prefix: prefix,
+      logical_partition: "global"
+    }
 
     assert %Result{
              status: :failure,
@@ -189,7 +194,8 @@ defmodule AshOnetime.Store.UncertaintyTest do
     target = %Postgres.Target{
       repo_module: AshOnetime.Test.RaisingDynamicRepo,
       dynamic_repo: Repo,
-      prefix: nil
+      prefix: nil,
+      logical_partition: "global"
     }
 
     assert %Result{status: :failure, reason: :dispatched_unknown} =

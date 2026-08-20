@@ -16,6 +16,8 @@ defmodule <%= inspect(module) %> do
     execute("""
     CREATE TABLE #{q("ash_onetime_idempotency_claims")} (
       id uuid <%= if hash_partitions, do: "NOT NULL", else: "PRIMARY KEY" %>,
+      logical_partition text NOT NULL DEFAULT 'global'
+        CHECK (octet_length(logical_partition) BETWEEN 1 AND 255),
       operation_hash bytea NOT NULL CHECK (octet_length(operation_hash) = 32),
       scope_hash bytea NOT NULL CHECK (octet_length(scope_hash) = 32),
       key_hash bytea NOT NULL CHECK (octet_length(key_hash) = 32),
@@ -28,7 +30,7 @@ defmodule <%= inspect(module) %> do
       retain_until timestamptz NOT NULL,
       inserted_at timestamptz NOT NULL,
       <%= collision_constraint %>,
-      <%= if hash_partitions, do: "PRIMARY KEY (operation_hash, id)," %>
+      <%= if hash_partitions, do: "PRIMARY KEY (operation_hash, logical_partition, id)," %>
       CHECK (retain_until > admitted_at),
       CHECK (inserted_at >= admitted_at),
       CHECK (
@@ -63,6 +65,8 @@ defmodule <%= inspect(module) %> do
     execute("""
     CREATE TABLE #{q("ash_onetime_nonce_claims")} (
       id uuid <%= if hash_partitions, do: "NOT NULL", else: "PRIMARY KEY" %>,
+      logical_partition text NOT NULL DEFAULT 'global'
+        CHECK (octet_length(logical_partition) BETWEEN 1 AND 255),
       operation_hash bytea NOT NULL CHECK (octet_length(operation_hash) = 32),
       scope_hash bytea NOT NULL CHECK (octet_length(scope_hash) = 32),
       key_hash bytea NOT NULL CHECK (octet_length(key_hash) = 32),
@@ -73,7 +77,7 @@ defmodule <%= inspect(module) %> do
       retain_until timestamptz NOT NULL,
       inserted_at timestamptz NOT NULL,
       <%= collision_constraint %>,
-      <%= if hash_partitions, do: "PRIMARY KEY (operation_hash, id)," %>
+      <%= if hash_partitions, do: "PRIMARY KEY (operation_hash, logical_partition, id)," %>
       CHECK (expires_at IS NULL OR expires_at >= issued_at),
       CHECK (retain_until > issued_at),
       CHECK (retain_until > admitted_at),
@@ -107,10 +111,12 @@ defmodule <%= inspect(module) %> do
   defp create_payloads do
     execute("""
     CREATE TABLE #{q("ash_onetime_response_payloads")} (
+      logical_partition text NOT NULL DEFAULT 'global'
+        CHECK (octet_length(logical_partition) BETWEEN 1 AND 255),
       partition_date date NOT NULL,
       claim_id uuid NOT NULL,
       encoded_response bytea NOT NULL CHECK (octet_length(encoded_response) <= #{@payload_ceiling}),
-      PRIMARY KEY (partition_date, claim_id)
+      PRIMARY KEY (logical_partition, partition_date, claim_id)
     ) PARTITION BY RANGE (partition_date)
     """)
 
@@ -183,7 +189,7 @@ defmodule <%= inspect(module) %> do
 
         SELECT count(*) INTO payload_count
         FROM #{q("ash_onetime_response_payloads")}
-        WHERE claim_id = OLD.id;
+        WHERE logical_partition = OLD.logical_partition AND claim_id = OLD.id;
         IF payload_count <> 0 THEN
           RAISE EXCEPTION 'reaped processing idempotency claim unexpectedly carries a payload'
             USING ERRCODE = '23514';
@@ -199,14 +205,16 @@ defmodule <%= inspect(module) %> do
 
       SELECT count(*) INTO payload_count
       FROM #{q("ash_onetime_response_payloads")}
-      WHERE partition_date = OLD.response_partition AND claim_id = OLD.id;
+      WHERE logical_partition = OLD.logical_partition
+        AND partition_date = OLD.response_partition AND claim_id = OLD.id;
       IF payload_count <> 1 THEN
         RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
           USING ERRCODE = '23514';
       END IF;
 
       DELETE FROM #{q("ash_onetime_response_payloads")}
-      WHERE partition_date = OLD.response_partition AND claim_id = OLD.id;
+      WHERE logical_partition = OLD.logical_partition
+        AND partition_date = OLD.response_partition AND claim_id = OLD.id;
       GET DIAGNOSTICS payload_count = ROW_COUNT;
       IF payload_count <> 1 THEN
         RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
@@ -257,11 +265,11 @@ defmodule <%= inspect(module) %> do
       END IF;
 
       WITH candidates AS (
-        SELECT operation_hash, id
+        SELECT logical_partition, operation_hash, id
         FROM #{q("ash_onetime_idempotency_claims")}
         WHERE state = 'complete'
           AND #{q("ash_onetime_cleanup_eligible")}(retain_until)
-        ORDER BY retain_until, operation_hash, id
+        ORDER BY retain_until, logical_partition, operation_hash, id
         FOR UPDATE SKIP LOCKED
         LIMIT batch_size
       ), deleted AS (
@@ -288,10 +296,10 @@ defmodule <%= inspect(module) %> do
       END IF;
 
       WITH candidates AS (
-        SELECT operation_hash, id
+        SELECT logical_partition, operation_hash, id
         FROM #{q("ash_onetime_nonce_claims")}
         WHERE #{q("ash_onetime_cleanup_eligible")}(retain_until)
-        ORDER BY retain_until, operation_hash, id
+        ORDER BY retain_until, logical_partition, operation_hash, id
         FOR UPDATE SKIP LOCKED
         LIMIT batch_size
       ), deleted AS (
@@ -327,12 +335,12 @@ defmodule <%= inspect(module) %> do
       PERFORM set_config('ash_onetime.reap_before', reap_before::text, true);
 
       WITH candidates AS (
-        SELECT operation_hash, id
+        SELECT logical_partition, operation_hash, id
         FROM #{q("ash_onetime_idempotency_claims")}
         WHERE state = 'processing'
           AND inserted_at < reap_before
           AND #{q("ash_onetime_cleanup_eligible")}(retain_until)
-        ORDER BY inserted_at, operation_hash, id
+        ORDER BY inserted_at, logical_partition, operation_hash, id
         FOR UPDATE SKIP LOCKED
         LIMIT batch_size
       ), deleted AS (

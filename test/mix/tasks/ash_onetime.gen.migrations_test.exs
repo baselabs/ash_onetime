@@ -2,6 +2,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
   use ExUnit.Case, async: false
 
   alias AshOnetime.Test.Repo
+  alias Mix.Tasks.AshOnetime.Gen.LogicalPartitions
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: GenerateMigrations
 
   setup do
@@ -34,7 +35,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
     path = run_generator(temporary, ["--claims", "hash", "--claim-partitions", "4"])
     source = File.read!(path)
 
-    assert source =~ "PRIMARY KEY (operation_hash, id)"
+    assert source =~ "PRIMARY KEY (operation_hash, logical_partition, id)"
     assert source =~ "PARTITION BY HASH (operation_hash)"
     assert source =~ "count = 4"
     assert source =~ ~S|FOR VALUES WITH (MODULUS #{count}, REMAINDER #{remainder})|
@@ -56,7 +57,24 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
     end
   end
 
-  test "Hex package unpack contains exactly both migration templates", %{temporary: temporary} do
+  test "generates the existing-install logical partition upgrade", %{temporary: temporary} do
+    Mix.Task.reenable("ash_onetime.gen.logical_partitions")
+
+    path =
+      LogicalPartitions.run([
+        "--repo",
+        inspect(Repo),
+        "--migrations-path",
+        temporary,
+        "--timestamp",
+        "20260820143000"
+      ])
+
+    assert Path.basename(path) == "20260820143000_add_ash_onetime_logical_partitions.exs"
+    assert File.read!(path) == GenerateMigrations.render_logical_partition_upgrade(Repo, [])
+  end
+
+  test "Hex package unpack contains exactly all migration templates", %{temporary: temporary} do
     package = Path.join(temporary, "package")
 
     {output, status} =
@@ -78,6 +96,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
     assert templates == [
              "priv/templates/migrations/hash_partitioned.exs",
              "priv/templates/migrations/install.exs",
+             "priv/templates/migrations/logical_partitions.exs",
              "priv/templates/migrations/roll_forward.exs"
            ]
   end

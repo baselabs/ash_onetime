@@ -44,6 +44,7 @@ defmodule AshOnetime.Store.Claim do
   @enforce_keys [
     :strategy,
     :id,
+    :logical_partition,
     :operation_hash,
     :scope_hash,
     :key_hash,
@@ -54,6 +55,7 @@ defmodule AshOnetime.Store.Claim do
   defstruct [
     :strategy,
     :id,
+    :logical_partition,
     :operation_hash,
     :scope_hash,
     :key_hash,
@@ -73,6 +75,7 @@ defmodule AshOnetime.Store.Claim do
   @type t :: %__MODULE__{
           strategy: :idempotency | :one_time_nonce,
           id: Ecto.UUID.t(),
+          logical_partition: binary(),
           operation_hash: binary(),
           scope_hash: binary(),
           key_hash: binary(),

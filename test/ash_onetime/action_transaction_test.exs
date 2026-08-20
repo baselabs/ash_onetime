@@ -749,6 +749,7 @@ defmodule AshOnetime.ActionTransactionTest do
       &%{&1 | strategy: :one_time_nonce},
       &%{&1 | id: Ecto.UUID.generate()},
       &%{&1 | operation_hash: :crypto.hash(:sha256, "wrong-operation")},
+      &%{&1 | logical_partition: "wrong-partition"},
       &%{&1 | scope_hash: :crypto.hash(:sha256, "wrong-scope")},
       &%{&1 | key_hash: :crypto.hash(:sha256, "wrong-key")},
       &%{&1 | fingerprint: :crypto.hash(:sha256, "wrong-fingerprint")},
@@ -763,6 +764,7 @@ defmodule AshOnetime.ActionTransactionTest do
           claim = %AshOnetime.Store.Claim{
             strategy: request.strategy,
             id: request.id,
+            logical_partition: "global",
             operation_hash: request.operation_hash,
             scope_hash: request.scope_hash,
             key_hash: request.key_hash,
@@ -1136,6 +1138,7 @@ defmodule AshOnetime.ActionTransactionTest do
     %AshOnetime.Store.Claim{
       strategy: request.strategy,
       id: request.id,
+      logical_partition: "global",
       operation_hash: request.operation_hash,
       scope_hash: request.scope_hash,
       key_hash: request.key_hash,

@@ -265,6 +265,7 @@ defmodule AshOnetime.Codec.ResourceTest do
     claim = %Claim{
       strategy: :idempotency,
       id: Ecto.UUID.generate(),
+      logical_partition: "global",
       operation_hash: :binary.copy(<<1>>, 32),
       scope_hash: :binary.copy(<<2>>, 32),
       key_hash: :binary.copy(<<3>>, 32),

@@ -25,6 +25,13 @@ Optional, non-admitting surfaces: a response cache, a Plug, Oban workers for cle
 forward partition creation, and an external-effect execute/recover protocol for peers that
 need to observe or reverse a side effect.
 
+Hosts that already own one authoritative Ecto transaction can use the public
+`AshOnetime.Transaction` boundary instead of wrapping an Ash action. It reserves idempotency
+and nonce authority inside the caller's existing `READ COMMITTED` transaction, so the claim,
+the host effect, and the exact replay bytes commit or roll back together. Logical partitions
+isolate tenants or authority planes without importing the host's actor types. See
+[Transaction-owned admission](documentation/transaction-owned-admission.md).
+
 ## When to use this vs. hand-rolled idempotency
 
 Use `ash_onetime` when you need a *correct* admission layer for effectful Ash actions and do
@@ -126,7 +133,8 @@ patterns.
 
 ## Status
 
-The package is [published on Hex](https://hex.pm/packages/ash_onetime) as v1.0.0 and the
+The latest published package is [v1.0.0 on Hex](https://hex.pm/packages/ash_onetime); this
+source tree prepares the additive v1.1.0 transaction-owned admission release. The
 [source is public](https://github.com/baselabs/ash_onetime). Every protected action chooses
 `:idempotency` or `:one_time_nonce` and declares a nonempty scope; there is no default
 strategy or global scope fallback. PostgreSQL-authoritative admission, transactional Ash
@@ -210,6 +218,7 @@ end
 - [Idempotency](documentation/idempotency.md)
 - [One-time nonces](documentation/one-time-nonces.md)
 - [External effects and recovery](documentation/external-effects.md)
+- [Transaction-owned admission](documentation/transaction-owned-admission.md)
 - [Replay: fresh vs stored](documentation/replay.md)
 - [Errors and HTTP mapping](documentation/errors.md)
 - [Operations](documentation/operations.md)
