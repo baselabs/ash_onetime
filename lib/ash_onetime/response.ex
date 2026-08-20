@@ -502,9 +502,12 @@ defmodule AshOnetime.Response do
     end
   end
 
+  @max_logical_partition_bytes 255
+
   defp validate_complete_claim(%Claim{} = claim) do
     valid? =
-      valid_uuid?(claim.id) and valid_claim_hashes?(claim) and valid_idempotency_fields?(claim) and
+      valid_uuid?(claim.id) and valid_logical_partition?(claim.logical_partition) and
+        valid_claim_hashes?(claim) and valid_idempotency_fields?(claim) and
         valid_complete_response?(claim) and valid_claim_timestamps?(claim)
 
     case valid? do
@@ -516,6 +519,11 @@ defmodule AshOnetime.Response do
   defp valid_claim_hashes?(claim) do
     [claim.operation_hash, claim.scope_hash, claim.key_hash, claim.fingerprint]
     |> Enum.all?(&(is_binary(&1) and byte_size(&1) == @digest_bytes))
+  end
+
+  defp valid_logical_partition?(value) do
+    is_binary(value) and byte_size(value) in 1..@max_logical_partition_bytes and
+      String.valid?(value) and not String.contains?(value, <<0>>)
   end
 
   defp valid_idempotency_fields?(claim),

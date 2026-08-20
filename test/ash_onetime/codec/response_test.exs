@@ -189,6 +189,11 @@ defmodule AshOnetime.Codec.ResponseTest do
     invalid_results = [
       %{valid | reason: :corrupt_payload},
       put_in(valid.claim.id, "invalid"),
+      put_in(valid.claim.logical_partition, nil),
+      put_in(valid.claim.logical_partition, ""),
+      put_in(valid.claim.logical_partition, String.duplicate("a", 256)),
+      put_in(valid.claim.logical_partition, <<0>>),
+      put_in(valid.claim.logical_partition, <<255>>),
       put_in(valid.claim.operation_hash, <<1>>),
       put_in(valid.claim.scope_hash, <<1>>),
       put_in(valid.claim.key_hash, <<1>>),
