@@ -4,6 +4,44 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **Ash requirement pin validation** (release tooling): `ASH_ONETIME_ASH_VERSION` is now
+  compile-time validated — it must parse as a version AND lie within the published
+  requirement range; pre-release and build suffixes are rejected; a release exported with
+  the variable unset is asserted by the package gate to carry the floating requirement in
+  the archive metadata.
+- **Telemetry contract** (`AshOnetime.Telemetry`): the default `attach/0` router now
+  covers the full closed surface — all 13 events including the `:uncertain_exception`
+  diagnosis event (previously silently dropped); the moduledoc was rewritten to the router
+  reality (the phantom `metrics/0` reference is gone); the diagnosis event's closed
+  atoms-only metadata shape (`%{strategy, phase, exception}`) is validated before
+  emission.
+- **Admission test seam**: the Process-dictionary test-store redirect in the internal
+  Admission module is no longer compiled under `Mix.env() == :test` — it is gated on
+  `Application.compile_env(:ash_onetime, :allow_admission_override, false)`, default-off
+  in every build environment (mirroring the token verify-clock gate). A consumer building
+  deps with `MIX_ENV=test` no longer ships the redirect; calling the seam without the
+  explicit opt-in now raises a named error.
+
+### Documentation
+
+- The operations runbooks' diagnostics are all executable (each snippet verified against
+  a live database): the vacuous default-partition count became a stranded-row count, the
+  non-runnable IEx backlog snippet was replaced by its SQL path, and the pool diagnostic
+  is a checkout-queue watch on the repo query event.
+- Worker-backoff records corrected (ADR-0005 and every prose carrier): Oban's default is
+  ~36–40 s at three attempts, not hours; the custom backoff's rationale is re-derived
+  honestly (spaced DDL-class retries, wide jitter, 120 s cap).
+- ADR batch: ADR-0001 (external-recovery `:absent` trust boundary), ADR-0003 (live
+  committed-claim failure taxonomy), ADR-0004 (forward-compatible floor posture) amended;
+  ADR-0006 (point-events observability) and ADR-0007 (persisted response-format
+  compatibility for 1.x) added.
+- SECURITY.md publishes the support and disclosure policy (supported-versions table,
+  7-day ack / weekly updates / coordinated disclosure); CI battery claims name the
+  per-cell battery precisely; the ROADMAP is reconciled (portable status column, all
+  eleven rows verified).
+
 ## v0.7.0 — 2026-08-18
 
 Security release: raises the Ash floor to 3.31.3 after EEF-CVE-2026-67579. **Breaking

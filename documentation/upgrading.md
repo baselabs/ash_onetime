@@ -4,7 +4,7 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: b
 or contract changes bump the minor version (the library is pre-1.0), and each breaking
 change lands here with the exact edit to make.
 
-The published package is [v0.7.0](https://hex.pm/packages/ash_onetime). Set your dependency
+The published package is [v1.0.0](https://hex.pm/packages/ash_onetime). Set your dependency
 to the minor range to pick up patches automatically and review this page on each minor bump:
 
 ```elixir

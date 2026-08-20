@@ -8,7 +8,7 @@ until a maintainer confirms disclosure is safe.
 
 | Release line | Bug fixes | Security fixes |
 | --- | --- | --- |
-| Pre-1.0: latest published minor (currently `0.7.x`) | Yes | Yes |
+| Pre-1.0: latest published minor (the `0.7.x` line — superseded by 1.0.0; upgrade) | No | No — upgrade to 1.x |
 | Pre-1.0: older minors | No | No — upgrade to the latest minor |
 | From 1.0.0: latest minor | Yes | Yes |
 | From 1.0.0: previous minor | Security-driven only | Yes — backported patch releases |
