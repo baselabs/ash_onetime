@@ -17,7 +17,8 @@ piece is verified at replay against the **runtime contract**, not just the store
 - the claim's `response_digest` (bytea, exactly 32 bytes) — SHA-256 over the payload,
   compared with a constant-time equal;
 - the claim's `response_codec` column — not a bare tag but a **binding**:
-  `binding_prefix <> format_tag <> ":" <> base64url(contract_digest)` (`Response.binding/2`),
+  `binding_prefix <> format_tag <> ":" <> base64url(contract_digest)` (the private
+  `binding/2` in `Response`),
   where the contract digest is SHA-256 over a deterministic `term_to_binary` descriptor of
   the replay contract's facets: resource/action identity, kind, result mode, replay fields
   and their specs, type, constraints, allow_nil, the codec module, and codec options;

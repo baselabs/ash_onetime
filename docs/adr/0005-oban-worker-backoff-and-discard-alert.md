@@ -27,8 +27,9 @@ maintenance work on a contended, retention-critical store this is the wrong shap
 - Its jitter is narrow (0–10% incremental), so simultaneous failures from one contention
   event (lock contention on the unique index, a slow query, momentary checkout pressure)
   retry nearly in lockstep and re-contend together.
-- It grows as `15 + 2^n` with the attempt count (`~17 min` by attempt 10; Oban clamps the
-  exponent only at attempt 20, ≈ 12 days), so any future raise of `max_attempts` would
+- It grows as `15 + 2^n` with the attempt count (`~17 min` by attempt 10; Oban bounds it
+  only by rescaling the effective attempt to at most `@clamped_max` 20 — an effective
+  ceiling of `15 + 2^20` s ≈ 12 days), so any future raise of `max_attempts` would
   silently re-introduce long windows.
 
 There was also no documented discard alert. An operator whose `PartitionWorker` exhausted its

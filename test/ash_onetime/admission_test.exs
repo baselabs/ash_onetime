@@ -1,7 +1,7 @@
 defmodule AshOnetime.AdmissionTest do
   use ExUnit.Case, async: true
 
-  # ROADMAP H31: the 1,165-line most security-critical module (Admission) is exercised only
+  # ROADMAP H31: Admission is the most security-critical module and is exercised mostly
   # transitively via integration tests. These are focused unit tests for the pure decision
   # functions that are independent of a live Postgres — the replay marker, the state
   # propagation, the replayed/fresh stamp, and the complete/2 short-circuits — so a
