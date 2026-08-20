@@ -9,11 +9,11 @@ defmodule AshOnetime.Token do
   ## 1.x compatibility (window-bounded)
 
   Within 1.x, a reader verifies tokens minted by any earlier 1.x writer while those
-  tokens remain inside their acceptance window (`max_age` + `clock_skew`) — the
+  tokens remain inside their acceptance window (`max_age` + the `skew:` option) — the
   obligation expires with each token's own window, nothing is frozen forever. New
   envelope forms are additive; a breaking format change waits out the longest
-  configured window (or verifies both forms through the transition). See
-  `docs/adr/0008-token-wire-format-compatibility.md`.
+  configured window (or verifies both forms through the transition). The rule is
+  recorded as ADR-0008 in the repository's `docs/adr/` directory.
   """
 
   alias AshOnetime.Canonical
@@ -127,9 +127,9 @@ defmodule AshOnetime.Token do
   @doc """
   Verifies a wire token against expected algorithm and namespace, returning the bound token.
 
-  `options` MUST supply `:algorithm` and `:namespace` from outside the token (these are
-  replay-binding expectations, not token-supplied facts), and MAY supply `:max_age`,
-  `:clock_skew`, and `:resolver_context`. The body is re-derived, the expected algorithm and
+  `options` MUST supply `:algorithm`, `:namespace`, and `:max_age` from outside the token
+  (`:algorithm` and `:namespace` are replay-binding expectations, not token-supplied facts),
+  and MAY supply `:skew` (acceptance-window clock skew, default 0) and `:resolver_context`. The body is re-derived, the expected algorithm and
   namespace are bound against the token's, the window is validated, and the signature is
   verified under the resolved key material (`resolver.resolve(:verify, token, context)`).
   Every field of the decoded body is re-validated before the signature check, so a tampered

@@ -4,11 +4,10 @@ Date: 2026-08-19
 
 ## Status
 
-Accepted. Companion to [7. Persisted response-format compatibility]
-(0007-persisted-response-format-compatibility.md), which governs stored response payloads;
-this record governs the canonical token wire format — a different surface with a
-different bound. Ruled by the package owner from the option set (permanent freeze /
-window-bounded / none) on 2026-08-19.
+Accepted. Companion to [7. Persisted response-format compatibility](0007-persisted-response-format-compatibility.md),
+which governs stored response payloads; this record governs the canonical token wire
+format — a different surface with a different bound. Ruled by the package owner from the
+option set (permanent freeze / window-bounded / none) on 2026-08-19.
 
 ## Context
 
@@ -27,7 +26,8 @@ event for clients holding valid proofs through a deploy.
 **Window-bounded compatibility — no permanent freeze.** Within the 1.x line:
 
 - A reader verifies tokens minted by any earlier 1.x writer **while those tokens remain
-  inside their acceptance window** (`max_age` + `clock_skew`). The obligation expires
+  inside their acceptance window** (`max_age` + `clock_skew` as configured — the `skew:`
+  option at the `Token.verify/3` boundary). The obligation expires
   naturally with each token's own window; nothing is frozen forever.
 - Format evolution is **additive through the self-identifying envelope**: a new algorithm
   or envelope variant is a new self-identifying form; the previous form keeps verifying
