@@ -1,4 +1,4 @@
-# Consumer modules mirroring documentation/livebooks/idempotency-and-nonces.livemd.
+# Consumer modules mirroring the idempotency and nonce Livebooks.
 # Defined under test/support so they compile before protocol consolidation, and so the
 # livebook walkthrough test (and the livebook itself) share one canonical shape.
 defmodule AshOnetime.Test.LivebookExamples do

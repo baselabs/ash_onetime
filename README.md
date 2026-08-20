@@ -133,8 +133,9 @@ patterns.
 
 ## Status
 
-The latest published package is [v1.0.0 on Hex](https://hex.pm/packages/ash_onetime); this
-source tree prepares the additive v1.1.0 transaction-owned admission release. The
+The current package release is [v1.1.0 on Hex](https://hex.pm/packages/ash_onetime). It adds
+transaction-owned admission and logical partitions while preserving every 1.0 resource-DSL
+consumer under the `global` partition. The
 [source is public](https://github.com/baselabs/ash_onetime). Every protected action chooses
 `:idempotency` or `:one_time_nonce` and declares a nonempty scope; there is no default
 strategy or global scope fallback. PostgreSQL-authoritative admission, transactional Ash

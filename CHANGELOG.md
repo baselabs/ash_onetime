@@ -27,6 +27,12 @@ Ecto transaction rather than an Ash action.
 - Fresh generated installs include logical partitions. Existing installs run the new upgrade
   task once before admitting non-global transaction-owned work.
 
+### Documentation
+
+- Updated Getting Started, Upgrading, README status, and every runnable Livebook to select the
+  `1.1` package line. All three notebooks now link the transaction-owned admission guide, and a
+  documentation-currency tripwire keeps their install requirements aligned with `mix.exs`.
+
 ## v1.0.0 — 2026-08-19
 
 The 1.0 stability release: the surface contract is frozen (published in full in

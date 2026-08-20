@@ -1,5 +1,7 @@
 # Transaction-owned admission
 
+Available from `ash_onetime` 1.1.0.
+
 `AshOnetime.Transaction` is the public boundary for a host that already owns one authoritative
 Ecto transaction. It applies the same PostgreSQL-authoritative idempotency and nonce semantics
 without wrapping the host effect in an Ash action.

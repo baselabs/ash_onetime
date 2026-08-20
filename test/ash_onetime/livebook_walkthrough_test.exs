@@ -14,7 +14,6 @@ defmodule AshOnetime.LivebookWalkthroughTest do
 
   use AshOnetime.Test.StoreCase, async: false
 
-  alias AshOnetime.Test.LivebookExamples
   alias AshOnetime.Test.LivebookExamples.Charge
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL

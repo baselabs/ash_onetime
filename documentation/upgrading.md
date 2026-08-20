@@ -4,11 +4,11 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: f
 breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
 land in a minor), and each breaking change lands here with the exact edit to make.
 
-The latest published package is [v1.0.0](https://hex.pm/packages/ash_onetime); this source tree
-prepares v1.1.0. Pin the v1 minor you have qualified and review this page on each minor bump:
+The current package release is v1.1.0 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
+minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 1.0"}
+{:ash_onetime, "~> 1.1"}
 ```
 
 ## v1.1.0 — transaction-owned admission and logical partitions

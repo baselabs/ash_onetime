@@ -7,7 +7,7 @@ livebook:{"persist_outputs":true}
 ```elixir
 Mix.install(
   [
-    {:ash_onetime, "~> 1.0"},
+    {:ash_onetime, "~> 1.1"},
     {:ash_postgres, "~> 2.11"},
     {:kino, "~> 0.14", only: :dev}
   ],
@@ -277,3 +277,4 @@ File.rm_rf!(temp)
 - [Idempotency](idempotency.livemd) and [One-time nonces](nonces.livemd).
 - [External effects guide](https://hexdocs.pm/ash_onetime/external-effects.html).
 - [Security model](https://hexdocs.pm/ash_onetime/security.html) — the recovery contract.
+- [Transaction-owned admission](https://hexdocs.pm/ash_onetime/transaction-owned-admission.html) — keep local admission inside an existing transaction.
