@@ -39,8 +39,9 @@ From 1.0.0, `ash_onetime` publishes this compatibility contract:
 - **Experimental carve-out.** Features explicitly marked experimental in their docs carry
   no compatibility guarantee until a release marks them stable (nothing is marked
   experimental today).
-- **Pre-1.0 releases were non-binding.** Compatibility is guaranteed only between
-  consecutive 0.x releases (Elixir's pre-1.0 rule); from 1.0.0, strict semver.
+- **Pre-1.0 releases were non-binding.** Compatibility was guaranteed only within a 0.x
+  patch series (each 0.x minor could break — v0.7.0's floor raise did); from 1.0.0,
+  strict semver.
 - **Frozen formats.** Persisted response payloads (codec tag + contract-digest binding +
   digest + encoded bytes — ADR-0007) and the token wire format within its acceptance
   window (ADR-0008) are 1.x cross-version compatibility surfaces; see the repository's
