@@ -76,7 +76,7 @@ defmodule AshOnetime.Transaction do
   rescue
     _exception -> unavailable()
   catch
-    _kind, _reason -> unavailable()
+    kind, reason -> contain_or_propagate(kind, reason)
   end
 
   def idempotency(_repo, _options), do: invalid_request()
@@ -117,7 +117,7 @@ defmodule AshOnetime.Transaction do
   rescue
     _exception -> unavailable()
   catch
-    _kind, _reason -> unavailable()
+    kind, reason -> contain_or_propagate(kind, reason)
   end
 
   def nonce(_repo, _options), do: invalid_request()
@@ -140,7 +140,7 @@ defmodule AshOnetime.Transaction do
   rescue
     _exception -> unavailable()
   catch
-    _kind, _reason -> unavailable()
+    kind, reason -> contain_or_propagate(kind, reason)
   end
 
   def complete(_admission, _payload), do: invalid_request()
@@ -156,6 +156,7 @@ defmodule AshOnetime.Transaction do
          {:ok, scope_hash} <- identity_hash(:transaction_scope, scope),
          {:ok, key_hash} <- identity_hash(:transaction_key, key),
          prefix <- Keyword.get(options, :prefix),
+         :ok <- valid_prefix(prefix),
          target <- Postgres.for_repo(repo, prefix, logical_partition: partition) do
       {:ok,
        %{
@@ -182,6 +183,19 @@ defmodule AshOnetime.Transaction do
   defp operation_hash(_operation), do: invalid_request()
 
   defp identity_hash(domain, value), do: Fingerprint.compute(%{domain: domain, value: value})
+
+  defp valid_prefix(nil), do: :ok
+  defp valid_prefix(value) when is_binary(value), do: bounded_utf8(value, 63)
+  defp valid_prefix(_value), do: invalid_request()
+
+  defp contain_or_propagate(
+         :throw,
+         {DBConnection, connection_reference, _reason} = rollback
+       )
+       when is_reference(connection_reference),
+       do: throw(rollback)
+
+  defp contain_or_propagate(_kind, _reason), do: unavailable()
 
   defp resolve_idempotency(
          %Result{status: :admitted, transaction: :open, claim: %Claim{} = claim},

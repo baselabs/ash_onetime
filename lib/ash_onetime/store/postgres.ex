@@ -1092,7 +1092,12 @@ defmodule AshOnetime.Store.Postgres do
   rescue
     _exception -> {:error, :invalid_nonce_window}
   catch
-    _kind, _reason -> {:error, :invalid_nonce_window}
+    :throw, {DBConnection, connection_reference, _reason} = rollback
+    when is_reference(connection_reference) ->
+      throw(rollback)
+
+    _kind, _reason ->
+      {:error, :invalid_nonce_window}
   end
 
   defp validate_verified_facts(verified_facts, evaluated_at, max_age, skew) do

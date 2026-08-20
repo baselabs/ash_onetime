@@ -4,6 +4,40 @@ defmodule AshOnetime.MutationCheck do
   @database_url "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
 
   @mutations %{
+    "transaction-store-rollback-propagation" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "    :throw, {DBConnection, connection_reference, _reason} = rollback\n" <>
+          "    when is_reference(connection_reference) ->\n" <>
+          "      throw(rollback)",
+      mutated:
+        "    :throw, {DBConnection, connection_reference, _reason}\n" <>
+          "    when is_reference(connection_reference) ->\n" <>
+          "      {:error, :invalid_nonce_window}",
+      test: "test/ash_onetime/transaction_admission_test.exs",
+      tag: "transaction_rollback_propagation_mutation",
+      test_name: "a collaborator transaction rollback is never converted into an ordinary error",
+      assertion: "assert {:error, :clock_abort}"
+    },
+    "transaction-boundary-rollback-propagation" => %{
+      path: "lib/ash_onetime/transaction.ex",
+      original: "       do: throw(rollback)",
+      mutated: "       do: unavailable()",
+      test: "test/ash_onetime/transaction_admission_test.exs",
+      tag: "transaction_rollback_propagation_mutation",
+      test_name: "a collaborator transaction rollback is never converted into an ordinary error",
+      assertion: "assert {:error, :clock_abort}"
+    },
+    "transaction-prefix-validation" => %{
+      path: "lib/ash_onetime/transaction.ex",
+      original: "         :ok <- valid_prefix(prefix),",
+      mutated: "         :ok <- :ok,",
+      test: "test/ash_onetime/transaction_admission_test.exs",
+      tag: "transaction_prefix_validation_mutation",
+      test_name:
+        "the public option contract rejects extras, duplicates, and malformed partitions",
+      assertion: "code: :invalid_request"
+    },
     "source-site-audit-proof" => %{
       path: "scripts/check_mutations.exs",
       original: "    audit_registered_" <> "sites!()",

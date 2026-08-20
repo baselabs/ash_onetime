@@ -2,7 +2,7 @@ defmodule AshOnetime.TransactionAdmissionTest do
   use AshOnetime.Test.StoreCase, async: false
 
   alias AshOnetime.{Error, Transaction, Verified}
-  alias AshOnetime.Test.Clock
+  alias AshOnetime.Test.{Clock, RollbackClock}
 
   @moduletag :store
 
@@ -93,6 +93,7 @@ defmodule AshOnetime.TransactionAdmissionTest do
     assert {:ok, :ok} = Repo.transaction(fn -> Transaction.nonce(Repo, nonce) end)
   end
 
+  @tag :transaction_prefix_validation_mutation
   test "the public option contract rejects extras, duplicates, and malformed partitions", %{
     prefix: prefix
   } do
@@ -103,7 +104,11 @@ defmodule AshOnetime.TransactionAdmissionTest do
           base ++ [key: "duplicate"],
           Keyword.replace!(base, :partition, ""),
           Keyword.replace!(base, :partition, String.duplicate("x", 256)),
-          Keyword.replace!(base, :partition, <<255>>)
+          Keyword.replace!(base, :partition, <<255>>),
+          Keyword.replace!(base, :prefix, ""),
+          Keyword.replace!(base, :prefix, String.duplicate("x", 64)),
+          Keyword.replace!(base, :prefix, <<255>>),
+          Keyword.replace!(base, :prefix, 123)
         ] do
       assert {:ok, {:error, %Error{code: :invalid_request}}} =
                Repo.transaction(fn -> Transaction.idempotency(Repo, options) end)
@@ -120,6 +125,19 @@ defmodule AshOnetime.TransactionAdmissionTest do
 
     assert {:ok, {:error, %Error{code: :invalid_request}}} =
              Repo.transaction(fn -> Transaction.nonce(Repo, changed) end)
+  end
+
+  @tag :transaction_rollback_propagation_mutation
+  test "a collaborator transaction rollback is never converted into an ordinary error", %{
+    prefix: prefix
+  } do
+    options =
+      prefix
+      |> nonce_options("tenant-a", "rollback-clock")
+      |> Keyword.replace!(:clock, RollbackClock)
+
+    assert {:error, :clock_abort} =
+             Repo.transaction(fn -> Transaction.nonce(Repo, options) end)
   end
 
   test "replay is bound to the exact response codec", %{prefix: prefix} do
