@@ -5,6 +5,15 @@ defmodule AshOnetime.Token do
   The signed body binds the algorithm, key identifier, namespace, keyed-effect
   key, issuance instant, and optional expiry instant. Verification requires an
   expected algorithm and namespace supplied outside the token.
+
+  ## 1.x compatibility (window-bounded)
+
+  Within 1.x, a reader verifies tokens minted by any earlier 1.x writer while those
+  tokens remain inside their acceptance window (`max_age` + `clock_skew`) — the
+  obligation expires with each token's own window, nothing is frozen forever. New
+  envelope forms are additive; a breaking format change waits out the longest
+  configured window (or verifies both forms through the transition). See
+  `docs/adr/0008-token-wire-format-compatibility.md`.
   """
 
   alias AshOnetime.Canonical

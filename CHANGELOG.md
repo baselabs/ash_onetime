@@ -26,6 +26,9 @@ All notable changes to this project are documented in this file.
 
 ### Documentation
 
+- ADR-0008 records the token wire-format compatibility rule (window-bounded: a 1.x
+  reader verifies tokens minted by any earlier 1.x writer while inside their acceptance
+  window; no permanent freeze) alongside the persisted response-format rules (ADR-0007).
 - The operations runbooks' diagnostics are all executable (each snippet verified against
   a live database): the vacuous default-partition count became a stranded-row count, the
   non-runnable IEx backlog snippet was replaced by its SQL path, and the pool diagnostic

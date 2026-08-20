@@ -6,7 +6,9 @@ Date: 2026-08-19
 
 Accepted. Extends the 1.0 frozen-surface list (D1, #2) with the persisted response format
 explicitly. This record must land before the 1.0.0 tag — it names a constraint the freeze
-implies (D5, #6).
+implies (D5, #6). Governs stored response payloads; the canonical token wire format is a
+sibling surface governed by [8. Token wire-format compatibility](0008-token-wire-format-compatibility.md)
+(window-bounded, not retention-bounded).
 
 ## Context
 
