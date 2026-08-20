@@ -2,7 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## v1.0.0 — 2026-08-19
+
+The 1.0 stability release: the surface contract is frozen (published in full in
+[upgrading.md](documentation/upgrading.md) — docs are the contract; breaking changes to
+the documented surface now happen only at 2.0, with reserved break-rights for security,
+behavior-correcting bug fixes, and new compiler/linter warnings). Pre-1.0 (0.x) releases
+were explicitly non-binding; 1.0.0 is the compatibility baseline. The persisted response
+format (ADR-0007) and the token wire format (ADR-0008, window-bounded) are frozen
+compatibility surfaces.
 
 ### Fixed
 

@@ -11,6 +11,41 @@ to the minor range to pick up patches automatically and review this page on each
 {:ash_onetime, "~> 1.0"}
 ```
 
+## v1.0.0 — the stability contract
+
+From 1.0.0, `ash_onetime` publishes this compatibility contract:
+
+- **The public surface is the published documentation.** The stable API is exactly what
+  the docs show at 1.0.0: the `AshOnetime.Resource` DSL (pinned by the cheat-sheet
+  freshness gate), every function with a public `@doc` in a module with a public
+  `@moduledoc` (the hexdocs reference surface), the closed telemetry surface (event
+  names, measurements, metadata shapes, `result_class` atoms), the typed-error and
+  replay-result shapes, the generated install DDL and flow, and the mix tasks' CLI.
+  `@doc false`/`@moduledoc false` seams are internal even where tracked by the
+  architecture census — the census is the drift guard, not the promise.
+- **The promise.** Code written against the documented 1.0 surface compiles and behaves
+  compatibly across the whole v1 branch. Breaking changes to the public surface happen
+  only at 2.0. Additions ship in minors; fixes in patches.
+- **Deprecations** are announced in the CHANGELOG with compile-time warnings where
+  feasible and removed only at a major.
+- **Reserved break-rights** (incompatible change permitted, each explained in the release
+  notes): security (the v0.7.0 EEF-CVE floor repair is the operating precedent),
+  behavior-correcting bug fixes, and new compiler/linter warnings.
+- **Ash floor raises after 1.0.** Security-driven raises ship as a minor immediately
+  (never held for a major number) with an entry on this page; non-security raises ship as
+  a minor only when the CI compatibility matrix is proven green on the new floor and this
+  page documents the operator step. Breaking changes to ash_onetime's own DSL/API remain
+  major-only; a future Ash 4 is a matrix-extension event first.
+- **Experimental carve-out.** Features explicitly marked experimental in their docs carry
+  no compatibility guarantee until a release marks them stable (nothing is marked
+  experimental today).
+- **Pre-1.0 releases were non-binding.** Compatibility is guaranteed only between
+  consecutive 0.x releases (Elixir's pre-1.0 rule); from 1.0.0, strict semver.
+- **Frozen formats.** Persisted response payloads (codec tag + contract-digest binding +
+  digest + encoded bytes — ADR-0007) and the token wire format within its acceptance
+  window (ADR-0008) are 1.x cross-version compatibility surfaces; see the repository's
+  `docs/adr/` records for the rules.
+
 ## v0.6.0 — enhancements (no upgrade action)
 
 v0.6.0 is an **additive** minor bump: two new capabilities (a `mix ash_onetime.doctor`
