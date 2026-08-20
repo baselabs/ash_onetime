@@ -8,6 +8,19 @@ defmodule AshOnetime.Admission do
   @private_state :ash_onetime_admission
   @private_replay :ash_onetime_replay
 
+  # Compile-time gate mirroring Token's @allow_clock_override: default OFF in every build
+  # environment; the ash_onetime test suite opts in via config/test.exs. The prior
+  # Mix.env() == :test gate was deployment-fragile — a consumer building deps with
+  # MIX_ENV=test shipped the Process-dictionary store redirect live, where any process
+  # could substitute the authoritative admission store by name. Application.compile_env
+  # default-off removes that: the seam (and the private store/0 redirect it feeds) exists
+  # only in builds that explicitly configure it, regardless of MIX_ENV.
+  @allow_admission_override Application.compile_env(
+                              :ash_onetime,
+                              :allow_admission_override,
+                              false
+                            )
+
   defmodule State do
     @moduledoc false
     @enforce_keys [:class, :strategy, :resource, :action]
@@ -318,7 +331,9 @@ defmodule AshOnetime.Admission do
     end
   end
 
-  if Mix.env() == :test do
+  # The seam is ABSENT in builds without the explicit opt-in — calling it there fails
+  # loudly with an UndefinedFunctionError and no Process-dictionary redirect ships.
+  if @allow_admission_override do
     @doc false
     def put_test_store(module) when is_atom(module),
       do: Process.put({__MODULE__, :test_store}, module)
@@ -1177,7 +1192,7 @@ defmodule AshOnetime.Admission do
   defp put_private(%Ash.Changeset{} = subject, key, value),
     do: Ash.Changeset.set_context(subject, %{private: %{key => value}})
 
-  if Mix.env() == :test do
+  if @allow_admission_override do
     defp store, do: Process.get({__MODULE__, :test_store}) || AshOnetime.Store
   else
     defp store, do: AshOnetime.Store
