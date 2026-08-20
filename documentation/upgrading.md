@@ -1,14 +1,14 @@
 # Upgrading
 
-Version-to-version migration notes. `ash_onetime` follows semantic versioning: breaking DSL
-or contract changes bump the minor version (the library is pre-1.0), and each breaking
-change lands here with the exact edit to make.
+Version-to-version migration notes. `ash_onetime` follows semantic versioning: from 1.0.0,
+breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
+land in a minor), and each breaking change lands here with the exact edit to make.
 
 The published package is [v1.0.0](https://hex.pm/packages/ash_onetime). Set your dependency
 to the minor range to pick up patches automatically and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 0.7"}
+{:ash_onetime, "~> 1.0"}
 ```
 
 ## v0.6.0 — enhancements (no upgrade action)

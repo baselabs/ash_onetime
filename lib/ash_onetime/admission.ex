@@ -10,11 +10,11 @@ defmodule AshOnetime.Admission do
 
   # Compile-time gate mirroring Token's @allow_clock_override: default OFF in every build
   # environment; the ash_onetime test suite opts in via config/test.exs. The prior
-  # Mix.env() == :test gate was deployment-fragile — a consumer building deps with
-  # MIX_ENV=test shipped the Process-dictionary store redirect live, where any process
-  # could substitute the authoritative admission store by name. Application.compile_env
+  # test-env-only Mix gate was deployment-fragile — a consumer building deps with a test
+  # MIX_ENV shipped the Process-dictionary store redirect live, where any process could
+  # substitute the authoritative admission store by name. Application.compile_env
   # default-off removes that: the seam (and the private store/0 redirect it feeds) exists
-  # only in builds that explicitly configure it, regardless of MIX_ENV.
+  # only in builds that explicitly configure it, regardless of build environment.
   @allow_admission_override Application.compile_env(
                               :ash_onetime,
                               :allow_admission_override,

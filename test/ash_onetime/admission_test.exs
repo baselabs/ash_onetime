@@ -161,4 +161,77 @@ defmodule AshOnetime.AdmissionTest do
     # [:action, :resource]. This unit suite cannot drive the verifier; the contract is pinned
     # there.
   end
+
+  describe "the test seam is default-off in every build (gate tripwire)" do
+    # The Process-dictionary store redirect is compiled only when a build explicitly sets
+    # config :ash_onetime, allow_admission_override: true (mirroring Token's
+    # @allow_clock_override gate; see the gate comment in Admission). Two tripwires pin
+    # that property: a source-shape assertion (the gate is Application.compile_env on the
+    # named key, and Mix.env() never appears in the module — the deployment-fragile
+    # pattern Token abandoned), and a dev-build subprocess proving the seam functions are
+    # COMPILED OUT of a build that has not opted in (config/test.exs opts the suite in, so
+    # only an out-of-suite build can observe the off branch).
+    test "the gate is compile_env on the named key and Mix.env is absent from the module" do
+      source = File.read!(Path.join(__DIR__, "../../lib/ash_onetime/admission.ex"))
+
+      assert source =~ "@allow_admission_override Application.compile_env("
+      assert source =~ ":allow_admission_override,"
+      assert source =~ "if @allow_admission_override do"
+      refute source =~ "Mix.env()"
+    end
+
+    test "the seam functions are absent from a dev build without the opt-in" do
+      # The dev subprocess inherits a clean env: config/config.exs imports test.exs ONLY
+      # for the test env, so in MIX_ENV=dev the allow_admission_override config is unset
+      # and the gate freezes to false at the dev build's compile time — the seam must be
+      # absent there.
+      script = ~s'''
+      seam =
+        {function_exported?(AshOnetime.Admission, :put_test_store, 1),
+         function_exported?(AshOnetime.Admission, :reset_test_store, 0),
+         function_exported?(AshOnetime.Admission, :put_test_state, 2)}
+
+      IO.inspect(seam, label: "admission_seam")
+      '''
+
+      build_path =
+        Path.join([
+          File.cwd!(),
+          "_build",
+          "ash-onetime-seam-off-#{System.pid()}-#{System.unique_integer([:positive, :monotonic])}"
+        ])
+
+      on_exit(fn -> File.rm_rf!(build_path) end)
+      link_dependency_builds!(Mix.Project.build_path(), build_path)
+
+      {output, status} =
+        try do
+          System.cmd("mix", ["run", "--no-start", "--no-deps-check", "-e", script],
+            env: [{"MIX_BUILD_PATH", build_path}, {"MIX_ENV", "dev"}],
+            stderr_to_stdout: true
+          )
+        after
+          File.rm_rf!(build_path)
+        end
+
+      refute File.exists?(build_path)
+      assert status == 0
+      assert output =~ "admission_seam: {false, false, false}"
+    end
+  end
+
+  # Mirrors TokenTest's private helper of the same shape: links dependency builds into an
+  # isolated build path so the subprocess compiles only ash_onetime fresh.
+  defp link_dependency_builds!(source_build_path, target_build_path) do
+    target_lib_path = Path.join(target_build_path, "lib")
+    File.mkdir_p!(target_lib_path)
+
+    source_build_path
+    |> Path.join("lib/*")
+    |> Path.wildcard()
+    |> Enum.reject(&(Path.basename(&1) == "ash_onetime"))
+    |> Enum.each(fn dependency_path ->
+      File.ln_s!(dependency_path, Path.join(target_lib_path, Path.basename(dependency_path)))
+    end)
+  end
 end
