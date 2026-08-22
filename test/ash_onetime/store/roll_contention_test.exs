@@ -13,9 +13,8 @@ defmodule AshOnetime.Store.RollContentionTest do
 
   alias AshOnetime.Store
   alias AshOnetime.Store.Postgres
-  alias AshOnetime.Test.{Migration, Repo}
+  alias AshOnetime.Test.{Migration, RealConnection, Repo}
   alias Ecto.Adapters.SQL
-  alias Ecto.Adapters.SQL.Sandbox
 
   @moduletag :store
 
@@ -37,7 +36,7 @@ defmodule AshOnetime.Store.RollContentionTest do
       Task.async_stream(
         1..2,
         fn _i ->
-          with_owner(fn -> Store.roll_partitions(target, months) end)
+          RealConnection.with_connection(fn -> Store.roll_partitions(target, months) end)
         end,
         ordered: false,
         timeout: 30_000
@@ -47,17 +46,22 @@ defmodule AshOnetime.Store.RollContentionTest do
     # First convergence roll: catches up whatever the concurrent rolls missed (any count).
     # If concurrency had corrupted the state (a half-created partition, a stale catalog entry),
     # this roll would fail.
-    assert {:ok, _} = with_owner(fn -> Store.roll_partitions(target, months) end)
+    assert {:ok, _} =
+             RealConnection.with_connection(fn -> Store.roll_partitions(target, months) end)
 
     # Second convergence roll: everything has converged — must report 0 created. If the
     # concurrent rolls or the first convergence left the state inconsistent, this would fail
     # or report > 0.
     assert {:ok, %{partitions_created: 0}} =
-             with_owner(fn -> Store.roll_partitions(target, months) end)
+             RealConnection.with_connection(fn -> Store.roll_partitions(target, months) end)
 
     # The forward months exist at least once (no missing — the install covers 0..12, rolls add
     # 13..months-1; the total named partitions is >= months).
-    children = with_owner(fn -> partition_children(prefix, "ash_onetime_response_payloads") end)
+    children =
+      RealConnection.with_connection(fn ->
+        partition_children(prefix, "ash_onetime_response_payloads")
+      end)
+
     forward = Enum.filter(children, &(&1 =~ ~r/^ash_onetime_response_payloads_\d{4}_\d{2}$/))
     assert length(forward) >= months
   end
@@ -65,12 +69,25 @@ defmodule AshOnetime.Store.RollContentionTest do
   test "roll_partitions is idempotent even across separate real connections", %{prefix: prefix} do
     target = Postgres.for_repo(Repo, prefix)
 
-    with_owner(fn -> Store.roll_partitions(target, 15) end)
+    RealConnection.with_connection(fn -> Store.roll_partitions(target, 15) end)
 
     result =
-      with_owner(fn -> Store.roll_partitions(target, 15) end)
+      RealConnection.with_connection(fn -> Store.roll_partitions(target, 15) end)
 
     assert {:ok, %{partitions_created: 0}} = result
+  end
+
+  # The sandbox-ownership race tripwire: back-to-back real connections acquired and
+  # released in ONE process must never collide on a stale ownership allowance. Under the
+  # previous `Sandbox.start_owner!/2` helper this crashes deterministically on the first
+  # pair (`{:badmatch, {:already, :allowed}}` inside start_owner! — the full-suite flake
+  # this file used to carry); the in-process checkout/checkin helper cleans the caller's
+  # ownership entry synchronously, so 100 immediate cycles are clean. Pure ownership churn
+  # (no SQL), so the loop costs milliseconds.
+  test "back-to-back real connections in one process never collide on stale allowance" do
+    for _ <- 1..100 do
+      assert :ok = RealConnection.with_connection(fn -> :ok end)
+    end
   end
 
   # L3: the partition-roll advisory lock is derived per-prefix so distinct tenants do not
@@ -108,22 +125,6 @@ defmodule AshOnetime.Store.RollContentionTest do
       prefix: prefix,
       logical_partition: "global"
     }
-
-  defp with_owner(callback) do
-    owner = Sandbox.start_owner!(Repo, shared: false, sandbox: false)
-
-    try do
-      callback.()
-    after
-      if Process.alive?(owner) do
-        try do
-          Sandbox.stop_owner(owner)
-        catch
-          :exit, _reason -> :ok
-        end
-      end
-    end
-  end
 
   defp partition_children(prefix, parent) do
     %{rows: rows} =

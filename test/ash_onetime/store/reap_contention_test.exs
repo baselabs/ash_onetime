@@ -3,9 +3,8 @@ defmodule AshOnetime.Store.ReapContentionTest do
 
   alias AshOnetime.Store
   alias AshOnetime.Store.{Claim, Postgres, Result}
-  alias AshOnetime.Test.{Migration, Repo}
+  alias AshOnetime.Test.{Migration, RealConnection, Repo}
   alias Ecto.Adapters.SQL
-  alias Ecto.Adapters.SQL.Sandbox
 
   @moduletag :store
 
@@ -76,13 +75,13 @@ defmodule AshOnetime.Store.ReapContentionTest do
     observer = observer!()
     claim = insert_abandoned_processing!(prefix, "reap-then-complete")
 
-    assert {:ok, 1} = with_owner(fn -> Store.reap(target, 100, @horizon) end)
+    assert {:ok, 1} = RealConnection.with_connection(fn -> Store.reap(target, 100, @horizon) end)
 
     payload = "reap-orphan-guard"
     digest = :crypto.hash(:sha256, payload)
 
     result =
-      with_owner(fn ->
+      RealConnection.with_connection(fn ->
         Repo.transaction(fn -> Store.complete(target, claim, "test", digest, payload) end)
       end)
 
@@ -102,7 +101,7 @@ defmodule AshOnetime.Store.ReapContentionTest do
     end
 
     result =
-      with_owner(fn ->
+      RealConnection.with_connection(fn ->
         Repo.transaction(fn ->
           payload = "reap-skip-locked-payload"
 
@@ -125,7 +124,7 @@ defmodule AshOnetime.Store.ReapContentionTest do
       :start -> :ok
     end
 
-    result = with_owner(fn -> Store.reap(target, 100, @horizon) end)
+    result = RealConnection.with_connection(fn -> Store.reap(target, 100, @horizon) end)
     send(parent, {:reaper_done, self(), result})
   end
 
@@ -134,7 +133,7 @@ defmodule AshOnetime.Store.ReapContentionTest do
   defp insert_abandoned_processing!(prefix, label) do
     claim_id = Ecto.UUID.generate()
 
-    with_owner(fn ->
+    RealConnection.with_connection(fn ->
       Repo.transaction(fn ->
         SQL.query!(
           Repo,
@@ -184,22 +183,6 @@ defmodule AshOnetime.Store.ReapContentionTest do
     end)
 
     observer
-  end
-
-  defp with_owner(callback) do
-    owner = Sandbox.start_owner!(Repo, shared: false, sandbox: false)
-
-    try do
-      callback.()
-    after
-      if Process.alive?(owner) do
-        try do
-          Sandbox.stop_owner(owner)
-        catch
-          :exit, _reason -> :ok
-        end
-      end
-    end
   end
 
   defp claim_state(observer, prefix, id) do

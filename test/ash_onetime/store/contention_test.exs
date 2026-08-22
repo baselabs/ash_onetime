@@ -3,7 +3,7 @@ defmodule AshOnetime.Store.ContentionTest do
 
   alias AshOnetime.Store
   alias AshOnetime.Store.{Claim, Postgres, Result}
-  alias AshOnetime.Test.{Migration, Repo}
+  alias AshOnetime.Test.{Migration, RealConnection, Repo}
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -107,7 +107,7 @@ defmodule AshOnetime.Store.ContentionTest do
     observer = observer!()
 
     assert {:ok, %Result{status: :processing, claim: claim}} =
-             with_owner(fn ->
+             RealConnection.with_connection(fn ->
                Repo.transaction(fn -> Store.claim(Postgres.for_repo(Repo, prefix), request) end)
              end)
 
@@ -161,7 +161,10 @@ defmodule AshOnetime.Store.ContentionTest do
       :start -> :ok
     end
 
-    result = with_owner(fn -> winner_transaction(parent, prefix, request, ledger?) end)
+    result =
+      RealConnection.with_connection(fn ->
+        winner_transaction(parent, prefix, request, ledger?)
+      end)
 
     send(parent, {:winner_done, self(), result})
   end
@@ -185,7 +188,7 @@ defmodule AshOnetime.Store.ContentionTest do
       :start -> :ok
     end
 
-    result = with_owner(fn -> loser_transaction(parent, prefix, request) end)
+    result = RealConnection.with_connection(fn -> loser_transaction(parent, prefix, request) end)
 
     send(parent, {:loser_done, self(), result})
   end
@@ -204,7 +207,8 @@ defmodule AshOnetime.Store.ContentionTest do
       :start -> :ok
     end
 
-    result = with_owner(fn -> timeout_transaction(parent, prefix, request) end)
+    result =
+      RealConnection.with_connection(fn -> timeout_transaction(parent, prefix, request) end)
 
     send(parent, {:loser_done, self(), result})
   end
@@ -226,7 +230,7 @@ defmodule AshOnetime.Store.ContentionTest do
       :start -> :ok
     end
 
-    with_owner(fn ->
+    RealConnection.with_connection(fn ->
       _result =
         Repo.transaction(fn ->
           send(parent, {:loser_started, self(), backend_pid!()})
@@ -246,22 +250,6 @@ defmodule AshOnetime.Store.ContentionTest do
     end)
 
     observer
-  end
-
-  defp with_owner(callback) do
-    owner = Sandbox.start_owner!(Repo, shared: false, sandbox: false)
-
-    try do
-      callback.()
-    after
-      if Process.alive?(owner) do
-        try do
-          Sandbox.stop_owner(owner)
-        catch
-          :exit, _reason -> :ok
-        end
-      end
-    end
   end
 
   defp waiting_observation(observer, loser_backend) do
@@ -402,7 +390,7 @@ defmodule AshOnetime.Store.ContentionTest do
   end
 
   defp insert_expired_conflict!(prefix, old_id, request) do
-    with_owner(fn ->
+    RealConnection.with_connection(fn ->
       Repo.transaction(fn ->
         SQL.query!(
           Repo,

@@ -592,10 +592,11 @@ defmodule AshOnetime.Store.PartitionTest do
 
   defp relation(prefix, name), do: ~s("#{prefix}"."#{name}")
 
-  defp flush_telemetry do
-    Process.sleep(20)
-    flush_telemetry([])
-  end
+  # :telemetry handlers run synchronously in the emitting process, and the emission this
+  # observes (Store.roll_partitions's :cleanup event) is triggered by a call made from the
+  # test process itself — the message is already in the mailbox when the call returns, so a
+  # zero-timeout drain is deterministic; no settling sleep is needed.
+  defp flush_telemetry, do: flush_telemetry([])
 
   defp flush_telemetry(acc) do
     receive do

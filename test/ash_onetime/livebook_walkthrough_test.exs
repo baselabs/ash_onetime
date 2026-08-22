@@ -166,11 +166,11 @@ defmodule AshOnetime.LivebookWalkthroughTest do
     count
   end
 
-  defp flush_events do
-    # Give telemetry handlers a moment to flush, then drain the mailbox of event messages.
-    Process.sleep(50)
-    flush_events([])
-  end
+  # :telemetry handlers run synchronously in the emitting process, and every emission this
+  # file observes (:admission/:conflict from charge and redeem) is triggered by calls made
+  # from the test process itself — the messages are already in the mailbox when the calls
+  # return, so a zero-timeout drain is deterministic; no settling sleep is needed.
+  defp flush_events, do: flush_events([])
 
   defp flush_events(acc) do
     receive do

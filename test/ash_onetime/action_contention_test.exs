@@ -2,7 +2,7 @@ defmodule AshOnetime.ActionContentionTest do
   use ExUnit.Case, async: false
 
   alias AshOnetime.Test.ActionExamples.Resource
-  alias AshOnetime.Test.{Migration, Repo}
+  alias AshOnetime.Test.{Migration, RealConnection, Repo}
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -75,7 +75,7 @@ defmodule AshOnetime.ActionContentionTest do
 
   defp action_worker(parent, label, prefix, input) do
     result =
-      with_owner(fn ->
+      RealConnection.with_connection(fn ->
         Resource
         |> Ash.Changeset.for_create(:charge, input)
         |> Ash.Changeset.set_tenant(prefix)
@@ -128,16 +128,6 @@ defmodule AshOnetime.ActionContentionTest do
     end)
 
     observer
-  end
-
-  defp with_owner(callback) do
-    owner = Sandbox.start_owner!(Repo, shared: false, sandbox: false)
-
-    try do
-      callback.()
-    after
-      if Process.alive?(owner), do: Sandbox.stop_owner(owner)
-    end
   end
 
   defp count(observer, prefix, table) do

@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.AshOnetime.PruneTest do
   use AshOnetime.Test.StoreCase, async: false
 
-  alias Ecto.Adapters.SQL.Sandbox
+  alias AshOnetime.Test.RealConnection
   alias Mix.Tasks.AshOnetime.Prune
 
   @moduletag :store
@@ -78,7 +78,7 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
 
     worker =
       spawn(fn ->
-        result = with_unboxed_owner(fn -> Store.cleanup(target, 100, 10) end)
+        result = RealConnection.with_connection(fn -> Store.cleanup(target, 100, 10) end)
         send(parent, {:prune_done, self(), result})
       end)
 
@@ -267,16 +267,6 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
     end)
 
     connection
-  end
-
-  defp with_unboxed_owner(callback) do
-    owner = Sandbox.start_owner!(Repo, shared: false, sandbox: false)
-
-    try do
-      callback.()
-    after
-      if Process.alive?(owner), do: Sandbox.stop_owner(owner)
-    end
   end
 
   defp waiting_partition_prune(observer, _prefix) do
