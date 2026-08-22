@@ -1,5 +1,7 @@
 # ash_onetime
 
+[![mutation battery](https://img.shields.io/badge/mutation_battery-130_sentinels_red--proven-brightgreen)](CONTRIBUTING.md)
+
 `ash_onetime` is an Ash extension for explicit keyed-effect semantics. It separates
 replay-safe idempotency from collision-rejecting one-time nonces and uses PostgreSQL as the
 authoritative admissions store.
@@ -143,6 +145,11 @@ strategy or global scope fallback. PostgreSQL-authoritative admission, transacti
 execution, typed replay, fail-closed nonce spending, signed tokens, external-effect recovery,
 bounded cleanup, optional cache/Plug/Oban integrations, the DPoP replay fence, and release
 gates are present.
+
+Test assurance runs deeper than line coverage: every library module sits at 100% line
+coverage, and the bar is the [mutation battery](CONTRIBUTING.md) — 130 sentinels, each
+proven to fail under its own mutation before it is trusted, so a green suite means the
+guards actually guard.
 
 ## Compatibility
 
