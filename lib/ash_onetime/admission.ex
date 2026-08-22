@@ -1132,15 +1132,21 @@ defmodule AshOnetime.Admission do
 
   defp bounded_binary(_value, _maximum), do: :error
 
-  defp sanitize_request(%Claim.Request{strategy: :one_time_nonce} = request),
+  # Exposed as @doc false public seams for direct unit coverage of the stripping contract
+  # (mirrors bounded_callback_context/1): the nonce request's verified/clock stripping and
+  # the nonce claim's verifier_id stripping are pure functions, but reaching them through
+  # reserve/3 requires a live authoritative store.
+  @doc false
+  def sanitize_request(%Claim.Request{strategy: :one_time_nonce} = request),
     do: %{request | verified: nil, clock: nil}
 
-  defp sanitize_request(%Claim.Request{} = request), do: request
+  def sanitize_request(%Claim.Request{} = request), do: request
 
-  defp sanitize_claim(%Claim{strategy: :one_time_nonce} = claim),
+  @doc false
+  def sanitize_claim(%Claim{strategy: :one_time_nonce} = claim),
     do: %{claim | verifier_id: nil}
 
-  defp sanitize_claim(%Claim{} = claim), do: claim
+  def sanitize_claim(%Claim{} = claim), do: claim
 
   defp valid_verified(%Verified{} = verified, max_key) do
     with :ok <- bounded_binary(verified.key, max_key),

@@ -10,7 +10,9 @@ defmodule AshOnetime.AdmissionTest do
 
   alias AshOnetime.Admission
   alias AshOnetime.Admission.State
+  alias AshOnetime.Resource.Info, as: ResourceInfo
   alias AshOnetime.Store.{Claim, Postgres, Result}
+  alias AshOnetime.Verified
 
   # A minimal Ash struct that carries the private context the admission functions read/write.
   # Both Ash.Changeset and Ash.ActionInput expose set_context/2 and a context field, so a
@@ -179,6 +181,519 @@ defmodule AshOnetime.AdmissionTest do
              )
   end
 
+  describe "sanitize_request/1 (the stripping seam)" do
+    # H31: the nonce request carries trusted verification facts (the Verified components and
+    # the clock module) only as far as the store claim; the state that survives into the
+    # admission decision must not carry them. These tests pin the pure stripping directly.
+
+    test "a one_time_nonce request loses verified and clock, everything else survives" do
+      {:ok, request} =
+        Claim.nonce(
+          operation_hash: :crypto.hash(:sha256, "operation"),
+          scope_hash: :crypto.hash(:sha256, "scope"),
+          key_hash: :crypto.hash(:sha256, "key"),
+          verified: [
+            %Verified{
+              key: "nonce-key",
+              issued_at: DateTime.utc_now(),
+              verifier_id: "unit-verifier"
+            }
+          ],
+          max_age: 60,
+          clock_skew: 5
+        )
+
+      sanitized = Admission.sanitize_request(request)
+
+      assert sanitized.verified == nil
+      assert sanitized.clock == nil
+      assert %{sanitized | verified: request.verified, clock: request.clock} == request
+    end
+
+    test "an idempotency request passes through untouched" do
+      {:ok, request} =
+        Claim.idempotency(
+          operation_hash: :crypto.hash(:sha256, "operation"),
+          scope_hash: :crypto.hash(:sha256, "scope"),
+          key_hash: :crypto.hash(:sha256, "key"),
+          fingerprint: :crypto.hash(:sha256, "fingerprint"),
+          retention_seconds: 60
+        )
+
+      assert Admission.sanitize_request(request) == request
+    end
+  end
+
+  describe "sanitize_claim/1 (the stripping seam)" do
+    # H31: a nonce claim's verifier_id is burn-time evidence; the state that execution
+    # proceeds with must not retain it. The idempotency claim carries no verification facts.
+
+    test "a one_time_nonce claim loses verifier_id, everything else survives" do
+      now = DateTime.utc_now()
+
+      claim = %Claim{
+        strategy: :one_time_nonce,
+        id: Ecto.UUID.generate(),
+        logical_partition: "tenant-a",
+        operation_hash: :crypto.hash(:sha256, "operation"),
+        scope_hash: :crypto.hash(:sha256, "scope"),
+        key_hash: :crypto.hash(:sha256, "key"),
+        issued_at: now,
+        verifier_id: "unit-verifier",
+        admitted_at: now,
+        retain_until: DateTime.add(now, 60),
+        inserted_at: now
+      }
+
+      sanitized = Admission.sanitize_claim(claim)
+
+      assert sanitized.verifier_id == nil
+      assert %{sanitized | verifier_id: claim.verifier_id} == claim
+    end
+
+    test "an idempotency claim passes through untouched" do
+      now = DateTime.utc_now()
+
+      claim = %Claim{
+        strategy: :idempotency,
+        id: Ecto.UUID.generate(),
+        logical_partition: "tenant-a",
+        operation_hash: :crypto.hash(:sha256, "operation"),
+        scope_hash: :crypto.hash(:sha256, "scope"),
+        key_hash: :crypto.hash(:sha256, "key"),
+        fingerprint: :crypto.hash(:sha256, "fingerprint"),
+        state: :processing,
+        admitted_at: now,
+        retain_until: DateTime.add(now, 60),
+        inserted_at: now
+      }
+
+      assert Admission.sanitize_claim(claim) == claim
+    end
+  end
+
+  describe "resolve/5: the :admitted arm" do
+    # H31: every execution_class/2 mapping plus the invariant-reject shapes. Each test names
+    # the failing function directly — synthetic Store.Result/Admission.State, zero Postgres.
+
+    test "idempotency local claim executes with class :execute" do
+      request = idempotency_request()
+      claim = idempotency_claim(request)
+      result = Result.success(:admitted, claim: claim)
+
+      assert {:execute, resolved} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+
+      assert resolved.class == :execute
+      assert resolved.claim == claim
+    end
+
+    test "idempotency committed external claim maps to :external_execute under a committed transaction" do
+      request = idempotency_request()
+      claim = idempotency_claim(request)
+      result = Result.success(:admitted, claim: claim) |> Result.committed()
+
+      assert {:execute, resolved} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :committed_external_claim
+               )
+
+      assert resolved.class == :external_execute
+    end
+
+    test "idempotency locked external finalize maps to :external_execute under an open transaction" do
+      request = idempotency_request()
+      result = Result.success(:admitted, claim: idempotency_claim(request))
+
+      assert {:execute, resolved} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :locked_external_finalize
+               )
+
+      assert resolved.class == :external_execute
+    end
+
+    test "a nonce admission executes with class :nonce and the claim stripped of verifier_id" do
+      request = nonce_request()
+      claim = nonce_claim(request)
+      result = Result.success(:admitted, claim: claim)
+
+      assert {:execute, resolved} =
+               Admission.resolve(
+                 result,
+                 decision_state(:one_time_nonce, request),
+                 %{strategy: :one_time_nonce},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+
+      assert resolved.class == :nonce
+      assert resolved.claim.verifier_id == nil
+      assert %{resolved.claim | verifier_id: claim.verifier_id} == claim
+    end
+
+    test "a committed nonce admission (the burn-marker path) still maps to :nonce" do
+      request = nonce_request()
+      result = Result.success(:admitted, claim: nonce_claim(request)) |> Result.committed()
+
+      assert {:execute, resolved} =
+               Admission.resolve(
+                 result,
+                 decision_state(:one_time_nonce, request),
+                 %{strategy: :one_time_nonce},
+                 System.monotonic_time(),
+                 :committed_external_claim
+               )
+
+      assert resolved.class == :nonce
+    end
+
+    test "a wrong transaction mode is a store invariant violation" do
+      # The mode dictates the only acceptable transaction mode; a committed result under
+      # :local_claim (which owns an open transaction) is untrusted.
+      request = idempotency_request()
+      result = Result.success(:admitted, claim: idempotency_claim(request)) |> Result.committed()
+
+      assert {:error, %AshOnetime.Error{code: :store_invariant}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+
+    test "a locator hash mismatch is a store invariant violation" do
+      request = idempotency_request()
+      claim = idempotency_claim(request, key_hash: :crypto.hash(:sha256, "foreign-key"))
+      result = Result.success(:admitted, claim: claim)
+
+      assert {:error, %AshOnetime.Error{code: :store_invariant}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+
+    test "a claim id other than the request's id is a store invariant violation" do
+      request = idempotency_request()
+      claim = %{idempotency_claim(request) | id: Ecto.UUID.generate()}
+      result = Result.success(:admitted, claim: claim)
+
+      assert {:error, %AshOnetime.Error{code: :store_invariant}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+
+    test "a claim in a state shape the status does not allow is a store invariant violation" do
+      # :admitted must observe an idempotency claim still :processing; a :complete-shaped
+      # claim under :admitted fails the claim-state validation.
+      request = idempotency_request()
+      claim = %{idempotency_claim(request) | state: :complete}
+      result = Result.success(:admitted, claim: claim)
+
+      assert {:error, %AshOnetime.Error{code: :store_invariant}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+  end
+
+  describe "resolve/5: the :complete replay arm" do
+    test "a matching stored response replays the persisted result" do
+      contract = redeem_contract()
+      {:ok, encoded} = AshOnetime.Response.encode(42, contract, [])
+      request = idempotency_request()
+      claim = complete_claim(request, encoded)
+      result = Result.success(:complete, claim: claim, payload: encoded.payload)
+
+      state =
+        decision_state(:idempotency, request,
+          contract: contract,
+          cache: AshOnetime.Cache.config([])
+        )
+
+      assert {:replay, replayed, replay_state} =
+               Admission.resolve(
+                 result,
+                 state,
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+
+      assert replayed == 42
+      assert replay_state.class == :replay
+      assert replay_state.replayed == 42
+      assert replay_state.claim == claim
+    end
+
+    test "a stored response under a different fingerprint is rejected as key reuse" do
+      contract = redeem_contract()
+      {:ok, encoded} = AshOnetime.Response.encode(42, contract, [])
+      request = idempotency_request()
+      claim = complete_claim(request, encoded, fingerprint: :crypto.hash(:sha256, "other"))
+      result = Result.success(:complete, claim: claim, payload: encoded.payload)
+
+      state =
+        decision_state(:idempotency, request,
+          contract: contract,
+          cache: AshOnetime.Cache.config([])
+        )
+
+      assert {:error, %AshOnetime.Error{code: :key_reused_with_different_request}} =
+               Admission.resolve(
+                 result,
+                 state,
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+
+    test "a complete result without a payload is a store invariant violation" do
+      contract = redeem_contract()
+      {:ok, encoded} = AshOnetime.Response.encode(42, contract, [])
+      request = idempotency_request()
+      result = Result.success(:complete, claim: complete_claim(request, encoded))
+
+      assert {:error, %AshOnetime.Error{code: :store_invariant}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request, contract: contract),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+  end
+
+  describe "resolve/5: the :processing arm" do
+    test "a local claim collision reports the request in progress" do
+      request = idempotency_request()
+      result = Result.success(:processing, claim: idempotency_claim(request))
+
+      assert {:error, %AshOnetime.Error{code: :request_in_progress}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+
+    test "a committed external claim collision returns :recover" do
+      request = idempotency_request()
+      claim = idempotency_claim(request)
+      result = Result.success(:processing, claim: claim) |> Result.committed()
+
+      assert {:recover, recovered} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :committed_external_claim
+               )
+
+      assert recovered.claim == claim
+    end
+
+    test "a locked external finalize collision proceeds to external execution" do
+      request = idempotency_request()
+      result = Result.success(:processing, claim: idempotency_claim(request))
+
+      assert {:execute, resolved} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :locked_external_finalize
+               )
+
+      assert resolved.class == :external_execute
+    end
+
+    test "a processing collision under a different fingerprint is rejected as key reuse" do
+      request = idempotency_request()
+      claim = idempotency_claim(request, fingerprint: :crypto.hash(:sha256, "other"))
+      result = Result.success(:processing, claim: claim)
+
+      assert {:error, %AshOnetime.Error{code: :key_reused_with_different_request}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+
+    test "a processing result carrying a stray payload is a store invariant violation" do
+      request = idempotency_request()
+      result = Result.success(:processing, claim: idempotency_claim(request), payload: "stray")
+
+      assert {:error, %AshOnetime.Error{code: :store_invariant}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+  end
+
+  describe "resolve/5: the :collision arm (one_time_nonce)" do
+    test "a matching nonce collision reports the nonce already used" do
+      request = nonce_request()
+      result = Result.success(:collision, claim: nonce_claim(request))
+
+      assert {:error, %AshOnetime.Error{code: :nonce_already_used}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:one_time_nonce, request),
+                 %{strategy: :one_time_nonce},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+
+    test "a malformed nonce collision is a store invariant violation" do
+      # A nonce claim without its verifier evidence cannot be attributed to the burned
+      # nonce, so the collision is not trusted to be THE nonce's.
+      request = nonce_request()
+      result = Result.success(:collision, claim: nonce_claim(request, verifier_id: nil))
+
+      assert {:error, %AshOnetime.Error{code: :store_invariant}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:one_time_nonce, request),
+                 %{strategy: :one_time_nonce},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+  end
+
+  describe "resolve/5: the :execute_untracked escape" do
+    # The escape is an EXACT shape: a definite pre-dispatch checkout failure, the explicit
+    # opt-in, the idempotency strategy, and the local-claim mode. Anything else fails closed.
+
+    test "a definite checkout failure with the opt-in executes untracked" do
+      result = Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+
+      assert {:execute_untracked, untracked} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, idempotency_request()),
+                 %{strategy: :idempotency, on_definite_store_failure: :execute_untracked},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+
+      assert untracked.class == :untracked
+    end
+
+    test "without the opt-in the same failure fails closed through the store error" do
+      result = Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+
+      assert {:error, %AshOnetime.Error{code: :checkout_unavailable}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, idempotency_request()),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+
+    test "the escape never applies to a nonce strategy" do
+      result = Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+
+      assert {:error, %AshOnetime.Error{code: :checkout_unavailable}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:one_time_nonce, nonce_request()),
+                 %{strategy: :one_time_nonce, on_definite_store_failure: :execute_untracked},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+
+    test "a checkout failure after dispatch fails closed too" do
+      result = Result.failure(:checkout_unavailable, :sent, :open)
+
+      assert {:error, %AshOnetime.Error{code: :checkout_unavailable}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, idempotency_request()),
+                 %{strategy: :idempotency, on_definite_store_failure: :execute_untracked},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+  end
+
+  describe "resolve/5: the store_error fallthrough" do
+    test "an uncertain failure maps its reason to the store error" do
+      result = Result.failure(:lock_timeout, :sent, :open)
+
+      assert {:error, %AshOnetime.Error{code: :lock_timeout}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, idempotency_request()),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+
+    test "a result no decide arm accepts is a bare store failure" do
+      # A :processing result under a nonce strategy has no decide arm (the processing arm
+      # owns idempotency only) — the catch-all must collapse it, not admit it.
+      result = %Result{status: :processing, admission_dispatch: :sent, transaction: :open}
+
+      assert {:error, %AshOnetime.Error{code: :store_failure}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:one_time_nonce, nonce_request()),
+                 %{strategy: :one_time_nonce},
+                 System.monotonic_time(),
+                 :local_claim
+               )
+    end
+  end
+
   describe "replayed?/1 (the caller-visible signal)" do
     # AshOnetime.replayed?/1 is the public observation of the stamp_replay marker. It reports
     # true/false for a stamped struct and nil for an unstamped/untracked one.
@@ -272,6 +787,128 @@ defmodule AshOnetime.AdmissionTest do
       assert status == 0
       assert output =~ "admission_seam: {false, false, false}"
     end
+  end
+
+  # --- H31 direct decision-function fixtures (synthetic, zero Postgres) ---
+  # Every fixture is built through the real constructors (Claim.idempotency/nonce,
+  # Result.success/failure/committed, Response.contract/encode) so a unit red names a
+  # decision-function regression, not a hand-forged struct drifting from the live shapes.
+
+  defp decision_state(strategy, request, opts \\ []) do
+    %State{
+      class: :pending,
+      strategy: strategy,
+      resource: AshOnetime.Test.ActionExamples.Resource,
+      action: Keyword.get(opts, :action, :charge),
+      request: request,
+      target: %Postgres.Target{
+        repo_module: AshOnetime.Test.Repo,
+        dynamic_repo: AshOnetime.Test.Repo,
+        logical_partition: "tenant-a"
+      },
+      contract: Keyword.get(opts, :contract),
+      cache: Keyword.get(opts, :cache)
+    }
+  end
+
+  defp idempotency_request(opts \\ []) do
+    {:ok, request} =
+      Claim.idempotency(
+        operation_hash: Keyword.get(opts, :operation_hash, :crypto.hash(:sha256, "operation")),
+        scope_hash: Keyword.get(opts, :scope_hash, :crypto.hash(:sha256, "scope")),
+        key_hash: Keyword.get(opts, :key_hash, :crypto.hash(:sha256, "key")),
+        fingerprint: Keyword.get(opts, :fingerprint, :crypto.hash(:sha256, "fingerprint")),
+        retention_seconds: 60
+      )
+
+    request
+  end
+
+  defp nonce_request(opts \\ []) do
+    {:ok, request} =
+      Claim.nonce(
+        operation_hash: Keyword.get(opts, :operation_hash, :crypto.hash(:sha256, "operation")),
+        scope_hash: Keyword.get(opts, :scope_hash, :crypto.hash(:sha256, "scope")),
+        key_hash: Keyword.get(opts, :key_hash, :crypto.hash(:sha256, "key")),
+        verified: [
+          %Verified{key: "nonce-key", issued_at: DateTime.utc_now(), verifier_id: "unit-verifier"}
+        ],
+        max_age: 60,
+        clock_skew: 5
+      )
+
+    request
+  end
+
+  defp idempotency_claim(request, opts \\ []) do
+    admitted = DateTime.utc_now()
+
+    %Claim{
+      strategy: :idempotency,
+      id: request.id,
+      logical_partition: "tenant-a",
+      operation_hash: Keyword.get(opts, :operation_hash, request.operation_hash),
+      scope_hash: Keyword.get(opts, :scope_hash, request.scope_hash),
+      key_hash: Keyword.get(opts, :key_hash, request.key_hash),
+      fingerprint: Keyword.get(opts, :fingerprint, request.fingerprint),
+      state: :processing,
+      admitted_at: admitted,
+      retain_until: DateTime.add(admitted, 3_600),
+      inserted_at: DateTime.add(admitted, 1)
+    }
+  end
+
+  defp nonce_claim(request, opts \\ []) do
+    admitted = DateTime.utc_now()
+
+    %Claim{
+      strategy: :one_time_nonce,
+      id: request.id,
+      logical_partition: "tenant-a",
+      operation_hash: request.operation_hash,
+      scope_hash: request.scope_hash,
+      key_hash: request.key_hash,
+      issued_at: admitted,
+      verifier_id: Keyword.get(opts, :verifier_id, "unit-verifier"),
+      admitted_at: admitted,
+      retain_until: DateTime.add(admitted, 60),
+      inserted_at: DateTime.add(admitted, 1)
+    }
+  end
+
+  defp complete_claim(request, encoded, opts \\ []) do
+    admitted = DateTime.utc_now()
+
+    %Claim{
+      strategy: :idempotency,
+      id: request.id,
+      logical_partition: "tenant-a",
+      operation_hash: request.operation_hash,
+      scope_hash: request.scope_hash,
+      key_hash: request.key_hash,
+      fingerprint: Keyword.get(opts, :fingerprint, request.fingerprint),
+      state: :complete,
+      response_partition: Date.utc_today(),
+      response_codec: encoded.codec,
+      response_digest: encoded.digest,
+      admitted_at: admitted,
+      retain_until: DateTime.add(admitted, 3_600),
+      inserted_at: DateTime.add(admitted, 1)
+    }
+  end
+
+  defp redeem_contract do
+    protection = ResourceInfo.protection(AshOnetime.Test.ActionExamples.Resource, :redeem)
+
+    {:ok, contract} =
+      AshOnetime.Response.contract(
+        AshOnetime.Test.ActionExamples.Resource,
+        :redeem,
+        protection.response,
+        %{limits: protection.limits}
+      )
+
+    contract
   end
 
   # Mirrors TokenTest's private helper of the same shape: links dependency builds into an

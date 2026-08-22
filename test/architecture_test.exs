@@ -119,6 +119,28 @@ defmodule AshOnetime.ArchitectureTest do
 
   @exports %{
     AshOnetime => [replayed?: 1, reserved_verification_inputs: 0],
+    AshOnetime.Admission => [
+      bounded_callback_context: 1,
+      complete: 2,
+      dispatch_reservation: 3,
+      prepare: 3,
+      put_replay: 2,
+      put_state: 2,
+      put_test_state: 2,
+      put_test_state: 3,
+      put_test_store: 1,
+      replay?: 1,
+      reserve: 3,
+      reserve_committed: 3,
+      reset_test_store: 0,
+      resolve: 5,
+      sanitize_claim: 1,
+      sanitize_request: 1,
+      stamp_replay: 2,
+      state: 1,
+      trusted_context: 1,
+      unavailable_error: 0
+    ],
     AshOnetime.Cache => [authoritative_payload: 2, config: 1, key: 1, store: 3],
     AshOnetime.Cache.Entry => [],
     AshOnetime.Cache.Ets => [
@@ -249,6 +271,16 @@ defmodule AshOnetime.ArchitectureTest do
     Mix.Tasks.AshOnetime.RollPartitions => [run: 1]
   }
 
+  # Internal modules (@moduledoc false) whose project-authored public surface is pinned by
+  # the export census anyway. Their @doc false functions are contract seams exercised by
+  # direct unit tests (e.g. Admission's sanitizer seams and bounded_callback_context/1), so
+  # an accidental removal — or an accidental new public function — must red the census
+  # exactly like a documented module's exports would. The pinned set is the full authored
+  # surface, not a hand-picked subset: the census compares exactly.
+  @pinned_internal_modules [
+    AshOnetime.Admission
+  ]
+
   # The exact-export census compares a hand-maintained `@exports` snapshot against
   # `module.__info__(:functions)`. For modules built on an injecting framework
   # (e.g. `use Splode.Error`), `__info__(:functions)` also lists functions the
@@ -337,7 +369,7 @@ defmodule AshOnetime.ArchitectureTest do
     # project-owned export — and a project override of an injected fn, or a framework
     # removing one, both surface as a snapshot mismatch.
     actual =
-      Map.new(@documented_modules, fn module ->
+      Map.new(@documented_modules ++ @pinned_internal_modules, fn module ->
         {module, project_owned_arity_set(module)}
       end)
 
