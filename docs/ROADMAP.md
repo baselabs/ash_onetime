@@ -37,7 +37,13 @@ status column records where it stands now.
 
 Tracked on the build parent ([#12](https://github.com/baselabs/ash_onetime/issues/12);
 the original map issue #1 is closed and hands off there): **H31** (direct admission
-decision-function coverage) and the **test-lifecycle migration** (21 `Process.sleep`/
-`Process.alive?` sites across 11 files to monitored/message-based synchronization,
-including the named `RollContentionTest` sandbox-owner flake) are deliberate post-1.0
-work, not 1.0 blockers.
+decision-function coverage) remains deliberate post-1.0 work. The **test-lifecycle
+migration** is resolved (d8f81ae): the `RollContentionTest` sandbox-owner flake is
+eliminated at the mechanism (`Sandbox.start_owner!`'s asynchronous teardown replaced by
+in-process `checkout`/`checkin` through a shared `AshOnetime.Test.RealConnection`
+helper, with a 100-cycle same-process tripwire pinning the class), and the three
+timing-dependent sleeps (two telemetry flushes, the ETS TTL wait) are deterministic.
+The retained `Process.sleep` sites are bounded condition-polls on `pg_stat_activity`/
+`pg_locks` (durable lock-wait signals with no message alternative) and the support
+cache's deliberate-latency double; the retained `Process.alive?` sites are idempotent
+teardown guards, not synchronization.
