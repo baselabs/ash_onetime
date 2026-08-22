@@ -135,7 +135,7 @@ patterns.
 
 ## Status
 
-The current package release is [v1.2.0 on Hex](https://hex.pm/packages/ash_onetime). It adds
+The current package release is [v1.2.1 on Hex](https://hex.pm/packages/ash_onetime). It adds
 the `mix ash_onetime.doctor --live` schema-currency preflight, the backup/restore runbook,
 and constant-time digest-comparison unification on top of v1.1's transaction-owned admission
 and logical partitions. The

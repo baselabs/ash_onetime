@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## v1.2.1 — 2026-08-22
+
+### Changed
+
+- **README**: a mutation-battery badge (130 sentinels, each proven RED under its own
+  mutation before it is trusted) and an explicit test-assurance statement — every
+  library module at 100% line coverage, with the mutation battery as the assurance
+  bar. Documentation only; no code, DSL, or contract change.
+
 ## v1.2.0 — 2026-08-22
 
 Additive operations-preflight and hardening release. No breaking change, no DSL/contract

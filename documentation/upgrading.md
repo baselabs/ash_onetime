@@ -4,12 +4,17 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: f
 breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
 land in a minor), and each breaking change lands here with the exact edit to make.
 
-The current package release is v1.2.0 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
+The current package release is v1.2.1 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
 {:ash_onetime, "~> 1.2"}
 ```
+
+## v1.2.1 — documentation only (no upgrade action)
+
+README assurance signal (mutation-battery badge, coverage statement). No code, DSL, or
+contract change; nothing to do on upgrade.
 
 ## v1.2.0 — operations preflight and hardening (additive, no upgrade action)
 
