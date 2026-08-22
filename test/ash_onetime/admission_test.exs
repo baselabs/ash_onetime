@@ -378,6 +378,22 @@ defmodule AshOnetime.AdmissionTest do
                )
     end
 
+    test "the mirrored transaction-mode violation is a store invariant violation too" do
+      # The same guard's other sign: an open result under :committed_external_claim
+      # (which owns a committed transaction).
+      request = idempotency_request()
+      result = Result.success(:admitted, claim: idempotency_claim(request))
+
+      assert {:error, %AshOnetime.Error{code: :store_invariant}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :committed_external_claim
+               )
+    end
+
     test "a locator hash mismatch is a store invariant violation" do
       request = idempotency_request()
       claim = idempotency_claim(request, key_hash: :crypto.hash(:sha256, "foreign-key"))
@@ -650,6 +666,21 @@ defmodule AshOnetime.AdmissionTest do
                )
     end
 
+    test "the escape is local-claim only — a committed mode fails closed too" do
+      # The decide clause pins :local_claim positionally; the same definite failure under
+      # :committed_external_claim must reach the catch-all, not the escape.
+      result = Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+
+      assert {:error, %AshOnetime.Error{code: :checkout_unavailable}} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, idempotency_request()),
+                 %{strategy: :idempotency, on_definite_store_failure: :execute_untracked},
+                 System.monotonic_time(),
+                 :committed_external_claim
+               )
+    end
+
     test "a checkout failure after dispatch fails closed too" do
       result = Result.failure(:checkout_unavailable, :sent, :open)
 
@@ -753,8 +784,15 @@ defmodule AshOnetime.AdmissionTest do
       # The dev subprocess inherits a clean env: config/config.exs imports test.exs ONLY
       # for the test env, so in MIX_ENV=dev the allow_admission_override config is unset
       # and the gate freezes to false at the dev build's compile time — the seam must be
-      # absent there.
+      # absent there. The probe MUST ensure_loaded the module first: function_exported?/3
+      # reports false for an unloaded module, and `mix run` compiles without loading, so
+      # an un-loaded probe prints {false, false, false} even in a build that DID compile
+      # the seam in (cross-vendor review probe, 2026-08-22) — the assertion discriminated
+      # nothing. ensure_loaded makes a dev build report {false, false, false} while an
+      # opted-in build reports {true, true, true}.
       script = ~s'''
+      Code.ensure_loaded(AshOnetime.Admission)
+
       seam =
         {function_exported?(AshOnetime.Admission, :put_test_store, 1),
          function_exported?(AshOnetime.Admission, :reset_test_store, 0),
