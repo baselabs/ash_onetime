@@ -130,8 +130,14 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
                Doctor.schema_status(complete_facts())
     end
 
-    test "a claim table missing the logical_partition column fails" do
-      facts = %{complete_facts() | logical_partition_tables: ["ash_onetime_nonce_claims"]}
+    test "an authority table missing the logical_partition column fails" do
+      facts = %{
+        complete_facts()
+        | logical_partition_tables: [
+            "ash_onetime_nonce_claims",
+            "ash_onetime_idempotency_claims"
+          ]
+      }
 
       assert Enum.any?(Doctor.schema_status(facts), fn
                {:fail, message} -> message =~ "logical_partition"
@@ -158,7 +164,14 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
     end
 
     test "a function with the wrong arity fails even when present" do
-      facts = put_in(complete_facts().functions["ash_onetime_reap_idempotency"], 3)
+      facts = %{
+        complete_facts()
+        | functions: [
+            {"ash_onetime_cleanup_idempotency", 1},
+            {"ash_onetime_cleanup_nonce", 1},
+            {"ash_onetime_reap_idempotency", 3}
+          ]
+      }
 
       assert Enum.any?(Doctor.schema_status(facts), fn
                {:fail, message} -> message =~ "exact arities"
@@ -171,6 +184,24 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
 
       assert Enum.any?(Doctor.schema_status(facts), fn
                {:fail, message} -> message =~ "triggers"
+               _ok -> false
+             end)
+    end
+
+    test "trigger clones (hash-partitioned installs) do not fail the verdict" do
+      # PostgreSQL clones parent triggers onto every hash/range partition under the same
+      # name; the live query is DISTINCT-constrained, and the verdict additionally dedupes.
+      facts = %{
+        complete_facts()
+        | triggers: [
+            "ash_onetime_idempotency_delete_guard",
+            "ash_onetime_idempotency_delete_guard",
+            "ash_onetime_nonce_delete_guard"
+          ]
+      }
+
+      refute Enum.any?(Doctor.schema_status(facts), fn
+               {:fail, _message} -> true
                _ok -> false
              end)
     end
@@ -188,14 +219,18 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
 
   defp complete_facts do
     %{
-      logical_partition_tables: ["ash_onetime_nonce_claims", "ash_onetime_idempotency_claims"],
+      logical_partition_tables: [
+        "ash_onetime_nonce_claims",
+        "ash_onetime_idempotency_claims",
+        "ash_onetime_response_payloads"
+      ],
       payload_table: true,
       default_partition: true,
-      functions: %{
-        "ash_onetime_cleanup_idempotency" => 1,
-        "ash_onetime_cleanup_nonce" => 1,
-        "ash_onetime_reap_idempotency" => 2
-      },
+      functions: [
+        {"ash_onetime_cleanup_idempotency", 1},
+        {"ash_onetime_cleanup_nonce", 1},
+        {"ash_onetime_reap_idempotency", 2}
+      ],
       triggers: [
         "ash_onetime_idempotency_delete_guard",
         "ash_onetime_nonce_delete_guard"

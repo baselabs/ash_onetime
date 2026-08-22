@@ -28,7 +28,7 @@ defmodule Mix.Tasks.AshOnetime.DoctorLiveTest do
         end)
       end)
 
-    assert output =~ "[OK]  logical_partition column present on both claim tables"
+    assert output =~ "[OK]  logical_partition column present on all three authority tables"
     assert output =~ "[OK]  ash_onetime_response_payloads table present"
     assert output =~ "[OK]  ash_onetime_response_payloads_default partition present"
     assert output =~ "[OK]  cleanup/reap functions present with exact arities"
@@ -60,6 +60,10 @@ defmodule Mix.Tasks.AshOnetime.DoctorLiveTest do
 
     assert output =~ ~s{Schema currency (schema "doctor_missing_schema")}
   end
+
+  # Hash-partitioned installs carry their own live coverage in DoctorHashLiveTest (a
+  # separate module — the migration helper compiles a fixed-named migration module, so one
+  # install per test module).
 
   defp capture_io(fun), do: ExUnit.CaptureIO.capture_io(fun)
 end

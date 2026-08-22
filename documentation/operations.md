@@ -379,8 +379,8 @@ config :my_app, MyApp.Repo, pool_size: 20  # was 10, for example
 If the timeout class is `:disconnected` instead, triage as a network partition (check
 `pg_stat_activity` for connection churn, the load balancer, the Postgres instance health) —
 not a pool-sizing issue. If it is `:unknown`, inspect the worker's exit reason in the Oban
-  job or application logs; that class names an unspecified dispatch failure a pool raise will
-  not fix.
+job or application logs; that class names an unspecified dispatch failure a pool raise will
+not fix.
 
 ### restore-from-backup — a database restore has rewound admission state
 

@@ -37,6 +37,8 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
 
   use Mix.Task
 
+  alias Ecto.Adapters.SQL
+
   @shortdoc "Checks ash_onetime install health (Ash floor, Oban queues, prefix validity)"
 
   @switches [repo: :string, prefix: :string, live: :boolean]
@@ -227,24 +229,44 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   # -- helpers mirrored from the runtime task family (reap.ex:59-78) --
 
   # -- live schema-currency check (--live) --
+  #
+  # All catalog reads target pg_catalog (pg_class/pg_attribute/pg_trigger/pg_proc), never
+  # information_schema: system catalogs are not privilege-filtered, so a least-privilege
+  # SELECT-only connection role still gets true verdicts instead of empty result sets.
 
-  @claim_tables ["ash_onetime_idempotency_claims", "ash_onetime_nonce_claims"]
-  @expected_functions %{
-    "ash_onetime_cleanup_idempotency" => 1,
-    "ash_onetime_cleanup_nonce" => 1,
-    "ash_onetime_reap_idempotency" => 2
-  }
+  # Every table carrying the logical-partition authority component: both claim tables AND
+  # the response-payloads table (the 1.1 upgrade adds the column to all three — checking
+  # only the claim tables would pass a schema whose payload writes then fail).
+  @authority_tables [
+    "ash_onetime_idempotency_claims",
+    "ash_onetime_nonce_claims",
+    "ash_onetime_response_payloads"
+  ]
+  @expected_functions [
+    {"ash_onetime_cleanup_idempotency", 1},
+    {"ash_onetime_cleanup_nonce", 1},
+    {"ash_onetime_reap_idempotency", 2}
+  ]
   @expected_triggers ["ash_onetime_idempotency_delete_guard", "ash_onetime_nonce_delete_guard"]
 
+  @claim_tables ["ash_onetime_idempotency_claims", "ash_onetime_nonce_claims"]
+
   @logical_partition_sql """
-  SELECT table_name FROM information_schema.columns
-  WHERE table_schema = $1 AND column_name = 'logical_partition'
-    AND table_name = ANY($2)
+  SELECT c.relname
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'logical_partition'
+  WHERE n.nspname = $1 AND c.relname = ANY($2)
   """
   @payload_table_sql """
-  SELECT 1 FROM information_schema.tables
-  WHERE table_schema = $1 AND table_name = 'ash_onetime_response_payloads'
+  SELECT 1
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = $1 AND c.relname = 'ash_onetime_response_payloads'
+    AND c.relkind = 'p'
   """
+  # The relpartbound = 'DEFAULT' predicate is load-bearing: a RANGE partition coincidentally
+  # named ..._default must not satisfy the default-partition verdict.
   @default_partition_sql """
   SELECT 1
   FROM pg_inherits inheritance
@@ -254,6 +276,7 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   WHERE parent_namespace.nspname = $1
     AND parent.relname = 'ash_onetime_response_payloads'
     AND child.relname = 'ash_onetime_response_payloads_default'
+    AND pg_get_expr(child.relpartbound, child.oid) = 'DEFAULT'
   """
   @function_sql """
   SELECT p.proname, p.pronargs
@@ -261,9 +284,17 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = $1 AND p.proname = ANY($2)
   """
+  # Constrained to the claim tables by tgrelid — an identically named trigger on an
+  # unrelated table must not satisfy the verdict — and DISTINCT because PostgreSQL clones
+  # parent triggers onto every hash/range partition under the same name (a hash-partitioned
+  # install reports the parent trigger plus one row per clone).
   @trigger_sql """
-  SELECT trigger_name FROM information_schema.triggers
-  WHERE trigger_schema = $1 AND trigger_name = ANY($2)
+  SELECT DISTINCT t.tgname
+  FROM pg_trigger t
+  JOIN pg_class c ON c.oid = t.tgrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = $1 AND NOT t.tgisinternal
+    AND c.relname = ANY($2)
   """
 
   defp check_schema(repo, prefix) do
@@ -287,56 +318,63 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   @spec schema_status(map()) :: [{:ok | :fail, String.t()}]
   def schema_status(facts) do
     [
-      {length(facts.logical_partition_tables) == length(@claim_tables),
-       "logical_partition column present on both claim tables " <>
+      {length(facts.logical_partition_tables) == length(@authority_tables),
+       "logical_partition column present on all three authority tables " <>
          "(found on: #{inspect(Enum.sort(facts.logical_partition_tables))})"},
       {facts.payload_table, "ash_onetime_response_payloads table present"},
       {facts.default_partition, "ash_onetime_response_payloads_default partition present"},
-      {function_signature_complete?(facts.functions),
+      {MapSet.new(facts.functions) == MapSet.new(@expected_functions),
        "cleanup/reap functions present with exact arities"},
-      {Enum.sort(facts.triggers) == Enum.sort(@expected_triggers),
-       "delete-guard triggers present (found: #{inspect(Enum.sort(facts.triggers))})"}
+      {Enum.sort(Enum.uniq(facts.triggers)) == Enum.sort(@expected_triggers),
+       "delete-guard triggers present (found: #{inspect(Enum.sort(Enum.uniq(facts.triggers)))})"}
     ]
     |> Enum.map(fn {passed?, message} ->
       if passed?, do: {:ok, message}, else: {:fail, message}
     end)
   end
 
-  defp function_signature_complete?(functions) do
-    map_size(functions) == map_size(@expected_functions) and
-      Enum.all?(functions, fn {name, arity} -> Map.get(@expected_functions, name) == arity end)
-  end
-
   defp live_schema_facts(repo, schema) do
-    with {:ok, columns} <- query(repo, @logical_partition_sql, [schema, @claim_tables]),
+    with {:ok, columns} <- query(repo, @logical_partition_sql, [schema, @authority_tables]),
          {:ok, payload} <- query(repo, @payload_table_sql, [schema]),
          {:ok, default} <- query(repo, @default_partition_sql, [schema]),
          {:ok, functions} <-
-           query(repo, @function_sql, [schema, Map.keys(@expected_functions)]),
-         {:ok, triggers} <- query(repo, @trigger_sql, [schema, @expected_triggers]) do
+           query(repo, @function_sql, [schema, Enum.map(@expected_functions, &elem(&1, 0))]),
+         {:ok, triggers} <- query(repo, @trigger_sql, [schema, @claim_tables]) do
       {:ok,
        %{
          logical_partition_tables: Enum.map(columns.rows, &hd/1),
          payload_table: payload.num_rows == 1,
          default_partition: default.num_rows == 1,
-         functions: Map.new(functions.rows, fn [name, arity] -> {name, arity} end),
+         functions: Enum.map(functions.rows, &List.to_tuple/1),
          triggers: Enum.map(triggers.rows, &hd/1)
        }}
     end
   end
 
   defp query(repo, sql, params) do
-    case Ecto.Adapters.SQL.query(repo, sql, params) do
+    case SQL.query(repo, sql, params) do
       {:ok, result} -> {:ok, result}
       {:error, exception} -> {:error, Exception.message(exception)}
     end
   end
 
   defp ensure_repo_started(repo) do
-    case repo.start_link() do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, reason} -> {:error, inspect(reason)}
+    # A cold `mix ash_onetime.doctor --live` VM has no applications started: a bare
+    # repo.start_link/1 then dies through its linked DBConnection processes with an EXIT
+    # that reaches the task (crash, not verdict). Load the app config, ensure the DB stack,
+    # and catch exits so every failure becomes a verdict line instead of a crash.
+    Mix.Task.run("app.config")
+
+    _ = Enum.map([:db_connection, :postgrex, :ecto_sql], &Application.ensure_all_started/1)
+
+    try do
+      case repo.start_link() do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+        {:error, _reason} -> {:error, "repo failed to start (see application logs)"}
+      end
+    catch
+      :exit, _reason -> {:error, "repo failed to start (see application logs)"}
     end
   end
 
