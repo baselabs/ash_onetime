@@ -149,7 +149,10 @@ gates are present.
 - Erlang/OTP 29
 - Ash `>= 3.31.3` and `< 4.0.0` (the whole 3.x line from the 3.31.3 floor up)
 - AshPostgres 2
-- PostgreSQL 18 for the project test harness
+- PostgreSQL 18 for the project test harness. The SQL surface requires PostgreSQL 11+
+  (declarative hash/range partitioning with default partitions, `SKIP LOCKED`,
+  `pg_advisory_xact_lock(bigint)`); versions below 18 are not exercised by this project's
+  CI — treat them as unverified.
 
 The floor is Ash 3.31.3, not the earlier 3.x line: EEF-CVE-2026-55736 (private
 action arguments settable by user input, fixed in 3.29.3),

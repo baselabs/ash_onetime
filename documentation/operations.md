@@ -379,8 +379,56 @@ config :my_app, MyApp.Repo, pool_size: 20  # was 10, for example
 If the timeout class is `:disconnected` instead, triage as a network partition (check
 `pg_stat_activity` for connection churn, the load balancer, the Postgres instance health) —
 not a pool-sizing issue. If it is `:unknown`, inspect the worker's exit reason in the Oban
-job or application logs; that class names an unspecified dispatch failure a pool raise will
-not fix.
+  job or application logs; that class names an unspecified dispatch failure a pool raise will
+  not fix.
+
+### restore-from-backup — a database restore has rewound admission state
+
+**Symptom.** This runbook is preventive: read it BEFORE restoring a backup (PITR or snapshot)
+of a database carrying `ash_onetime` authority. PostgreSQL's claim tables ARE the admission
+truth, and a restore rewinds them: every claim committed after the restore point is gone, so
+the store no longer knows those keys were spent. What that means per strategy:
+
+- **One-time nonces:** a proof whose spend committed after the restore point becomes
+  spendable again. The exposure is bounded by the proof's acceptance window
+  (`max_age + clock_skew` — typically minutes): once the window closes, the restored-away
+  claim could not have admitted anyway. Restores landing well past the window carry no
+  nonce exposure.
+- **Idempotency:** a key whose effect completed after the restore point executes FRESH on
+  retry — the restored store has no claim, and the retry's fingerprint matches (it is the
+  same request), so it admits rather than conflicts. The protected effect can fire twice.
+  Where an `external_effect` adapter is deployed, its `recover/3` protocol observes the peer
+  state on the retry; otherwise this is business-level reconciliation.
+- **Cross-system disagreement:** external systems (payment providers, webhook targets)
+  remember effects the restored store has forgotten. The application's own logs and the
+  peers' records for the post-restore-point period are the source of truth for what actually
+  happened.
+
+**Diagnose.** Establish the restore point (PITR target or snapshot age), then enumerate what
+ran after it — from application logs, the external peers' ledgers, or both. The database
+cannot tell you what was lost; the rows are gone. Anything effectful that succeeded after the
+restore point is in scope for reconciliation.
+
+**Remediate.**
+
+1. Minimize the window: restore to just before the incident rather than an older snapshot —
+   every hour cut from the rewind is an hour of effects that cannot re-execute.
+2. Fence the nonce window if it matters: if proofs with acceptance windows spanning the
+   restore point are replayable by an adversary (not just a retrying client), block their
+   redemption at the edge until the windows close. Minutes of fencing, not hours.
+3. Reconcile external effects: for every post-restore-point effect, confirm against the peer
+   whether it happened. Idempotency retries with an `external_effect` adapter perform this
+   automatically via the recover protocol; adapters without it (or unprotected actions) need
+   business reconciliation.
+4. Roll the partition window forward: the restored (older) `ash_onetime_response_payloads`
+   partition set may have a lapsed forward window — new payloads would route to `_default`
+   and never drop. Run `mix ash_onetime.roll_partitions --repo MyApp.Repo` after the restore
+   and re-check the stranded count as in partition-discard-detected.
+5. No special cleanup action: `prune`/`reap` continue from the restored state under their
+   usual guards; retention horizons rewound with everything else.
+
+Restoring per-tenant schemas (`--prefix`) or logical partitions rewinds only that authority's
+claims — scope the reconciliation the same way.
 
 ## Key rotation
 
@@ -390,7 +438,12 @@ using it to sign. Retain every old verification key until the last token it sign
 fall back silently to a different key.
 
 The supported runtime is Elixir `~> 1.20` (verified on 1.20.2) and Erlang/OTP 29 with
-Ash `>= 3.31.3`, AshPostgres 2, and PostgreSQL 18. Release checks include the full suite, mutation
+Ash `>= 3.31.3`, AshPostgres 2, and PostgreSQL 18 (the version the project's test harness
+and release checks run on). The SQL surface itself needs PostgreSQL 11 or newer — declarative
+hash/range partitioning with default partitions, `SELECT ... FOR UPDATE SKIP LOCKED`, and
+`pg_advisory_xact_lock(bigint)` are all 11+ features — but nothing below 18 is exercised by
+this project's CI: treat older servers as unverified, and report (or CI-pin) the version you
+run before relying on one. Release checks include the full suite, mutation
 matrix, warnings-as-errors documentation, exact Hex archive inspection, and an unpacked
 zero-configuration consumer, all run on the runtime pinned in `.tool-versions`; see
 [CONTRIBUTING](../CONTRIBUTING.md).
