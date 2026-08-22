@@ -39,4 +39,3 @@ priv/plts/
 /docs/superpowers/
 
 # Forge lifecycle artifacts (handoffs, exec-runs, memory) — local only, never tracked
-/.forge/

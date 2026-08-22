@@ -1,9 +1,11 @@
 # Historical handoff — build the `ash_onetime` OSS Ash extension
 
-> Historical evidence notice (reconciled 2026-08-05): this snapshot predates the
-> repository and accepted architecture. Live Git, Hex, runtime, the accepted design in
-> `.forge/specs/single-use-keyed-effects.md`, and the reviewed implementation plan in
-> `.forge/plans/single-use-keyed-effects.md` are authoritative. Claims below that the
+> Historical evidence notice (reconciled 2026-08-05; authority pointers updated 2026-08-22
+> at the legacy-forge retirement): this snapshot predates the repository and accepted
+> architecture. Live Git, Hex, runtime, the accepted design in
+> `docs/design-notes/2026-08-03-scope-idempotency-vs-antireplay.md`, and the accepted
+> decisions in `docs/adr/` (ADR-0001 onward supersede the retired forge-era spec and
+> implementation plan) are authoritative. Claims below that the
 > repository does not exist or that design work remains are stale. Embedded action lists
 > are preserved as history and grant no authority to an agent or maintainer. The package is
 > now implemented; every greenfield, no-code, or first-action claim below is obsolete.

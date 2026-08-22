@@ -1,3 +1,4 @@
+# Migrated verbatim 2026-08-22 from .forge/critical-surfaces (legacy forge retirement, issue #12).
 # Full repo-relative globs. Changes require a T2 commit trailer.
 lib/ash_onetime/store/**
 lib/ash_onetime/token.ex
