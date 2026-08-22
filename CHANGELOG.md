@@ -2,7 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## v1.2.0 — 2026-08-22
+
+Additive operations-preflight and hardening release. No breaking change, no DSL/contract
+change, no migration.
 
 ### Added
 
@@ -23,6 +26,12 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- **Store digest comparisons unified to constant-time** — the last two plain-`==` digest
+  comparisons in the store (the stored-payload digest check on replay load and the
+  caller-digest check at completion) now use a size-guarded `:crypto.hash_equals` helper,
+  one convention for every digest comparison site in the library. No behavior change:
+  neither site compares attacker-secret material, and both operands were already
+  32-byte-constrained.
 - **Test suite**: the `RollContentionTest` full-suite flake (~10%/run) is eliminated at
   the mechanism — `Sandbox.start_owner!/2`'s asynchronous teardown could leave the
   caller's ownership allowance in place long enough for a back-to-back second owner in
@@ -31,6 +40,15 @@ All notable changes to this project are documented in this file.
   (`AshOnetime.Test.RealConnection`), with a 100-cycle tripwire pinning the class; the
   timing-dependent telemetry-flush and ETS-TTL sleeps are deterministic. No library code
   changed.
+- **Test suite**: direct unit coverage for the admission decision functions — every
+  `resolve/5` arm (all `execution_class/2` mappings, transaction-mode/locator/identity/
+  claim-state invariant rejects, `:complete` replay and fingerprint mismatch,
+  `:processing` per mode, `:collision` match/malformed, the exact-shape
+  `:execute_untracked` escape with a fail-closed test per guard dimension, the
+  `store_error` fallthrough) plus the request/claim sanitizers, exposed as `@doc false`
+  test seams and pinned by the architecture census. The dev-build seam-absence tripwire
+  was also de-vacuated: its subprocess probe now loads the module before
+  `function_exported?/3` (an unloaded module probes false unconditionally).
 
 ## v1.1.0 — 2026-08-20
 

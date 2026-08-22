@@ -4,12 +4,42 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: f
 breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
 land in a minor), and each breaking change lands here with the exact edit to make.
 
-The current package release is v1.1.0 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
+The current package release is v1.2.0 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 1.1"}
+{:ash_onetime, "~> 1.2"}
 ```
+
+## v1.2.0 — operations preflight and hardening (additive, no upgrade action)
+
+v1.2.0 is an **additive** minor: one new operator capability (`mix ash_onetime.doctor --live`)
+plus documentation and internal hardening. No breaking change, no DSL/contract change, no
+migration, no upgrade action for existing consumers.
+
+- **`mix ash_onetime.doctor --live`** — an opt-in extension to the install preflight that
+  connects to the database (read-only, catalog tables) and verifies the schema is current
+  for the running package: the `logical_partition` columns (the 1.1 upgrade marker), the
+  `ash_onetime_response_payloads` table and its `_default` partition, the cleanup/reap
+  functions by exact arity, and the delete-guard triggers. This catches
+  upgrade-package-without-running-migrations as a named failure at preflight time instead
+  of a cryptic `:store_invariant` at the first admission after deploy. Without `--live`
+  the doctor stays offline. The schema checked is `--prefix` when given, else `public`.
+- **Backup/restore runbook** (operations.md) — the `restore-from-backup` procedure: what a
+  database restore rewinds per strategy (nonce windows, idempotent re-execution), how to
+  scope reconciliation, and the post-restore partition roll-forward.
+- **PostgreSQL floor statement** (README, operations.md) — the SQL surface requires
+  PostgreSQL 11+; the project's CI exercises 18, and versions below it are unverified.
+- **Store digest comparisons unified to constant-time** — the last two plain-`==` digest
+  comparisons in the store (the stored-payload digest check and the caller-digest
+  completion check) now use a size-guarded `:crypto.hash_equals` helper, so every digest
+  comparison site in the library follows one convention. No behavior change: neither site
+  compares attacker-secret material, and both operands were already 32-byte-constrained.
+- **Test-lifecycle hardening** — the full-suite `RollContentionTest` flake is eliminated
+  at the mechanism (same-process connection checkout/checkin through a shared test
+  helper), and the admission decision functions (`resolve/5` arms and the request/claim
+  sanitizers) carry direct unit coverage naming the failing function. No library code
+  changed for the test fixes.
 
 ## v1.1.0 — transaction-owned admission and logical partitions
 
@@ -70,22 +100,6 @@ From 1.0.0, `ash_onetime` publishes this compatibility contract:
   digest + encoded bytes — ADR-0007) and the token wire format within its acceptance
   window (ADR-0008) are 1.x cross-version compatibility surfaces; see the repository's
   `docs/adr/` records for the rules.
-
-## Unreleased — additive (no upgrade action)
-
-- **`mix ash_onetime.doctor --live`** — an opt-in extension to the install preflight that
-  connects to the database (read-only, catalog tables) and verifies the schema is current
-  for the running package: the `logical_partition` columns (the 1.1 upgrade marker), the
-  `ash_onetime_response_payloads` table and its `_default` partition, the cleanup/reap
-  functions by exact arity, and the delete-guard triggers. This catches
-  upgrade-package-without-running-migrations as a named failure at preflight time instead
-  of a cryptic `:store_invariant` at the first admission after deploy. Without `--live`
-  the doctor stays offline. The schema checked is `--prefix` when given, else `public`.
-- **Backup/restore runbook** (operations.md) — the `restore-from-backup` procedure: what a
-  database restore rewinds per strategy (nonce windows, idempotent re-execution), how to
-  scope reconciliation, and the post-restore partition roll-forward.
-- **PostgreSQL floor statement** (README, operations.md) — the SQL surface requires
-  PostgreSQL 11+; the project's CI exercises 18, and versions below it are unverified.
 
 ## v0.6.0 — enhancements (no upgrade action)
 
