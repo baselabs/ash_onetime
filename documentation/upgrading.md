@@ -71,6 +71,22 @@ From 1.0.0, `ash_onetime` publishes this compatibility contract:
   window (ADR-0008) are 1.x cross-version compatibility surfaces; see the repository's
   `docs/adr/` records for the rules.
 
+## Unreleased — additive (no upgrade action)
+
+- **`mix ash_onetime.doctor --live`** — an opt-in extension to the install preflight that
+  connects to the database (read-only, catalog tables) and verifies the schema is current
+  for the running package: the `logical_partition` columns (the 1.1 upgrade marker), the
+  `ash_onetime_response_payloads` table and its `_default` partition, the cleanup/reap
+  functions by exact arity, and the delete-guard triggers. This catches
+  upgrade-package-without-running-migrations as a named failure at preflight time instead
+  of a cryptic `:store_invariant` at the first admission after deploy. Without `--live`
+  the doctor stays offline. The schema checked is `--prefix` when given, else `public`.
+- **Backup/restore runbook** (operations.md) — the `restore-from-backup` procedure: what a
+  database restore rewinds per strategy (nonce windows, idempotent re-execution), how to
+  scope reconciliation, and the post-restore partition roll-forward.
+- **PostgreSQL floor statement** (README, operations.md) — the SQL surface requires
+  PostgreSQL 11+; the project's CI exercises 18, and versions below it are unverified.
+
 ## v0.6.0 — enhancements (no upgrade action)
 
 v0.6.0 is an **additive** minor bump: two new capabilities (a `mix ash_onetime.doctor`

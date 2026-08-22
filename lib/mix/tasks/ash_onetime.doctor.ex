@@ -18,16 +18,28 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
     warns on any missing. This is advisory — a consumer may configure Oban dynamically at runtime.
   - **Prefix validity** (when `--prefix` given): the prefix must be 1..63 bytes (PostgreSQL's
     NAMEDATALEN bound).
+  - **Schema currency** (fatal, only with `--live`): queries the database (read-only, catalog
+    tables) and fails when the installed schema is not current for this package version — the
+    failure mode of upgrading the package without running its migrations. Checks: the
+    `logical_partition` column on both claim tables (the 1.1 logical-partition upgrade), the
+    `ash_onetime_response_payloads` partitioned table and its `_default` partition, the three
+    cleanup/reap functions (by name and arity), and the two delete-guard triggers.
 
-  Exits non-zero only on a FAIL (Ash below floor, missing `--repo`, invalid `--prefix`).
-  Advisory warnings return `:ok`.
+      mix ash_onetime.doctor --repo MyApp.Repo --live
+      mix ash_onetime.doctor --repo MyApp.Repo --live --prefix tenant_1
+
+    Without `--live` the doctor stays offline (compile-env checks only). The schema checked is
+    `--prefix` when given, else `public`.
+
+  Exits non-zero only on a FAIL (Ash below floor, missing `--repo`, invalid `--prefix`, or — with
+  `--live` — a missing/stale schema). Advisory warnings return `:ok`.
   """
 
   use Mix.Task
 
   @shortdoc "Checks ash_onetime install health (Ash floor, Oban queues, prefix validity)"
 
-  @switches [repo: :string, prefix: :string]
+  @switches [repo: :string, prefix: :string, live: :boolean]
 
   # Mirrors mix.exs ash_requirement/0's floor (>= 3.31.3). The CVEs that motivated this floor
   # are documented alongside that requirement: EEF-CVE-2026-55736/-70395/-69659 (fixed at or
@@ -47,14 +59,15 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
     if positional != [] or invalid != [],
       do: Mix.raise("invalid ash_onetime doctor arguments")
 
-    _repo = parse_repo!(options[:repo])
+    repo = parse_repo!(options[:repo])
     prefix = parse_prefix!(options[:prefix])
 
     failures =
       [
         &check_ash_floor/0,
         &check_oban_queues/0,
-        fn -> check_prefix(prefix) end
+        fn -> check_prefix(prefix) end,
+        fn -> if options[:live], do: check_schema(repo, prefix), else: :ok end
       ]
       |> Enum.map(& &1.())
       |> Enum.filter(&(&1 == :fail))
@@ -212,6 +225,146 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   end
 
   # -- helpers mirrored from the runtime task family (reap.ex:59-78) --
+
+  # -- live schema-currency check (--live) --
+
+  @claim_tables ["ash_onetime_idempotency_claims", "ash_onetime_nonce_claims"]
+  @expected_functions %{
+    "ash_onetime_cleanup_idempotency" => 1,
+    "ash_onetime_cleanup_nonce" => 1,
+    "ash_onetime_reap_idempotency" => 2
+  }
+  @expected_triggers ["ash_onetime_idempotency_delete_guard", "ash_onetime_nonce_delete_guard"]
+
+  @logical_partition_sql """
+  SELECT table_name FROM information_schema.columns
+  WHERE table_schema = $1 AND column_name = 'logical_partition'
+    AND table_name = ANY($2)
+  """
+  @payload_table_sql """
+  SELECT 1 FROM information_schema.tables
+  WHERE table_schema = $1 AND table_name = 'ash_onetime_response_payloads'
+  """
+  @default_partition_sql """
+  SELECT 1
+  FROM pg_inherits inheritance
+  JOIN pg_class parent ON parent.oid = inheritance.inhparent
+  JOIN pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
+  JOIN pg_class child ON child.oid = inheritance.inhrelid
+  WHERE parent_namespace.nspname = $1
+    AND parent.relname = 'ash_onetime_response_payloads'
+    AND child.relname = 'ash_onetime_response_payloads_default'
+  """
+  @function_sql """
+  SELECT p.proname, p.pronargs
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = $1 AND p.proname = ANY($2)
+  """
+  @trigger_sql """
+  SELECT trigger_name FROM information_schema.triggers
+  WHERE trigger_schema = $1 AND trigger_name = ANY($2)
+  """
+
+  defp check_schema(repo, prefix) do
+    schema = prefix || "public"
+
+    with :ok <- ensure_repo_started(repo),
+         {:ok, facts} <- live_schema_facts(repo, schema) do
+      render_schema_verdicts(schema_status(facts), schema)
+    else
+      {:error, reason} -> live_query_failure(repo, reason)
+    end
+  end
+
+  # The pure verdict seam, mirroring floor_status/oban_queue_status: the catalog facts are
+  # gathered by live_schema_facts/2 against the database; THIS function decides pass/fail
+  # from them, so every stale-schema shape is directly testable without a live connection.
+  # A missing item is FAIL, never WARN: a schema that is not current for the running
+  # package is the exact silent 3am failure mode (--store_invariant at first admission)
+  # this check exists to catch at upgrade time.
+  @doc false
+  @spec schema_status(map()) :: [{:ok | :fail, String.t()}]
+  def schema_status(facts) do
+    [
+      {length(facts.logical_partition_tables) == length(@claim_tables),
+       "logical_partition column present on both claim tables " <>
+         "(found on: #{inspect(Enum.sort(facts.logical_partition_tables))})"},
+      {facts.payload_table, "ash_onetime_response_payloads table present"},
+      {facts.default_partition, "ash_onetime_response_payloads_default partition present"},
+      {function_signature_complete?(facts.functions),
+       "cleanup/reap functions present with exact arities"},
+      {Enum.sort(facts.triggers) == Enum.sort(@expected_triggers),
+       "delete-guard triggers present (found: #{inspect(Enum.sort(facts.triggers))})"}
+    ]
+    |> Enum.map(fn {passed?, message} ->
+      if passed?, do: {:ok, message}, else: {:fail, message}
+    end)
+  end
+
+  defp function_signature_complete?(functions) do
+    map_size(functions) == map_size(@expected_functions) and
+      Enum.all?(functions, fn {name, arity} -> Map.get(@expected_functions, name) == arity end)
+  end
+
+  defp live_schema_facts(repo, schema) do
+    with {:ok, columns} <- query(repo, @logical_partition_sql, [schema, @claim_tables]),
+         {:ok, payload} <- query(repo, @payload_table_sql, [schema]),
+         {:ok, default} <- query(repo, @default_partition_sql, [schema]),
+         {:ok, functions} <-
+           query(repo, @function_sql, [schema, Map.keys(@expected_functions)]),
+         {:ok, triggers} <- query(repo, @trigger_sql, [schema, @expected_triggers]) do
+      {:ok,
+       %{
+         logical_partition_tables: Enum.map(columns.rows, &hd/1),
+         payload_table: payload.num_rows == 1,
+         default_partition: default.num_rows == 1,
+         functions: Map.new(functions.rows, fn [name, arity] -> {name, arity} end),
+         triggers: Enum.map(triggers.rows, &hd/1)
+       }}
+    end
+  end
+
+  defp query(repo, sql, params) do
+    case Ecto.Adapters.SQL.query(repo, sql, params) do
+      {:ok, result} -> {:ok, result}
+      {:error, exception} -> {:error, Exception.message(exception)}
+    end
+  end
+
+  defp ensure_repo_started(repo) do
+    case repo.start_link() do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  defp render_schema_verdicts(verdicts, schema) do
+    Mix.shell().info("\nSchema currency (schema #{inspect(schema)}):")
+
+    Enum.each(verdicts, fn
+      {:ok, message} -> Mix.shell().info("[OK]  #{message}")
+      {:fail, message} -> Mix.shell().error("[FAIL] #{message}")
+    end)
+
+    if Enum.any?(verdicts, &match?({:fail, _}, &1)) do
+      Mix.shell().error(
+        "      The schema is not current for this package version — run the outstanding " <>
+          "ash_onetime migrations (see documentation/upgrading.md)."
+      )
+
+      :fail
+    else
+      :ok
+    end
+  end
+
+  defp live_query_failure(repo, reason) do
+    Mix.shell().error("[FAIL] live schema check could not query #{inspect(repo)}: #{reason}")
+
+    :fail
+  end
 
   defp parse_repo!(nil), do: Mix.raise("--repo is required")
 

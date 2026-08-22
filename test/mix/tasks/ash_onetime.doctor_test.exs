@@ -124,6 +124,58 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
     end
   end
 
+  describe "schema currency verdict (pure seam)" do
+    test "a complete current schema passes every verdict" do
+      assert [{:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}] =
+               Doctor.schema_status(complete_facts())
+    end
+
+    test "a claim table missing the logical_partition column fails" do
+      facts = %{complete_facts() | logical_partition_tables: ["ash_onetime_nonce_claims"]}
+
+      assert Enum.any?(Doctor.schema_status(facts), fn
+               {:fail, message} -> message =~ "logical_partition"
+               _ok -> false
+             end)
+    end
+
+    test "a missing response payloads table fails" do
+      facts = %{complete_facts() | payload_table: false}
+
+      assert Enum.any?(Doctor.schema_status(facts), fn
+               {:fail, message} -> message =~ "response_payloads table"
+               _ok -> false
+             end)
+    end
+
+    test "a missing default partition fails" do
+      facts = %{complete_facts() | default_partition: false}
+
+      assert Enum.any?(Doctor.schema_status(facts), fn
+               {:fail, message} -> message =~ "_default partition"
+               _ok -> false
+             end)
+    end
+
+    test "a function with the wrong arity fails even when present" do
+      facts = put_in(complete_facts().functions["ash_onetime_reap_idempotency"], 3)
+
+      assert Enum.any?(Doctor.schema_status(facts), fn
+               {:fail, message} -> message =~ "exact arities"
+               _ok -> false
+             end)
+    end
+
+    test "a missing delete-guard trigger fails" do
+      facts = %{complete_facts() | triggers: ["ash_onetime_idempotency_delete_guard"]}
+
+      assert Enum.any?(Doctor.schema_status(facts), fn
+               {:fail, message} -> message =~ "triggers"
+               _ok -> false
+             end)
+    end
+  end
+
   describe "summary" do
     test "prints all-checks-passed when no failures" do
       Mix.Task.reenable("ash_onetime.doctor")
@@ -132,6 +184,23 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
                Doctor.run(["--repo", "AshOnetime.Test.Repo"])
              end) =~ "all checks passed"
     end
+  end
+
+  defp complete_facts do
+    %{
+      logical_partition_tables: ["ash_onetime_nonce_claims", "ash_onetime_idempotency_claims"],
+      payload_table: true,
+      default_partition: true,
+      functions: %{
+        "ash_onetime_cleanup_idempotency" => 1,
+        "ash_onetime_cleanup_nonce" => 1,
+        "ash_onetime_reap_idempotency" => 2
+      },
+      triggers: [
+        "ash_onetime_idempotency_delete_guard",
+        "ash_onetime_nonce_delete_guard"
+      ]
+    }
   end
 
   defp capture_io(fun), do: ExUnit.CaptureIO.capture_io(fun)

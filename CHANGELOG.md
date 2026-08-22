@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Added
+
+- **`mix ash_onetime.doctor --live`** — opt-in schema-currency preflight: connects to the
+  database read-only and fails when the installed schema is not current for the running
+  package (missing `logical_partition` columns, response-payloads table or its `_default`
+  partition, cleanup/reap functions by exact arity, or delete-guard triggers) — the
+  upgrade-without-migrating failure mode, caught at preflight instead of at the first
+  admission after deploy.
+- **Backup/restore runbook** (`documentation/operations.md`) — the `restore-from-backup`
+  procedure: per-strategy exposure of a rewound admission store (bounded nonce windows,
+  fresh re-execution of post-restore-point idempotent effects), reconciliation scoping,
+  and the post-restore partition roll-forward.
+- **PostgreSQL floor documentation** (README, operations.md) — the SQL surface requires
+  PostgreSQL 11+ (declarative hash/range partitioning with default partitions,
+  `SKIP LOCKED`, `pg_advisory_xact_lock(bigint)`); CI exercises PostgreSQL 18 and versions
+  below it are unverified.
+
+### Fixed
+
+- **Test suite**: the `RollContentionTest` full-suite flake (~10%/run) is eliminated at
+  the mechanism — `Sandbox.start_owner!/2`'s asynchronous teardown could leave the
+  caller's ownership allowance in place long enough for a back-to-back second owner in
+  the same process to crash with `{:already, :allowed}`. Same-process sequential owner
+  sites now use an in-process `checkout`/`checkin` helper
+  (`AshOnetime.Test.RealConnection`), with a 100-cycle tripwire pinning the class; the
+  timing-dependent telemetry-flush and ETS-TTL sleeps are deterministic. No library code
+  changed.
+
 ## v1.1.0 — 2026-08-20
 
 Additive transaction-owned admission for applications whose effect boundary is an existing
