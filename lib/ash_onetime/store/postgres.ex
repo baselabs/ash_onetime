@@ -655,7 +655,7 @@ defmodule AshOnetime.Store.Postgres do
       {:ok, %{num_rows: 1, rows: [[partition_date, payload]]}}
       when partition_date == claim.response_partition and is_binary(payload) and
              byte_size(payload) <= @payload_ceiling ->
-        if :crypto.hash(:sha256, payload) == claim.response_digest do
+        if fixed_digest_equal?(:crypto.hash(:sha256, payload), claim.response_digest) do
           {:ok, payload}
         else
           {:error, Result.failure(:corrupt_payload, :sent, :open)}
@@ -1157,12 +1157,25 @@ defmodule AshOnetime.Store.Postgres do
     if is_binary(codec) and byte_size(codec) > 0 and byte_size(codec) <= @max_codec_bytes and
          is_binary(digest) and byte_size(digest) == 32 and is_binary(encoded_response) and
          byte_size(encoded_response) <= @payload_ceiling and
-         :crypto.hash(:sha256, encoded_response) == digest do
+         fixed_digest_equal?(:crypto.hash(:sha256, encoded_response), digest) do
       :ok
     else
       {:error, :invalid_request}
     end
   end
+
+  # Constant-time digest equality, size-guarded, mirroring Admission.fixed_digest_equal?/2
+  # and Cache.fixed_equal?/2 — the store's digest comparisons follow the same convention as
+  # every other comparison site in the library. Neither call site compares attacker-secret
+  # material today (a digest of the payload returned to the key holder; a caller-supplied
+  # digest validated against its own payload); the unification removes the plain-==
+  # precedent so a future secret-adjacent comparison cannot copy it.
+  defp fixed_digest_equal?(left, right)
+       when is_binary(left) and byte_size(left) == 32 and is_binary(right) and
+              byte_size(right) == 32,
+       do: :crypto.hash_equals(left, right)
+
+  defp fixed_digest_equal?(_left, _right), do: false
 
   defp transaction_preconditions(target) do
     if target.repo_module.in_transaction?() do
