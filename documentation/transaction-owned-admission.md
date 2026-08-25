@@ -30,7 +30,11 @@ MyApp.Repo.transaction(fn ->
     {:execute, admission} ->
       exact_response_bytes = MyApp.Management.execute_and_encode!()
       :ok = Transaction.complete(admission, exact_response_bytes)
-      {:fresh, exact_response_bytes}
+      # The claim's durable address — persist it for correlation / external
+      # execute-recover peers (the one sanctioned accessor; Admission stays
+      # opaque):
+      claim_uuid = Transaction.claim_id(admission)
+      {:fresh, exact_response_bytes, claim_uuid}
 
     {:replay, exact_response_bytes} ->
       {:replay, exact_response_bytes}

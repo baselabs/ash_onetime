@@ -206,4 +206,28 @@ defmodule AshOnetime.TransactionAdmissionTest do
       clock: Clock
     ]
   end
+
+  test "claim_id/1 returns the admission's claim UUID (the one sanctioned accessor)", %{
+    prefix: prefix
+  } do
+    options = idempotency_options(prefix, "tenant-a", "request-claim-id", hash("body-a"))
+
+    {:ok, claim_id} =
+      Repo.transaction(fn ->
+        assert {:execute, admission} = Transaction.idempotency(Repo, options)
+        Transaction.claim_id(admission)
+      end)
+
+    assert {:ok, _uuid} = Ecto.UUID.cast(claim_id)
+
+    # The returned UUID IS the stored claim's id (the durable address).
+    assert {:ok, %{rows: [[count]]}} =
+             Repo.query(
+               "SELECT COUNT(*) FROM \"" <>
+                 prefix <> "\".ash_onetime_idempotency_claims WHERE id = $1::uuid",
+               [Ecto.UUID.dump!(claim_id)]
+             )
+
+    assert count == 1
+  end
 end

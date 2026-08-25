@@ -145,6 +145,18 @@ defmodule AshOnetime.Transaction do
 
   def complete(_admission, _payload), do: invalid_request()
 
+  @doc """
+  Returns the claim UUID of a fresh admission.
+
+  `Admission` is opaque by contract; this is the one sanctioned accessor. The
+  UUID is the durable address of the claim inside the store — persisting it
+  lets a host correlate its own invocation records with the claim (and hand
+  the unchanged UUID to an external execute/recover peer). A pure read: no
+  process, transaction, or store interaction.
+  """
+  @spec claim_id(admission()) :: Ecto.UUID.t()
+  def claim_id(%Admission{claim_id: claim_id}), do: claim_id
+
   defp common(repo, options) do
     with {:ok, operation_hash} <- operation_hash(Keyword.get(options, :operation)),
          partition when is_binary(partition) <- Keyword.get(options, :partition),

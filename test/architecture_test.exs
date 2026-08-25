@@ -242,7 +242,7 @@ defmodule AshOnetime.ArchitectureTest do
       verification: 5
     ],
     AshOnetime.Token => [mint: 2, sign: 3, verify: 3],
-    AshOnetime.Transaction => [complete: 2, idempotency: 2, nonce: 2],
+    AshOnetime.Transaction => [claim_id: 1, complete: 2, idempotency: 2, nonce: 2],
     AshOnetime.Verified => [],
     AshOnetime.Verifier => [],
     AshOnetime.Window => [cleanup_after: 3, cleanup_skew_margin_seconds: 0, validate: 5],
