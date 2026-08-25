@@ -135,10 +135,11 @@ patterns.
 
 ## Status
 
-The current package release is [v1.2.1 on Hex](https://hex.pm/packages/ash_onetime). It adds
-the `mix ash_onetime.doctor --live` schema-currency preflight, the backup/restore runbook,
-and constant-time digest-comparison unification on top of v1.1's transaction-owned admission
-and logical partitions. The
+The current package release is [v1.2.2 on Hex](https://hex.pm/packages/ash_onetime). It adds
+the `AshOnetime.Transaction.claim_id/1` accessor (the one sanctioned read of a fresh
+admission's claim UUID — persist it for correlation and external execute/recover peers) on
+top of v1.2's operations preflight, backup/restore runbook, and constant-time
+digest-comparison unification, and v1.1's transaction-owned admission and logical partitions. The
 [source is public](https://github.com/baselabs/ash_onetime). Every protected action chooses
 `:idempotency` or `:one_time_nonce` and declares a nonempty scope; there is no default
 strategy or global scope fallback. PostgreSQL-authoritative admission, transactional Ash

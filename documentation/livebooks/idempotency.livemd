@@ -195,6 +195,22 @@ account_id = "00000000-0000-0000-0000-000000000001"
 %{amount: 10, replayed?: false}
 ```
 
+## The claim's durable address (v1.2.2)
+
+`AshOnetime.Transaction.claim_id/1` is the one sanctioned read of a fresh admission's
+claim UUID — `Admission` stays opaque. On the transaction boundary (see
+[Transaction-owned admission](https://hexdocs.pm/ash_onetime/transaction-owned-admission.html)),
+persist the UUID wherever you correlate your own invocation records with the claim, or hand
+it unchanged to an external execute/recover peer:
+
+```elixir
+{:execute, admission} = AshOnetime.Transaction.idempotency(Repo, options)
+:ok = AshOnetime.Transaction.complete(admission, exact_response_bytes)
+claim_uuid = AshOnetime.Transaction.claim_id(admission)
+```
+
+A pure read — no process, transaction, or store interaction.
+
 ## Retry replays the stored result
 
 The same `idempotency_key` with the same content returns the *stored* record. `replayed?/1`

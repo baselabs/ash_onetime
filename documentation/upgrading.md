@@ -4,12 +4,19 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: f
 breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
 land in a minor), and each breaking change lands here with the exact edit to make.
 
-The current package release is v1.2.1 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
+The current package release is v1.2.2 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
 {:ash_onetime, "~> 1.2"}
 ```
+
+## v1.2.2 — additive (no upgrade action)
+
+`AshOnetime.Transaction.claim_id/1` — the sanctioned accessor for a fresh admission's
+claim UUID. Nothing to do on upgrade; start persisting the UUID wherever you correlate
+your own invocation records with the claim or hand it to an external
+execute/recover peer.
 
 ## v1.2.1 — documentation only (no upgrade action)
 

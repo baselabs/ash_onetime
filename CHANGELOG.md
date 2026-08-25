@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## v1.2.2 — 2026-08-25
+
+### Added
+
+- **`AshOnetime.Transaction.claim_id/1`** — the one sanctioned accessor for a
+  fresh admission's claim UUID (`Admission` stays opaque by contract). The
+  UUID is the durable address of the claim inside the store: persisting it
+  lets a host correlate its own invocation records with the claim and hand
+  the unchanged UUID to an external execute/recover peer. A pure read (no
+  process/transaction/store interaction); test-pinned against the stored
+  claim row, and the architecture export inventory is updated.
+
 ## v1.2.1 — 2026-08-22
 
 ### Changed
