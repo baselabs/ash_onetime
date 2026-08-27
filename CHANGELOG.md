@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## v1.2.3 — 2026-08-27
+
+### Changed
+
+- **Runtime application closure of the package's `.app` spec** — `plug`, `oban`,
+  `igniter`, and `stream_data` now carry `runtime: false`, so none of them appear in
+  the generated `applications` list anymore. Before this release, every host that
+  carried one of the optional integrations in its own dependency closure inherited
+  it as a runtime application of ash_onetime (the extension's app spec claimed its
+  boot and release closure), and every host inherited `stream_data` unconditionally.
+  The opt-in contract is unchanged: the Plug module, the Oban workers, and the
+  Igniter installer compile exactly when the host itself lists the dependency
+  (the optional-dependency matrix passes unchanged), and the published Hex
+  requirements still mark the three integrations `optional: true`. `stream_data`
+  remains a published requirement because Ash itself requires it transitively in
+  every environment — Mix rejects an `only: :test` restriction alongside Ash's
+  unrestricted entry — but it no longer contributes to this package's runtime
+  applications. Dev-side, the dialyzer PLT now names `:oban`, `:plug`, and
+  `:igniter` explicitly, since `runtime: false` deps are no longer seeded into the
+  PLT automatically while the guarded integration modules still analyze against
+  them.
+
 ## v1.2.2 — 2026-08-25
 
 ### Added

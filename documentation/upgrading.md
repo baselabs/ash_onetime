@@ -4,12 +4,23 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: f
 breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
 land in a minor), and each breaking change lands here with the exact edit to make.
 
-The current package release is v1.2.2 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
+The current package release is v1.2.3 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
 {:ash_onetime, "~> 1.2"}
 ```
+
+## v1.2.3 — runtime application closure fix (no upgrade action)
+
+The package's `.app` spec no longer lists `plug`, `oban`, `igniter`, or
+`stream_data` as runtime applications — previously they were claimed by
+ash_onetime whenever present in your own dependency closure. Nothing to do on
+upgrade: the optional integrations (the Plug module, the Oban workers, the
+Igniter installer) compile exactly when your own `deps()` lists the dependency,
+and those applications were always started by your own application tree, never
+by this extension. A release that carried any of them keeps working; only the
+extension's redundant claim on their boot order is gone.
 
 ## v1.2.2 — additive (no upgrade action)
 
