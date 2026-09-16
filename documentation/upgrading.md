@@ -14,7 +14,7 @@ minor whose public capabilities you use and review this page on each minor bump:
 ## v1.3.0 — security dependency floors (2026-09-16)
 
 If you pin Ash or AshPostgres yourself, raise those pins to Ash
-`>= 3.33.0 and < 4.0.0` and AshPostgres `~> 2.13`, then refresh:
+`>= 3.33.4 and < 4.0.0` and AshPostgres `~> 2.13`, then refresh:
 
 ```sh
 mix deps.update ash ash_postgres
@@ -47,7 +47,7 @@ These consumer requirements implement the security floors in
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md).
 OBSERVED: the September 15, 2026 Hex audit reported 26 advisories in the previous
 development lock; the advisory ranges and release metadata identify the patched
-minimums above. The doctor now rejects Ash below 3.33.0. No data migration or
+minimums above. The doctor now rejects Ash below 3.33.4. No data migration or
 DSL change is required. Mint remains optional, and the optional integrations
 remain host-owned runtime applications.
 

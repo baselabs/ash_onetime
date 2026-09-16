@@ -9,7 +9,7 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
 
   **Checks:**
 
-  - **Ash floor** (fatal): the running Ash version must be >= 3.33.0 (the CVE-floor pinned in
+  - **Ash floor** (fatal): the running Ash version must be >= 3.33.4 (the CVE-floor pinned in
     `mix.exs` `ash_requirement/0`). A below-floor Ash is a security defect, not an advisory.
   - **Oban queues** (advisory when Oban loaded): the three maintenance workers require
     `:ash_onetime_cleanup`, `:ash_onetime_reap`, and `:ash_onetime_partitions`. A missing
@@ -43,9 +43,9 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
 
   @switches [repo: :string, prefix: :string, live: :boolean]
 
-  # Mirrors mix.exs ash_requirement/0 and ADR 0004: EEF-CVE-2026-82752 sets the
-  # 3.33.0 floor. Update the consumer requirement and this runtime check together.
-  @ash_floor Version.parse!("3.33.0")
+  # Mirrors mix.exs ash_requirement/0 and ADR 0004: EEF-CVE-2026-86338 sets the
+  # 3.33.4 floor. Update the consumer requirement and this runtime check together.
+  @ash_floor Version.parse!("3.33.4")
 
   # The three required Oban queues (authoritative source: the three `use Oban.Worker, queue:`
   # declarations in lib/ash_onetime/oban/{cleanup,reap,partition}_worker.ex).

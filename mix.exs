@@ -75,9 +75,11 @@ defmodule AshOnetime.MixProject do
     ]
   end
 
-  # `>= 3.33.0 and < 4.0.0` is the consumer requirement. ADR 0004 records the
-  # September 15 advisory inventory: EEF-CVE-2026-82752 fixes unbounded combining-mark
-  # strings in 3.33.0; the other known Ash advisories are fixed at or below this floor.
+  # `>= 3.33.4 and < 4.0.0` is the consumer requirement. ADR 0004 records the
+  # advisory inventory through 2026-09-16: EEF-CVE-2026-86338 (field policies fail to
+  # filter-nil forbidden calculations and aggregates — an information-disclosure
+  # oracle) is fixed only in 3.33.4; EEF-CVE-2026-82752 and the rest of the
+  # EEF-CVE-2026-82xxx batch are fixed at or below this floor.
   # The CI compatibility matrix sets ASH_ONETIME_ASH_VERSION to pin
   # one exact Ash per cell (the floor and each later minor); `latest`/unset keeps the floating
   # requirement so the newest published Ash is exercised. The namespaced var name is extremely
@@ -85,7 +87,7 @@ defmodule AshOnetime.MixProject do
   # the full requirement. A pin is validated at project-config evaluation time: it must be a
   # version inside the published range, else Mix.raise fires — a publish with an out-of-range
   # pin exported would otherwise silently freeze a wrong exact requirement into the package.
-  @ash_floor "3.33.0"
+  @ash_floor "3.33.4"
 
   defp ash_requirement do
     case System.get_env("ASH_ONETIME_ASH_VERSION") do

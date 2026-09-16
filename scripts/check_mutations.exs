@@ -517,17 +517,17 @@ defmodule AshOnetime.MutationCheck do
     },
     "doctor-ash-floor" => %{
       path: "lib/mix/tasks/ash_onetime.doctor.ex",
-      original: "@ash_floor Version.parse!(\"3.33.0\")",
-      mutated: "@ash_floor Version.parse!(\"3.32.2\")",
+      original: "@ash_floor Version.parse!(\"3.33.4\")",
+      mutated: "@ash_floor Version.parse!(\"3.33.3\")",
       test: "test/mix/tasks/ash_onetime.doctor_test.exs",
       tag: "doctor_ash_floor_mutation",
-      test_name: "rejects the Ash release preceding the patched string constraint floor",
-      assertion: "assert {:fail, message} = Doctor.floor_status(Version.parse!(\"3.32.2\"))"
+      test_name: "rejects the Ash release preceding the patched field-policy floor",
+      assertion: "assert {:fail, message} = Doctor.floor_status(Version.parse!(\"3.33.3\"))"
     },
     "mixpin-ash-floor" => %{
       path: "mix.exs",
-      original: "@ash_floor \"3.33.0\"",
-      mutated: "@ash_floor \"3.32.2\"",
+      original: "@ash_floor \"3.33.4\"",
+      mutated: "@ash_floor \"3.33.3\"",
       test: "test/mix/ash_pin_validation_test.exs",
       tag: "mixpin_ash_floor_mutation",
       test_name: "rejects a below-floor pin at config evaluation",

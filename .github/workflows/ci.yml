@@ -27,8 +27,8 @@ jobs:
       fail-fast: false
       matrix:
         ash:
-          - "3.33.0" # declared security floor (EEF-CVE-2026-82752; ADR 0004)
-          - "latest" # floating >= 3.33.0, < 4.0.0 — newest published Ash 3.x
+          - "3.33.4" # declared security floor (EEF-CVE-2026-86338 fixed only here; 82752/82xxx at or below; ADR 0004)
+          - "latest" # floating >= 3.33.4, < 4.0.0 — newest published Ash 3.x
 
     services:
       postgres:
@@ -68,7 +68,7 @@ jobs:
 
       - name: Resolve the matrix Ash version
         # `== X` cells resolve to exactly X; the floating `latest` cell resolves to the
-        # newest Ash satisfying `>= 3.33.0 and < 4.0.0`. Unlock first so the committed
+        # newest Ash satisfying `>= 3.33.4 and < 4.0.0`. Unlock first so the committed
         # lock's floor pin never holds a cell back.
         run: |
           mix deps.unlock ash

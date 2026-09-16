@@ -19,8 +19,8 @@ defmodule AshOnetime.MixDependencySecurityTest do
     # ASH_ONETIME_ASH_VERSION; the floating form is asserted in
     # test/mix/ash_pin_validation_test.exs and scripts/check_package.exs.
     unless String.starts_with?(requirement, "==") do
-      refute Version.match?("3.32.2", requirement)
-      assert Version.match?("3.33.0", requirement)
+      refute Version.match?("3.33.3", requirement)
+      assert Version.match?("3.33.4", requirement)
     end
   end
 

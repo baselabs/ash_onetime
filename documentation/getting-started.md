@@ -1,6 +1,6 @@
 # Getting started
 
-`ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.2), Erlang/OTP 29, Ash `>= 3.33.0`,
+`ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.2), Erlang/OTP 29, Ash `>= 3.33.4`,
 AshPostgres `~> 2.13`, and PostgreSQL 11+ (CI exercises 18). The package is published on
 [Hex](https://hex.pm/packages/ash_onetime) (`{:ash_onetime, "~> 1.3"}`).
 

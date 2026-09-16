@@ -4,7 +4,7 @@ Date: 2026-08-09
 
 ## Status
 
-Accepted (amended 2026-09-15 — Ash floor raised to 3.33.0 and related dependency floors repaired; see the final amendment).
+Accepted (amended 2026-09-16 — Ash floor raised to 3.33.4 and related dependency floors repaired; see the final amendment).
 Supersedes the `>= 3.29.3` floor documented in the v0.1.x/v0.2.0 README and `mix.exs`
 (not a prior ADR — the floor was an inline documented constraint, not an architecture decision).
 Tightens the published dependency requirement from `>= 3.29.3 and < 4.0.0` to
@@ -114,7 +114,7 @@ How the floor moves after 1.0:
   adapting to a future Ash 4 follows the same path and only forces an ash_onetime 2.0 if
   the DSL itself must break.
 
-## Amendment — patched dependency floors (2026-09-15, unreleased)
+## Amendment — patched dependency floors (2026-09-16, v1.3.0)
 
 OBSERVED: `mix hex.audit` on September 15 reported 26 advisories against the
 committed Ash 3.32.0, AshPostgres 2.11.0, AshSql 0.6.6, Mint 1.9.3, and Igniter
@@ -129,7 +129,7 @@ and the Hex release retirement metadata establish these patched, nonretired floo
 
 | Package | Minimum | Binding advisory |
 |---|---|---|
-| Ash | 3.33.0 | [EEF-CVE-2026-82752](https://cna.erlef.org/osv/EEF-CVE-2026-82752.html) |
+| Ash | 3.33.4 | [EEF-CVE-2026-86338](https://cna.erlef.org/osv/EEF-CVE-2026-86338.html) — fixed only in 3.33.4; 82752's 3.33.0 and the 82xxx batch's 3.32.2 sit below it |
 | AshPostgres | 2.13.0 | [EEF-CVE-2026-78699](https://cna.erlef.org/osv/EEF-CVE-2026-78699.html) |
 | AshSql | 0.7.1 | [EEF-CVE-2026-81318](https://cna.erlef.org/osv/EEF-CVE-2026-81318.html), plus the other four AshSql advisories |
 | Mint | 1.10.0 | [EEF-CVE-2026-82728](https://cna.erlef.org/osv/EEF-CVE-2026-82728.html) and EEF-CVE-2026-82729 |
@@ -141,7 +141,9 @@ deliberate next-major caps (`< 1.0.0` and `< 2.0.0`) — not inherited ranges, b
 same compatibility posture as the Ash `< 4.0.0` bound: a breaking major of a direct
 dependency is a matrix-extension event first (see the 2026-08-19 amendment), so the
 caps move only after the matrix proves the new major green.
-The CI Ash matrix becomes `[3.33.0, latest]`; the doctor and package checks use
+The CI Ash matrix becomes `[3.33.4, latest]` (transiently both cells resolve 3.33.4
+until the next Ash release — the same expected collapse as the 2026-08-18
+amendment); the doctor and package checks use
 the same floor. OBSERVED Hex release metadata for AshPostgres 2.13.0 permits
 `ash_sql ~> 0.7`, including vulnerable 0.7.0, so declare an explicit AshSql
 constraint. Its `runtime: false` preserves AshPostgres ownership of its startup.

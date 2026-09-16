@@ -438,7 +438,7 @@ using it to sign. Retain every old verification key until the last token it sign
 fall back silently to a different key.
 
 The supported runtime is Elixir `~> 1.20` (verified on 1.20.2) and Erlang/OTP 29 with
-Ash `>= 3.33.0`, AshPostgres `~> 2.13`, and PostgreSQL 18 (the version the project's test harness
+Ash `>= 3.33.4`, AshPostgres `~> 2.13`, and PostgreSQL 18 (the version the project's test harness
 and release checks run on). The SQL surface itself needs PostgreSQL 11 or newer — declarative
 hash/range partitioning with default partitions, `SELECT ... FOR UPDATE SKIP LOCKED`, and
 `pg_advisory_xact_lock(bigint)` are all 11+ features — but nothing below 18 is exercised by

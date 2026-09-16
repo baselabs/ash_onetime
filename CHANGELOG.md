@@ -6,11 +6,14 @@ All notable changes to this project are documented in this file.
 
 ### Security
 
-- **Breaking dependency change:** raise the consumer floors to Ash 3.33.0,
+- **Breaking dependency change:** raise the consumer floors to Ash 3.33.4,
   AshPostgres `~> 2.13`, AshSql 0.7.1, Igniter 0.8.4, and Mint 1.10.0, following
   ADR 0004. OBSERVED: `mix hex.audit` on September 15, 2026 reported 26
   advisories against the previous lock; the OSV ranges and Hex release metadata
-  identify these patched minimums. The doctor, CI floor, and package check move
+  identify these patched minimums. EEF-CVE-2026-86338 (published September 16,
+  fixed only in Ash 3.33.4) moved the Ash floor above the initial 3.33.0 choice
+  before release — CI's floor-cell audit caught it. The doctor, CI floor, and
+  package check move
   together. Mint is optional and excluded from this package's runtime application
   list; existing optional integrations retain their startup boundaries. **Ash 3.33
   additionally requires the consumer config `config :ash, default_string_length_count:
