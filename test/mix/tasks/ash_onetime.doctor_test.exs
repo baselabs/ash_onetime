@@ -49,8 +49,7 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
       assert message =~ "3.29.3"
     end
 
-    @tag :doctor_ash_floor_mutation
-    test "rejects the retired and advised Ash releases inside the 0.6.0 published range" do
+    test "rejects the retired and advised Ash releases inside the former published range" do
       # 3.31.1: retired by Hex ("breaking change") and inside EEF-CVE-2026-67579's affected
       # range — it was the OLD floor (where 70395/-69659 were fixed), but 67579 (fixed only
       # in 3.31.3) puts it below the floor. 3.31.2: also inside 67579's range. The doctor
@@ -62,8 +61,15 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
       assert message_3312 =~ "below the security floor"
     end
 
-    test "accepts the 3.31.3 security floor" do
-      assert :ok = Doctor.floor_status(Version.parse!("3.31.3"))
+    @tag :doctor_ash_floor_mutation
+    test "rejects the Ash release preceding the patched string constraint floor" do
+      assert {:fail, message} = Doctor.floor_status(Version.parse!("3.32.2"))
+      assert message =~ "below the security floor"
+      assert message =~ "3.33.0"
+    end
+
+    test "accepts the 3.33.0 security floor" do
+      assert :ok = Doctor.floor_status(Version.parse!("3.33.0"))
     end
   end
 

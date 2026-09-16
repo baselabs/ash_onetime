@@ -35,7 +35,7 @@ defmodule AshOnetime.PackageCheck do
       File.mkdir_p!(package)
       assert_outer!(archive)
       extract!(archive, outer, false)
-      assert_floating_ash_requirement!(Path.join(outer, "metadata.config"))
+      assert_published_requirements(Path.join(outer, "metadata.config"))
       contents = Path.join(outer, "contents.tar.gz")
       entries = table!(contents, true) |> file_entries()
       expected = source_entries()
@@ -220,18 +220,52 @@ defmodule AshOnetime.PackageCheck do
   # The published ash requirement is security surface (D2): a release built with an exact
   # ASH_ONETIME_ASH_VERSION pin exported freezes "== x.y.z" into the hex metadata in place
   # of the floating range. mix.exs rejects out-of-range pins at config evaluation; this
-  # asserts the FROZEN METADATA of the archive the battery is about to approve actually
-  # carries the floating requirement, whatever the current shell holds.
-  @floating_ash_requirement ">= 3.31.3 and < 4.0.0"
+  # parses the FROZEN METADATA of the archive the battery is about to approve and asserts
+  # every published security floor — plus its optional flag — actually shipped, whatever
+  # the current shell holds.
+  @published_requirements %{
+    ash: {">= 3.33.0 and < 4.0.0", false},
+    ash_postgres: {"~> 2.13", false},
+    ash_sql: {"~> 0.7 and >= 0.7.1", false},
+    igniter: {"~> 0.8 and >= 0.8.4", true},
+    mint: {"~> 1.10", true}
+  }
 
-  defp assert_floating_ash_requirement!(metadata_path) do
-    metadata = File.read!(metadata_path)
+  defp assert_published_requirements(metadata_path) do
+    # metadata.config is a dotted multi-term file, not one binary term.
+    metadata =
+      case :file.consult(metadata_path) do
+        {:ok, metadata} ->
+          metadata
 
-    unless metadata =~ "<<\"#{@floating_ash_requirement}\">>" do
-      raise "archive ash requirement is not the floating #{@floating_ash_requirement} — the " <>
-              "release was built with ASH_ONETIME_ASH_VERSION exported (frozen exact pin); " <>
-              "rebuild with the variable unset"
-    end
+        error ->
+          raise "could not parse archive metadata #{metadata_path}: #{inspect(error)}"
+      end
+
+    {"requirements", entries} = List.keyfind(metadata, "requirements", 0)
+
+    Enum.each(@published_requirements, fn {package, {requirement, optional}} ->
+      package_name = Atom.to_string(package)
+
+      entry = Enum.find(entries, &(List.keyfind(&1, "name", 0) == {"name", package_name}))
+
+      unless entry do
+        raise "archive metadata has no #{package} requirement entry"
+      end
+
+      {"requirement", shipped} = List.keyfind(entry, "requirement", 0)
+
+      unless shipped == requirement do
+        raise "archive #{package} requirement is #{inspect(shipped)}, not the published " <>
+                "#{inspect(requirement)} — the shipped metadata drifted from mix.exs"
+      end
+
+      {"optional", shipped_optional} = List.keyfind(entry, "optional", 0)
+
+      unless shipped_optional == optional do
+        raise "archive #{package} optional flag is #{shipped_optional}, expected #{optional}"
+      end
+    end)
   end
 
   defp digest_file(path), do: path |> File.read!() |> then(&:crypto.hash(:sha256, &1))

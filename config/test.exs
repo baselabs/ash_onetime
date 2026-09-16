@@ -16,6 +16,11 @@ config :ash_onetime,
 config :ash_onetime, AshOnetime.Test.Repo,
   url: database_url,
   pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: 10
+  pool_size: 10,
+  # DBConnection's codel queue dropped the pool's first checkout during the
+  # mutation battery's per-mutation boots under host load (observed symptom; the
+  # default queue_target is 50ms). Wait patiently instead of dropping at boot.
+  queue_target: 5_000,
+  queue_interval: 10_000
 
 config :logger, level: :warning

@@ -150,7 +150,7 @@ bounded cleanup, optional cache/Plug/Oban integrations, the DPoP replay fence, a
 gates are present.
 
 Test assurance runs deeper than line coverage: every library module sits at 100% line
-coverage, and the bar is the [mutation battery](CONTRIBUTING.md) — 130 sentinels, each
+coverage, and the bar is the [mutation battery](CONTRIBUTING.md) — 135 sentinels, each
 proven to fail under its own mutation before it is trusted, so a green suite means the
 guards actually guard.
 
@@ -158,27 +158,25 @@ guards actually guard.
 
 - Elixir `~> 1.20` (developed and tested on 1.20.2)
 - Erlang/OTP 29
-- Ash `>= 3.31.3` and `< 4.0.0` (the whole 3.x line from the 3.31.3 floor up)
-- AshPostgres 2
+- Ash `>= 3.33.0` and `< 4.0.0`
+- AshPostgres `~> 2.13`, AshSql `~> 0.7 and >= 0.7.1`
 - PostgreSQL 18 for the project test harness. The SQL surface requires PostgreSQL 11+
   (declarative hash/range partitioning with default partitions, `SKIP LOCKED`,
   `pg_advisory_xact_lock(bigint)`); versions below 18 are not exercised by this project's
   CI — treat them as unverified.
 
-The floor is Ash 3.31.3, not the earlier 3.x line: EEF-CVE-2026-55736 (private
-action arguments settable by user input, fixed in 3.29.3),
-EEF-CVE-2026-70395 (predicate injection in `manage_relationship` belongs_to
-lookup disclosing secret lookup keys, fixed in 3.31.1), EEF-CVE-2026-69659
-(memory exhaustion via unbounded keyset-cursor deserialization, fixed in
-3.31.1), and EEF-CVE-2026-67579 (filter expression injection via a forged
-keyset pagination cursor — HIGH, fixed only in 3.31.3) all affect Ash below
-3.31.3 — a security library must not admit a vulnerable floor. Compatibility
-across the range is verified per matrix cell by the standard gate battery — format,
-compile with warnings-as-errors, `mix hex.audit` (Hex security advisories),
-`mix deps.audit`, the full test suite, `mix credo --strict`, `mix dialyzer`,
-`mix docs --warnings-as-errors`, and `mix hex.build` — run against the 3.31.3 floor
-and the latest published Ash 3.x. The release battery (mutation matrix,
-unpacked-package check, DSL cheat-sheet freshness) runs once per push in the
+The security floors follow
+[ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md).
+OBSERVED: the September 15, 2026 advisory inventory identifies Ash 3.33.0 as the
+patched floor for EEF-CVE-2026-82752; earlier Ash advisories are fixed at or below
+that version. The optional Igniter and Mint requirements enforce patched floors
+of 0.8.4 and 1.10.0 without adding either to this package's runtime applications.
+Compatibility across the range is verified per matrix cell by the standard gate
+battery — format, compile with warnings-as-errors, `mix hex.audit` (Hex security
+advisories), `mix deps.audit`, the full test suite, `mix credo --strict`,
+`mix dialyzer`, `mix docs --warnings-as-errors`, and `mix hex.build` — run against
+the 3.33.0 floor and the latest published Ash 3.x. The release battery (mutation
+matrix, unpacked-package check, DSL cheat-sheet freshness) runs once per push in the
 `release-checks` job against the committed lock, not per cell.
 `.github/workflows/ci.yml` is configured to re-run this matrix on every push and
 pull request. The pinned development runtime is Elixir 1.20.2 / Erlang/OTP 29

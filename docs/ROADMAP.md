@@ -7,6 +7,14 @@ build parent [#12](https://github.com/baselabs/ash_onetime/issues/12)), or **ope
 cross-row joins are deliberate. Row text describes the gap as it was authored; the
 status column records where it stands now.
 
+## Security dependency maintenance
+
+The unreleased dependency repair follows [ADR 0004](adr/0004-security-driven-ash-floor.md):
+consumer floors are Ash 3.33.0, AshPostgres 2.13.0, AshSql 0.7.1, Igniter 0.8.4,
+and Mint 1.10.0. The doctor, package check, and Ash floor/latest CI cells follow
+these requirements. See [upgrading](../documentation/upgrading.md) for consumer
+steps. Registry publication is separate from this source repair.
+
 ## Security / correctness (P0 — do first)
 
 | ID | Status | What | Acceptance | Depends | Why |

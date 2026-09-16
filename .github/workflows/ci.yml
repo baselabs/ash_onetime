@@ -27,8 +27,8 @@ jobs:
       fail-fast: false
       matrix:
         ash:
-          - "3.31.3" # declared floor (EEF-CVE-2026-67579 fixed only here; 55736/70395/69659 fixed at or below it)
-          - "latest" # floating >= 3.31.3, < 4.0.0 — newest published Ash 3.x
+          - "3.33.0" # declared security floor (EEF-CVE-2026-82752; ADR 0004)
+          - "latest" # floating >= 3.33.0, < 4.0.0 — newest published Ash 3.x
 
     services:
       postgres:
@@ -68,7 +68,7 @@ jobs:
 
       - name: Resolve the matrix Ash version
         # `== X` cells resolve to exactly X; the floating `latest` cell resolves to the
-        # newest Ash satisfying `>= 3.31.3 and < 4.0.0`. Unlock first so the committed
+        # newest Ash satisfying `>= 3.33.0 and < 4.0.0`. Unlock first so the committed
         # lock's floor pin never holds a cell back.
         run: |
           mix deps.unlock ash
@@ -138,3 +138,10 @@ jobs:
       # Fails when the committed documentation/dsls/DSL-*.md drifts from the declared schema.
       - name: DSL cheat-sheet freshness
         run: mix spark.cheat_sheets --check --extensions AshOnetime.Resource
+      # Optional-integration matrix: which integrations compile per consumer dep set,
+      # that no optional dep leaks into the runtime application closure, and two
+      # conflict proofs — exact advised pins (igniter == 0.8.3, mint == 1.9.3)
+      # must FAIL to resolve, proving the security floors bind in a real consumer
+      # resolution (ADR 0004).
+      - name: Optional integration matrix
+        run: MIX_ENV=test mix run scripts/check_optional_matrix.exs

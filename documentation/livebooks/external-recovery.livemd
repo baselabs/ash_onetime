@@ -8,7 +8,7 @@ livebook:{"persist_outputs":true}
 Mix.install(
   [
     {:ash_onetime, "~> 1.2"},
-    {:ash_postgres, "~> 2.11"},
+    {:ash_postgres, "~> 2.13"},
     {:kino, "~> 0.14", only: :dev}
   ],
   consolidate_protocols: false
@@ -43,6 +43,9 @@ database_url =
   )
 
 :ok = Application.put_env(:ash, :disable_async?, true)
+# Ash >= 3.33 requires an explicit string-length counting mode; codepoints
+# matches how the SQL data layer counts (EEF-CVE-2026-82752 remediation).
+:ok = Application.put_env(:ash, :default_string_length_count, :codepoints)
 :ok = Application.put_env(:ash_onetime_demo, AshOnetimeDemo.Repo, url: database_url, pool_size: 10)
 ```
 

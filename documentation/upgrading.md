@@ -11,6 +11,47 @@ minor whose public capabilities you use and review this page on each minor bump:
 {:ash_onetime, "~> 1.2"}
 ```
 
+## Unreleased — security dependency floors
+
+If you pin Ash or AshPostgres yourself, raise those pins to Ash
+`>= 3.33.0 and < 4.0.0` and AshPostgres `~> 2.13`, then refresh:
+
+```sh
+mix deps.update ash ash_postgres
+mix hex.audit
+mix deps.audit
+```
+
+No action is needed for AshSql, Igniter, or Mint unless you pin them directly:
+`ash_onetime`'s own requirements (`ash_sql ~> 0.7 and >= 0.7.1`, and — when present
+in your graph — `igniter ~> 0.8 and >= 0.8.4`, `mint ~> 1.10`) already exclude the
+advised versions transitively. If you do pin them, raise those pins to the same
+floors.
+
+**Ash 3.33 additionally requires a string-length counting config.** Ash refuses to
+compile resources until your application declares how `min_length`/`max_length`
+count string length (its remediation for EEF-CVE-2026-82752 — grapheme counting
+does not bound value size). Add the recommended codepoints mode to your config:
+
+```elixir
+config :ash, default_string_length_count: :codepoints
+```
+
+`:codepoints` matches how SQL data layers count, so `max_length` bounds the size of
+stored values; `:mixed` keeps the pre-3.33 grapheme behavior but does not bound
+value size. Individual attributes can override the default with the `length_count`
+constraint. See the
+[Ash backwards-compatibility config](https://hexdocs.pm/ash/backwards-compatibility-config.html#default_string_length_count).
+
+These consumer requirements implement the security floors in
+[ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md).
+OBSERVED: the September 15, 2026 Hex audit reported 26 advisories in the previous
+development lock; the advisory ranges and release metadata identify the patched
+minimums above. The doctor now rejects Ash below 3.33.0. No data migration or
+DSL change is required. Mint remains optional, and the optional integrations
+remain host-owned runtime applications. These changes are not yet published;
+the current Hex release remains v1.2.3.
+
 ## v1.2.3 — runtime application closure fix (no upgrade action)
 
 The package's `.app` spec no longer lists `plug`, `oban`, `igniter`, or

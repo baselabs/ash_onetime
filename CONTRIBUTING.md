@@ -40,10 +40,15 @@ DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test \
   MIX_ENV=test mix run scripts/check_mutations.exs -- all
 mix hex.build
 mix run scripts/check_package.exs
+mix run scripts/check_optional_matrix.exs
 ```
 
 Inspect the Hex archive by exact file allowlist and compile/test an unpacked archive consumer;
 building an archive alone is not package proof. Remove the generated tar after verification.
+The optional-integration matrix compiles a consumer per dependency set (none/plug/oban/
+igniter/all/mint-pin), asserts none of the optional deps leak into the package's runtime
+application closure, and proves the security floors bind in resolution: exact advised
+pins (igniter == 0.8.3, mint == 1.9.3) must FAIL to resolve next to this package.
 
 Run the gate battery on the runtime pinned in `.tool-versions` (Elixir 1.20.2,
 Erlang/OTP 29), which is the supported and released runtime.
@@ -58,13 +63,15 @@ dependencies, or project-owned version suffixes in durable identifiers.
 
 ## Dependency compatibility
 
-The published `mix.exs` bounds (`ash_postgres ~> 2.11`, `spark ~> 2.7`, and the Ash floor
-`>= 3.31.3`) allow forward drift within their major lines. They are NOT the primary guard
+The consumer `mix.exs` bounds (`ash_postgres ~> 2.13`, `spark ~> 2.7`, and the Ash floor
+`>= 3.33.0`) allow forward drift within their major lines. AshSql additionally requires
+`~> 0.7 and >= 0.7.1`; optional Igniter and Mint require `~> 0.8 and >= 0.8.4` and
+`~> 1.10`. These security floors follow ADR 0004. They are NOT the primary guard
 against a transitive semantic shift — a future `ash_postgres` 2.x or `spark` 2.x minor that
 changes transaction-visibility semantics the fail-closed logic depends on would still satisfy
 the bound. The real guard is the **CI compatibility matrix** in `.github/workflows/ci.yml`:
 
-- the declared Ash floor (`3.31.3`, CVE-justified per ADR-0004);
+- the declared Ash floor (`3.33.0`, CVE-justified per ADR-0004);
 - a floating `latest` cell that resolves the newest published Ash 3.x on every run via
   `deps.unlock ash` / `deps.update ash` and re-runs the per-cell gate battery against it
   (format, compile warnings-as-errors, hex.audit, deps.audit, test, credo --strict,

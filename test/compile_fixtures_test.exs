@@ -336,6 +336,12 @@ defmodule AshOnetime.CompileFixturesTest do
   @runner ~S"""
   [fixture, expected] = System.argv()
   expected = Module.concat([expected])
+  # Ash >= 3.33 requires an explicit string-length counting mode at resource compile
+  # time; this fresh VM does not read config/test.exs, so mirror its codepoints mode.
+  # Starting Mix keeps the transformer's compiling_dependency?/0 (which reads
+  # Mix.Project.config/0) from crashing on a dead Mix.ProjectStack in this Mix-less VM.
+  Mix.start()
+  Application.put_env(:ash, :default_string_length_count, :codepoints)
   Code.require_file(Path.join(Path.dirname(fixture), "support.exs"))
 
   emit_dsl_error = fn %Spark.Error.DslError{} = error ->
@@ -365,6 +371,12 @@ defmodule AshOnetime.CompileFixturesTest do
 
   @matrix_runner ~S"""
   [case_name] = System.argv()
+  # Ash >= 3.33 requires an explicit string-length counting mode at resource compile
+  # time; this fresh VM does not read config/test.exs, so mirror its codepoints mode.
+  # Starting Mix keeps the transformer's compiling_dependency?/0 (which reads
+  # Mix.Project.config/0) from crashing on a dead Mix.ProjectStack in this Mix-less VM.
+  Mix.start()
+  Application.put_env(:ash, :default_string_length_count, :codepoints)
   fixture_dir = Path.expand("test/compile_fixtures")
   Code.require_file(Path.join(fixture_dir, "support.exs"))
   Code.require_file(Path.join(fixture_dir, "matrix_cases.exs"))

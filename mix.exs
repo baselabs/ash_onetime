@@ -15,9 +15,12 @@ defmodule AshOnetime.MixProject do
       description: description(),
       package: package(),
       docs: docs(),
-      # :oban/:plug/:igniter are runtime: false, so dialyxir no longer seeds the PLT with
-      # them on its own, while the guarded integration modules still analyze against their
-      # beams — they must be added explicitly.
+      # :oban/:plug/:igniter/:mint/:stream_data/:ash_sql are all runtime: false, so
+      # dialyxir no longer seeds the PLT with them on its own, while the guarded
+      # integration modules still analyze against their beams — they must be added
+      # explicitly. :ash_sql stays seeded transitively through ash_postgres's own
+      # app spec; :mint needs no explicit entry because nothing in lib/ compiles
+      # against it (it binds only inside the optional installer closure).
       dialyzer: [plt_add_apps: [:ecto_sql, :ex_unit, :mix, :oban, :plug, :igniter]],
       test_paths: ["test"],
       test_ignore_filters: [&String.starts_with?(&1, "test/compile_fixtures/")]
@@ -34,7 +37,14 @@ defmodule AshOnetime.MixProject do
   defp deps do
     [
       {:ash, ash_requirement()},
-      {:ash_postgres, "~> 2.11"},
+      # Security floor (ADR 0004): AshPostgres 2.13.0 is where EEF-CVE-2026-78699 is
+      # fixed, and AshPostgres still admits older ash_sql releases — the explicit
+      # ash_sql floor below closes that gap for consumers. `runtime: false` keeps
+      # AshPostgres the owner of ash_sql's startup; the < 1.0.0 cap is the same
+      # matrix-extension posture as the Ash < 4.0.0 bound (a breaking major is
+      # proven in CI before the cap moves).
+      {:ash_postgres, "~> 2.13"},
+      {:ash_sql, "~> 0.7 and >= 0.7.1", runtime: false},
       {:spark, "~> 2.7"},
       {:ecto_sql, "~> 3.14"},
       {:postgrex, "~> 0.22"},
@@ -51,7 +61,12 @@ defmodule AshOnetime.MixProject do
       # but kept out of the runtime applications list.
       {:plug, "~> 1.20", optional: true, runtime: false},
       {:oban, "~> 2.23", optional: true, runtime: false},
-      {:igniter, "~> 0.8", optional: true, runtime: false},
+      {:igniter, "~> 0.8 and >= 0.8.4", optional: true, runtime: false},
+      # Constrain the installer's HTTP closure without adding HTTP to core consumers:
+      # mint reaches a tree only through igniter → req → finch, so an optional
+      # requirement binds exactly the closure that carries it. Same next-major cap
+      # posture as ash_sql above.
+      {:mint, "~> 1.10", optional: true, runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
@@ -60,21 +75,17 @@ defmodule AshOnetime.MixProject do
     ]
   end
 
-  # `>= 3.31.3 and < 4.0.0` is the published requirement every consumer resolves against. The
-  # floor is 3.31.3: EEF-CVE-2026-55736 (private action arguments settable by user input, fixed
-  # in 3.29.3), EEF-CVE-2026-70395 (predicate injection in manage_relationship belongs_to
-  # lookup disclosing secret lookup keys, fixed in 3.31.1), EEF-CVE-2026-69659 (memory
-  # exhaustion via unbounded keyset-cursor deserialization, fixed in 3.31.1), and
-  # EEF-CVE-2026-67579 (filter expression injection via a forged keyset pagination cursor —
-  # HIGH, fixed only in 3.31.3) all affect Ash below 3.31.3 — a security library must not
-  # admit a vulnerable floor. The CI compatibility matrix sets ASH_ONETIME_ASH_VERSION to pin
+  # `>= 3.33.0 and < 4.0.0` is the consumer requirement. ADR 0004 records the
+  # September 15 advisory inventory: EEF-CVE-2026-82752 fixes unbounded combining-mark
+  # strings in 3.33.0; the other known Ash advisories are fixed at or below this floor.
+  # The CI compatibility matrix sets ASH_ONETIME_ASH_VERSION to pin
   # one exact Ash per cell (the floor and each later minor); `latest`/unset keeps the floating
   # requirement so the newest published Ash is exercised. The namespaced var name is extremely
   # unlikely to collide with anything in a consumer's environment, so a published build sees
   # the full requirement. A pin is validated at project-config evaluation time: it must be a
   # version inside the published range, else Mix.raise fires — a publish with an out-of-range
   # pin exported would otherwise silently freeze a wrong exact requirement into the package.
-  @ash_floor "3.31.3"
+  @ash_floor "3.33.0"
 
   defp ash_requirement do
     case System.get_env("ASH_ONETIME_ASH_VERSION") do

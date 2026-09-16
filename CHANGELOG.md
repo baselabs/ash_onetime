@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Security
+
+- **Breaking dependency change:** raise the consumer floors to Ash 3.33.0,
+  AshPostgres `~> 2.13`, AshSql 0.7.1, Igniter 0.8.4, and Mint 1.10.0, following
+  ADR 0004. OBSERVED: `mix hex.audit` on September 15, 2026 reported 26
+  advisories against the previous lock; the OSV ranges and Hex release metadata
+  identify these patched minimums. The doctor, CI floor, and package check move
+  together. Mint is optional and excluded from this package's runtime application
+  list; existing optional integrations retain their startup boundaries. **Ash 3.33
+  additionally requires the consumer config `config :ash, default_string_length_count:
+  :codepoints` (or `:mixed`)** — without it an application's own resources fail to
+  compile; see the upgrading guide for the full consumer steps, including this one.
+  No registry publication.
+- **Lock:** `ash` 3.32.0 → 3.33.4, `ash_postgres` 2.11.0 → 2.13.1,
+  `ash_sql` 0.6.6 → 0.7.5, `igniter` 0.8.3 → 0.8.4, `mint` 1.9.3 → 1.10.0, with
+  `req` 0.7.4, `spark` 2.7.3, and `spitfire` 0.4.1 riding the resolution.
+
+### Changed
+
+- **Test harness:** Ash 3.33's mandatory string-length counting mode is set to the
+  recommended `:codepoints` (`config/config.exs`), and the compile-fixture
+  subprocess runners start Mix and mirror the mode (the fresh VMs read no config).
+  The dynamic-repo transaction test's readiness receives and the test pool's
+  checkout queue were widened to bounded patient windows — the default 100ms/6s
+  ceilings flaked under scheduler and host load; no fail-closed semantics changed.
+  The optional-integration matrix script now also observes the resolved Igniter
+  and Mint versions against the security floors, gains conflict proofs (exact
+  advised pins must fail to resolve), and joins the release-gate battery.
+
 ## v1.2.3 — 2026-08-27
 
 ### Changed

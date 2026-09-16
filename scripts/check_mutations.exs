@@ -517,21 +517,66 @@ defmodule AshOnetime.MutationCheck do
     },
     "doctor-ash-floor" => %{
       path: "lib/mix/tasks/ash_onetime.doctor.ex",
-      original: "@ash_floor Version.parse!(\"3.31.3\")",
-      mutated: "@ash_floor Version.parse!(\"3.31.1\")",
+      original: "@ash_floor Version.parse!(\"3.33.0\")",
+      mutated: "@ash_floor Version.parse!(\"3.32.2\")",
       test: "test/mix/tasks/ash_onetime.doctor_test.exs",
       tag: "doctor_ash_floor_mutation",
-      test_name: "rejects the retired and advised Ash releases inside the 0.6.0 published range",
-      assertion: "assert {:fail, message_3311} = Doctor.floor_status(Version.parse!(\"3.31.1\"))"
+      test_name: "rejects the Ash release preceding the patched string constraint floor",
+      assertion: "assert {:fail, message} = Doctor.floor_status(Version.parse!(\"3.32.2\"))"
     },
     "mixpin-ash-floor" => %{
       path: "mix.exs",
-      original: "@ash_floor \"3.31.3\"",
-      mutated: "@ash_floor \"3.31.0\"",
+      original: "@ash_floor \"3.33.0\"",
+      mutated: "@ash_floor \"3.32.2\"",
       test: "test/mix/ash_pin_validation_test.exs",
       tag: "mixpin_ash_floor_mutation",
       test_name: "rejects a below-floor pin at config evaluation",
       assertion: "assert exit != 0"
+    },
+    "deps-ash-postgres-floor" => %{
+      path: "mix.exs",
+      original: "{:ash_postgres, \"~> 2.13\"}",
+      mutated: "{:ash_postgres, \"~> 2.11\"}",
+      test: "test/mix/dependency_security_test.exs",
+      tag: "deps_ash_postgres_floor_mutation",
+      test_name: "ash_postgres consumer requirement rejects advised versions",
+      assertion: "refute Version.match?(\"2.12.0\", requirement)"
+    },
+    "deps-ash-sql-floor" => %{
+      path: "mix.exs",
+      original: "{:ash_sql, \"~> 0.7 and >= 0.7.1\", runtime: false}",
+      mutated: "{:ash_sql, \"~> 0.7\", runtime: false}",
+      test: "test/mix/dependency_security_test.exs",
+      tag: "deps_ash_sql_floor_mutation",
+      test_name: "ash_sql consumer requirement rejects advised versions",
+      assertion: "refute Version.match?(\"0.7.0\", requirement)"
+    },
+    "deps-mint-floor" => %{
+      path: "mix.exs",
+      original: "{:mint, \"~> 1.10\", optional: true, runtime: false}",
+      mutated: "{:mint, \"~> 1.9\", optional: true, runtime: false}",
+      test: "test/mix/dependency_security_test.exs",
+      tag: "deps_mint_floor_mutation",
+      test_name: "mint consumer requirement rejects advised versions",
+      assertion: "refute Version.match?(\"1.9.3\", requirement)"
+    },
+    "deps-igniter-floor" => %{
+      path: "mix.exs",
+      original: "{:igniter, \"~> 0.8 and >= 0.8.4\", optional: true, runtime: false}",
+      mutated: "{:igniter, \"~> 0.8\", optional: true, runtime: false}",
+      test: "test/mix/dependency_security_test.exs",
+      tag: "deps_igniter_floor_mutation",
+      test_name: "igniter consumer requirement rejects advised versions",
+      assertion: "refute Version.match?(\"0.8.3\", requirement)"
+    },
+    "deps-optional-runtime" => %{
+      path: "mix.exs",
+      original: "{:igniter, \"~> 0.8 and >= 0.8.4\", optional: true, runtime: false}",
+      mutated: "{:igniter, \"~> 0.8 and >= 0.8.4\", optional: true}",
+      test: "test/mix/dependency_security_test.exs",
+      tag: "deps_optional_runtime_mutation",
+      test_name: "security constraints preserve host-owned optional runtime applications",
+      assertion: "assert options[:runtime] == false"
     },
     "operation-hash-select" => %{
       path: "lib/ash_onetime/store/postgres.ex",

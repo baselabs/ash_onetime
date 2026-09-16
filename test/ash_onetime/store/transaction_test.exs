@@ -120,24 +120,29 @@ defmodule AshOnetime.Store.TransactionTest do
     parent = self()
     task_a = live_repo_task(parent, repo_a, prefix, request, :hold)
     task_a_pid = task_a.pid
-    assert_receive {:live_repo_ready, ^task_a_pid, backend_a}
+    # The readiness signal sits behind a connection checkout and a SQL round-trip;
+    # the default 100ms window flakes under scheduler/CI load. The signals stay
+    # deterministic — 15_000 sits above the pool's queue-drop threshold
+    # (2 x queue_target = 10_000 in config/test.exs), so a queued-but-healthy
+    # checkout is never abandoned early by the test before the pool would give up.
+    assert_receive {:live_repo_ready, ^task_a_pid, backend_a}, 15_000
     send(task_a_pid, :start_claim)
-    assert_receive {:live_repo_claimed, ^task_a_pid, :admitted}
+    assert_receive {:live_repo_claimed, ^task_a_pid, :admitted}, 15_000
 
     task_b =
       live_repo_task(parent, repo_b, prefix, %{request | id: Ecto.UUID.generate()}, :proceed)
 
     task_b_pid = task_b.pid
-    assert_receive {:live_repo_ready, ^task_b_pid, backend_b}
+    assert_receive {:live_repo_ready, ^task_b_pid, backend_b}, 15_000
     assert repo_a != repo_b
     assert backend_a != backend_b
     send(task_a.pid, :release)
 
     assert {:ok, {^backend_a, %Result{status: :admitted, claim: claim_a}}} =
-             Task.await(task_a, 5_000)
+             Task.await(task_a, 15_000)
 
     assert {:ok, {^backend_b, %Result{status: :processing, claim: claim_b}}} =
-             Task.await(task_b, 5_000)
+             Task.await(task_b, 15_000)
 
     assert claim_a.id == claim_b.id
 
