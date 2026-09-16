@@ -135,7 +135,7 @@ patterns.
 
 ## Status
 
-The current package release is [v1.2.3 on Hex](https://hex.pm/packages/ash_onetime). It
+The current package release is [v1.3.0 on Hex](https://hex.pm/packages/ash_onetime). It
 tightens the package's runtime application closure — no optional integration (Plug, Oban,
 Igniter) or property-test dependency is claimed as a runtime application of the extension
 anymore — on top of v1.2.2's `AshOnetime.Transaction.claim_id/1` accessor (the one sanctioned

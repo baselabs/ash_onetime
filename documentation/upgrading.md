@@ -4,14 +4,14 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: f
 breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
 land in a minor), and each breaking change lands here with the exact edit to make.
 
-The current package release is v1.2.3 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
+The current package release is v1.3.0 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 1.2"}
+{:ash_onetime, "~> 1.3"}
 ```
 
-## Unreleased — security dependency floors
+## v1.3.0 — security dependency floors (2026-09-16)
 
 If you pin Ash or AshPostgres yourself, raise those pins to Ash
 `>= 3.33.0 and < 4.0.0` and AshPostgres `~> 2.13`, then refresh:
@@ -49,8 +49,7 @@ OBSERVED: the September 15, 2026 Hex audit reported 26 advisories in the previou
 development lock; the advisory ranges and release metadata identify the patched
 minimums above. The doctor now rejects Ash below 3.33.0. No data migration or
 DSL change is required. Mint remains optional, and the optional integrations
-remain host-owned runtime applications. These changes are not yet published;
-the current Hex release remains v1.2.3.
+remain host-owned runtime applications.
 
 ## v1.2.3 — runtime application closure fix (no upgrade action)
 

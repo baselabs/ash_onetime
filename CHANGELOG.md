@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## v1.3.0 — 2026-09-16
 
 ### Security
 
@@ -16,7 +16,6 @@ All notable changes to this project are documented in this file.
   additionally requires the consumer config `config :ash, default_string_length_count:
   :codepoints` (or `:mixed`)** — without it an application's own resources fail to
   compile; see the upgrading guide for the full consumer steps, including this one.
-  No registry publication.
 - **Lock:** `ash` 3.32.0 → 3.33.4, `ash_postgres` 2.11.0 → 2.13.1,
   `ash_sql` 0.6.6 → 0.7.5, `igniter` 0.8.3 → 0.8.4, `mint` 1.9.3 → 1.10.0, with
   `req` 0.7.4, `spark` 2.7.3, and `spitfire` 0.4.1 riding the resolution.

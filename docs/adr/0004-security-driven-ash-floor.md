@@ -162,4 +162,5 @@ documents the consumer step.
 Lock-only repair remains rejected. Admission, transaction, nonce failure, and
 cache authority semantics are unchanged by this decision. The regression suite,
 mutation battery, unpacked consumer, optional integration matrix, and exact-commit
-CI are the compatibility checks. This amendment does not publish a package.
+CI are the compatibility checks. The release vehicle is v1.3.0 (security-driven
+minor, per the forward-compatible floor posture above).

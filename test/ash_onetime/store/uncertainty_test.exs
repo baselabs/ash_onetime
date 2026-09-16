@@ -23,8 +23,19 @@ defmodule AshOnetime.Store.UncertaintyTest do
   test "a checkout failure before callback entry is the sole not-started store failure", %{
     prefix: prefix
   } do
-    dead_repo = spawn(fn -> :ok end)
+    # The exit must happen AFTER the monitor exists: a process that dies before
+    # Process.monitor/1 synthesizes a :noproc DOWN instead of :normal, and under
+    # scheduler load spawn-and-exit beats the monitor. A receive handshake makes
+    # the :normal reason deterministic.
+    dead_repo =
+      spawn(fn ->
+        receive do
+          :exit -> :ok
+        end
+      end)
+
     monitor = Process.monitor(dead_repo)
+    send(dead_repo, :exit)
     assert_receive {:DOWN, ^monitor, :process, ^dead_repo, :normal}
 
     target = %Postgres.Target{

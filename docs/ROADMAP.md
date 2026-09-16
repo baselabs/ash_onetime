@@ -9,11 +9,12 @@ status column records where it stands now.
 
 ## Security dependency maintenance
 
-The unreleased dependency repair follows [ADR 0004](adr/0004-security-driven-ash-floor.md):
+The v1.3.0 dependency-security release (2026-09-16) follows
+[ADR 0004](adr/0004-security-driven-ash-floor.md):
 consumer floors are Ash 3.33.0, AshPostgres 2.13.0, AshSql 0.7.1, Igniter 0.8.4,
 and Mint 1.10.0. The doctor, package check, and Ash floor/latest CI cells follow
 these requirements. See [upgrading](../documentation/upgrading.md) for consumer
-steps. Registry publication is separate from this source repair.
+steps.
 
 ## Security / correctness (P0 — do first)
 
