@@ -437,7 +437,7 @@ using it to sign. Retain every old verification key until the last token it sign
 `max_age + clock_skew`, then remove it. An unknown key identifier fails verification; never
 fall back silently to a different key.
 
-The supported runtime is Elixir `~> 1.20` (verified on 1.20.2) and Erlang/OTP 29 with
+The supported runtime is Elixir `~> 1.20` (verified on 1.20.4) and Erlang/OTP 28 or 29 with
 Ash `>= 3.33.4`, AshPostgres `~> 2.13`, and PostgreSQL 18 (the version the project's test harness
 and release checks run on). The SQL surface itself needs PostgreSQL 11 or newer — declarative
 hash/range partitioning with default partitions, `SELECT ... FOR UPDATE SKIP LOCKED`, and

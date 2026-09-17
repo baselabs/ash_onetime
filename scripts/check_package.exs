@@ -1,3 +1,5 @@
+Code.require_file("#{__DIR__}/portable.exs")
+
 defmodule AshOnetime.PackageCheck do
   @moduledoc false
 
@@ -182,7 +184,11 @@ defmodule AshOnetime.PackageCheck do
 
   defp command!(directory, environment, arguments) do
     {output, status} =
-      System.cmd("mix", arguments, cd: directory, env: environment, stderr_to_stdout: true)
+      AshOnetime.Portable.cmd("mix", arguments,
+        cd: directory,
+        env: environment,
+        stderr_to_stdout: true
+      )
 
     IO.puts(output)
     if status != 0, do: raise("consumer command failed: mix #{Enum.join(arguments, " ")}")

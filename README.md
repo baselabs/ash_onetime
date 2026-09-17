@@ -135,8 +135,12 @@ patterns.
 
 ## Status
 
-The current package release is [v1.3.0 on Hex](https://hex.pm/packages/ash_onetime). It
-tightens the package's runtime application closure — no optional integration (Plug, Oban,
+The current package release is [v1.3.1 on Hex](https://hex.pm/packages/ash_onetime) — a
+repository-only hardening release (in-repo toolchain enforcement, a compose test database
+with a per-machine port, mechanical dependency currency, and a tri-platform developer
+surface with CI proving the Windows pickup and test battery continuously) with no
+consumer-facing change. It follows v1.3.0, which
+tightened the package's runtime application closure — no optional integration (Plug, Oban,
 Igniter) or property-test dependency is claimed as a runtime application of the extension
 anymore — on top of v1.2.2's `AshOnetime.Transaction.claim_id/1` accessor (the one sanctioned
 read of a fresh admission's claim UUID), v1.2's operations preflight, backup/restore runbook,
@@ -156,8 +160,8 @@ guards actually guard.
 
 ## Compatibility
 
-- Elixir `~> 1.20` (developed and tested on 1.20.2)
-- Erlang/OTP 29
+- Elixir `~> 1.20` (developed and tested on 1.20.4)
+- Erlang/OTP 28 or 29
 - Ash `>= 3.33.4` and `< 4.0.0`
 - AshPostgres `~> 2.13`, AshSql `~> 0.7 and >= 0.7.1`
 - PostgreSQL 18 for the project test harness. The SQL surface requires PostgreSQL 11+
@@ -181,7 +185,8 @@ the 3.33.4 floor and the latest published Ash 3.x. The release battery (mutation
 matrix, unpacked-package check, DSL cheat-sheet freshness) runs once per push in the
 `release-checks` job against the committed lock, not per cell.
 `.github/workflows/ci.yml` is configured to re-run this matrix on every push and
-pull request. The pinned development runtime is Elixir 1.20.2 / Erlang/OTP 29
+pull request, plus a dedicated OTP 28 leg covering the other end of the supported
+runtime set. The pinned development runtime is Elixir 1.20.4 / Erlang/OTP 29.0.3
 (`.tool-versions`).
 
 ## Development
@@ -190,8 +195,11 @@ Start the dedicated test database and run the suite as documented in
 [CONTRIBUTING.md](CONTRIBUTING.md), then:
 
 ```sh
+cp .env.example .env   # pick a free PGPORT; keep DATABASE_URL's port in sync
+docker compose up -d
+set -a && . ./.env && set +a   # sh; PowerShell: $env:DATABASE_URL = "..."
 mix deps.get
-DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test mix test
+mix test
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete gate battery and

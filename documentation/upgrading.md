@@ -4,12 +4,21 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: f
 breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
 land in a minor), and each breaking change lands here with the exact edit to make.
 
-The current package release is v1.3.0 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
+The current package release is v1.3.1 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
 {:ash_onetime, "~> 1.3"}
 ```
+
+## v1.3.1 — repository-only hardening (2026-09-17)
+
+Nothing to do. No requirement, dependency floor, or public API changed: the release
+enforces the project's own build toolchain in-repo (an OTP allowlist in
+`config/config.exs`, which never ships in the package), adds a compose test database
+with a per-machine port, makes dependency currency mechanical, and makes the
+repository's developer surface tri-platform — macOS/Linux/Windows CI lanes with no
+POSIX-only tooling in any gate.
 
 ## v1.3.0 — security dependency floors (2026-09-16)
 

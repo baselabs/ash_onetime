@@ -1,3 +1,5 @@
+Code.require_file("../../scripts/portable.exs", __DIR__)
+
 defmodule AshOnetime.TokenTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
@@ -517,7 +519,7 @@ defmodule AshOnetime.TokenTest do
 
     {output, status} =
       try do
-        System.cmd("mix", ["run", "--no-start", "--no-deps-check", "-e", script],
+        AshOnetime.Portable.cmd("mix", ["run", "--no-start", "--no-deps-check", "-e", script],
           env: [{"MIX_BUILD_PATH", build_path}, {"MIX_ENV", "dev"}],
           stderr_to_stdout: true
         )

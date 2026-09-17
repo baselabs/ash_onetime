@@ -1,7 +1,7 @@
+Code.require_file("#{__DIR__}/portable.exs")
+
 defmodule AshOnetime.MutationCheck do
   @moduledoc false
-
-  @database_url "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
 
   @mutations %{
     "transaction-store-rollback-propagation" => %{
@@ -1553,14 +1553,14 @@ defmodule AshOnetime.MutationCheck do
     env = mutation_environment()
 
     {compile_output, compile_status} =
-      System.cmd("mix", ["compile", "--force"], env: env, stderr_to_stdout: true)
+      AshOnetime.Portable.cmd("mix", ["compile", "--force"], env: env, stderr_to_stdout: true)
 
     if compile_status != 0 do
       raise "mutation #{name} failed to compile:\n#{compile_output}"
     end
 
     {output, status} =
-      System.cmd(
+      AshOnetime.Portable.cmd(
         "mix",
         ["run", "--no-compile", "scripts/probe_compile_fixture.exs", fixture, expected],
         env: env,
@@ -1581,7 +1581,7 @@ defmodule AshOnetime.MutationCheck do
   defp run_test(mutation) do
     env = mutation_environment()
 
-    System.cmd(
+    AshOnetime.Portable.cmd(
       "mix",
       ["test", "--force", mutation.test, "--only", mutation.tag, "--seed", "0"],
       env: env,
@@ -1592,7 +1592,10 @@ defmodule AshOnetime.MutationCheck do
   defp mutation_environment do
     [
       {"MIX_ENV", "test"},
-      {"DATABASE_URL", @database_url}
+      # The battery always targets the same dedicated database the parent test
+      # run validated (test_helper fails closed on its shape first); refusing
+      # to start without it beats silently retargeting a hardcoded URL.
+      {"DATABASE_URL", System.fetch_env!("DATABASE_URL")}
     ]
     |> maybe_put_build_path(System.get_env("MIX_BUILD_PATH"))
   end

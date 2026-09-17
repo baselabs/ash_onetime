@@ -2,6 +2,51 @@
 
 All notable changes to this project are documented in this file.
 
+## v1.3.1 — 2026-09-17
+
+No consumer-facing changes: the published Elixir requirement (`~> 1.20`), every
+dependency floor, and the public API are identical to v1.3.0. This release hardens
+how the project itself builds and verifies — on every platform it supports.
+
+### Changed
+
+- **Toolchain identity is enforced in-repo, before anything compiles.** The Elixir
+  support window stays `~> 1.20`; `config/config.exs` now refuses any Erlang/OTP
+  build outside the supported set (`28`, `29`). `System.version/0` does not encode
+  the OTP build, so a same-Elixir foreign build previously compiled silently and
+  poisoned shared `_build`/PLT state. The guard never ships — `config/` is excluded
+  from the package — and its set grows only in the same commit that adds a CI leg:
+  a dedicated `otp-28` CI job now proves the 28 end, while `.tool-versions`
+  (Elixir 1.20.4 on OTP 29.0.3) and the primary CI runtime hold the 29 end.
+- **macOS/Linux/Windows capability is a hard requirement, not a preference.** Every
+  POSIX-only tool in the developer surface is gone: the dependency-currency gate
+  moved from a bash script to `scripts/check_deps_currency.exs` (same exit-code
+  contract; all four outcomes proven — green, resolvable drift, deliberate pin,
+  unparsable table), every `System.cmd("mix", ...)` call site in tests and battery
+  scripts spawns through `AshOnetime.Portable` (`cmd /c` wrapping for Windows'
+  .cmd shims), and `.gitattributes` (`* text=auto eol=lf`) keeps a Windows checkout
+  byte-exact for `mix format --check-formatted`. CI proves the weakest platform
+  continuously: a `windows-build` lane (clone, deps, format, compile, audits,
+  credo, currency gate, hex.build) and a `windows-db-battery` lane that installs
+  PostgreSQL 18 natively via chocolatey (service containers are a Linux-only
+  feature) and runs the full `mix test`. The heavier release gates (mutation
+  battery, unpacked-package check, optional-integration matrix) remain
+  ubuntu-proven and are named as such in the workflow.
+- **Test database substrate:** `docker compose up -d` provisions the exact
+  PostgreSQL 18 the harness requires, with the host port taken from `.env`
+  (`PGPORT`, default 18841 — the same port CI pins) so the dedicated instance
+  never collides with another local listener; `.env.example` documents the
+  `PG*` variables, the fail-closed `DATABASE_URL`, and `HEX_API_KEY`. The harness
+  still fails closed — on the dedicated shape rather than one string: ecto
+  scheme, `postgres` user, loopback host, `ash_onetime_test` name, any port
+  except the shared default 5432.
+- **Dependency currency is mechanical:** `scripts/check_deps_currency.exs` exits
+  nonzero on resolver-updatable drift (`mix hex.outdated` "Update possible") and
+  prints blocked packages with the requirement chains holding them. OBSERVED:
+  dialyxir 1.4.7 → 1.4.8, ex_doc 0.40.3 → 0.40.4, and oban 2.23.1 → 2.24.1 moved
+  to latest; `mix hex.audit` reported "No retired or security advisory packages
+  found" before and after the move.
+
 ## v1.3.0 — 2026-09-16
 
 ### Security

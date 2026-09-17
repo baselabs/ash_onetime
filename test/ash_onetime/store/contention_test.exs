@@ -3,18 +3,11 @@ defmodule AshOnetime.Store.ContentionTest do
 
   alias AshOnetime.Store
   alias AshOnetime.Store.{Claim, Postgres, Result}
-  alias AshOnetime.Test.{Migration, RealConnection, Repo}
+  alias AshOnetime.Test.{ExternalPeer, Migration, RealConnection, Repo}
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
   @moduletag :store
-  @database_options [
-    hostname: "127.0.0.1",
-    port: 18_841,
-    username: "postgres",
-    password: "postgres",
-    database: "ash_onetime_test"
-  ]
 
   setup_all do
     installation = Migration.install_generated!()
@@ -242,7 +235,7 @@ defmodule AshOnetime.Store.ContentionTest do
   end
 
   defp observer! do
-    {:ok, observer} = Postgrex.start_link(@database_options)
+    {:ok, observer} = Postgrex.start_link(ExternalPeer.database_options())
     Process.unlink(observer)
 
     on_exit(fn ->

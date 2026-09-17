@@ -1,0 +1,33 @@
+# Test-database substrate — the only service this repo's harness requires.
+#
+# This is a LIBRARY: the build itself needs no containers. The toolchain comes
+# from .tool-versions (mise reads it natively on Windows/macOS/Linux; asdf on
+# Unix) and is enforced in code — mix.exs' `~> 1.20` window plus the OTP assert
+# in config/config.exs refuse foreign toolchains on every platform before
+# anything compiles. What the harness DOES hard-require is Postgres:
+# test/test_helper.exs fails closed unless DATABASE_URL targets the dedicated
+# loopback ash_onetime_test database on a non-default port.
+#
+# `docker compose` interpolates the PG* variables from .env (copy
+# .env.example). PGPORT exists so each machine picks a collision-free port —
+# keep it in sync with the port inside DATABASE_URL. The defaults match CI's
+# Linux service-container mapping (host 18841 -> container 5432).
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${PGUSER:-postgres}
+      POSTGRES_PASSWORD: ${PGPASSWORD:-postgres}
+      POSTGRES_DB: ${PGDATABASE:-ash_onetime_test}
+    # Host ${PGPORT} -> container 5432: the harness's DATABASE_URL port.
+    ports:
+      - "${PGPORT:-18841}:5432"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${PGUSER:-postgres} -d ${PGDATABASE:-ash_onetime_test}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10

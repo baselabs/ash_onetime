@@ -1,0 +1,6 @@
+# Cross-platform checkout policy: a Windows clone with Git's default
+# core.autocrlf=true would check text files out as CRLF, silently breaking
+# `mix format --check-formatted` and every byte-exact comparison. text=auto
+# normalizes to LF in the index; eol=lf forces an LF working tree on every
+# platform.
+* text=auto eol=lf

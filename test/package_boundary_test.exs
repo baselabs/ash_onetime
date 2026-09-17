@@ -56,10 +56,14 @@ defmodule AshOnetime.PackageBoundaryTest do
   end
 
   test "the database harness is pinned to its dedicated PostgreSQL 18 database" do
-    repo_config = Application.fetch_env!(:ash_onetime, Repo)
+    # test_helper already failed closed unless DATABASE_URL targets the
+    # dedicated shape (postgres user, loopback host, ash_onetime_test name,
+    # non-default port); this pins the Repo to that SAME guarded URL — no
+    # independent fallback target — plus the live isolation check against the
+    # connected server.
+    database_url = System.fetch_env!("DATABASE_URL")
 
-    assert repo_config[:url] ==
-             "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+    assert Application.fetch_env!(:ash_onetime, Repo)[:url] == database_url
 
     assert :ok = Migration.assert_isolated_database!()
   end

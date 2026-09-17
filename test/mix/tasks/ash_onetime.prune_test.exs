@@ -1,18 +1,11 @@
 defmodule Mix.Tasks.AshOnetime.PruneTest do
   use AshOnetime.Test.StoreCase, async: false
 
-  alias AshOnetime.Test.RealConnection
+  alias AshOnetime.Test.{ExternalPeer, RealConnection}
   alias Mix.Tasks.AshOnetime.Prune
 
   @moduletag :store
   @moduletag :payload_partition_mutation
-  @database_options [
-    hostname: "127.0.0.1",
-    port: 18_841,
-    username: "postgres",
-    password: "postgres",
-    database: System.get_env("ASH_ONETIME_EXPECTED_TEST_DATABASE", "ash_onetime_test")
-  ]
 
   setup_all do
     installation = install_store!()
@@ -122,7 +115,11 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
     current = detach_current_month(prefix, today)
 
     on_exit(fn ->
-      {:ok, connection} = Postgrex.start_link(@database_options)
+      {:ok, connection} =
+        Postgrex.start_link(
+          ExternalPeer.database_options(System.get_env("ASH_ONETIME_EXPECTED_TEST_DATABASE"))
+        )
+
       Process.unlink(connection)
 
       try do
@@ -259,7 +256,11 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
   end
 
   defp connection! do
-    {:ok, connection} = Postgrex.start_link(@database_options)
+    {:ok, connection} =
+      Postgrex.start_link(
+        ExternalPeer.database_options(System.get_env("ASH_ONETIME_EXPECTED_TEST_DATABASE"))
+      )
+
     Process.unlink(connection)
 
     on_exit(fn ->

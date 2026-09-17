@@ -27,3 +27,4 @@ mix hex.build
 - Verification callbacks return trusted local facts; action input cannot supply pre-verified facts.
 - Do not depend on `ash_webhook_it`, `core_os`, QorPay, or Bounded Authority packages.
 - Do not place phase, task, slice, release, schema, worker, contract, or API versions in durable project identifiers.
+- macOS/Linux/Windows capability is required — a repo that does not clone, build, and gate on all three is a failure. Gates run in Elixir (`.exs`), never POSIX shell; spawn `mix` through `AshOnetime.Portable` (`scripts/portable.exs`); keep `.gitattributes` (`* text=auto eol=lf`) intact.

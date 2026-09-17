@@ -29,6 +29,8 @@ This notebook walks through the spend and the reuse rejection — against a real
 ## Connect to PostgreSQL
 
 ```elixir
+# The default targets the repo's dedicated test database (see CONTRIBUTING.md);
+# set DATABASE_URL to your own host port if your local instance differs.
 database_url =
   System.get_env(
     "DATABASE_URL",

@@ -141,15 +141,9 @@ defmodule AshOnetime.ExternalContentionTest do
   end
 
   defp with_observer(callback) do
-    options = [
-      hostname: "127.0.0.1",
-      port: 18_841,
-      username: "postgres",
-      password: "postgres",
-      database: "ash_onetime_test"
-    ]
-
-    {:ok, observer} = Postgrex.start_link(options)
+    # Observer sessions derive host/port from the Repo URL — never a pinned
+    # port (per-machine PGPORT via .env).
+    {:ok, observer} = Postgrex.start_link(ExternalPeer.database_options())
     Process.unlink(observer)
 
     try do

@@ -1,6 +1,6 @@
 # Getting started
 
-`ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.2), Erlang/OTP 29, Ash `>= 3.33.4`,
+`ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.4), Erlang/OTP 28 or 29, Ash `>= 3.33.4`,
 AshPostgres `~> 2.13`, and PostgreSQL 11+ (CI exercises 18). The package is published on
 [Hex](https://hex.pm/packages/ash_onetime) (`{:ash_onetime, "~> 1.3"}`).
 
@@ -139,4 +139,5 @@ end
 
 Contributors and library maintainers need the test database harness, which is documented in
 [CONTRIBUTING.md](../CONTRIBUTING.md). The suite fails closed unless `DATABASE_URL` points at
-the dedicated database on port `18841`; the container is reusable across sessions.
+the dedicated loopback database on a non-default port (repo default `18841`; pick a
+collision-free port via `.env.example`); the container is reusable across sessions.

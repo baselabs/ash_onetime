@@ -4,13 +4,26 @@ defmodule AshOnetime.Test.ExternalPeer do
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
 
-  @database_options [
-    hostname: "127.0.0.1",
-    port: 18_841,
-    username: "postgres",
-    password: "postgres",
-    database: "ash_onetime_test"
-  ]
+  # The observer sessions must land on the SAME dedicated instance the Repo
+  # uses — derive host/port/credentials from the Repo's configured URL at
+  # runtime instead of pinning a port that no longer has a single value
+  # (each machine picks its collision-free PGPORT via .env; CI pins 18841).
+  # `database` is overridable for the mutation battery's alternate-database
+  # observer runs (ASH_ONETIME_EXPECTED_TEST_DATABASE).
+  def database_options(database \\ nil) do
+    %URI{host: host, port: port, userinfo: userinfo, path: path} =
+      URI.parse(Application.fetch_env!(:ash_onetime, Repo)[:url])
+
+    [user, password] = String.split(userinfo || "postgres:postgres", ":", parts: 2)
+
+    [
+      hostname: host,
+      port: port || 5432,
+      username: user,
+      password: password,
+      database: database || String.trim_leading(path, "/")
+    ]
+  end
 
   def install!(prefix) do
     prefix = validated_prefix!(prefix)
@@ -240,7 +253,7 @@ defmodule AshOnetime.Test.ExternalPeer do
   end
 
   defp with_connection(callback) do
-    {:ok, connection} = Postgrex.start_link(@database_options)
+    {:ok, connection} = Postgrex.start_link(database_options())
     Process.unlink(connection)
 
     try do

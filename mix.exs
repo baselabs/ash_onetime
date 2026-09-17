@@ -1,13 +1,24 @@
 defmodule AshOnetime.MixProject do
   use Mix.Project
 
-  @version "1.3.0"
+  @version "1.3.1"
   @source_url "https://github.com/baselabs/ash_onetime"
 
   def project do
     [
       app: :ash_onetime,
       version: @version,
+      # Elixir requirement — the PUBLIC support window, not a build pin: `~> 1.20`
+      # admits the entire 1.20 minor line (>= 1.20.0 and < 1.21.0) so consumers
+      # are never scoped to one Elixir build, and refuses 1.19.x and 1.21+
+      # (a minor move is a deliberate support decision proven in CI first).
+      # This repo's OWN exact toolchain identity is enforced separately:
+      # .tool-versions and CI's ELIXIR_VERSION/OTP_VERSION pin the build every
+      # gate runs on (currently 1.20.4 / OTP 29.0.3), and config/config.exs
+      # refuses a foreign OTP build before anything compiles. Lockstep rule:
+      # this requirement, .tool-versions, and CI's ELIXIR_VERSION/OTP_VERSION
+      # move together in ONE commit — the pinned toolchain must satisfy this
+      # requirement; divergence between the three is a defect.
       elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,

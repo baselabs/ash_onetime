@@ -3,26 +3,37 @@
 Work directly from a clean checkout and keep changes focused on one behavior. New
 behavior starts with a test that fails for the intended reason.
 
-The test suite requires a dedicated PostgreSQL 18 database on `127.0.0.1:18841`. The suite
-fails closed unless `DATABASE_URL` points at exactly that database and port; it rejects any
-other name or port.
+The test suite requires a dedicated PostgreSQL 18 database on `127.0.0.1`. The suite
+fails closed unless `DATABASE_URL` targets exactly that dedicated database under the
+`postgres` user on a non-default port; the port is per-machine, so the dedicated instance
+never collides with another local listener.
 
-Before creating the container, verify that neither a container named `ash-onetime-postgres`
-nor a listener on port `18841` already exists. Reuse the existing container across sessions;
-do not start a second database on another port.
+`docker compose up -d` provisions that database from the committed compose file
+(postgres:18 — the same image CI uses), interpolating the `PG*` variables from `.env`.
+Copy `.env.example` to `.env`, pick a random non-standard `PGPORT`, and keep the port
+inside `DATABASE_URL` in sync with it; `.env` also carries `HEX_API_KEY` when publishing.
+If a listener on your chosen port already exists, reuse it; do not start a second
+database on another port.
 
 ```sh
-docker run --name ash-onetime-postgres \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=ash_onetime_test \
-  -p 127.0.0.1:18841:5432 \
-  -d postgres:18
+cp .env.example .env   # then set PGPORT (and DATABASE_URL's port) to a free port
+docker compose up -d
 
-export DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test
+export DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test  # as in your .env
 mix deps.get
 mix test
 ```
+
+The repository is cross-platform by requirement: the same clone and the same gate
+battery must work on macOS, Linux, and Windows (CI's `windows-build` lane proves
+the Windows pickup surface on every push). On Windows, set the variable in
+PowerShell instead of `export`:
+
+```powershell
+$env:DATABASE_URL = "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+```
+
+(match the port to your `.env` `PGPORT` in every shell form)
 
 Before reporting a change complete, run:
 
@@ -34,10 +45,10 @@ mix credo --strict
 mix dialyzer
 mix deps.audit
 mix hex.audit
+mix run --no-start scripts/check_deps_currency.exs
 mix spark.cheat_sheets --check --extensions AshOnetime.Resource
 mix docs --warnings-as-errors
-DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test \
-  MIX_ENV=test mix run scripts/check_mutations.exs -- all
+MIX_ENV=test mix run scripts/check_mutations.exs -- all   # with DATABASE_URL exported as in your .env
 mix hex.build
 mix run scripts/check_package.exs
 mix run scripts/check_optional_matrix.exs
@@ -50,8 +61,11 @@ igniter/all/mint-pin), asserts none of the optional deps leak into the package's
 application closure, and proves the security floors bind in resolution: exact advised
 pins (igniter == 0.8.3, mint == 1.9.3) must FAIL to resolve next to this package.
 
-Run the gate battery on the runtime pinned in `.tool-versions` (Elixir 1.20.2,
-Erlang/OTP 29), which is the supported and released runtime.
+Run the gate battery on the runtime pinned in `.tool-versions` (Elixir 1.20.4 on
+Erlang/OTP 29.0.3) — the primary CI runtime. Development on OTP 28 is equally
+supported: `config/config.exs` refuses any OTP release outside the supported set
+(`28`, `29`) before anything compiles, and CI's dedicated `otp-28` job proves that
+end. The set grows only in the same commit that adds the CI leg.
 
 Every mutation row must name one exact source edit, one owned test and assertion, demonstrate
 RED, restore the exact source bytes, and demonstrate GREEN. New public modules or dependencies
@@ -86,6 +100,14 @@ bound violation. When updating a dependency bound, ensure the matrix still cover
 range; tightening a bound without matrix coverage is a regression in the guard. A breaking
 major bump of `ash_postgres` or `spark` (3.x for either) is a matrix-extension event first —
 add the cell, confirm green, then update the bound.
+
+Dependency currency is mechanical, not remembered: `scripts/check_deps_currency.exs` exits
+nonzero whenever `mix hex.outdated` shows resolver-updatable drift ("Update possible") and
+prints blocked packages with the requirement chains that hold them. Anything deliberately
+not at latest carries an inline reason in `mix.exs`; "we never bumped it" is not a reason.
+After every dependency move, rerun `mix hex.audit` — Hex advisories lag public disclosures
+by hours, so after a fresh disclosure also check the advisory's affected range (OSV/GHSA)
+for each directly-consumed package in the affected family.
 
 Never commit secrets, provider-specific signature implementations, reference-project
 dependencies, or project-owned version suffixes in durable identifiers.

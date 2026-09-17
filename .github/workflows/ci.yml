@@ -4,11 +4,16 @@ on:
   push:
   pull_request:
 
-# The test harness (test/test_helper.exs) fails closed unless DATABASE_URL is
-# EXACTLY this string, and the contention tests connect their observer sessions
-# to 127.0.0.1:18841 directly, so the Postgres service is mapped to that port.
+# The test harness (test/test_helper.exs) fails closed unless DATABASE_URL
+# targets the dedicated loopback ash_onetime_test database under the postgres
+# user on a non-default port; CI pins the repo-default port 18841 and maps the
+# Postgres service to it. The contention tests' observer sessions derive
+# their connection from the Repo URL, so they follow the same port.
 env:
-  ELIXIR_VERSION: "1.20.2"
+  # Lockstep with mix.exs' `elixir:` support window (the pinned toolchain must
+  # satisfy it) and .tool-versions — all three move together in ONE commit;
+  # divergence between the three is a defect.
+  ELIXIR_VERSION: "1.20.4"
   OTP_VERSION: "29.0.3"
   DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
 
@@ -145,3 +150,131 @@ jobs:
       # resolution (ADR 0004).
       - name: Optional integration matrix
         run: MIX_ENV=test mix run scripts/check_optional_matrix.exs
+
+  # The other end of the OTP allowlist in config/config.exs: the dev gates run
+  # on OTP 28 (the floor of the supported set) so an in-window contributor on
+  # 28 is proven, not assumed. The allowlist grows only alongside a leg here.
+  otp-28:
+    name: "OTP 28"
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      OTP_VERSION: "28.5"
+      DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-otp28leg-${{ hashFiles('mix.exs', 'mix.lock') }}
+
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix hex.audit
+      - run: mix test
+      - run: mix credo --strict
+
+  # Cross-platform bar (owner rule, 2026-09-16): a repo that does not clone and
+  # build on macOS, Linux AND Windows is a failed project. The ubuntu lanes above
+  # prove Linux; local development proves macOS; this lane proves the weakest
+  # platform — the Windows clone-pickup surface. Checkout bytes survive via
+  # .gitattributes (`* text=auto eol=lf`), and every gate below is the portable
+  # surface: spawning mix goes through AshOnetime.Portable (cmd /c on win32),
+  # never a POSIX shell.
+  #
+  # NAMED REMAINDER, not a silent skip: the heavier DB-backed release gates
+  # (mutation battery, unpacked-package check, optional-integration matrix)
+  # stay proven by the ubuntu lanes; `mix test` itself is attempted on Windows
+  # by the windows-db-battery job below. This lane deliberately carries no
+  # database dependency so the platform build bar never couples to it.
+  windows-build:
+    name: "Windows build bar"
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix compile --warnings-as-errors
+        env:
+          MIX_ENV: test
+      - run: mix hex.audit
+      - run: mix deps.audit
+      - run: mix credo --strict
+      - name: Dependency currency gate
+        run: mix run --no-start scripts/check_deps_currency.exs
+      - run: mix hex.build
+
+  # The Windows DB-backed test suite — closes the named platform gap as far as
+  # CI can prove it: GitHub's Windows runners cannot run service containers
+  # (a Linux-only feature), so PostgreSQL 18 is installed natively via
+  # chocolatey on the port CI pins elsewhere (18841). The postgresql18
+  # package's /Port parameter sets the server's actual listen port — no NAT
+  # mapping — which is why test/support/migration.ex accepts the URL's own
+  # port as the server port alongside the container's 5432.
+  windows-db-battery:
+    name: "Windows DB battery"
+    runs-on: windows-latest
+
+    env:
+      DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Install PostgreSQL 18 (chocolatey)
+        run: |
+          choco install -y postgresql18 --params "/Password:postgres /Port:18841"
+          $pgService = Get-Service -Name "postgresql*" | Select-Object -First 1
+          Start-Service -Name $pgService.Name
+          $env:PGPASSWORD = "postgres"
+          $pgBin = Join-Path $env:ProgramFiles "PostgreSQL\18\bin"
+          $deadline = (Get-Date).AddMinutes(5)
+          do {
+            Start-Sleep -Seconds 5
+            & (Join-Path $pgBin "pg_isready.exe") -h 127.0.0.1 -p 18841 -U postgres
+            $ready = ($LASTEXITCODE -eq 0)
+          } while (-not $ready -and (Get-Date) -lt $deadline)
+          if (-not $ready) { throw "PostgreSQL 18 did not become ready on 127.0.0.1:18841" }
+          & (Join-Path $pgBin "createdb.exe") -h 127.0.0.1 -p 18841 -U postgres ash_onetime_test
+
+      - run: mix deps.get
+      - run: mix test

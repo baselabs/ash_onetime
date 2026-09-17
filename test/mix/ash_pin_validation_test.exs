@@ -1,3 +1,5 @@
+Code.require_file("../../scripts/portable.exs", __DIR__)
+
 defmodule AshOnetime.MixAshPinValidationTest do
   # Ticket #13: the ASH_ONETIME_ASH_VERSION pin branch in mix.exs ash_requirement/0
   # must fail closed at project-config evaluation time when the pinned value is not a
@@ -18,7 +20,7 @@ defmodule AshOnetime.MixAshPinValidationTest do
   @pin_var "ASH_ONETIME_ASH_VERSION"
 
   defp mix_compile(pin) do
-    System.cmd("mix", ["compile", "--no-deps-check"],
+    AshOnetime.Portable.cmd("mix", ["compile", "--no-deps-check"],
       env: %{@pin_var => pin},
       stderr_to_stdout: true,
       cd: File.cwd!()
@@ -73,7 +75,7 @@ defmodule AshOnetime.MixAshPinValidationTest do
     # parent environment cannot prove the unset path — a nil value in the child env
     # deterministically UNSETS the variable for the subprocess instead.
     {output, exit} =
-      System.cmd("mix", ["compile", "--no-deps-check"],
+      AshOnetime.Portable.cmd("mix", ["compile", "--no-deps-check"],
         env: %{@pin_var => nil},
         stderr_to_stdout: true,
         cd: File.cwd!()

@@ -3,7 +3,7 @@ defmodule AshOnetime.Store.ReapContentionTest do
 
   alias AshOnetime.Store
   alias AshOnetime.Store.{Claim, Postgres, Result}
-  alias AshOnetime.Test.{Migration, RealConnection, Repo}
+  alias AshOnetime.Test.{ExternalPeer, Migration, RealConnection, Repo}
   alias Ecto.Adapters.SQL
 
   @moduletag :store
@@ -16,14 +16,6 @@ defmodule AshOnetime.Store.ReapContentionTest do
   # Comfortably above the migration's 86_400 s (1 day) hard floor and any legitimate in-flight
   # window, so a genuinely abandoned recovery point is reapable.
   @horizon 7 * 86_400
-
-  @database_options [
-    hostname: "127.0.0.1",
-    port: 18_841,
-    username: "postgres",
-    password: "postgres",
-    database: System.get_env("ASH_ONETIME_EXPECTED_TEST_DATABASE", "ash_onetime_test")
-  ]
 
   setup_all do
     installation = Migration.install_generated!()
@@ -175,7 +167,11 @@ defmodule AshOnetime.Store.ReapContentionTest do
   end
 
   defp observer! do
-    {:ok, observer} = Postgrex.start_link(@database_options)
+    {:ok, observer} =
+      Postgrex.start_link(
+        ExternalPeer.database_options(System.get_env("ASH_ONETIME_EXPECTED_TEST_DATABASE"))
+      )
+
     Process.unlink(observer)
 
     on_exit(fn ->

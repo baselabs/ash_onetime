@@ -14,7 +14,16 @@ defmodule AshOnetime.Test.Migration do
         []
       )
 
-    unless database == "ash_onetime_test" and port == "5432" and
+    # The connected server listens either on the URL's own port (a native
+    # install — Windows CI's chocolatey PostgreSQL) or on 5432 behind a host
+    # port mapping (the compose/CI service-container shape). Anything else
+    # means the Repo is not talking to the dedicated instance.
+    url_port =
+      Application.fetch_env!(:ash_onetime, Repo)[:url]
+      |> URI.parse()
+      |> Map.fetch!(:port)
+
+    unless database == "ash_onetime_test" and port in [Integer.to_string(url_port), "5432"] and
              String.starts_with?(server_version, "18.") do
       raise "database isolation check failed"
     end
