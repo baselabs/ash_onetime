@@ -4,12 +4,21 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: f
 breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
 land in a minor), and each breaking change lands here with the exact edit to make.
 
-The current package release is v1.3.1 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
+The current package release is v1.3.2 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
 {:ash_onetime, "~> 1.3"}
 ```
+
+## v1.3.2 — the `Verified` constructor (2026-09-20)
+
+Nothing required. Purely additive: `AshOnetime.Verified.new/1` is the sanctioned
+constructor for the opaque type, for hosts implementing the `AshOnetime.Verifier`
+verify callback or the `AshOnetime.KeySource` mint callback. Existing struct-literal
+construction keeps working at runtime but violates the opacity contract Dialyzer
+enforces (`contract_with_opaque`) — switch verifier/minter callbacks to
+`Verified.new/1`, which validates at mint time and never raises.
 
 ## v1.3.1 — repository-only hardening (2026-09-17)
 

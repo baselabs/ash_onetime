@@ -5,7 +5,9 @@ defense. A collision returns `:nonce_already_used`; no stored response exists to
 replayed request.
 
 Nonce keys must come from trusted local facts. A verifier checks untrusted action input and
-returns `AshOnetime.Verified`; a minter creates the same trusted shape locally. The verified
+returns `AshOnetime.Verified`; a minter creates the same trusted shape locally through
+`AshOnetime.Verified.new/1`, the type's only sanctioned constructor (the type is opaque —
+hosts never build the struct literal). The verified
 key, issuance time, optional expiry, and verifier identity are used to derive the claim but
 are sanitized out of retained admission state. Reserved action input names cannot bypass
 that boundary.

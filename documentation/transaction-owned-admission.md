@@ -53,14 +53,17 @@ returning bytes.
 ## One-time nonce
 
 ```elixir
-verified = [
-  %AshOnetime.Verified{
+{:ok, verified_fact} =
+  AshOnetime.Verified.new(
     key: nonce,
     issued_at: signed_created_at,
     expires_at: signed_expires_at,
     verifier_id: "management-gateway"
-  }
-]
+  )
+
+# new/1 validates at mint time and never raises: a bad fact returns
+# {:error, reason} here. Match it only when the signed timestamps are yours
+# to trust; otherwise branch on the tuple.
 
 :ok =
   AshOnetime.Transaction.nonce(MyApp.Repo,
@@ -68,7 +71,7 @@ verified = [
     partition: tenant_id,
     scope: credential_id,
     key: nonce,
-    verified: verified,
+    verified: [verified_fact],
     max_age: 300,
     clock_skew: 0
   )

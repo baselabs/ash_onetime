@@ -553,7 +553,7 @@ defmodule AshOnetime.MutationCheck do
     },
     "deps-mint-floor" => %{
       path: "mix.exs",
-      original: "{:mint, \"~> 1.10\", optional: true, runtime: false}",
+      original: "{:mint, \"~> 1.10 and >= 1.10.1\", optional: true, runtime: false}",
       mutated: "{:mint, \"~> 1.9\", optional: true, runtime: false}",
       test: "test/mix/dependency_security_test.exs",
       tag: "deps_mint_floor_mutation",
@@ -1244,6 +1244,96 @@ defmodule AshOnetime.MutationCheck do
       tag: "untracked_transparency_mutation",
       test_name: "an untracked execution carries no :ash_onetime metadata (replayed? nil)",
       assertion: "assert stamped.__metadata__ == %{}"
+    },
+    "verified-key-validation" => %{
+      path: "lib/ash_onetime/verified.ex",
+      original:
+        "      key when is_binary(key) and byte_size(key) > 0 -> {:ok, key}\n      _other -> {:error, \"key must be a non-empty binary\"}",
+      mutated: "      key -> {:ok, key}",
+      test: "test/ash_onetime/verified_test.exs",
+      tag: "verified_key_validation_mutation",
+      test_name: "rejects a key that is not a non-empty binary",
+      assertion: "Verified.new(key: key, issued_at: @issued_at, verifier_id: @verifier_id)"
+    },
+    "verified-issued-at-validation" => %{
+      path: "lib/ash_onetime/verified.ex",
+      original: "    if representable_datetime?(issued_at) do",
+      mutated: "    if true do",
+      test: "test/ash_onetime/verified_test.exs",
+      tag: "verified_issued_at_validation_mutation",
+      test_name: "rejects an issued_at that is not a DateTime",
+      assertion: "Verified.new(key: \"nonce-1\", issued_at: issued_at, verifier_id: @verifier_id)"
+    },
+    "verified-verifier-id-bound" => %{
+      path: "lib/ash_onetime/verified.ex",
+      original:
+        "      verifier_id\n" <>
+          "      when is_binary(verifier_id) and byte_size(verifier_id) > 0 and\n" <>
+          "             byte_size(verifier_id) <= @max_verifier_id_bytes ->\n" <>
+          "        {:ok, verifier_id}\n" <>
+          "\n" <>
+          "      _other ->\n" <>
+          "        {:error,\n" <>
+          "         \"verifier_id must be a non-empty binary of at most \#{@max_verifier_id_bytes} bytes\"}",
+      mutated: "      verifier_id ->\n        {:ok, verifier_id}",
+      test: "test/ash_onetime/verified_test.exs",
+      tag: "verified_verifier_id_bound_mutation",
+      test_name: "rejects a verifier_id that is not a non-empty binary within the 128-byte bound",
+      assertion: "Verified.new(key: \"nonce-1\", issued_at: @issued_at, verifier_id: verifier_id)"
+    },
+    "verified-expiry-order" => %{
+      path: "lib/ash_onetime/verified.ex",
+      original: "    if DateTime.compare(expires_at, issued_at) in [:eq, :gt] do",
+      mutated: "    if DateTime.compare(expires_at, issued_at) in [:eq, :gt, :lt] do",
+      test: "test/ash_onetime/verified_test.exs",
+      tag: "verified_expiry_order_mutation",
+      test_name: "rejects an expires_at before issued_at",
+      assertion: "expires_at: ~U[2026-09-20 11:59:59Z]"
+    },
+    "verified-unknown-keys" => %{
+      path: "lib/ash_onetime/verified.ex",
+      original: "    unknown = Enum.uniq(keys -- @known_keys)",
+      mutated: "    unknown = []",
+      test: "test/ash_onetime/verified_test.exs",
+      tag: "verified_unknown_keys_mutation",
+      test_name: "rejects unknown keys",
+      assertion: "verifier: @verifier_id"
+    },
+    "verified-shape-rejection" => %{
+      path: "lib/ash_onetime/verified.ex",
+      original: "  def new(_fields), do: {:error, \"verified facts must be a keyword list\"}",
+      mutated: "  def new(_fields), do: {:ok, nil}",
+      test: "test/ash_onetime/verified_test.exs",
+      tag: "verified_shape_rejection_mutation",
+      test_name: "rejects input that is not a keyword list",
+      assertion: "Verified.new(%{key: \"nonce-1\"})"
+    },
+    "verified-expires-at-validation" => %{
+      path: "lib/ash_onetime/verified.ex",
+      original: "      true -> {:error, \"expires_at must be a DateTime or nil\"}",
+      mutated: "      true -> {:ok, nil}",
+      test: "test/ash_onetime/verified_test.exs",
+      tag: "verified_expires_at_validation_mutation",
+      test_name: "rejects an expires_at that is neither nil nor a DateTime",
+      assertion: "assert {:error, \"expires_at must be a DateTime or nil\"}"
+    },
+    "verified-duplicate-keys" => %{
+      path: "lib/ash_onetime/verified.ex",
+      original: "      map_size(Map.new(fields)) != length(fields) ->",
+      mutated: "      false ->",
+      test: "test/ash_onetime/verified_test.exs",
+      tag: "verified_duplicate_keys_mutation",
+      test_name: "rejects duplicate keys",
+      assertion: "assert reason =~ \"unique\""
+    },
+    "verified-missing-required" => %{
+      path: "lib/ash_onetime/verified.ex",
+      original: "    missing = Enum.uniq(@required_keys -- keys)",
+      mutated: "    missing = []",
+      test: "test/ash_onetime/verified_test.exs",
+      tag: "verified_missing_required_mutation",
+      test_name: "rejects a missing required key",
+      assertion: "** (KeyError)"
     }
   }
 

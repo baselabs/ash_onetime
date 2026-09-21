@@ -135,7 +135,10 @@ patterns.
 
 ## Status
 
-The current package release is [v1.3.1 on Hex](https://hex.pm/packages/ash_onetime) — a
+The current package release is [v1.3.2 on Hex](https://hex.pm/packages/ash_onetime) — an
+additive release shipping `AshOnetime.Verified.new/1`, the sanctioned constructor for the
+opaque `Verified` type, so verifier and minter callbacks never build the struct literal.
+It follows v1.3.1, a
 repository-only hardening release (in-repo toolchain enforcement, a compose test database
 with a per-machine port, mechanical dependency currency, and a tri-platform developer
 surface with CI proving the Windows pickup and test battery continuously) with no
@@ -176,7 +179,7 @@ as the patched floor — EEF-CVE-2026-86338 (field policies fail to filter-nil
 forbidden calculations and aggregates, an information-disclosure oracle) is fixed
 only there, with EEF-CVE-2026-82752 and the rest of the EEF-CVE-2026-82xxx batch
 fixed at or below it. The optional Igniter and Mint requirements enforce patched floors
-of 0.8.4 and 1.10.0 without adding either to this package's runtime applications.
+of 0.8.4 and 1.10.1 without adding either to this package's runtime applications.
 Compatibility across the range is verified per matrix cell by the standard gate
 battery — format, compile with warnings-as-errors, `mix hex.audit` (Hex security
 advisories), `mix deps.audit`, the full test suite, `mix credo --strict`,

@@ -234,7 +234,7 @@ defmodule AshOnetime.PackageCheck do
     ash_postgres: {"~> 2.13", false},
     ash_sql: {"~> 0.7 and >= 0.7.1", false},
     igniter: {"~> 0.8 and >= 0.8.4", true},
-    mint: {"~> 1.10", true}
+    mint: {"~> 1.10 and >= 1.10.1", true}
   }
 
   defp assert_published_requirements(metadata_path) do

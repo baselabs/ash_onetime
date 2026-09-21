@@ -166,3 +166,14 @@ cache authority semantics are unchanged by this decision. The regression suite,
 mutation battery, unpacked consumer, optional integration matrix, and exact-commit
 CI are the compatibility checks. The release vehicle is v1.3.0 (security-driven
 minor, per the forward-compatible floor posture above).
+
+## Amendment — Mint floor raised to 1.10.1 (2026-09-20, v1.3.2)
+
+`mix hex.audit` flagged EEF-CVE-2026-82672 against the locked Mint 1.10.0: an
+unvalidated chunk-size line tail in the HTTP/1 client enabled response
+smuggling against strict intermediaries on pooled connections. Mint 1.10.1
+(2026-09-19) carries the fix, so the optional Mint floor moves to
+`~> 1.10 and >= 1.10.1`. Mint stays optional and runtime-excluded — the floor
+binds only hosts that already carry the installer closure. The doctor,
+package check, and optional-integration matrix mint assertions move together
+in the same commit; the release vehicle is v1.3.2.

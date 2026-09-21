@@ -42,7 +42,8 @@ defmodule AshOnetime.MixDependencySecurityTest do
   test "mint consumer requirement rejects advised versions" do
     requirement = requirement!(:mint)
     refute Version.match?("1.9.3", requirement)
-    assert Version.match?("1.10.0", requirement)
+    refute Version.match?("1.10.0", requirement)
+    assert Version.match?("1.10.1", requirement)
   end
 
   @tag :deps_igniter_floor_mutation

@@ -43,6 +43,7 @@ mix compile --warnings-as-errors
 mix test
 mix credo --strict
 mix dialyzer
+MIX_ENV=test mix dialyzer
 mix deps.audit
 mix hex.audit
 mix run --no-start scripts/check_deps_currency.exs
@@ -80,7 +81,7 @@ dependencies, or project-owned version suffixes in durable identifiers.
 The consumer `mix.exs` bounds (`ash_postgres ~> 2.13`, `spark ~> 2.7`, and the Ash floor
 `>= 3.33.4`) allow forward drift within their major lines. AshSql additionally requires
 `~> 0.7 and >= 0.7.1`; optional Igniter and Mint require `~> 0.8 and >= 0.8.4` and
-`~> 1.10`. These security floors follow ADR 0004. They are NOT the primary guard
+`~> 1.10 and >= 1.10.1`. These security floors follow ADR 0004. They are NOT the primary guard
 against a transitive semantic shift — a future `ash_postgres` 2.x or `spark` 2.x minor that
 changes transaction-visibility semantics the fail-closed logic depends on would still satisfy
 the bound. The real guard is the **CI compatibility matrix** in `.github/workflows/ci.yml`:

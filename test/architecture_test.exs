@@ -243,7 +243,7 @@ defmodule AshOnetime.ArchitectureTest do
     ],
     AshOnetime.Token => [mint: 2, sign: 3, verify: 3],
     AshOnetime.Transaction => [claim_id: 1, complete: 2, idempotency: 2, nonce: 2],
-    AshOnetime.Verified => [],
+    AshOnetime.Verified => [new: 1],
     AshOnetime.Verifier => [],
     AshOnetime.Window => [cleanup_after: 3, cleanup_skew_margin_seconds: 0, validate: 5],
     Mix.Tasks.AshOnetime.Gen.LogicalPartitions => [run: 1],

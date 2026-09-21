@@ -29,12 +29,11 @@ defmodule AshOnetime.Test.LivebookExamples do
     @moduledoc false
 
     def verify(proof, _context) when is_binary(proof) do
-      {:ok,
-       %AshOnetime.Verified{
-         key: proof,
-         issued_at: DateTime.utc_now(),
-         verifier_id: "demo-verifier"
-       }}
+      AshOnetime.Verified.new(
+        key: proof,
+        issued_at: DateTime.utc_now(),
+        verifier_id: "demo-verifier"
+      )
     end
 
     def algorithm, do: :ed25519

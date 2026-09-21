@@ -144,14 +144,14 @@ defmodule AshOnetime.OptionalMatrix do
     end
 
     if Code.ensure_loaded?(Mint.HTTP) do
-      unless Version.match?(resolved.(:mint), ">= 1.10.0") do
+      unless Version.match?(resolved.(:mint), ">= 1.10.1") do
         raise("mint resolved to \#{resolved.(:mint)} — the security floor did not bind")
       end
     end
 
     if #{name == "mint-pin"} do
-      unless Code.ensure_loaded?(Mint.HTTP) and Version.match?(resolved.(:mint), ">= 1.10.0") do
-        raise("mint-pin case: mint must resolve to >= 1.10.0 over the consumer's ~> 1.9 pin")
+      unless Code.ensure_loaded?(Mint.HTTP) and Version.match?(resolved.(:mint), ">= 1.10.1") do
+        raise("mint-pin case: mint must resolve to >= 1.10.1 over the consumer's ~> 1.9 pin")
       end
     end
 

@@ -2,6 +2,45 @@
 
 All notable changes to this project are documented in this file.
 
+## v1.3.2 — 2026-09-20
+
+### Security
+
+- **Optional Mint floor raised to `~> 1.10 and >= 1.10.1`** following ADR 0004:
+  `mix hex.audit` flagged EEF-CVE-2026-82672 against the locked 1.10.0 — an
+  unvalidated chunk-size line tail in Mint's HTTP/1 client enabled response
+  smuggling against strict intermediaries on pooled connections. 1.10.1
+  (2026-09-19) carries the fix. Mint stays `optional: true` and
+  runtime-excluded: the floor binds only hosts that already carry the
+  installer closure, and no core consumer pulls it. The package check,
+  optional-integration matrix, and dependency-security tripwires move
+  together. OBSERVED: `mix hex.audit` clean after the raise.
+
+- **Lock:** `ash` 3.33.4 → 3.33.8 and `ash_sql` 0.7.5 → 0.7.6, riding the
+  dependency-currency gate (resolver-updatable drift). The published floors
+  are unchanged — `>= 3.33.4 and < 4.0.0` for Ash remains the CVE-derived
+  minimum; `mix hex.audit` reports no advisories against the new lock.
+
+### Added
+
+- **`AshOnetime.Verified.new/1`** — the sanctioned constructor for the opaque
+  `Verified` type. `t` stays opaque — a Dialyzer-enforced construction
+  convention: consumer code that builds the struct literal violates the
+  opacity contract (`contract_with_opaque`, OBSERVED at 1.2.3 in a consumer
+  sweep; suppressed there pending this release). Opacity is not the runtime
+  anti-forgery boundary — that remains the admission path (DSL-configured
+  verifier/minter callbacks under a bounded context, reserved-input
+  rejection). `new/1` validates at mint time what every internal consumer
+  holds a `Verified` to: `key` and `verifier_id` non-empty binaries
+  (`verifier_id` at most 128 bytes), `issued_at` and the optional `expires_at`
+  well-formed DateTimes with `expires_at` at or after `issued_at`; unknown,
+  duplicate, and missing keys are rejected, and the constructor never raises.
+  Purely additive: no existing export changed (the export census grew
+  `new: 1`), the Elixir requirement and dependency floors are unchanged. The
+  nonce livebook, its walkthrough mirror, and the transaction-owned admission
+  guide now demonstrate the constructor; CI gained a test-env dialyzer leg so
+  the consumer-shaped opacity fixture stays analyzed.
+
 ## v1.3.1 — 2026-09-17
 
 No consumer-facing changes: the published Elixir requirement (`~> 1.20`), every

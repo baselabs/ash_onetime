@@ -12,6 +12,7 @@ mix compile --warnings-as-errors
 mix test
 mix credo --strict
 mix dialyzer
+MIX_ENV=test mix dialyzer
 mix deps.audit
 mix hex.audit
 mix hex.build

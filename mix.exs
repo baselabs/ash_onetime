@@ -1,7 +1,7 @@
 defmodule AshOnetime.MixProject do
   use Mix.Project
 
-  @version "1.3.1"
+  @version "1.3.2"
   @source_url "https://github.com/baselabs/ash_onetime"
 
   def project do
@@ -73,11 +73,15 @@ defmodule AshOnetime.MixProject do
       {:plug, "~> 1.20", optional: true, runtime: false},
       {:oban, "~> 2.23", optional: true, runtime: false},
       {:igniter, "~> 0.8 and >= 0.8.4", optional: true, runtime: false},
-      # Constrain the installer's HTTP closure without adding HTTP to core consumers:
-      # mint reaches a tree only through igniter → req → finch, so an optional
-      # requirement binds exactly the closure that carries it. Same next-major cap
-      # posture as ash_sql above.
-      {:mint, "~> 1.10", optional: true, runtime: false},
+      # Constrain the installer's HTTP closure without adding HTTP to core
+      # consumers: mint reaches a tree only through igniter → req → finch, so
+      # an optional requirement binds exactly the closure that carries it.
+      # Security floor (ADR 0004): Mint 1.10.1 is where EEF-CVE-2026-82672 is
+      # fixed (an unvalidated chunk-size line tail in the HTTP/1 client enabled
+      # response smuggling against strict intermediaries on pooled
+      # connections); 1.10.0 and below carry it. Same next-major cap posture
+      # as ash_sql above.
+      {:mint, "~> 1.10 and >= 1.10.1", optional: true, runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
