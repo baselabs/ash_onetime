@@ -199,3 +199,43 @@ verified at all, and such peers are exactly the ones the protocol already reject
 - Tests must use real committed PostgreSQL connections for contention and must cover
   failure direction, exact window edges, cross-operation isolation, and cleanup races.
 - Optional integrations may improve operations but cannot become correctness dependencies.
+
+## External recovery: concurrent executes under one operation key (2026-09-24 amendment)
+
+*Corrects a claim in the 2026-08-19 D5 amendment above. The D5 sentence "A duplicate side
+effect requires BOTH the adapter lying AND the peer failing key idempotency" is wrong as
+written: a duplicate peer effect requires only that the peer's key dedup fail, and it can
+fail a fully honest adapter.*
+
+Between the independently committed claim and finalize, the package holds no lock. A retry
+arriving inside that window recovers first; the peer has not committed the effect yet, so an
+honest `recover/3` returns `:absent` and the retry executes under the **same operation key**.
+Both facts are OBSERVED in `test/ash_onetime/external_contention_test.exs`: two execute
+calls under one key from one logical request with no caller death and no lying adapter
+("an in-flight retry truthfully recovers absence and both callers execute under one
+operation key"), and genuine overlap — the retry's atomic key-claim insert observed blocked
+by the original's uncommitted key row via `pg_blocking_pids` ("a retry's execute overlaps
+the original's in-flight execute and only the atomic key claim absorbs it"). The same tests
+observe the package's own guarantee holding under that race: the finalize row lock leaves
+one local effect, one stored response, identical results.
+
+Consequences for defense 2, now stated normatively in `documentation/external-effects.md`:
+
+- The peer's idempotency by operation key MUST be **atomic** — a single-statement claim of
+  the key (insert-on-key/upsert), never check-then-act. A sequentially correct peer
+  (SELECT, then INSERT) conforms to the defense as previously written and loses exactly the
+  observed overlapping-execute race.
+- The peer SHOULD record the key on receipt, before processing the effect.
+
+The worst case is therefore corrected to: a duplicate peer side effect requires the peer's
+key dedup to fail. Under adapter honesty that failure must survive a concurrent same-key
+execute; under adapter dishonesty (a lying `:absent`) the redundant execute still becomes a
+duplicate side effect only if the peer's dedup also fails — a working dedup absorbs both
+routes. The two-defenses structure is unchanged; defense 2's bar is higher than previously
+stated.
+
+Relatedly, the adapter execution environment is now recorded normatively: both effect
+callbacks run inside the caller's open PostgreSQL transaction and the package applies no
+timeout to them (OBSERVED per callback in the same test file: "the adapter callbacks run
+inside the caller's open transaction", "recover runs inside the retry caller's open
+transaction"); bounding the peer call is an adapter-side MUST.

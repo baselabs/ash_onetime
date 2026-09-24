@@ -60,3 +60,24 @@ extended to the abandoned-processing case.
   guard-replacement and reaper-function SQL is applied manually (documented in the operations
   guide); a generalized upgrade-migration mechanism is out of scope.
 - The reaper is opt-in and idempotency-only (nonce has no `processing` state).
+
+## Amendment (2026-09-24): reaping an outcome-unknown claim removes the last key-based tie
+
+The decision section above calls a post-reap retry "consistent with 0001's 'reuse after
+retention is a new execution.'" The two cases differ in the decisive respect, and the
+distinction is load-bearing for external effects: after **retention**, cleanup deletes only
+`complete` claims — the prior execution is known complete, and a new execution is safe. After
+**reap**, the deleted `processing` claim's outcome is unknown by definition (that is why it
+was abandoned), and the operation key — the claim row's UUID, freshly generated per insert —
+is deleted with it. A retry therefore executes at the peer under a brand-new operation key:
+the peer's contractually required key dedup cannot recognize it as the same operation, and
+the package has no record left either. No key-based defense remains at either layer.
+
+This is not a defect in the reaper's mechanics (the recovery-point invariant for in-flight
+and in-retention claims is unchanged); it is the honest boundary of reaping external-effect
+claims. The normative statement lives in `documentation/external-effects.md`: enable the
+reaper on an external-effect action only together with a business-level reconciliation path
+that can settle an outcome-unknown claim before its abandonment horizon passes. A
+reap-surviving derived operation key (stable across reap via the logical key plus an epoch,
+or a reap tombstone) was considered and deliberately not taken: it changes the published
+post-retention semantics for external effects and needs its own ADR if ever adopted.

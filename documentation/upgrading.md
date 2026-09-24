@@ -397,6 +397,29 @@ from a pre-v0.1.0 snapshot, move any `response ..., limits: [max_response_*: ...
 This change is additive in coverage (no limit is lost) and removes a redundant configuration
 surface where two places could spell overlapping limits.
 
+## Unreleased — external-effect contract tightening (documentation-only, no code change)
+
+Two normative requirements in [External effects and
+recovery](external-effects.md) tightened after a 2026-09-24 design review. No library code,
+schema, or API changed, but a peer or adapter that conformed under the previous wording may
+no longer conform:
+
+- **The peer's idempotency-by-operation-key defense MUST be atomic** (a single-statement
+  claim of the key, never check-then-act). An honest in-flight retry produces two execute
+  calls under one operation key — observed overlapping — and a check-then-act peer
+  (SELECT, then INSERT) double-spends in exactly that window. If your peer claims keys with
+  a read-then-write sequence, move the claim into one `INSERT ... ON CONFLICT`-style
+  statement. See ADR 0001's 2026-09-24 amendment.
+- **The reaper on external-effect actions requires a reconciliation path.** A reaped claim
+  deletes its operation key with it, so a post-reap retry executes under a new key and no
+  key-based defense remains at either layer. Enable `ash_onetime.reap` on an
+  external-effect action only with a business-level way to settle an outcome-unknown claim
+  before its abandonment horizon. See ADR 0002's 2026-09-24 amendment and the operations
+  guide.
+
+Also new: a `:absent` vs `:unknown` mapping table for real HTTP peers with a worked bounded
+adapter, and Recipe 4 (external effect via a transactional outbox) in the recipes guide.
+
 ## Between releases
 
 Non-breaking additions (new optional integrations, new introspection helpers, new guides)

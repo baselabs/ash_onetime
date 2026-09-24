@@ -48,7 +48,12 @@ it is older than both `abandonment_seconds` and a hard 1-day floor and past its 
 horizon (all re-enforced by the delete guard), so an in-flight or in-retention recovery point is
 never removed. `abandonment_seconds` must be at least the 1-day floor. Schedule it far less
 frequently than cleanup (recoverability becomes bounded by `max(retention, abandonment)`), and
-size the horizon well beyond any legitimate in-flight window.
+size the horizon well beyond any legitimate in-flight window. For **external-effect** actions,
+reaping is a stronger decision than for local ones: a reaped claim takes its operation key
+(the claim UUID) with it, so a later retry executes at the peer under a new key and no
+key-based defense remains at either layer — enable the reaper there only together with a
+business-level reconciliation path that can settle an outcome-unknown claim before its
+abandonment horizon passes (see the external-effects guide).
 
 Run the reaper manually or with the optional Oban worker, mirroring cleanup:
 

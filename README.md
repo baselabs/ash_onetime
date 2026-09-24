@@ -130,8 +130,8 @@ cell. Each notebook's code is regression-pinned so it never ships broken.
 - [External effects and recovery](documentation/livebooks/external-recovery.livemd) — the execute/recover protocol.
 
 See [Security model](documentation/security.md) for the authority and fail-closed contract,
-and [Recipes](documentation/recipes.md) for end-to-end payment, webhook, and redemption
-patterns.
+and [Recipes](documentation/recipes.md) for end-to-end payment, webhook, redemption, and
+transactional-outbox patterns.
 
 ## Status
 

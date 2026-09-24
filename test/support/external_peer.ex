@@ -122,21 +122,20 @@ defmodule AshOnetime.Test.ExternalPeer do
     end)
   end
 
-  def execute(prefix, operation_key, result) do
+  def execute(prefix, operation_key, result, options \\ []) do
     encoded = :erlang.term_to_binary(result, [:deterministic])
-    with_connection(&execute_transaction(&1, prefix, operation_key, encoded))
+
+    with_connection(fn connection ->
+      {:ok, stored} =
+        Postgrex.transaction(connection, fn transaction ->
+          execute_in_transaction(transaction, prefix, operation_key, encoded, options)
+        end)
+
+      :erlang.binary_to_term(stored, [:safe])
+    end)
   end
 
-  defp execute_transaction(connection, prefix, operation_key, encoded) do
-    {:ok, stored} =
-      Postgrex.transaction(connection, fn transaction ->
-        execute_in_transaction(transaction, prefix, operation_key, encoded)
-      end)
-
-    :erlang.binary_to_term(stored, [:safe])
-  end
-
-  defp execute_in_transaction(transaction, prefix, operation_key, encoded) do
+  defp execute_in_transaction(transaction, prefix, operation_key, encoded, options) do
     Postgrex.query!(
       transaction,
       "INSERT INTO #{relation(prefix, "external_peer_calls")} (operation_key, kind) VALUES ($1::uuid, 'execute')",
@@ -163,6 +162,12 @@ defmodule AshOnetime.Test.ExternalPeer do
         [Ecto.UUID.dump!(operation_key), encoded]
       )
     end
+
+    # Optional in-transaction hold: the transaction stays open (rows uncommitted, key
+    # row lock held) until the hold closure releases, modeling a peer whose execute is
+    # still in flight. Runs in the adapter caller's process, so a receive-based latch
+    # blocks that caller exactly as a slow peer would.
+    if hold = Keyword.get(options, :hold), do: hold.()
 
     %{rows: [[stored]]} =
       Postgrex.query!(
