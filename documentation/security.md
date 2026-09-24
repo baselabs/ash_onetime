@@ -59,8 +59,10 @@ rows — a storage denial of service. The opt-in reaper (`mix ash_onetime.reap`)
 separate, much longer abandonment horizon, through a sanctioned delete path: a processing claim is
 removable only when it is older than both the operator's horizon and a hard 1-day floor and past
 its own retention horizon, all re-enforced by the delete guard. Recoverability is thereby bounded
-by `max(retention, abandonment horizon)` rather than unbounded, and a retry after reaping is a new
-execution with a new peer operation key. The reaper bounds steady-state growth, not a burst
+by `max(retention, abandonment horizon)` rather than unbounded. A retry after reaping runs
+under a new peer operation key, so no key-based defense remains at either layer — enable
+the reaper on external-effect actions only with a business-level reconciliation path (the
+external-effects guide states the boundary). The reaper bounds steady-state growth, not a burst
 (residual ≈ admission rate × that window); operators tune it with edge rate limiting and reap
 cadence.
 Telemetry is deliberately value-free to avoid exporting keys, tokens, signatures, payloads,

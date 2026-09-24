@@ -45,6 +45,11 @@ application sees nothing unless it attaches a handler.
 `strategy` is `:idempotency` or `:one_time_nonce`; `resource` and `action` are the module and
 action atom the protection is declared on.
 
+The `:conflict` event's `:processing` class has two sources: a same-key collision on an
+in-flight local claim, and (since v1.4.0) a same-key external retry refused by the
+pre-peer claim lock within its configured wait (ADR-0010) — the external path's mirror of
+the local path's concurrent-retry signal.
+
 ## A runnable handler
 
 This handler counts admissions by result class per resource/action, and records admission

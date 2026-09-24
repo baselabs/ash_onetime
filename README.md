@@ -1,6 +1,6 @@
 # ash_onetime
 
-[![mutation battery](https://img.shields.io/badge/mutation_battery-130_sentinels_red--proven-brightgreen)](CONTRIBUTING.md)
+[![mutation battery](https://img.shields.io/badge/mutation_battery-132_sentinels_red--proven-brightgreen)](CONTRIBUTING.md)
 
 `ash_onetime` is an Ash extension for explicit keyed-effect semantics. It separates
 replay-safe idempotency from collision-rejecting one-time nonces and uses PostgreSQL as the
@@ -25,7 +25,8 @@ concurrent races. There is no admission pre-read.
 
 Optional, non-admitting surfaces: a response cache, a Plug, Oban workers for cleanup and
 forward partition creation, and an external-effect execute/recover protocol for peers that
-need to observe or reverse a side effect.
+need to observe or reverse a side effect — serialized by a pre-peer claim lock so concurrent
+same-key retries cannot overlap at the peer (v1.4.0, ADR-0010).
 
 Hosts that already own one authoritative Ecto transaction can use the public
 `AshOnetime.Transaction` boundary instead of wrapping an Ash action. It reserves idempotency

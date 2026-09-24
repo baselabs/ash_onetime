@@ -31,7 +31,10 @@ in-memory ETS-backed peer adapter that stands in for your real external system.
 >
 > **Note on persisted outputs:** the external-effect path commits its claim in a spawned
 > transaction, so this notebook's result cells are not pre-filled — run it in Livebook to see
-> the outputs. The code is regression-pinned by `test/ash_onetime/external_recovery_test.exs`.
+> the outputs. The code is regression-pinned by `test/ash_onetime/external_recovery_test.exs`
+> (execute/recover/absent/ambiguous matrix) and
+> `test/ash_onetime/external_contention_test.exs` (the pre-peer lock's concurrent-retry
+> refusal, observed on live PostgreSQL).
 
 ## Connect to PostgreSQL
 
@@ -91,11 +94,29 @@ defmodule AshOnetimeDemo.PeerAdapter do
     :ok
   end
 
+  # Demo helper for the concurrent-retry section below: arm a one-shot hold so the NEXT
+  # execute signals `waiter` and blocks inside the peer call until released — standing in
+  # for a real peer that is slow to respond.
+  def arm_hold(waiter) do
+    :ets.insert(@table, {:hold, waiter})
+    :ok
+  end
+
   @impl true
   def execute(operation_key, input, _context) do
     value = Ash.ActionInput.get_argument(input, :value)
-    :ets.insert(@table, {operation_key, value})
-    {:ok, value}
+
+    case :ets.take(@table, :hold) do
+      [{:hold, waiter}] ->
+        send(waiter, {:held, operation_key})
+        receive do: (:continue -> :ok)
+        :ets.insert(@table, {operation_key, value})
+        {:ok, value}
+
+      [] ->
+        :ets.insert(@table, {operation_key, value})
+        {:ok, value}
+    end
   end
 
   @impl true
@@ -267,6 +288,54 @@ is recovered later by retry or the reaper, never double-executed. This is the co
 contract that prevents a second side effect when the first's outcome is uncertain. (Simulating
 a broken peer requires a second adapter; see `test/ash_onetime/external_recovery_test.exs` for
 the full execute/recover/absent/ambiguous matrix.)
+
+## Concurrent retries: the pre-peer claim lock (v1.4.0)
+
+Before any peer call, the package takes the claim row lock in the caller's open transaction
+and holds it across the effect (ADR-0010). A **sequential** retry — like the one above —
+recovers the committed result. A **concurrent** retry, arriving while the original is still
+mid-effect, cannot acquire the lock within `external_lock_timeout_ms` (default 2000) and is
+refused with `:request_in_progress` — the same wait-or-retry signal the local path returns.
+Two `execute` calls under one operation key can therefore never overlap at the peer.
+
+```elixir
+# Arm the demo adapter's hold, start the original in a task, and wait until it is INSIDE
+# the peer call (the claim row lock is held across it).
+parent = self()
+:ok = AshOnetimeDemo.PeerAdapter.arm_hold(parent)
+
+original =
+  Task.async(fn ->
+    AshOnetimeDemo.ExternalRedeem
+    |> Ash.ActionInput.for_action(:redeem, %{value: 7, request_key: "ext-lock-1"})
+    |> Ash.ActionInput.set_tenant(schema)
+    |> Ash.run_action()
+  end)
+
+receive do: ({:held, _operation_key} -> :ok)
+
+# The concurrent retry blocks on the claim lock for the configured wait, then is refused.
+{:error, refusal} =
+  AshOnetimeDemo.ExternalRedeem
+  |> Ash.ActionInput.for_action(:redeem, %{value: 7, request_key: "ext-lock-1"})
+  |> Ash.ActionInput.set_tenant(schema)
+  |> Ash.run_action()
+
+code =
+  case refusal do
+    %Ash.Error.Invalid{errors: [%AshOnetime.Error{} = inner]} -> AshOnetime.Error.code(inner)
+  end
+
+# Release the original; it completes normally.
+send(original.pid, :continue)
+{:ok, 7} = Task.await(original)
+
+%{concurrent_retry: code}
+```
+
+`%{concurrent_retry: :request_in_progress}` — the retry never reached the peer. A client
+sees 409/425 and retries: by then the original has settled, and the retry recovers the
+committed result exactly like the sequential case above.
 
 ## Clean up
 

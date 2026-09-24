@@ -57,7 +57,8 @@ canonical input and cache payload work.
 
 Nonce requires `window` and deliberately has no response, retention, external-effect, or
 failure-direction option. `external_effect` is idempotency-only and requires a recoverable
-adapter.
+adapter; its pre-peer claim lock serializes concurrent same-key retries
+(`external_lock_timeout_ms`, default 2000 — ADR-0010).
 
 Compile-time validation rejects read or nontransactional actions, duplicate protections,
 empty scope, missing references, reserved verification inputs, unsafe replay callbacks,
