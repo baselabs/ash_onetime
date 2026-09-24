@@ -248,6 +248,9 @@ defmodule AshOnetime.Test.ActionExamples.DeniedResource do
 
       retention(3_600)
       external_effect(AshOnetime.Test.ActionExamples.ExternalEffect)
+      # Generous wait so the finalize-window contention test's loser reliably outwaits the
+      # winner's completion instead of racing the 2000ms default.
+      external_lock_timeout_ms(10_000)
     end
 
     protect :denied_redeem do
@@ -263,6 +266,9 @@ defmodule AshOnetime.Test.ActionExamples.DeniedResource do
 
       retention(3_600)
       external_effect(AshOnetime.Test.ActionExamples.ExternalEffect)
+      # Generous wait so the finalize-window contention test's loser reliably outwaits the
+      # winner's completion instead of racing the 2000ms default.
+      external_lock_timeout_ms(10_000)
     end
   end
 end
@@ -372,6 +378,14 @@ defmodule AshOnetime.Test.ActionExamples.Resource do
       argument :proof, :string, allow_nil?: false
       run {AshOnetime.Test.ActionExamples.GenericRun, []}
     end
+
+    action :external_redeem_quick_lock, :integer do
+      transaction? true
+      argument :value, :integer, allow_nil?: false
+      argument :request_key, :string, allow_nil?: false
+      argument :proof, :string, allow_nil?: false
+      run {AshOnetime.Test.ActionExamples.GenericRun, []}
+    end
   end
 
   onetime do
@@ -437,6 +451,9 @@ defmodule AshOnetime.Test.ActionExamples.Resource do
 
       retention(3_600)
       external_effect(AshOnetime.Test.ActionExamples.ExternalEffect)
+      # Generous wait so the finalize-window contention test's loser reliably outwaits the
+      # winner's completion instead of racing the 2000ms default.
+      external_lock_timeout_ms(10_000)
     end
 
     protect :consume do
@@ -514,6 +531,33 @@ defmodule AshOnetime.Test.ActionExamples.Resource do
 
       retention(3_600)
       external_effect(AshOnetime.Test.ActionExamples.ExternalEffect)
+      # Generous wait so the finalize-window contention test's loser reliably outwaits the
+      # winner's completion instead of racing the 2000ms default.
+      external_lock_timeout_ms(10_000)
+    end
+
+    protect :external_redeem_quick_lock do
+      strategy :idempotency
+      scope([{:tenant, AshOnetime.Test.ActionExamples.TenantResolver}])
+
+      key([
+        {:client, :request_key},
+        {:verified, :proof, AshOnetime.Test.ActionExamples.Verifier},
+        {:minted, AshOnetime.Test.ActionExamples.Minter}
+      ])
+
+      fingerprint(arguments: [:value], attributes: [])
+
+      response(AshOnetime.Test.Support.ResponseCodec,
+        fields: [],
+        classify: AshOnetime.Test.Support.ResponseClassifier
+      )
+
+      retention(3_600)
+      external_effect(AshOnetime.Test.ActionExamples.ExternalEffect)
+      # Exercises the ADR-0010 wait bound at a fast-fail value; 1000ms keeps the
+      # blocked-query observation window comfortably wide for the polling helper.
+      external_lock_timeout_ms(1_000)
     end
 
     protect :adjust do

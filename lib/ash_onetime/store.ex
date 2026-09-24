@@ -4,7 +4,8 @@ defmodule AshOnetime.Store do
   alias AshOnetime.Store.{Claim, Postgres, Result}
 
   @callback claim(term(), Claim.Request.t()) :: Result.t()
-  @callback claim_committed(term(), Claim.Request.t()) :: Result.t()
+  @callback claim_committed(term(), Claim.Request.t(), keyword()) :: Result.t()
+  @callback lock_for_effect(term(), Claim.t(), keyword()) :: Result.t()
   @callback complete(term(), Claim.t(), binary(), binary(), binary()) :: Result.t()
   @callback complete_external(term(), Claim.t(), binary(), binary(), binary()) :: Result.t()
   @callback load(term(), Claim.t()) :: Result.t()
@@ -15,7 +16,17 @@ defmodule AshOnetime.Store do
 
   @doc false
   @spec claim_committed(term(), Claim.Request.t()) :: Result.t()
-  def claim_committed(target, request), do: Postgres.claim_committed(target, request)
+  def claim_committed(target, request), do: Postgres.claim_committed(target, request, [])
+
+  @doc false
+  @spec claim_committed(term(), Claim.Request.t(), keyword()) :: Result.t()
+  def claim_committed(target, request, options),
+    do: Postgres.claim_committed(target, request, options)
+
+  @doc false
+  @spec lock_for_effect(term(), Claim.t(), keyword()) :: Result.t()
+  def lock_for_effect(target, claim, options),
+    do: Postgres.lock_for_effect(target, claim, options)
 
   @doc false
   @spec complete(term(), Claim.t(), binary(), binary(), binary()) :: Result.t()

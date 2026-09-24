@@ -445,4 +445,142 @@ defmodule AshOnetime.Store.ContentionTest do
 
   defp hash(value), do: :crypto.hash(:sha256, value)
   defp relation(prefix, name), do: ~s("#{prefix}"."#{name}")
+  # ADR-0010 pre-peer claim lock: store-level behavior against a foreign row holder and
+  # against a row whose id no longer matches the logical key (reaped-and-reinserted shape).
+  # The contended shape mirrors production: the row is COMMITTED (processing) and its lock
+  # is held by another caller's open transaction — a FOR UPDATE select does not block on an
+  # uncommitted insert, it misses it.
+  test "lock_for_effect times out against a foreign row holder and reports lock_timeout", %{
+    prefix: prefix
+  } do
+    request = idempotency_request("effect-lock-timeout")
+    target = Postgres.for_repo(Repo, prefix)
+    parent = self()
+
+    assert_admitted_worker!(parent, prefix, request)
+
+    holder =
+      spawn(fn ->
+        result =
+          RealConnection.with_connection(fn ->
+            Repo.transaction(fn ->
+              claim = claim_from_request(request, prefix)
+
+              case Store.lock_for_effect(target, claim, lock_timeout_ms: 250) do
+                %Result{status: :failure} = failure ->
+                  Repo.rollback(failure)
+
+                locked ->
+                  send(parent, {:holder_ready, self()})
+                  receive do: (:release -> locked)
+              end
+            end)
+          end)
+
+        send(parent, {:holder_done, self(), result})
+      end)
+
+    assert_receive {:holder_ready, ^holder}, 5_000
+
+    loser =
+      spawn(fn ->
+        result =
+          RealConnection.with_connection(fn ->
+            Repo.transaction(fn ->
+              claim = claim_from_request(request, prefix)
+
+              case Store.lock_for_effect(target, claim, lock_timeout_ms: 250) do
+                %Result{status: :failure} = failure -> Repo.rollback(failure)
+                other -> other
+              end
+            end)
+          end)
+
+        send(parent, {:lock_done, self(), result})
+      end)
+
+    assert_receive {:lock_done, ^loser,
+                    {:error,
+                     %Result{
+                       status: :failure,
+                       reason: :lock_timeout,
+                       admission_dispatch: :sent,
+                       transaction: :rolled_back
+                     }}},
+                   5_000
+
+    send(holder, :release)
+    assert_receive {:holder_done, ^holder, {:ok, %Result{status: :processing}}}, 5_000
+  end
+
+  @tag effect_lock_generation_mutation: true
+  test "lock_for_effect refuses a row whose id no longer matches the logical key", %{
+    prefix: prefix
+  } do
+    request = idempotency_request("effect-lock-generation")
+    target = Postgres.for_repo(Repo, prefix)
+    parent = self()
+
+    assert_admitted_worker!(parent, prefix, request)
+
+    # Same logical key, a different claim id: the shape of a row reaped and re-inserted
+    # between the committed claim and the lock. The id bind makes the lock miss (fail
+    # closed) instead of adopting another generation's claim.
+    stranger = %{claim_from_request(request, prefix) | id: Ecto.UUID.generate()}
+
+    stranger_result =
+      RealConnection.with_connection(fn ->
+        Repo.transaction(fn ->
+          case Store.lock_for_effect(target, stranger, lock_timeout_ms: 250) do
+            %Result{status: :failure} = failure -> Repo.rollback(failure)
+            other -> other
+          end
+        end)
+      end)
+
+    assert {:error,
+            %Result{
+              status: :failure,
+              reason: :store_invariant,
+              admission_dispatch: :sent,
+              transaction: :open
+            }} = stranger_result
+  end
+
+  defp assert_admitted_worker!(parent, prefix, request) do
+    worker = spawn(fn -> admit_committed(parent, prefix, request) end)
+    assert_receive {:admitted, ^worker, {:ok, %Result{status: :admitted}}}, 5_000
+  end
+
+  defp admit_committed(parent, prefix, request) do
+    result = RealConnection.with_connection(fn -> admit_transaction(prefix, request) end)
+    send(parent, {:admitted, self(), result})
+  end
+
+  defp admit_transaction(prefix, request) do
+    Repo.transaction(fn ->
+      case Store.claim(Postgres.for_repo(Repo, prefix), request) do
+        %Result{status: :admitted} = admitted -> admitted
+        %Result{} = failure -> Repo.rollback(failure)
+      end
+    end)
+  end
+
+  defp claim_from_request(request, prefix) do
+    now = DateTime.utc_now()
+
+    %Claim{
+      strategy: :idempotency,
+      id: request.id,
+      logical_partition: Postgres.for_repo(Repo, prefix).logical_partition,
+      operation_hash: request.operation_hash,
+      scope_hash: request.scope_hash,
+      key_hash: request.key_hash,
+      fingerprint: request.fingerprint,
+      state: :processing,
+      admitted_at: now,
+      retain_until: DateTime.add(now, request.retention_seconds, :second),
+      inserted_at: now
+    }
+  end
 end

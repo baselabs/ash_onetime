@@ -1005,6 +1005,26 @@ defmodule AshOnetime.MutationCheck do
       test_name: "caller death before peer preserves one key and retry proves absence",
       assertion: "assert [[\"recover\", ^operation_key], [\"execute\", ^operation_key]] ="
     },
+    "pre-peer-lock-removed" => %{
+      path: "lib/ash_onetime/external_recovery.ex",
+      original:
+        "      case lock_for_peer(state, protection, started) do\n        {:ok, locked} ->\n          execute_then_settle(locked, subject, protection, context, operation_key, started)",
+      mutated:
+        "      case {:ok, state} do\n        {:ok, locked} ->\n          execute_then_settle(locked, subject, protection, context, operation_key, started)",
+      test: "test/ash_onetime/external_contention_test.exs",
+      tag: "pre_peer_lock_mutation",
+      test_name: "an in-flight retry is refused while the original holds the pre-peer claim lock",
+      assertion: "assert {_pid, blockers, query} = wait_for_blocked_query(context.prefix)"
+    },
+    "effect-lock-generation" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "AND id = $5::uuid",
+      mutated: "AND (id = $5::uuid OR true)",
+      test: "test/ash_onetime/store/contention_test.exs",
+      tag: "effect_lock_generation_mutation",
+      test_name: "lock_for_effect refuses a row whose id no longer matches the logical key",
+      assertion: "reason: :store_invariant,"
+    },
     "ambiguous-retry" => %{
       path: "lib/ash_onetime/external_recovery.ex",
       original:

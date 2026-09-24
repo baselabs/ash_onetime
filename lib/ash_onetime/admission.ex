@@ -104,7 +104,7 @@ defmodule AshOnetime.Admission do
 
   Structurally identical to `reserve/3` except the claim commits in its own transaction via
   `Store.claim_committed/2` (a worker process on its own connection, nesting-guarded at
-  `Store.Postgres.run_committed_claim_transaction/2`), so an action-body failure cannot roll
+  `Store.Postgres.run_committed_claim_transaction/3`), so an action-body failure cannot roll
   the spend back. The result resolves under `:committed_external_claim` — the existing,
   ADR-0001-blessed mode for an independently-committed claim. A reused proof within the
   acceptance window collides on retry and rejects with `:nonce_already_used` via the existing
@@ -212,7 +212,12 @@ defmodule AshOnetime.Admission do
 
   @doc false
   def resolve(%Result{} = result, %State{} = state, protection, started, mode)
-      when mode in [:local_claim, :committed_external_claim, :locked_external_finalize] do
+      when mode in [
+             :local_claim,
+             :committed_external_claim,
+             :locked_external_claim,
+             :locked_external_finalize
+           ] do
     decide(result, state, protection, started, mode)
   end
 
@@ -734,16 +739,23 @@ defmodule AshOnetime.Admission do
     with {:ok, disposition} <-
            validate_collision(result, state.request, state.target, expected_transaction(mode)),
          :match <- disposition do
-      emit_conflict(state, :processing)
-
       case mode do
         :local_claim ->
+          emit_conflict(state, :processing)
           {:error, Error.new(:request_in_progress, "request is already processing")}
 
         :committed_external_claim ->
+          emit_conflict(state, :processing)
           {:recover, %{state | claim: sanitize_claim(result.claim)}}
 
         :locked_external_finalize ->
+          emit_conflict(state, :processing)
+          {:execute, %{state | class: :external_execute, claim: sanitize_claim(result.claim)}}
+
+        # The pre-peer claim lock's own resolution (ADR-0010): reading a :processing claim
+        # under the lock is not a new conflict — every other mode's emission still fires —
+        # so this arm emits nothing and keeps the per-execute conflict counts unchanged.
+        :locked_external_claim ->
           {:execute, %{state | class: :external_execute, claim: sanitize_claim(result.claim)}}
       end
     else
@@ -803,6 +815,9 @@ defmodule AshOnetime.Admission do
 
   defp expected_transaction(:committed_external_claim), do: :committed
 
+  # The pre-peer claim lock runs in the caller's open transaction (ADR-0010).
+  defp expected_transaction(:locked_external_claim), do: :open
+
   defp expected_transaction(mode) when mode in [:local_claim, :locked_external_finalize],
     do: :open
 
@@ -814,6 +829,7 @@ defmodule AshOnetime.Admission do
   defp execution_class(:one_time_nonce, :committed_external_claim), do: :nonce
 
   defp execution_class(:idempotency, :committed_external_claim), do: :external_execute
+  defp execution_class(:idempotency, :locked_external_claim), do: :external_execute
   defp execution_class(:idempotency, :locked_external_finalize), do: :external_execute
   defp execution_class(:idempotency, :local_claim), do: :execute
 

@@ -10,7 +10,9 @@ idempotency and recovery surfaces.
 
 1. PostgreSQL commits a claim in `processing` before any peer call.
 2. A fresh request calls `execute(operation_key, subject, context)`.
-3. A retry of a processing claim calls `recover/3` first.
+3. A retry of a processing claim takes the pre-peer claim lock (above) and then calls
+   `recover/3`; a concurrent retry that cannot acquire the lock within the configured wait
+   is refused with `:request_in_progress` before `recover/3` runs.
 4. `{:ok, result}` is finalized locally while the claim is locked.
 5. `:absent` is proof that execution never happened; only then may the same operation key be
    executed.
@@ -38,37 +40,49 @@ stub that merely records the request proves only that the package produced a sha
 conformance requires a live peer contract. External effects are idempotency-only because a
 nonce cannot safely recover or replay a response.
 
-## Concurrent retries can execute twice under one operation key (normative)
+## Concurrent retries: the pre-peer claim lock (normative)
 
-Between committing the claim and finalizing, the package holds no lock: the claim commits in
-its own transaction (which releases every lock on return), the peer call runs unguarded, and
-the claim row is locked again only at finalize. A retry that arrives while the original
-request is inside that window recovers first — and because the peer has not committed the
-effect yet, an **honest** `recover/3` returns `:absent` and the retry executes under the
-**same operation key**. The retry's execute can land while the original's execute is still
-in flight: no caller death, no lying adapter, and — when the two executes overlap — no lock
-at the package that serializes them through the peer. Both behaviors are observed on a live
-PostgreSQL in `test/ash_onetime/external_contention_test.exs`: "an in-flight retry
-truthfully recovers absence and both callers execute under one operation key" (two executes,
-one key), and "a retry's execute overlaps the original's in-flight execute and only the
-atomic key claim absorbs it" (the retry's key-claim insert observed blocked by the
-original's uncommitted key row via `pg_blocking_pids`).
+Before any peer call, the package takes the claim row `FOR UPDATE` in the caller's open
+transaction — a **pre-peer claim lock** with a bounded wait (`external_lock_timeout_ms`,
+default 2000, ceiling 25000; ADR-0010). A same-key retry that arrives while the original is
+between its committed claim and its finalization now blocks on that row:
 
-This is why defense 2 below is shaped the way it is:
+- If the original settles within the wait, the retry proceeds under the lock — recovering
+  or replaying exactly as a sequential retry would.
+- If it does not, the retry fails with `:request_in_progress` — the same semantic the local
+  (non-external) path already returns for a concurrent same-key request.
 
-1. **The peer's key dedup MUST be atomic.** Claiming the key must be a single statement —
-   `INSERT ... ON CONFLICT` / an upsert against the key store — never a check-then-act
-   (SELECT, then INSERT) sequence. Overlapping same-key executes must race inside one
-   atomic claim, where exactly one wins and the other returns the stored result; the
-   blocking-observation test above is exactly the race a check-then-act peer loses.
-2. **The peer SHOULD record the key on receipt, before processing the effect**, so the
-   redundant execute is absorbed deterministically rather than racing the effect itself.
+Two `execute` calls under one operation key therefore cannot overlap at the peer: the lock
+is held across the peer call and released only when the caller's transaction ends. This is
+observed on a live PostgreSQL in `test/ash_onetime/external_contention_test.exs`: a retry
+arriving while the original is paused before its peer call, and one arriving while the
+original is mid-execution at the peer, both block on the claims row (observed via
+`pg_blocking_pids`), time out at the configured wait, and are refused with
+`:request_in_progress` — the ledger shows exactly one execute under one key. A dead caller
+releases its backend's locks, so dead-caller recovery is unchanged (same file, "recover runs
+inside the retry caller's open transaction").
 
-The package's own guarantee is unaffected: finalize takes the claim row lock, serializes the
-two callers, and leaves one local effect and one stored response. The redundant *peer*
-execute is precisely the case defense 2 exists to absorb — but only an atomic dedup absorbs
-it; a check-then-act peer double-spends here with every party conforming to the contract as
-previously written.
+The lock is also generation-safe: it binds the claim's id alongside the logical key, so a
+row reaped and re-inserted between the committed claim and the lock is refused
+(`:store_invariant`, fail closed) rather than adopted (observed in
+`test/ash_onetime/store/contention_test.exs`).
+
+Why the lock exists — the race it closes was real: before it, the package held no lock
+between the committed claim and finalize, so an honest in-flight retry truthfully recovered
+`:absent` and executed under the same operation key while the original's execute was still
+in flight. The peer contract still carries the residue the lock cannot cover:
+
+1. **The peer MUST enforce idempotency by operation key** — a *sequential* retry after the
+   original's transaction ended, with a lying `:absent`, still induces a redundant execute
+   under the same key. A correct peer absorbs it.
+2. **The peer SHOULD claim the key atomically** (a single insert-on-key statement, recorded
+   on receipt before processing the effect): with the pre-peer lock in place, atomicity is
+   no longer the only defense against concurrent same-key executes — but a peer that
+   deduplicates atomically is correct under every retry interleaving, including any future
+   path that does not take the lock.
+
+The package's own guarantee is unchanged and observed: the finalize row lock leaves one
+local effect and one stored response regardless of retry pressure.
 
 ## The adapter execution environment (normative)
 
@@ -76,10 +90,11 @@ Both callbacks run **inside the caller's open PostgreSQL transaction** — the a
 transaction is open on the caller's connection while `execute/3` and `recover/3` run — and
 the package applies **no timeout** to either callback. Observed per callback on a live
 PostgreSQL in `test/ash_onetime/external_contention_test.exs`: "the adapter callbacks run
-inside the caller's open transaction" (`execute/3`) and "recover runs inside the retry
-caller's open transaction" (`recover/3`); an open transaction on a checked-out connection
-holds that pooled connection and an idle-in-transaction backend for as long as the callback
-runs.
+inside the caller's open transaction" (`execute/3` — which also reads the caller's backend
+from `pg_stat_activity` while the callback is paused and observes it `idle in transaction`
+with an open `xact_start`) and "recover runs inside the retry caller's open transaction"
+(`recover/3`). An open transaction on a checked-out connection holds that pooled connection
+and an idle-in-transaction backend for as long as the callback runs.
 
 An adapter MUST bound its own peer call (its own HTTP timeout, deadline, or circuit): an
 unbounded callback holds a pooled connection and an idle-in-transaction backend for as long
@@ -112,10 +127,11 @@ The defenses are independent and both are required:
    key store. Returning `:absent` without a real query (a stub, a default, a cached negative)
    is a contract violation. Every uncertain, exceptional, or malformed outcome is `:unknown`,
    never `:absent`.
-2. **The peer MUST enforce idempotency by operation key — atomically** (a single-statement
-   claim of the key, not check-then-act) so a redundant execute is absorbed, including the
-   concurrent same-key executes an honest in-flight retry produces (see the concurrency
-   section above).
+2. **The peer MUST enforce idempotency by operation key** so a redundant execute is
+   absorbed. With the pre-peer claim lock preventing concurrent same-key executes, the
+   binding case is sequential: a lying `:absent` after the original's transaction ended
+   still induces a redundant execute under the same key, which only the peer absorbs. The
+   peer SHOULD claim the key atomically (see the concurrency section above).
 
 The package supplies the operation key (the authoritative committed claim UUID) to both
 callbacks; the adapter passes it unchanged to the peer's idempotency and recovery surfaces.

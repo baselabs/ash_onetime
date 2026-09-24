@@ -48,7 +48,7 @@ through the authoritative store — not only the codes raised on the happy admis
 |---|---|---|
 | `:nonce_already_used` | 409 | A one-time nonce was already spent. |
 | `:key_reused_with_different_request` | 409/422 | An idempotency key was reused with a different request fingerprint. |
-| `:request_in_progress` | 409 / 425 | A `processing` claim is still in flight for this key. |
+| `:request_in_progress` | 409 / 425 | A `processing` claim is still in flight for this key — including, on external-effect actions, a same-key retry refused by the pre-peer claim lock within its configured wait (ADR-0010). |
 | `:verification_failed` | 401 | A trusted verifier rejected the token. |
 | `:verification_timeout` | 503 | A trusted verifier timed out (retryable). |
 | `:fingerprint_too_large` | 422 | The request fingerprint exceeded its byte limit. |
@@ -132,6 +132,7 @@ configuration faults that will not clear by retrying.
 |---|---|---|
 | `:checkout_unavailable` | **503** | No database connection could be checked out (pool exhausted or down). |
 | `:disconnected` | **503** | The database connection dropped mid-operation. |
+| `:worker_timeout` | **503** | The independently committed claim's worker exceeded its 30s ceiling. |
 | `:lock_timeout` | **503** | A row lock could not be acquired within the timeout. |
 | `:dispatched_unknown` | **503** | A statement was dispatched but its outcome is unknown (retryable). |
 | `:store_failure` | **503** | The authoritative store failed for an unenumerated reason. |

@@ -123,18 +123,26 @@ defmodule AshOnetime.Test.ExternalEffectSupport do
 
   # Reports whether the callback is executing inside the caller's open transaction:
   # evaluated in the caller's process against the dynamic repo Ash opened the action
-  # transaction on, before any peer call. The packaged external-effect docs state this as
-  # the adapter execution environment; the probe observes it directly.
+  # transaction on, before any peer call. Also captures the caller's backend pid (from
+  # inside the same checked-out connection) so the observer can read that backend's
+  # pg_stat_activity state while the callback is paused.
   defp pause_execute_probe(prefix, operation_key, subject, observer, reference) do
     in_transaction = Repo.in_transaction?()
+    backend_pid = backend_pid!()
 
     send(
       observer,
-      {:external_pause, reference, :execute_probe, operation_key, self(), in_transaction}
+      {:external_pause, reference, :execute_probe, operation_key, self(), in_transaction,
+       backend_pid}
     )
 
     receive do: ({:external_continue, ^reference} -> :ok)
     {:ok, ExternalPeer.execute(prefix, operation_key, peer_result(subject))}
+  end
+
+  defp backend_pid! do
+    %{rows: [[pid]]} = Repo.query!("SELECT pg_backend_pid()")
+    pid
   end
 
   defp peer_result(%Ash.ActionInput{} = input),

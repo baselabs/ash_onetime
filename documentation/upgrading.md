@@ -4,12 +4,47 @@ Version-to-version migration notes. `ash_onetime` follows semantic versioning: f
 breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
 land in a minor), and each breaking change lands here with the exact edit to make.
 
-The current package release is v1.3.2 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
+The current package release is v1.4.0 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 1.3"}
+{:ash_onetime, "~> 1.4"}
 ```
+
+## v1.4.0 — the pre-peer claim lock and the corrected external-effect contract (2026-09-24)
+
+**One behavior change to review.** A concurrent same-key retry of an external-effect action
+may now return `:request_in_progress` (409/425) within `external_lock_timeout_ms`
+(default 2000) instead of waiting out the original and replaying. Clients should treat that
+code as wait-or-retry — the correct posture for idempotent actions. If you need the old
+waiting behavior, raise `external_lock_timeout_ms` toward its 25000 ceiling (5s of
+headroom under the committed-claim worker kill, so the lock timeout — not the worker
+kill — decides a contended wait); if you want refusal faster, lower it. Nothing to edit otherwise: the lock is automatic for every
+`external_effect` protection.
+
+Two normative requirements in [External effects and recovery](external-effects.md) were
+corrected/tightened after a 2026-09-24 design review — no library schema or API change,
+but a peer or adapter that conformed under the previous wording may no longer conform:
+
+- **The peer's idempotency-by-operation-key defense remains a MUST; atomic key claims
+  (insert-on-key, not check-then-act) are now a SHOULD.** Before this release an honest
+  in-flight retry produced two executes under one operation key (observed, overlapping) —
+  a check-then-act peer double-spends in exactly that window, and the pre-peer lock now
+  prevents the overlap. If your peer claims keys with a read-then-write sequence, moving
+  the claim into one `INSERT ... ON CONFLICT`-style statement keeps you correct under
+  every retry interleaving. See ADR-0010 and ADR-0001's 2026-09-24 amendments.
+- **The reaper on external-effect actions requires a reconciliation path.** A reaped claim
+  deletes its operation key with it, so a post-reap retry executes under a new key and no
+  key-based defense remains at either layer. Enable `ash_onetime.reap` on an
+  external-effect action only with a business-level way to settle an outcome-unknown claim
+  before its abandonment horizon (ADR-0002's amendment, ADR-0009 records why a
+  reap-surviving derived key was rejected).
+
+Also new: the adapter execution environment is normative (callbacks run inside the
+caller's open transaction, unbounded — adapters MUST bound their own peer call; an
+ambiguous execute is followed by recover in the same transaction), a `:absent` vs
+`:unknown` mapping table for real HTTP peers with a worked bounded adapter, and Recipe 4
+(external effect via a transactional outbox) in the recipes guide.
 
 ## v1.3.2 — the `Verified` constructor (2026-09-20)
 
@@ -396,29 +431,6 @@ from a pre-v0.1.0 snapshot, move any `response ..., limits: [max_response_*: ...
 
 This change is additive in coverage (no limit is lost) and removes a redundant configuration
 surface where two places could spell overlapping limits.
-
-## Unreleased — external-effect contract tightening (documentation-only, no code change)
-
-Two normative requirements in [External effects and
-recovery](external-effects.md) tightened after a 2026-09-24 design review. No library code,
-schema, or API changed, but a peer or adapter that conformed under the previous wording may
-no longer conform:
-
-- **The peer's idempotency-by-operation-key defense MUST be atomic** (a single-statement
-  claim of the key, never check-then-act). An honest in-flight retry produces two execute
-  calls under one operation key — observed overlapping — and a check-then-act peer
-  (SELECT, then INSERT) double-spends in exactly that window. If your peer claims keys with
-  a read-then-write sequence, move the claim into one `INSERT ... ON CONFLICT`-style
-  statement. See ADR 0001's 2026-09-24 amendment.
-- **The reaper on external-effect actions requires a reconciliation path.** A reaped claim
-  deletes its operation key with it, so a post-reap retry executes under a new key and no
-  key-based defense remains at either layer. Enable `ash_onetime.reap` on an
-  external-effect action only with a business-level way to settle an outcome-unknown claim
-  before its abandonment horizon. See ADR 0002's 2026-09-24 amendment and the operations
-  guide.
-
-Also new: a `:absent` vs `:unknown` mapping table for real HTTP peers with a worked bounded
-adapter, and Recipe 4 (external effect via a transactional outbox) in the recipes guide.
 
 ## Between releases
 

@@ -210,12 +210,15 @@ fail a fully honest adapter.*
 Between the independently committed claim and finalize, the package holds no lock. A retry
 arriving inside that window recovers first; the peer has not committed the effect yet, so an
 honest `recover/3` returns `:absent` and the retry executes under the **same operation key**.
-Both facts are OBSERVED in `test/ash_onetime/external_contention_test.exs`: two execute
-calls under one key from one logical request with no caller death and no lying adapter
-("an in-flight retry truthfully recovers absence and both callers execute under one
-operation key"), and genuine overlap — the retry's atomic key-claim insert observed blocked
-by the original's uncommitted key row via `pg_blocking_pids` ("a retry's execute overlaps
-the original's in-flight execute and only the atomic key claim absorbs it"). The same tests
+Both facts were OBSERVED as this amendment was written, by the tests as they stood at
+commit `bf37ff5` ("an in-flight retry truthfully recovers absence and both callers execute
+under one operation key" — two executes, one key; "a retry's execute overlaps the
+original's in-flight execute and only the atomic key claim absorbs it" — the retry's
+atomic key-claim insert observed blocked by the original's uncommitted key row via
+`pg_blocking_pids`). ADR-0010's lock, later the same day, renamed and inverted those
+tests; the observation itself is preserved here and in `bf37ff5`'s history, and the
+lock's red-proof (mutation `pre-peer-lock-removed`) re-demonstrates the unlocked race on
+demand. The same tests
 observe the package's own guarantee holding under that race: the finalize row lock leaves
 one local effect, one stored response, identical results.
 
@@ -239,3 +242,25 @@ callbacks run inside the caller's open PostgreSQL transaction and the package ap
 timeout to them (OBSERVED per callback in the same test file: "the adapter callbacks run
 inside the caller's open transaction", "recover runs inside the retry caller's open
 transaction"); bounding the peer call is an adapter-side MUST.
+
+## External recovery: pre-peer claim lock (2026-09-24 amendment, second)
+
+*Supersedes the concurrency consequence of the amendment above, which recorded the unguarded
+window as a permanent property. The window is now closed by ADR-0010; the amendment above
+stands as the historical record of the race and the reason the lock exists.*
+
+Before any peer call, `ExternalRecovery` takes the claim row `FOR UPDATE` in the caller's
+open transaction with a bounded wait (`external_lock_timeout_ms`, default 2000 ms, ceiling
+30000 ms), re-resolving the full claim through the finalize-mode resolver: `:processing`
+proceeds to the peer call under the lock, `:complete` replays, a missing row (reaped and
+re-inserted between the committed claim and the lock) fails closed. The same-key retry's
+committed-claim worker arms the same bounded wait, and a lock timeout on either path maps
+to `:request_in_progress` — the local path's existing concurrent-retry semantic.
+
+Observed in `test/ash_onetime/external_contention_test.exs`: a retry arriving before the
+original's peer call, and one arriving while the original is mid-execution at the peer, are
+both refused without reaching the peer (one execute in the ledger, block observed via
+`pg_blocking_pids`); dead-caller recovery is unchanged. Defense 2's atomicity clause drops
+from MUST to SHOULD accordingly: the peer MUST still enforce idempotency by operation key
+(a sequential retry with a lying `:absent` remains peer-absorbed), and SHOULD claim the key
+atomically.

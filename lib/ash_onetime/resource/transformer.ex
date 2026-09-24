@@ -502,6 +502,14 @@ defmodule AshOnetime.Resource.Transformer do
              :external_effect,
              "nonce cannot configure external effects"
            ),
+         :ok <-
+           reject_present(
+             protection.external_lock_timeout_ms,
+             protection,
+             context,
+             :external_lock_timeout_ms,
+             "nonce cannot configure external-effect options"
+           ),
          :ok <- reject_explicit_failure_option(protection, context),
          {:ok, window} <- normalize_window(protection, context) do
       {:ok, %{protection | window: window, retention: nil, fingerprint: nil, response: nil}}
@@ -688,16 +696,51 @@ defmodule AshOnetime.Resource.Transformer do
     end
   end
 
-  defp verify_external_effect(%{external_effect: nil}, _context), do: :ok
+  defp verify_external_effect(%{external_effect: nil} = protection, context) do
+    reject_stale_lock_timeout(protection, context)
+  end
 
   defp verify_external_effect(protection, context) do
     with :ok <- ensure_callbacks(protection.external_effect, execute: 3, recover: 3),
-         :ok <- reject_external_untracked(protection, context) do
+         :ok <- reject_external_untracked(protection, context),
+         :ok <- verify_external_lock_timeout(protection, context) do
       :ok
     else
       {:error, %DslError{} = error} -> {:error, error}
       {:error, message} -> error(context.dsl_state, protection, :external_effect, message)
     end
+  end
+
+  defp reject_stale_lock_timeout(%{external_lock_timeout_ms: nil}, _context), do: :ok
+
+  defp reject_stale_lock_timeout(protection, context) do
+    error(
+      context.dsl_state,
+      protection,
+      :external_lock_timeout_ms,
+      "external_lock_timeout_ms requires external_effect"
+    )
+  end
+
+  # 1..25_000ms: a positive wait with 5s of headroom under the committed-claim worker
+  # kill, so a contended lock fails with :lock_timeout (:request_in_progress) rather than
+  # the parent's :worker_timeout (ADR-0010; the store enforces the same bound at runtime).
+  defp verify_external_lock_timeout(%{external_lock_timeout_ms: nil}, _context), do: :ok
+
+  defp verify_external_lock_timeout(
+         %{external_lock_timeout_ms: milliseconds} = _protection,
+         _context
+       )
+       when is_integer(milliseconds) and milliseconds > 0 and milliseconds <= 25_000,
+       do: :ok
+
+  defp verify_external_lock_timeout(protection, context) do
+    error(
+      context.dsl_state,
+      protection,
+      :external_lock_timeout_ms,
+      "external_lock_timeout_ms must be an integer of 1..25000 milliseconds"
+    )
   end
 
   defp reject_external_untracked(

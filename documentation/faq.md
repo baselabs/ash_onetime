@@ -59,7 +59,9 @@ Two concurrent requests for the same key raced, and one is mid-flight. This is t
 `:conflict` admission result surfaced as the `:request_in_progress` code; it is correct
 behavior — the unique constraint decides the race, and the loser is told to wait or retry,
 not to execute in parallel. A retry of the same key after the first completes will replay
-the stored result.
+the stored result. On external-effect actions the same code has a second source: the
+pre-peer claim lock (ADR-0010) refuses a same-key retry that cannot acquire the claim row
+within `external_lock_timeout_ms` (default 2000) — the client retries.
 
 ### Why is `AshOnetime.replayed?/1` returning `nil`?
 

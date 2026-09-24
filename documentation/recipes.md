@@ -349,9 +349,11 @@ end
 `recover/3`'s `:absent` is authoritative for a **settled** history: once the original
 request's transaction has committed or rolled back, the row's absence proves the effect
 never landed (a rolled-back action leaves no row, so a retry's recovery truthfully returns
-`:absent` and re-executes). While the original is still in flight, the concurrent case is
-handled where it must be — inside `execute/3`'s atomic key claim — not by `recover/3`,
-which runs in a different transaction and cannot see an uncommitted row.
+`:absent` and re-executes). While the original is still in flight, the package's pre-peer
+claim lock (ADR-0010) has already serialized the retry away — a concurrent same-key retry
+is refused with `:request_in_progress` before `recover/3` runs — and `execute/3`'s
+`on_conflict` key claim remains the second line for any sequential overlap, which is why
+it stays even with the lock.
 
 The protected action is Recipe 1's shape with `external_effect MyApp.NotificationOutboxAdapter`
 added. The stored response is the **acceptance receipt** — which pins two classifier rules

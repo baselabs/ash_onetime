@@ -135,7 +135,12 @@ transactional-outbox patterns.
 
 ## Status
 
-The current package release is [v1.3.2 on Hex](https://hex.pm/packages/ash_onetime) — an
+The current package release is [v1.4.0 on Hex](https://hex.pm/packages/ash_onetime) — the
+pre-peer claim lock for external effects (ADR-0010: a concurrent same-key retry is refused
+with `:request_in_progress` within `external_lock_timeout_ms` instead of racing into a
+second peer execute under one operation key) plus the corrected external-effect contract
+(the adapter execution environment, the `:absent`/`:unknown` mapping guide, honest reaper
+boundaries, and the transactional-outbox recipe; ADRs 0009-0011). It follows v1.3.2, an
 additive release shipping `AshOnetime.Verified.new/1`, the sanctioned constructor for the
 opaque `Verified` type, so verifier and minter callbacks never build the struct literal.
 It follows v1.3.1, a

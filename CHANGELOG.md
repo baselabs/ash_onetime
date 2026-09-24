@@ -2,39 +2,79 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## v1.4.0 — 2026-09-24
+
+**Breaking behavior change (the reason this is a minor, not a patch):** a concurrent
+same-key retry of an external-effect action that previously waited out the original and
+replayed may now return `:request_in_progress` within the configured wait. Clients already
+treat that code as wait-or-retry; consumers running check-then-act peers are the direct
+beneficiaries.
+
+### Added
+
+- **Pre-peer claim lock for external effects (ADR-0010).** Before any peer call, the
+  package takes the claim row `FOR UPDATE` in the caller's open transaction with a bounded
+  wait — the new per-protection `external_lock_timeout_ms` option (default 2000,
+  validated `1..25_000` — 5s of headroom under the committed-claim worker kill, requires
+  `external_effect`). The same-key retry's committed-claim
+  worker arms the same bound. A lock timeout maps to `:request_in_progress` (the local
+  path's existing concurrent-retry semantic) and is terminal. The lock is
+  generation-safe: it binds the claim id alongside the logical key, so a reaped-and-
+  reinserted row fails closed (`:store_invariant`) instead of being adopted. Motivation,
+  observed on live PostgreSQL: without the lock, an honest in-flight retry truthfully
+  recovered `:absent` and executed under the same operation key while the original's
+  execute was still in flight — and a check-then-act peer (conforming to the contract as
+  published at v1.3.2) double-spends in exactly that window. With the lock, two executes
+  under one key cannot overlap at the peer; dead-caller recovery is unchanged
+  (`test/ash_onetime/external_contention_test.exs`, `test/ash_onetime/store/contention_test.exs`).
+  The mutation battery pins the lock twice: `effect-lock-generation` (id bind defeated while
+  kept, reds on generation adoption) and `pre-peer-lock-removed` (the lock call removed,
+  reds on the unlocked race — B's red-proof). The `lock_timeout` GUC is scoped to the
+  lock: captured before, restored after — it never caps the adapter's own writes.
+  `AshOnetime.Store` grows `lock_for_effect/3` and an options-taking `claim_committed/3`
+  (the 2-arity facade is unchanged).
+
+### Decisions (ADRs 0009-0011, each adversarially reviewed and judged)
+
+- **ADR-0009 (Rejected): reap-surviving derived operation key.** A stateless derivation
+  survives retention too — a post-retention retry would replay the prior generation's
+  peer result instead of executing (a disclosed duplicate traded for an undisclosed
+  no-op); a stateful one is correct only under an unknowable peer key-retention horizon;
+  and the operation key is published callback API, so a derived key breaks every
+  conforming adapter's claim join. The operator-side defense stays: business-level
+  reconciliation before enabling the reaper on external-effect actions.
+- **ADR-0011 (Rejected for wall-clock): library-side callback bounding.** The only
+  in-package bounding mechanism (`timed_callback/4`'s Task) runs the callback outside the
+  caller's transaction, silently breaking transactional adapter writes. The DB-resource
+  bound (opt-in `idle_in_transaction_session_timeout`) and a configurable immediate
+  post-ambiguous `recover/3` are recorded as candidates with named decision criteria.
 
 ### Documentation
 
-- **External-effect contract corrected and tightened** (design review 2026-09-24; decision
-  record in `.kimosabe/specs/external-effect-admission-and-outbox-boundary.md`):
-  - The peer's idempotency-by-operation-key defense MUST be **atomic** (a single-statement
-    claim of the key, never check-then-act). An honest in-flight retry — no caller death,
-    no lying adapter — produces two `execute` calls under one operation key because the
-    package holds no lock between the committed claim and finalize, and the two calls can
-    overlap at the peer. OBSERVED in `test/ash_onetime/external_contention_test.exs`: two
-    executes under one key ("an in-flight retry truthfully recovers absence and both
-    callers execute under one operation key") and genuine overlap, with the retry's atomic
-    key-claim insert observed blocked by the original's in-flight claim
-    ("a retry's execute overlaps the original's in-flight execute and only the atomic key
-    claim absorbs it"). ADR 0001's claim that a duplicate requires BOTH a lying adapter AND
-    a failing peer is corrected by a dated amendment.
-  - The adapter execution environment is now normative: both effect callbacks run inside
-    the caller's open PostgreSQL transaction and the package applies no timeout to them;
-    adapters MUST bound their own peer call. OBSERVED per callback in the same test file
-    ("the adapter callbacks run inside the caller's open transaction", "recover runs
-    inside the retry caller's open transaction").
-  - Reaping an external-effect claim now documented honestly: the operation key is the
-    claim UUID, so a post-reap retry runs under a new key and **no key-based defense
-    remains at either layer** — enable the reaper on external-effect actions only with a
-    business-level reconciliation path (external-effects guide, operations guide, ADR 0002
-    amendment).
-  - New `:absent` vs `:unknown` mapping table for real HTTP peers (the 404-under-replica-lag
-    double-spend trap) plus a worked bounded HTTP adapter in the external-effects guide.
+- **External-effect contract corrected** (design review 2026-09-24; decision records under
+  `.kimosabe/specs/`):
+  - ADR 0001's claim that a duplicate side effect requires BOTH a lying adapter AND a
+    failing peer is corrected by a dated amendment: an honest in-flight retry alone
+    produced concurrent same-key executes (now prevented by the lock; the peer-side
+    residue — a sequential lying `:absent` — keeps key idempotency a MUST, with atomic
+    key claims a SHOULD).
+  - The adapter execution environment is normative: both effect callbacks run inside the
+    caller's open PostgreSQL transaction (observed per callback, including the caller's
+    backend `idle in transaction` on `pg_stat_activity`) and the package applies no
+    timeout to them; adapters MUST bound their own peer call, and an ambiguous execute is
+    followed by recover in the same transaction (up to two adapter timeouts of hold).
+  - Reaping an external-effect claim documented honestly: the operation key is the claim
+    UUID, so a post-reap retry runs under a new key and no key-based defense remains at
+    either layer (external-effects guide, operations guide, ADR 0002 amendment).
+  - New `:absent` vs `:unknown` mapping table for real HTTP peers (the
+    404-under-replica-lag double-spend trap) plus a worked bounded HTTP adapter in the
+    external-effects guide.
   - New Recipe 4 — external effect via a transactional outbox (the outbox row as the
     ExternalEffect peer, keyed by the operation key, committing with the action), including
     the acceptance-receipt classifier rule, the race-absorbing `on_conflict` key claim, and
     the receiver-side cross-generation deduplication boundary.
+  - `:request_in_progress` documented on the external path; the previously unlisted
+    `:worker_timeout` added to the error table.
 
 ## v1.3.2 — 2026-09-20
 

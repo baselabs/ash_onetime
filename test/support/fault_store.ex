@@ -19,7 +19,12 @@ defmodule AshOnetime.Test.FaultStore do
   def claim(target, request), do: result!(:claim, [target, request])
 
   @impl AshOnetime.Store
-  def claim_committed(target, request), do: result!(:claim_committed, [target, request])
+  def claim_committed(target, request, options \\ []),
+    do: result!(:claim_committed, [target, request, options])
+
+  @impl AshOnetime.Store
+  def lock_for_effect(target, claim, options),
+    do: result!(:lock_for_effect, [target, claim, options])
 
   @impl AshOnetime.Store
   def complete(target, claim, codec, digest, payload),

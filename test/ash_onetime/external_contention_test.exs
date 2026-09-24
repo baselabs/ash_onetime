@@ -58,7 +58,8 @@ defmodule AshOnetime.ExternalContentionTest do
   end
 
   @tag external_operation_key_mutation: true
-  test "an in-flight retry truthfully recovers absence and both callers execute under one operation key",
+  @tag pre_peer_lock_mutation: true
+  test "an in-flight retry is refused while the original holds the pre-peer claim lock",
        context do
     reference = make_ref()
     parent = self()
@@ -66,36 +67,45 @@ defmodule AshOnetime.ExternalContentionTest do
     {first, first_monitor} =
       spawn_monitor(fn ->
         ExternalEffectSupport.put_mode({:pause_before_execute, parent, reference})
-        send(parent, {:external_done, self(), run_unguarded(context, "unguarded-window")})
+        send(parent, {:external_done, self(), run_quick_lock(context, "unguarded-window")})
       end)
 
     assert_receive {:external_pause, ^reference, :before_execute, operation_key, ^first}, 5_000
 
-    # The first caller sits inside the unguarded window: its claim is committed, every lock
-    # from the independent claim transaction is released, and the peer has not been called.
-    # A retry of the same logical key recovers first; the peer genuinely has no record yet,
-    # so an honest adapter returns :absent and the retry executes under the SAME operation
-    # key — no caller death, no lying adapter.
+    # The first caller holds the ADR-0010 pre-peer claim lock: taken in its open
+    # transaction before the peer call, still held while paused here. Before the lock,
+    # a same-key retry in this window truthfully recovered :absent and executed under
+    # the SAME operation key (two concurrent executes, one key — the observed race that
+    # motivated the lock; see the overlap test below). With the lock, the retry's
+    # committed-claim worker blocks on the claims row, times out at the configured wait,
+    # and the retry is refused with the local path's concurrent-retry semantic.
     {second, second_monitor} =
       spawn_monitor(fn ->
-        send(parent, {:external_done, self(), run_unguarded(context, "unguarded-window")})
+        send(parent, {:external_done, self(), run_quick_lock(context, "unguarded-window")})
       end)
 
-    assert_receive {:external_done, ^second, {:ok, second_result}}, 5_000
+    assert {_pid, blockers, query} = wait_for_blocked_query(context.prefix)
+    assert blockers != []
+    assert String.contains?(String.downcase(query), "ash_onetime_idempotency_claims")
+
+    assert_receive {:external_done, ^second,
+                    {:error,
+                     %Ash.Error.Invalid{
+                       errors: [%AshOnetime.Error{code: :request_in_progress}]
+                     }}},
+                   5_000
+
     assert_receive {:DOWN, ^second_monitor, :process, ^second, :normal}, 5_000
 
     send(first, {:external_continue, reference})
 
-    assert_receive {:external_done, ^first, {:ok, first_result}}, 5_000
+    assert_receive {:external_done, ^first, {:ok, _first_result}}, 5_000
     assert_receive {:DOWN, ^first_monitor, :process, ^first, :normal}, 5_000
-    assert first_result == second_result
 
-    # Two execute calls reached the peer bearing one operation key. The finalize row lock
-    # kept the LOCAL effect single (one payload, one local effect, identical results); only
-    # the peer stands between the redundant execute and a duplicate effect — and only an
-    # atomic insert-on-key dedup absorbs it, which is why the adapter contract requires one.
+    # Exactly one execute reached the peer: the lock serialized the retry away before any
+    # peer call. One operation, one effect, one local effect, one stored payload.
     calls = ExternalPeer.calls(context.prefix)
-    assert Enum.count(calls, fn [kind, _key] -> kind == "execute" end) == 2
+    assert Enum.count(calls, fn [kind, _key] -> kind == "execute" end) == 1
     assert Enum.uniq(Enum.map(calls, &List.last/1)) == [operation_key]
     assert ExternalPeer.count(context.prefix, "external_peer_effects") == 1
     assert ExternalPeer.count(context.prefix, "external_peer_operations") == 1
@@ -113,11 +123,24 @@ defmodule AshOnetime.ExternalContentionTest do
         send(parent, {:external_done, self(), run_unguarded(context, "execution-environment")})
       end)
 
-    # The probe reports the caller's own transaction state from inside the callback: the
-    # action transaction is open on the caller's connection while the adapter executes, so
-    # an unbounded peer call holds a pooled connection and an idle-in-transaction backend.
-    assert_receive {:external_pause, ^reference, :execute_probe, _operation_key, ^caller, true},
+    # The probe reports the caller's own transaction state from inside the callback —
+    # the action transaction is open on the caller's connection while the adapter
+    # executes — and hands over the caller's backend pid. Reading that backend's
+    # pg_stat_activity row from the observer while the callback is paused shows the
+    # operational consequence directly: the backend sits 'idle in transaction' for as
+    # long as the (here, paused; in production, unbounded) adapter call runs.
+    assert_receive {:external_pause, ^reference, :execute_probe, _operation_key, ^caller, true,
+                    backend_pid},
                    5_000
+
+    assert %{rows: [["idle in transaction", true]]} =
+             with_observer(fn observer ->
+               Postgrex.query!(
+                 observer,
+                 "SELECT state, xact_start IS NOT NULL FROM pg_stat_activity WHERE pid = $1",
+                 [backend_pid]
+               )
+             end)
 
     send(caller, {:external_continue, reference})
 
@@ -126,7 +149,7 @@ defmodule AshOnetime.ExternalContentionTest do
   end
 
   @tag external_operation_key_mutation: true
-  test "a retry's execute overlaps the original's in-flight execute and only the atomic key claim absorbs it",
+  test "the pre-peer claim lock holds across the peer call, so an overlapping retry never reaches the peer",
        context do
     reference = make_ref()
     parent = self()
@@ -134,40 +157,45 @@ defmodule AshOnetime.ExternalContentionTest do
     {first, first_monitor} =
       spawn_monitor(fn ->
         ExternalEffectSupport.put_mode({:hold_execute, parent, reference})
-        send(parent, {:external_done, self(), run_unguarded(context, "held-execute")})
+        send(parent, {:external_done, self(), run_quick_lock(context, "held-execute")})
       end)
 
     # The first caller's peer transaction holds the operation-key row uncommitted: the
-    # effect is genuinely in flight, invisible to any other connection.
+    # effect is genuinely in flight, invisible to any other connection — the exact state
+    # in which, pre-lock, an honest retry recovered :absent and its execute BLOCKED on
+    # the in-flight key claim (the observed overlap). With the claim lock held across
+    # the peer call, the retry never reaches the peer at all.
     assert_receive {:external_pause, ^reference, :held_execute, operation_key, ^first}, 5_000
 
     {second, second_monitor} =
       spawn_monitor(fn ->
-        send(parent, {:external_done, self(), run_unguarded(context, "held-execute")})
+        send(parent, {:external_done, self(), run_quick_lock(context, "held-execute")})
       end)
 
-    # The retry recovers truthfully (:absent — the held transaction is invisible) and
-    # executes; its atomic insert-on-key claim BLOCKS on the in-flight key row. That
-    # blocking is the deterministic overlap: the second execute is inside the peer while
-    # the first is still in flight — the exact window in which a check-then-act peer
-    # (SELECT then INSERT) would race past the check and double-apply the effect.
-    assert {_pid, blockers, query} = wait_for_blocked_insert(context.prefix)
+    # The retry blocks on the CLAIMS row (the pre-peer lock), not the peer's key row —
+    # the lock moved the serialization ahead of the peer call — then times out at the
+    # configured wait and is refused.
+    assert {_pid, blockers, query} = wait_for_blocked_query(context.prefix)
     assert blockers != []
-    assert String.contains?(String.downcase(query), "external_peer_operations")
+    assert String.contains?(String.downcase(query), "ash_onetime_idempotency_claims")
+
+    assert_receive {:external_done, ^second,
+                    {:error,
+                     %Ash.Error.Invalid{
+                       errors: [%AshOnetime.Error{code: :request_in_progress}]
+                     }}},
+                   5_000
+
+    assert_receive {:DOWN, ^second_monitor, :process, ^second, :normal}, 5_000
 
     send(first, {:external_continue, reference})
 
-    assert_receive {:external_done, ^first, {:ok, first_result}}, 5_000
+    assert_receive {:external_done, ^first, {:ok, _first_result}}, 5_000
     assert_receive {:DOWN, ^first_monitor, :process, ^first, :normal}, 5_000
-    assert_receive {:external_done, ^second, {:ok, second_result}}, 5_000
-    assert_receive {:DOWN, ^second_monitor, :process, ^second, :normal}, 5_000
-    assert first_result == second_result
 
     calls = ExternalPeer.calls(context.prefix)
-    assert Enum.count(calls, fn [kind, _key] -> kind == "execute" end) == 2
+    assert Enum.count(calls, fn [kind, _key] -> kind == "execute" end) == 1
     assert Enum.uniq(Enum.map(calls, &List.last/1)) == [operation_key]
-    # The atomic insert-on-key claim absorbed the overlapping execute: one operation,
-    # one effect, one local effect, one stored payload.
     assert ExternalPeer.count(context.prefix, "external_peer_effects") == 1
     assert ExternalPeer.count(context.prefix, "external_peer_operations") == 1
     assert ExternalPeer.count(context.prefix, "external_local_effects") == 1
@@ -245,6 +273,24 @@ defmodule AshOnetime.ExternalContentionTest do
     end
   end
 
+  defp run_quick_lock(context, request_key) do
+    previous = Repo.get_dynamic_repo()
+    Repo.put_dynamic_repo(context.external_repo)
+
+    try do
+      Resource
+      |> Ash.ActionInput.for_action(:external_redeem_quick_lock, %{
+        value: 19,
+        request_key: request_key,
+        proof: "proof-#{request_key}"
+      })
+      |> Ash.ActionInput.set_tenant(context.prefix)
+      |> Ash.run_action()
+    after
+      Repo.put_dynamic_repo(previous)
+    end
+  end
+
   defp wait_for_blocked_query(prefix) do
     # ~10s deadline: generous for a loaded CI runner; halts as soon as the wait is observed.
     Enum.reduce_while(1..2_000, nil, fn _attempt, _last ->
@@ -255,42 +301,6 @@ defmodule AshOnetime.ExternalContentionTest do
 
         blocked ->
           {:halt, blocked}
-      end
-    end)
-  end
-
-  defp wait_for_blocked_insert(prefix) do
-    Enum.reduce_while(1..2_000, nil, fn _attempt, _last ->
-      case blocked_insert(prefix) do
-        nil ->
-          Process.sleep(5)
-          {:cont, nil}
-
-        blocked ->
-          {:halt, blocked}
-      end
-    end)
-  end
-
-  defp blocked_insert(prefix) do
-    with_observer(fn observer ->
-      %{rows: rows} =
-        Postgrex.query!(
-          observer,
-          """
-          SELECT pid, pg_blocking_pids(pid), query
-          FROM pg_stat_activity
-          WHERE datname = current_database()
-            AND wait_event_type = 'Lock'
-            AND query LIKE $1
-          ORDER BY pid
-          """,
-          ["%#{prefix}%external_peer_operations%"]
-        )
-
-      case rows do
-        [[pid, blockers, query] | _rest] -> {pid, blockers, query}
-        [] -> nil
       end
     end)
   end

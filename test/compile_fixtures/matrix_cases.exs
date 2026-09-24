@@ -78,6 +78,22 @@ defmodule AshOnetime.CompileFixture.MatrixCases do
     {[], idempotency(external_effect: CompileFixture.MissingExternal)}
   end
 
+  defp definition(:external_lock_without_effect) do
+    {[], idempotency(external_lock_timeout_ms: 2_000)}
+  end
+
+  defp definition(:external_lock_out_of_range) do
+    {[], idempotency(external_effect: CompileFixture.External, external_lock_timeout_ms: 30_001)}
+  end
+
+  defp definition(:external_lock_zero) do
+    {[], idempotency(external_effect: CompileFixture.External, external_lock_timeout_ms: 0)}
+  end
+
+  defp definition(:nonce_external_lock) do
+    {[], nonce(external_lock_timeout_ms: 2_000)}
+  end
+
   defp definition(:response_duplicate_fields) do
     opts = Keyword.put(response_opts(), :fields, [:account_id, :account_id])
     {[attributes: :response_fields], idempotency(response: {CompileFixture.Codec, opts})}

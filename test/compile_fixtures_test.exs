@@ -275,6 +275,16 @@ defmodule AshOnetime.CompileFixturesTest do
       {:remove, :external_effect, "nonce cannot configure external effects"},
     nonce_external_generic:
       {:redeem, :external_effect, "nonce cannot configure external effects"},
+    external_lock_without_effect:
+      {:charge, :external_lock_timeout_ms, "external_lock_timeout_ms requires external_effect"},
+    external_lock_out_of_range:
+      {:charge, :external_lock_timeout_ms,
+       "external_lock_timeout_ms must be an integer of 1..25000 milliseconds"},
+    external_lock_zero:
+      {:charge, :external_lock_timeout_ms,
+       "external_lock_timeout_ms must be an integer of 1..25000 milliseconds"},
+    nonce_external_lock:
+      {:redeem, :external_lock_timeout_ms, "nonce cannot configure external-effect options"},
     limit_max_key_bytes:
       {:charge, :limits, "limit overrides must be positive and cannot exceed package ceilings"},
     limit_max_token_bytes:

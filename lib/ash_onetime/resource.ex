@@ -39,6 +39,7 @@ defmodule AshOnetime.Resource.Protection do
     :retention,
     :window,
     :external_effect,
+    :external_lock_timeout_ms,
     on_definite_store_failure: :fail_closed,
     commit: :with_action,
     limits: [],
@@ -55,6 +56,7 @@ defmodule AshOnetime.Resource.Protection do
           retention: non_neg_integer() | nil,
           window: Keyword.t() | nil,
           external_effect: module() | nil,
+          external_lock_timeout_ms: pos_integer() | nil,
           on_definite_store_failure: :fail_closed | :execute_untracked,
           commit: :with_action | :independent,
           limits: Keyword.t(),
@@ -172,6 +174,15 @@ defmodule AshOnetime.Resource do
         doc:
           "Optional module exporting the external-effect contract for idempotent actions " <>
             "that must observe or reverse a side effect. Not available for nonce strategies."
+      ],
+      external_lock_timeout_ms: [
+        type: :integer,
+        doc:
+          "How long a same-key concurrent retry waits on the pre-peer claim lock before " <>
+            "failing with `:request_in_progress` (milliseconds; default 2000, ceiling 25000). " <>
+            "The lock serializes same-key external retries through the peer call so two " <>
+            "executes can never overlap under one operation key (ADR-0010). Requires " <>
+            "`external_effect`."
       ],
       on_definite_store_failure: [
         type: {:in, [:fail_closed, :execute_untracked]},

@@ -5,6 +5,11 @@ defmodule AshOnetime.ExternalRecovery do
   alias AshOnetime.Store
   alias AshOnetime.Store.Result
 
+  # The pre-peer claim lock's default wait (ADR-0010): comfortably longer than a local
+  # finalize, far shorter than a peer call, and well under the committed-claim worker's
+  # 30s ceiling. Overridable per protection via `external_lock_timeout_ms`.
+  @default_claim_lock_timeout 2_000
+
   @spec reserve(Ash.Changeset.t() | Ash.ActionInput.t(), struct(), map()) ::
           {:execute, Ash.Changeset.t() | Ash.ActionInput.t(), Admission.State.t()}
           | {:replay, term(), Admission.State.t()}
@@ -14,16 +19,30 @@ defmodule AshOnetime.ExternalRecovery do
     started = System.monotonic_time()
 
     with {:ok, state} <- Admission.prepare(subject, protection, context),
-         %Result{} = committed <- Store.claim_committed(state.target, state.request),
-         decision <-
-           Admission.resolve(
-             committed,
-             state,
-             protection,
-             started,
-             :committed_external_claim
-           ) do
-      continue(decision, subject, protection, context, started)
+         %Result{} = committed <-
+           Store.claim_committed(state.target, state.request, claim_lock_options(protection)) do
+      case committed do
+        # The same-key retry's worker blocked on the original's pre-peer claim lock past the
+        # configured wait (ADR-0010): the external path now reports the local path's
+        # concurrent-retry semantic instead of racing into a second peer execute.
+        %Result{status: :failure, reason: :lock_timeout} ->
+          emit_claim_lock_conflict(state)
+
+          {:error,
+           Error.new(:request_in_progress, "a request for this key is already processing")}
+
+        %Result{} ->
+          decision =
+            Admission.resolve(
+              committed,
+              state,
+              protection,
+              started,
+              :committed_external_claim
+            )
+
+          continue(decision, subject, protection, context, started)
+      end
     else
       {:error, %Error{} = error} -> {:error, error}
     end
@@ -40,7 +59,13 @@ defmodule AshOnetime.ExternalRecovery do
     operation_key = state.claim.id
 
     with :ok <- validate_operation_key(operation_key) do
-      execute_then_settle(state, subject, protection, context, operation_key, started)
+      case lock_for_peer(state, protection, started) do
+        {:ok, locked} ->
+          execute_then_settle(locked, subject, protection, context, operation_key, started)
+
+        other ->
+          other
+      end
     end
   end
 
@@ -48,7 +73,13 @@ defmodule AshOnetime.ExternalRecovery do
     operation_key = state.claim.id
 
     with :ok <- validate_operation_key(operation_key) do
-      recover_processing(state, subject, protection, context, operation_key, started)
+      case lock_for_peer(state, protection, started) do
+        {:ok, locked} ->
+          recover_processing(locked, subject, protection, context, operation_key, started)
+
+        other ->
+          other
+      end
     end
   end
 
@@ -60,6 +91,48 @@ defmodule AshOnetime.ExternalRecovery do
     do: {:error, error}
 
   defp continue(_decision, _subject, _protection, _context, _started), do: unavailable()
+
+  # ADR-0010 pre-peer claim lock: before ANY peer call, take the claim row FOR UPDATE in the
+  # caller's open transaction with a bounded wait, then re-resolve. A same-key retry now
+  # either waits out the original and replays its completed result, or fails with
+  # :request_in_progress — it can no longer execute concurrently under one operation key.
+  # A claim that completed while this caller was blocked resolves to a replay (the full-row
+  # lock result routes through the same finalize-mode resolver); a reaped-and-reinserted row
+  # is missing under the id bind and fails closed.
+  defp lock_for_peer(state, protection, started) do
+    case Store.lock_for_effect(state.target, state.claim, claim_lock_options(protection)) do
+      %Result{status: :failure, reason: :lock_timeout} ->
+        emit_claim_lock_conflict(state)
+        {:error, Error.new(:request_in_progress, "a request for this key is already processing")}
+
+      %Result{} = result ->
+        case Admission.resolve(result, state, protection, started, :locked_external_claim) do
+          {:execute, locked_state} ->
+            {:ok, locked_state}
+
+          {:replay, replayed, replay_state} ->
+            emit(replay_state, started, :replayed)
+            {:replay, replayed, replay_state}
+
+          {:error, %Error{} = error} ->
+            {:error, error}
+
+          _other ->
+            unavailable()
+        end
+    end
+  end
+
+  defp claim_lock_options(protection) do
+    [lock_timeout_ms: protection.external_lock_timeout_ms || @default_claim_lock_timeout]
+  end
+
+  # Mirrors the local path's concurrent-retry observability (Admission's
+  # emit_conflict(state, :processing) before :request_in_progress).
+  defp emit_claim_lock_conflict(state) do
+    _ = Telemetry.conflict(state.strategy, state.resource, state.action, :processing)
+    :ok
+  end
 
   defp recover_processing(state, subject, protection, context, operation_key, started) do
     # mutation sentinel: external-recover

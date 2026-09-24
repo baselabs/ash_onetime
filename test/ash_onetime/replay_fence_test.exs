@@ -433,12 +433,12 @@ defmodule AshOnetime.ReplayFenceTest do
   defp fail_claim_committed(:claim_committed, _args),
     do: Result.failure(:dispatched_unknown, :unknown, :unknown)
 
-  defp fail_claim_committed(_op, [target, request]),
+  defp fail_claim_committed(_op, [target, request | _]),
     do: AshOnetime.Store.claim(target, request)
 
   defp checkout_unavailable(:claim_committed, _args),
     do: Result.failure(:checkout_unavailable, :not_started, :not_applicable)
 
-  defp checkout_unavailable(_op, [target, request]),
+  defp checkout_unavailable(_op, [target, request | _]),
     do: AshOnetime.Store.claim(target, request)
 end
