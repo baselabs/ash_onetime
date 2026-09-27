@@ -61,8 +61,8 @@ Nothing to do. No requirement, dependency floor, or public API changed: the rele
 enforces the project's own build toolchain in-repo (an OTP allowlist in
 `config/config.exs`, which never ships in the package), adds a compose test database
 with a per-machine port, makes dependency currency mechanical, and makes the
-repository's developer surface tri-platform — macOS/Linux/Windows CI lanes with no
-POSIX-only tooling in any gate.
+repository's developer surface tri-platform: macOS, Linux, and Windows, with no
+POSIX-only tooling in any gate, proven on a developer machine. CI runs on Linux only.
 
 ## v1.3.0 — security dependency floors (2026-09-16)
 

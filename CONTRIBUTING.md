@@ -25,8 +25,8 @@ mix test
 ```
 
 The repository is cross-platform by requirement: the same clone and the same gate
-battery must work on macOS, Linux, and Windows (CI's `windows-build` lane proves
-the Windows pickup surface on every push). On Windows, set the variable in
+battery must work on macOS, Linux, and Windows. This is a developer-setup property,
+proven on a developer machine; CI runs on Linux only. On Windows, set the variable in
 PowerShell instead of `export`:
 
 ```powershell

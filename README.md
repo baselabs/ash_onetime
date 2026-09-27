@@ -147,7 +147,8 @@ opaque `Verified` type, so verifier and minter callbacks never build the struct 
 It follows v1.3.1, a
 repository-only hardening release (in-repo toolchain enforcement, a compose test database
 with a per-machine port, mechanical dependency currency, and a tri-platform developer
-surface with CI proving the Windows pickup and test battery continuously) with no
+surface (macOS, Linux, and Windows) with no POSIX-only tooling in any gate; CI runs
+on Linux only, and cross-platform capability is proven on a developer machine) with no
 consumer-facing change. It follows v1.3.0, which
 tightened the package's runtime application closure — no optional integration (Plug, Oban,
 Igniter) or property-test dependency is claimed as a runtime application of the extension

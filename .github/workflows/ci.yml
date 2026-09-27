@@ -2,7 +2,13 @@ name: CI
 
 on:
   push:
+    branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**', 'LICENSE*', '.github/ISSUE_TEMPLATE/**']
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 # The test harness (test/test_helper.exs) fails closed unless DATABASE_URL
 # targets the dedicated loopback ash_onetime_test database under the postgres
