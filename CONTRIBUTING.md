@@ -6,7 +6,9 @@ behavior starts with a test that fails for the intended reason.
 The test suite requires a dedicated PostgreSQL 18 database on `127.0.0.1`. The suite
 fails closed unless `DATABASE_URL` targets exactly that dedicated database under the
 `postgres` user on a non-default port; the port is per-machine, so the dedicated instance
-never collides with another local listener.
+never collides with another local listener. A shared local PostgreSQL 18 server may host
+the same `ash_onetime_test` database instead, under an `ash_onetime` role (with CREATEDB)
+that can reach only its own `ash_onetime_*` databases; the guard accepts that role too.
 
 `docker compose up -d` provisions that database from the committed compose file
 (postgres:18 — the same image CI uses), interpolating the `PG*` variables from `.env`.
