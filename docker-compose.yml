@@ -9,8 +9,9 @@
 # loopback ash_onetime_test database on a non-default port.
 #
 # `docker compose` interpolates the PG* variables from .env (copy
-# .env.example). PGPORT exists so each machine picks a collision-free port —
-# keep it in sync with the port inside DATABASE_URL. The defaults match CI's
+# .env.example). STANDALONE_PGPORT (the published host port) and PGPORT exist so
+# each machine picks a collision-free port — keep both in sync with the port
+# inside DATABASE_URL. The defaults match CI's
 # Linux service-container mapping (host 18841 -> container 5432).
 services:
   postgres:
@@ -19,9 +20,11 @@ services:
       POSTGRES_USER: ${PGUSER:-postgres}
       POSTGRES_PASSWORD: ${PGPASSWORD:-postgres}
       POSTGRES_DB: ${PGDATABASE:-ash_onetime_test}
-    # Host ${PGPORT} -> container 5432: the harness's DATABASE_URL port.
+    # Host ${STANDALONE_PGPORT} (default 18841) -> container 5432; keep DATABASE_URL's
+    # port and PGPORT equal to it. A .env pointed at a shared PostgreSQL server sets
+    # PGPORT only, so this container never publishes that server's port.
     ports:
-      - "${PGPORT:-18841}:5432"
+      - "${STANDALONE_PGPORT:-18841}:5432"
     healthcheck:
       test:
         [

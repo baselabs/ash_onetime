@@ -205,7 +205,7 @@ Start the dedicated test database and run the suite as documented in
 [CONTRIBUTING.md](CONTRIBUTING.md), then:
 
 ```sh
-cp .env.example .env   # pick a free PGPORT; keep DATABASE_URL's port in sync
+cp .env.example .env   # set STANDALONE_PGPORT, PGPORT and DATABASE_URL's port to one free port
 docker compose up -d
 set -a && . ./.env && set +a   # sh; PowerShell: $env:DATABASE_URL = "..."
 mix deps.get

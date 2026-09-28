@@ -12,13 +12,14 @@ that can reach only its own `ash_onetime_*` databases; the guard accepts that ro
 
 `docker compose up -d` provisions that database from the committed compose file
 (postgres:18 — the same image CI uses), interpolating the `PG*` variables from `.env`.
-Copy `.env.example` to `.env`, pick a random non-standard `PGPORT`, and keep the port
-inside `DATABASE_URL` in sync with it; `.env` also carries `HEX_API_KEY` when publishing.
+Copy `.env.example` to `.env`, set `STANDALONE_PGPORT` (the port `docker compose`
+publishes) and `PGPORT` to one random non-standard port, and keep the port inside
+`DATABASE_URL` in sync with them; `.env` also carries `HEX_API_KEY` when publishing.
 If a listener on your chosen port already exists, reuse it; do not start a second
 database on another port.
 
 ```sh
-cp .env.example .env   # then set PGPORT (and DATABASE_URL's port) to a free port
+cp .env.example .env   # then set STANDALONE_PGPORT, PGPORT and DATABASE_URL's port to one free port
 docker compose up -d
 
 export DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test  # as in your .env
