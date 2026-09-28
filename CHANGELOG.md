@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- Development: the repository no longer ships `docker-compose.yml`. Point `.env`'s
+  `DATABASE_URL` at a PostgreSQL 18 you run (see CONTRIBUTING.md); CI keeps its own
+  service container. No library code changed.
+
 ## v1.4.0 — 2026-09-24
 
 **Breaking behavior change (the reason this is a minor, not a patch):** a concurrent

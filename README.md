@@ -201,12 +201,11 @@ runtime set. The pinned development runtime is Elixir 1.20.4 / Erlang/OTP 29.0.3
 
 ## Development
 
-Start the dedicated test database and run the suite as documented in
-[CONTRIBUTING.md](CONTRIBUTING.md), then:
+Point `.env` at a PostgreSQL 18 you run (the repository ships no database container)
+as documented in [CONTRIBUTING.md](CONTRIBUTING.md), then:
 
 ```sh
-cp .env.example .env   # set STANDALONE_PGPORT, PGPORT and DATABASE_URL's port to one free port
-docker compose up -d
+cp .env.example .env   # set PGPORT and DATABASE_URL's port to your server's port
 set -a && . ./.env && set +a   # sh; PowerShell: $env:DATABASE_URL = "..."
 mix deps.get
 mix test

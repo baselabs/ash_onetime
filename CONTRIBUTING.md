@@ -10,17 +10,14 @@ never collides with another local listener. A shared local PostgreSQL 18 server 
 the same `ash_onetime_test` database instead, under an `ash_onetime` role (with CREATEDB)
 that can reach only its own `ash_onetime_*` databases; the guard accepts that role too.
 
-`docker compose up -d` provisions that database from the committed compose file
-(postgres:18 — the same image CI uses), interpolating the `PG*` variables from `.env`.
-Copy `.env.example` to `.env`, set `STANDALONE_PGPORT` (the port `docker compose`
-publishes) and `PGPORT` to one random non-standard port, and keep the port inside
-`DATABASE_URL` in sync with them; `.env` also carries `HEX_API_KEY` when publishing.
-If a listener on your chosen port already exists, reuse it; do not start a second
-database on another port.
+The repository ships no database container. Point `.env` at a PostgreSQL 18 you
+already run (a native install or a shared local server): copy `.env.example` to `.env`,
+set `PGPORT` to that server's non-standard port and keep the port inside `DATABASE_URL`
+in sync; `.env` also carries `HEX_API_KEY` when publishing. If the server is
+unreachable, fix or report it; do not start a second database on another port.
 
 ```sh
-cp .env.example .env   # then set STANDALONE_PGPORT, PGPORT and DATABASE_URL's port to one free port
-docker compose up -d
+cp .env.example .env   # then set PGPORT and DATABASE_URL's port to your server's port
 
 export DATABASE_URL=ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test  # as in your .env
 mix deps.get
