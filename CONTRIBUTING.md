@@ -24,16 +24,13 @@ mix deps.get
 mix test
 ```
 
-The repository is cross-platform by requirement: the same clone and the same gate
-battery must work on macOS, Linux, and Windows. This is a developer-setup property,
-proven on a developer machine; CI runs on Linux only. On Windows, set the variable in
-PowerShell instead of `export`:
+The developer platforms are macOS and Linux: the same clone and the same gate
+battery must work on both. Windows developers use WSL2 (clone inside the WSL
+filesystem, not under `/mnt/c`), which is the Linux path; no native-Windows developer
+path is maintained. This is a developer-setup property, proven on a developer machine;
+CI runs on Linux only.
 
-```powershell
-$env:DATABASE_URL = "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
-```
-
-(match the port to your `.env` `PGPORT` in every shell form)
+(match the port to your `.env` `PGPORT`)
 
 Before reporting a change complete, run:
 

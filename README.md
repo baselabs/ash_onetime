@@ -146,10 +146,10 @@ additive release shipping `AshOnetime.Verified.new/1`, the sanctioned constructo
 opaque `Verified` type, so verifier and minter callbacks never build the struct literal.
 It follows v1.3.1, a
 repository-only hardening release (in-repo toolchain enforcement, a compose test database
-with a per-machine port, mechanical dependency currency, and a tri-platform developer
-surface (macOS, Linux, and Windows) with no POSIX-only tooling in any gate; CI runs
-on Linux only, and cross-platform capability is proven on a developer machine) with no
-consumer-facing change. It follows v1.3.0, which
+with a per-machine port, mechanical dependency currency, and a developer surface for macOS
+and Linux (Windows developers use WSL2, the Linux path) with no POSIX-only tooling in any
+gate; CI runs on Linux only, and developer-platform capability is proven on a developer
+machine) with no consumer-facing change. It follows v1.3.0, which
 tightened the package's runtime application closure — no optional integration (Plug, Oban,
 Igniter) or property-test dependency is claimed as a runtime application of the extension
 anymore — on top of v1.2.2's `AshOnetime.Transaction.claim_id/1` accessor (the one sanctioned
@@ -206,7 +206,7 @@ as documented in [CONTRIBUTING.md](CONTRIBUTING.md), then:
 
 ```sh
 cp .env.example .env   # set PGPORT and DATABASE_URL's port to your server's port
-set -a && . ./.env && set +a   # sh; PowerShell: $env:DATABASE_URL = "..."
+set -a && . ./.env && set +a
 mix deps.get
 mix test
 ```
