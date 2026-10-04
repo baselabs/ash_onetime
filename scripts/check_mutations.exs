@@ -1,5 +1,3 @@
-Code.require_file("#{__DIR__}/portable.exs")
-
 defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
@@ -1663,14 +1661,14 @@ defmodule AshOnetime.MutationCheck do
     env = mutation_environment()
 
     {compile_output, compile_status} =
-      AshOnetime.Portable.cmd("mix", ["compile", "--force"], env: env, stderr_to_stdout: true)
+      System.cmd("mix", ["compile", "--force"], env: env, stderr_to_stdout: true)
 
     if compile_status != 0 do
       raise "mutation #{name} failed to compile:\n#{compile_output}"
     end
 
     {output, status} =
-      AshOnetime.Portable.cmd(
+      System.cmd(
         "mix",
         ["run", "--no-compile", "scripts/probe_compile_fixture.exs", fixture, expected],
         env: env,
@@ -1691,7 +1689,7 @@ defmodule AshOnetime.MutationCheck do
   defp run_test(mutation) do
     env = mutation_environment()
 
-    AshOnetime.Portable.cmd(
+    System.cmd(
       "mix",
       ["test", "--force", mutation.test, "--only", mutation.tag, "--seed", "0"],
       env: env,

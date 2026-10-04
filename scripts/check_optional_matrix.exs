@@ -1,5 +1,3 @@
-Code.require_file("#{__DIR__}/portable.exs")
-
 defmodule AshOnetime.OptionalMatrix do
   @moduledoc false
 
@@ -77,7 +75,7 @@ defmodule AshOnetime.OptionalMatrix do
     ]
 
     {output, status} =
-      AshOnetime.Portable.cmd("mix", ["deps.get"],
+      System.cmd("mix", ["deps.get"],
         cd: project,
         env: environment,
         stderr_to_stdout: true
@@ -163,7 +161,7 @@ defmodule AshOnetime.OptionalMatrix do
 
   defp command!(name, project, environment, arguments) do
     {output, status} =
-      AshOnetime.Portable.cmd("mix", arguments,
+      System.cmd("mix", arguments,
         cd: project,
         env: environment,
         stderr_to_stdout: true
