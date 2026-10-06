@@ -7,6 +7,13 @@ All notable changes to this project are documented in this file.
 - Development: the repository no longer ships `docker-compose.yml`. Point `.env`'s
   `DATABASE_URL` at a PostgreSQL 18 you run (see CONTRIBUTING.md); CI keeps its own
   service container. No library code changed.
+- **Lock:** `ash` 3.33.11 → 3.34.4, `ash_postgres` 2.13.1 → 2.14.2,
+  `ash_sql` 0.7.6 → 0.8.1, `spark` 2.7.3 → 2.7.6, `mint` 1.10.1 → 1.11.0, with
+  `ex_ast` 0.16.0, `finch` 0.24.0, and `req` 0.7.5 riding the resolution, for the
+  dependency-currency gate (resolver-updatable drift). The published requirements
+  are unchanged; every new version sits inside them. Mint 1.11.0 carries the fixes for
+  EEF-CVE-2026-91043, EEF-CVE-2026-92103, and EEF-CVE-2026-94194, which `mix hex.audit`
+  reports against 1.10.1.
 
 ## v1.4.0 — 2026-09-24
 
@@ -37,7 +44,7 @@ beneficiaries.
   kept, reds on generation adoption) and `pre-peer-lock-removed` (the lock call removed,
   reds on the unlocked race — B's red-proof). The `lock_timeout` GUC is scoped to the
   lock: captured before, restored after — it never caps the adapter's own writes.
-  `AshOnetime.Store` grows `lock_for_effect/3` and an options-taking `claim_committed/3`
+  The internal AshOnetime.Store grows `lock_for_effect/3` and an options-taking `claim_committed/3`
   (the 2-arity facade is unchanged).
 
 ### Decisions (ADRs 0009-0011, each adversarially reviewed and judged)
