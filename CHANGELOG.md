@@ -4,16 +4,52 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
-- Development: the repository no longer ships `docker-compose.yml`. Point `.env`'s
-  `DATABASE_URL` at a PostgreSQL 18 you run (see CONTRIBUTING.md); CI keeps its own
-  service container. No library code changed.
+## v1.5.0 — 2026-10-06
+
+Security dependency release. The package DSL, public API, database schema, persisted
+response format, and token wire format are unchanged; no migration is required.
+
+**Breaking dependency change:** consumers pinned below Ash 3.34.3 or Mint 1.10.2
+must update those dependencies. See [Upgrading](documentation/upgrading.md) for the steps.
+
+### Security
+
+- **Ash floor raised to `>= 3.34.3 and < 4.0.0`.**
+  [EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html) affects Ash
+  `>= 3.5.1 and < 3.34.3` through unsafe atom-attribute filters that can exhaust the BEAM
+  atom table. Ash 3.33.11 includes the
+  [EEF-CVE-2026-93477](https://cna.erlef.org/osv/EEF-CVE-2026-93477.html) fix but remains
+  affected by EEF-CVE-2026-94201, so 3.33.11 cannot be the package floor.
+- **Optional Mint floor raised to `~> 1.10 and >= 1.10.2`.** Mint 1.10.2 backports the fixes
+  for [EEF-CVE-2026-91043](https://cna.erlef.org/osv/EEF-CVE-2026-91043.html),
+  [EEF-CVE-2026-92103](https://cna.erlef.org/osv/EEF-CVE-2026-92103.html), and
+  [EEF-CVE-2026-94194](https://cna.erlef.org/osv/EEF-CVE-2026-94194.html). Mint remains
+  optional and runtime-excluded; the requirement binds only dependency graphs that already
+  carry the installer HTTP closure.
+- **Supported-line backports remain release obligations.** The advisory entered intake while
+  1.4.x and 1.3.x were the supported latest and previous lines. The floor-only backport
+  targets are 1.4.1 and 1.3.3; this entry does not claim those candidates are published.
+
+### Changed
+
 - **Lock:** `ash` 3.33.11 → 3.34.4, `ash_postgres` 2.13.1 → 2.14.2,
   `ash_sql` 0.7.6 → 0.8.1, `spark` 2.7.3 → 2.7.6, `mint` 1.10.1 → 1.11.0, with
   `ex_ast` 0.16.0, `finch` 0.24.0, and `req` 0.7.5 riding the resolution, for the
-  dependency-currency gate (resolver-updatable drift). The published requirements
-  are unchanged; every new version sits inside them. Mint 1.11.0 carries the fixes for
-  EEF-CVE-2026-91043, EEF-CVE-2026-92103, and EEF-CVE-2026-94194, which `mix hex.audit`
-  reports against 1.10.1.
+  dependency-currency gate. The development lock exercises current releases while the
+  published ranges retain the patched Ash 3.x and Mint 1.x compatibility lines.
+- **Actual Livebook source execution is now a release gate.**
+  `elixir scripts/check_livebooks.exs --local` evaluates every Elixir cell and persisted
+  output in all three `.livemd` files against PostgreSQL before packaging; the
+  `--published` mode repeats the same notebooks from the Hex dependency after publication.
+  The existing `LivebookWalkthroughTest` remains a supplemental mirror test for selected
+  idempotency and nonce shapes. The v0.1.1 entry below records the historical claim that this
+  mirror regression-pinned the notebooks; it did not read or execute notebook source, and
+  this release corrects that verification boundary.
+- **Developer database setup follows the current repository policy.** The repository no
+  longer ships `docker-compose.yml`; contributors point `.env` at PostgreSQL 18 and source
+  it before the gate battery. macOS and Linux are the supported developer platforms;
+  Windows developers use WSL2, and CI runs on Linux only. This current guidance supersedes
+  the v1.3.1 historical repository description without rewriting that release record.
 
 ## v1.4.0 — 2026-09-24
 
@@ -104,7 +140,7 @@ beneficiaries.
   together. OBSERVED: `mix hex.audit` clean after the raise.
 
 - **Lock:** `ash` 3.33.4 → 3.33.8 and `ash_sql` 0.7.5 → 0.7.6, riding the
-  dependency-currency gate (resolver-updatable drift). The published floors
+  dependency-currency gate (resolver-updatable drift). The published non-Mint floors
   are unchanged — `>= 3.33.4 and < 4.0.0` for Ash remains the CVE-derived
   minimum; `mix hex.audit` reports no advisories against the new lock.
 
@@ -123,7 +159,7 @@ beneficiaries.
   well-formed DateTimes with `expires_at` at or after `issued_at`; unknown,
   duplicate, and missing keys are rejected, and the constructor never raises.
   Purely additive: no existing export changed (the export census grew
-  `new: 1`), the Elixir requirement and dependency floors are unchanged. The
+  `new: 1`), the Elixir requirement and non-Mint dependency floors are unchanged. The
   nonce livebook, its walkthrough mirror, and the transaction-owned admission
   guide now demonstrate the constructor; CI gained a test-env dialyzer leg so
   the consumer-shaped opacity fixture stays analyzed.

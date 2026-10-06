@@ -1,6 +1,6 @@
 defmodule AshOnetime.Signer do
   @moduledoc """
-  Behaviour implemented by bounded token signers.
+  Behavior contract implemented by bounded token signers.
   """
 
   alias AshOnetime.Error

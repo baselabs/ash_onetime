@@ -1,6 +1,6 @@
 defmodule AshOnetime.Verifier do
   @moduledoc """
-  Behaviour for trusted local verification callbacks.
+  Behavior contract for trusted local verification callbacks.
 
   The `context` map passed to `verify/2` is the BOUNDED callback context: `%{resource:,
   action:}` — exactly the trusted local facts the admission path derives itself. Caller-

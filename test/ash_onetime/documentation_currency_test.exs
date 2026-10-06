@@ -3,7 +3,7 @@ defmodule AshOnetime.DocumentationCurrencyTest do
 
   @version Mix.Project.config() |> Keyword.fetch!(:version)
   @parsed_version Version.parse!(@version)
-  @minor_requirement "~> #{@parsed_version.major}.#{@parsed_version.minor}"
+  @minor_requirement "~> #{@parsed_version.major}.#{@parsed_version.minor}.0"
 
   @installation_surfaces [
     "documentation/getting-started.md",
@@ -25,8 +25,8 @@ defmodule AshOnetime.DocumentationCurrencyTest do
   end
 
   test "README, upgrading guide, and changelog name the current package version" do
-    assert File.read!("README.md") =~ "current package release is [v#{@version}"
-    assert File.read!("documentation/upgrading.md") =~ "current package release is v#{@version}"
+    assert File.read!("README.md") =~ "guide targets [v#{@version}"
+    assert File.read!("documentation/upgrading.md") =~ "guide targets v#{@version}"
     assert File.read!("CHANGELOG.md") =~ "## v#{@version} —"
   end
 end

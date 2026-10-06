@@ -1,8 +1,10 @@
 # Getting started
 
-`ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.4), Erlang/OTP 28 or 29, Ash `>= 3.33.4`,
-AshPostgres `~> 2.13`, and PostgreSQL 11+ (CI exercises 18). The package is published on
-[Hex](https://hex.pm/packages/ash_onetime) (`{:ash_onetime, "~> 1.4"}`).
+`ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.4; the requirement admits later 1.x
+releases and excludes 2.0 or newer), Erlang/OTP 28 or 29, Ash `>= 3.34.3 and < 4.0.0`,
+AshPostgres `~> 2.13`, and PostgreSQL 11+ (CI exercises 18). This guide targets
+v1.5.0 (`{:ash_onetime, "~> 1.5.0"}`); see its
+[Hex package page](https://hex.pm/packages/ash_onetime/1.5.0).
 
 Ash 3.33 additionally requires every application to declare how it counts string
 length; without this your resources fail to compile:
@@ -137,7 +139,7 @@ end
 
 ## Developing on `ash_onetime` itself
 
-Contributors and library maintainers need the test database harness, which is documented in
-[CONTRIBUTING.md](../CONTRIBUTING.md). The suite fails closed unless `DATABASE_URL` points at
-the dedicated loopback database on a non-default port (repo default `18841`; pick a
-collision-free port via `.env.example`); the container is reusable across sessions.
+Contributors and library maintainers need the test database harness documented in
+[CONTRIBUTING.md](../CONTRIBUTING.md). The repository ships no database container. The suite
+fails closed unless `DATABASE_URL` points at the dedicated PostgreSQL 18 database configured
+in the contributor's `.env` on a non-default loopback port.

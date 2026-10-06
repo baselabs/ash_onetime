@@ -28,7 +28,7 @@ need nothing:
 | Inline `change fn ...` / `prepare fn ...` (Ash's function-backed change/preparation) | **rejected** — inline callbacks cannot declare replay safety; extract them to a module |
 
 A custom callback declares its replay safety by implementing the
-`AshOnetime.ReplaySafety` behaviour, which carries two callbacks:
+`AshOnetime.ReplaySafety` behavior contract, which carries two callbacks:
 
 ```elixir
 defmodule AshOnetime.ReplaySafety do

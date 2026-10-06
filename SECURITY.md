@@ -17,6 +17,13 @@ From 1.0.0 the security window covers the latest two minors. The window may wide
 (announced as a docs change) and never silently narrows — a narrowing is announced one
 minor ahead in the release notes.
 
+Support is fixed at advisory intake, not recalculated to discard work when a new minor ships.
+If the latest and previous lines are supported when an advisory arrives, both retain their
+patch obligations even when the latest-line fix is released as a new security-driven minor.
+For the October 6, 2026 dependency-floor intake, 1.4.x and 1.3.x were those two lines;
+therefore v1.5.0 does not discharge the required 1.4.1 and 1.3.3 floor-only backports. Those
+versions are release targets, not a claim that the artifacts are already published.
+
 ## Fix and disclosure policy
 
 - Security fixes ship as patch releases on the supported minors. A fix that takes the

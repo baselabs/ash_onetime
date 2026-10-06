@@ -9,12 +9,12 @@ status column records where it stands now.
 
 ## Security dependency maintenance
 
-The v1.3.0 dependency-security release (2026-09-16) follows
-[ADR 0004](adr/0004-security-driven-ash-floor.md):
-consumer floors are Ash 3.33.4, AshPostgres 2.13.0, AshSql 0.7.1, Igniter 0.8.4,
-and Mint 1.10.0. The doctor, package check, and Ash floor/latest CI cells follow
-these requirements. See [upgrading](../documentation/upgrading.md) for consumer
-steps.
+The v1.5.0 dependency-security release (2026-10-06) continues the policy in
+[ADR 0004](adr/0004-security-driven-ash-floor.md). Current consumer floors are Ash 3.34.3
+(with the range capped below 4.0.0),
+AshPostgres 2.13.0, AshSql 0.7.1, Igniter 0.8.4, and optional Mint 1.10.2. The doctor,
+package check, optional-integration matrix, and Ash floor/latest CI cells follow these
+requirements. See [upgrading](../documentation/upgrading.md) for consumer steps.
 
 ## Security / correctness (P0 — do first)
 
@@ -36,7 +36,7 @@ steps.
 
 | ID | Status | What | Acceptance | Depends | Why |
 |---|---|---|---|---|---|
-| H30 | **done** | **Ship an ETS cache reference adapter** — originally only `cache/none.ex` shipped; the cache-degradation path was well-engineered but unrealized without a reference adapter. slug:h30-ets-cache-adapter | `AshOnetime.Cache.Ets` (bounded, TTL-aware) as an optional reference adapter under the existing `AshOnetime.Cache` behaviour. — Resolved: `lib/ash_onetime/cache/ets.ex` ships — deadline-based expiry, a max-entries cap with oldest-by-deadline eviction, supervision documented, and explicitly not admission authority. | — | The cache feature's value is unreachable without a consumer-usable adapter. |
+| H30 | **done** | **Ship an ETS cache reference adapter** — originally only `cache/none.ex` shipped; the cache-degradation path was well-engineered but unrealized without a reference adapter. slug:h30-ets-cache-adapter | `AshOnetime.Cache.Ets` (bounded, TTL-aware) as an optional reference adapter under the existing `AshOnetime.Cache` behavior contract. — Resolved: `lib/ash_onetime/cache/ets.ex` ships — deadline-based expiry, a max-entries cap with oldest-by-deadline eviction, supervision documented, and explicitly not admission authority. | — | The cache feature's value is unreachable without a consumer-usable adapter. |
 | H31 | **done** | **Direct unit tests for `admission.ex`'s pure decision functions** — `admission_test.exs` already carried direct Postgres-free unit tests for several pure functions (the replay marker, state propagation, `stamp_replay/2`, `complete/2` short-circuits); the remaining gap was the acceptance's targets — `resolve/5` branches and `sanitize_request`/`sanitize_claim` stripping — still covered only transitively. slug:h31-admission-unit-tests | a focused direct-coverage suite for the pure decision functions, independent of a live Postgres. — Resolved (2026-08-22): `admission_test.exs` carries direct synthetic-result coverage of every `decide/5` arm (all five `execution_class/2` mappings, both transaction-mode invariant signs, locator/identity/claim-state rejects, `:complete` replay + fingerprint mismatch, `:processing` per mode, `:collision` match/malformed, the exact-shape `:execute_untracked` escape with a fail-closed test for every guard dimension, the `store_error` fallthrough) plus the two sanitizers, exposed as `@doc false` seams and pinned by the architecture census (`@pinned_internal_modules`); the same landing fixed the dev-build seam-absence tripwire's vacuity (the subprocess probe now `ensure_loaded`s the module before `function_exported?/3`). | — | A regression in `emit_uncertainty` or `sanitize_request` should surface directly, not via integration. |
 | H32 | **done** | **Direct tests for `key_source.ex` + `store/claim.ex`** — the key_source invariants (non-empty, ≤16 sources, no nesting, unique, valid tags) originally had no property tests. slug:h32-key-source-claim-tests | property tests for each `key_source` invariant boundary + structural tests for the `Claim`/`Claim.Request` structs. — Resolved: `key_source_test.exs` carries the iff-property over all five invariants plus a second property and boundary-exact rejection tests. | — | Input-validation rules on the security boundary are worth property-testing. |
 | H33 | **done** (acceptance revised by D4) | **Document the runtime security-surface API** — the DSL was documented, but `token.ex`, `store.ex`, `key_source.ex`, `fingerprint.ex`, `telemetry.ex` carried `@spec` without `@doc`. slug:h33-runtime-api-docs | `@doc` on every spec-bearing public function in those modules. — Revised by D4: `token.ex`, `key_source.ex`, `fingerprint.ex`, and `telemetry.ex` are fully documented; `store.ex` is ruled **internal-by-design** (`@doc false` = internal per D1, the architecture census is the drift guard) — operator docs may name Store functions as mechanisms, but every executable path they hand operators is public (mix task, SQL, worker schedule, doctor output). | — | An undocumented *public* security surface is open risk; internal-by-design is not that. |

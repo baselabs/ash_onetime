@@ -10,7 +10,7 @@ idempotency and recovery surfaces.
 
 1. PostgreSQL commits a claim in `processing` before any peer call.
 2. A fresh request calls `execute(operation_key, subject, context)`.
-3. A retry of a processing claim takes the pre-peer claim lock (above) and then calls
+3. A retry of a processing claim takes the pre-peer claim lock described below and then calls
    `recover/3`; a concurrent retry that cannot acquire the lock within the configured wait
    is refused with `:request_in_progress` before `recover/3` runs.
 4. `{:ok, result}` is finalized locally while the claim is locked.
@@ -184,14 +184,17 @@ defmodule MyApp.PaymentPeer do
     end
   end
 
-  # The peer MUST claim the key atomically on receipt (INSERT ... ON CONFLICT or the
-  # peer's equivalent single-statement upsert) BEFORE processing the effect, so a
-  # concurrent same-key execute is absorbed deterministically. A peer that cannot is
-  # not a valid external-effect peer.
+  # The peer must enforce idempotency by operation key. An atomic claim on receipt
+  # (INSERT ... ON CONFLICT or its equivalent) is the recommended implementation;
+  # it also absorbs callers outside this library's pre-peer lock.
   defp req_post(operation_key, subject) do
     Req.post(peer_url(operation_key),
       json: effect_request(subject),
+      connect_options: [timeout: @receive_timeout],
+      finch: [pool_timeout: @receive_timeout],
       receive_timeout: @receive_timeout,
+      request_timeout: @receive_timeout,
+      redirect: false,
       retry: false
     )
     |> map_response()
@@ -200,7 +203,11 @@ defmodule MyApp.PaymentPeer do
   defp req_get(operation_key, subject) do
     Req.get(peer_url(operation_key),
       params: effect_request(subject),
+      connect_options: [timeout: @receive_timeout],
+      finch: [pool_timeout: @receive_timeout],
       receive_timeout: @receive_timeout,
+      request_timeout: @receive_timeout,
+      redirect: false,
       retry: false
     )
     |> map_response()
@@ -216,6 +223,12 @@ defmodule MyApp.PaymentPeer do
   defp map_response(_other), do: :unknown
 end
 ```
+
+The timeout options cover connection establishment, pool checkout, socket receives, and
+the response as a whole; redirects and automatic retries are disabled. They are separate
+HTTP phase limits, not a claim that the entire callback lasts exactly ten seconds. Adapt
+them to your request deadline and peer contract. See [Req's connection options](https://hexdocs.pm/req/Req.html#new/2)
+and [Finch's request options](https://hexdocs.pm/finch/Finch.html#request/3).
 
 The `:unknown` arm of `map_response/1` deliberately swallows 5xx, timeouts, transport
 errors, and malformed bodies with one clause: every one of them is ambiguity, and ambiguity

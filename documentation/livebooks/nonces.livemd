@@ -7,9 +7,8 @@ livebook:{"persist_outputs":true}
 ```elixir
 Mix.install(
   [
-    {:ash_onetime, "~> 1.4"},
-    {:ash_postgres, "~> 2.13"},
-    {:kino, "~> 0.14", only: :dev}
+    {:ash_onetime, "~> 1.5.0"},
+    {:ash_postgres, "~> 2.13"}
   ],
   consolidate_protocols: false
 )
@@ -24,18 +23,16 @@ redemptions, anti-replay of a captured request).
 
 This notebook walks through the spend and the reuse rejection — against a real PostgreSQL.
 
-> Requires PostgreSQL 18 reachable at `DATABASE_URL`.
+> Requires Elixir 1.20+, Ash 3.34.3+, and PostgreSQL 18 reachable at
+> `DATABASE_URL`. Use a development database where you can create and remove
+> schemas. This notebook signs and verifies real Ed25519 proofs; its simple
+> proof format illustrates nonce admission and is not a DPoP implementation.
 
 ## Connect to PostgreSQL
 
 ```elixir
-# The default targets the repo's dedicated test database (see CONTRIBUTING.md);
-# set DATABASE_URL to your own host port if your local instance differs.
-database_url =
-  System.get_env(
-    "DATABASE_URL",
-    "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
-  )
+database_url = System.fetch_env!("DATABASE_URL")
+Logger.configure(level: :warning)
 
 :ok = Application.put_env(:ash, :disable_async?, true)
 # Ash >= 3.33 requires an explicit string-length counting mode; codepoints
@@ -61,19 +58,49 @@ end
 ```
 
 ```elixir
-# A verifier turns raw proof material into trusted AshOnetime.Verified facts.
-# In production this checks a real signature; here we trust the input for the demo.
+# Only the public key enters server-side verification configuration. The signing
+# key remains with the issuer in this notebook's binding.
+{public_key, private_key} = :crypto.generate_key(:eddsa, :ed25519)
+:ok = Application.put_env(:ash_onetime_demo, :proof_public_key, public_key)
+
+sign_proof = fn nonce ->
+  payload = Jason.encode!(%{nonce: nonce, issued_at: DateTime.to_unix(DateTime.utc_now())})
+  signature = :crypto.sign(:eddsa, :none, payload, [private_key, :ed25519])
+  Base.url_encode64(payload, padding: false) <> "." <> Base.url_encode64(signature, padding: false)
+end
+
 defmodule AshOnetimeDemo.ProofVerifier do
+  @behaviour AshOnetime.Verifier
+
+  @impl true
   def verify(proof, _context) when is_binary(proof) do
-    AshOnetime.Verified.new(
-      key: proof,
-      issued_at: DateTime.utc_now(),
-      verifier_id: "demo-verifier"
-    )
+    public_key = Application.fetch_env!(:ash_onetime_demo, :proof_public_key)
+
+    with [encoded_payload, encoded_signature] <- String.split(proof, "."),
+         {:ok, payload} <- Base.url_decode64(encoded_payload, padding: false),
+         {:ok, signature} <- Base.url_decode64(encoded_signature, padding: false),
+         true <- :crypto.verify(:eddsa, :none, payload, signature, [public_key, :ed25519]),
+         {:ok, %{"nonce" => nonce, "issued_at" => issued_at}} <- Jason.decode(payload),
+         true <- is_binary(nonce) and is_integer(issued_at),
+         {:ok, timestamp} <- DateTime.from_unix(issued_at) do
+      AshOnetime.Verified.new(key: nonce, issued_at: timestamp, verifier_id: "notebook-issuer")
+    else
+      _ -> {:error, :invalid_signature}
+    end
   end
 
+  @impl true
   def algorithm, do: :ed25519
+  @impl true
   def trust_model, do: :separated
+end
+
+defmodule AshOnetimeDemo.FailRun do
+  use Ash.Resource.Actions.Implementation
+
+  @impl true
+  def run(_input, _opts, _context),
+    do: {:error, RuntimeError.exception("the action body failed")}
 end
 
 # A protected generic action's `run` must be a module-based implementation.
@@ -141,10 +168,15 @@ end
 alias AshOnetimeDemo.Repo
 alias Ecto.Adapters.SQL
 
-unique = System.unique_integer([:positive])
+unique = Ecto.UUID.generate() |> String.replace("-", "")
 schema = "ash_onetime_demo_#{unique}"
 temp = Path.join(System.tmp_dir!(), "ash_onetime_demo_#{unique}")
 File.mkdir_p!(temp)
+
+{schema, temp}
+```
+
+```elixir
 
 source =
   Mix.Tasks.AshOnetime.Gen.Migrations.render(Repo,
@@ -180,17 +212,19 @@ SQL.query!(
 
 The first `:redeem` spends the proof and runs the action body.
 
-<!-- livebook:{"output":true} -->
-
 ```elixir
+proof = sign_proof.("proof-once")
+
 {:ok, value} =
   AshOnetimeDemo.Redeemable
-  |> Ash.ActionInput.for_action(:redeem, %{value: 7, proof: "proof-once"})
+  |> Ash.ActionInput.for_action(:redeem, %{value: 7, proof: proof})
   |> Ash.ActionInput.set_tenant(schema)
   |> Ash.run_action()
 
 value
 ```
+
+<!-- livebook:{"output":true} -->
 
 ```
 7
@@ -200,35 +234,65 @@ value
 
 Reusing the same `proof` is rejected as `:nonce_already_used`. The action body does not run.
 
-<!-- livebook:{"output":true} -->
-
 ```elixir
 {:error, error} =
   AshOnetimeDemo.Redeemable
-  |> Ash.ActionInput.for_action(:redeem, %{value: 7, proof: "proof-once"})
+  |> Ash.ActionInput.for_action(:redeem, %{value: 7, proof: proof})
   |> Ash.ActionInput.set_tenant(schema)
   |> Ash.run_action()
 
 AshOnetime.Error.code(error)
 ```
 
+<!-- livebook:{"output":true} -->
+
 ```
 :nonce_already_used
 ```
 
-## DPoP replay fencing (`commit: :independent`)
+## A changed proof is not trusted
+
+Changing a signed payload without issuing a new signature fails verification.
+It cannot supply trusted nonce or timestamp facts:
+
+```elixir
+[encoded_payload, encoded_signature] = String.split(proof, ".")
+{:ok, payload} = Base.url_decode64(encoded_payload, padding: false)
+changed_payload = String.replace(payload, "proof-once", "other-nonce")
+tampered = Base.url_encode64(changed_payload, padding: false) <> "." <> encoded_signature
+
+{:error, :invalid_signature} = AshOnetimeDemo.ProofVerifier.verify(tampered, %{})
+:tampered_proof_rejected
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:tampered_proof_rejected
+```
+
+## Keep the spend after body failure (`commit: :independent`)
 
 By default the nonce spend commits **inside** the action's transaction, so an action-body
 failure rolls the spend back — correct when a retry will bear a fresh proof. For
 [RFC 9449 (DPoP)](https://datatracker.ietf.org/doc/html/rfc9449#section-11.1) §11.1 replay
 protection, declare `commit: :independent` so the claim commits in its own transaction **before**
-the body runs. A body failure then leaves the proof spent for the acceptance window, and a retry
-with the same `jti` is rejected:
+the body runs. A DPoP verifier must separately validate the complete RFC proof; this
+cell demonstrates the transaction rule with the signed nonce format above. A body
+failure leaves that nonce spent for the acceptance window:
 
 ```elixir
+defmodule AshOnetimeDemo.FailureDomain do
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshOnetimeDemo.RedeemableFail
+  end
+end
+
 defmodule AshOnetimeDemo.RedeemableFail do
   use Ash.Resource,
-    domain: AshOnetimeDemo.Domain,
+    domain: AshOnetimeDemo.FailureDomain,
     data_layer: AshPostgres.DataLayer,
     extensions: [AshOnetime.Resource]
 
@@ -252,9 +316,7 @@ defmodule AshOnetimeDemo.RedeemableFail do
       transaction? true
       argument :value, :integer, allow_nil?: false
       argument :proof, :string, allow_nil?: false
-      run fn _input, _opts, _context ->
-        {:error, AshOnetime.Error.new(:downstream_failed, "the action body failed")}
-      end
+      run {AshOnetimeDemo.FailRun, []}
     end
   end
 
@@ -272,24 +334,27 @@ end
 
 The body fails, but the spend survived — a retry with the same proof is rejected:
 
-<!-- livebook:{"output":true} -->
-
 ```elixir
-AshOnetimeDemo.Repo.transaction(fn ->
+failing_proof = sign_proof.("independent-proof")
+
+{:error, failure} =
   AshOnetimeDemo.RedeemableFail
-  |> Ash.ActionInput.for_action(:redeem_fail, %{value: 1, proof: "dpop-proof-fence"})
+  |> Ash.ActionInput.for_action(:redeem_fail, %{value: 1, proof: failing_proof})
   |> Ash.ActionInput.set_tenant(schema)
   |> Ash.run_action()
-end)
+
+true = Exception.message(failure) =~ "the action body failed"
 
 {:error, retry} =
   AshOnetimeDemo.RedeemableFail
-  |> Ash.ActionInput.for_action(:redeem_fail, %{value: 1, proof: "dpop-proof-fence"})
+  |> Ash.ActionInput.for_action(:redeem_fail, %{value: 1, proof: failing_proof})
   |> Ash.ActionInput.set_tenant(schema)
   |> Ash.run_action()
 
 AshOnetime.Error.code(retry)
 ```
+
+<!-- livebook:{"output":true} -->
 
 ```
 :nonce_already_used

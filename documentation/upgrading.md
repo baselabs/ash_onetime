@@ -3,13 +3,49 @@
 Version-to-version migration notes. `ash_onetime` follows semantic versioning: from 1.0.0,
 breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
 land in a minor), and each breaking change lands here with the exact edit to make.
+Security-driven dependency floors follow the documented minor-release policy in
+[ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md);
+their required dependency edits appear here too.
 
-The current package release is v1.4.0 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
+This guide targets v1.5.0 ([Hex package](https://hex.pm/packages/ash_onetime/1.5.0)). Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 1.4"}
+{:ash_onetime, "~> 1.5.0"}
 ```
+
+## v1.5.0 — Ash and Mint security floors (2026-10-06)
+
+Raise any direct Ash pin to `>= 3.34.3 and < 4.0.0`. If your dependency graph includes Mint,
+raise its pin to `~> 1.10 and >= 1.10.2`, then resolve the graph again:
+
+```sh
+mix deps.unlock --all
+mix deps.get
+mix hex.audit
+mix deps.audit
+```
+
+The Ash floor closes
+[EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html), which affects Ash
+`>= 3.5.1 and < 3.34.3`. Ash 3.33.11 includes the
+[EEF-CVE-2026-93477](https://cna.erlef.org/osv/EEF-CVE-2026-93477.html) fix but is still in
+EEF-CVE-2026-94201's affected range, so it cannot be the package floor. The optional Mint
+floor closes the 1.10.x ranges covered by
+[EEF-CVE-2026-91043](https://cna.erlef.org/osv/EEF-CVE-2026-91043.html),
+[EEF-CVE-2026-92103](https://cna.erlef.org/osv/EEF-CVE-2026-92103.html), and
+[EEF-CVE-2026-94194](https://cna.erlef.org/osv/EEF-CVE-2026-94194.html); Mint 1.10.2 contains
+the backported fixes for all three. The committed development lock exercises Ash 3.34.4 and
+Mint 1.11.0, while the published ranges preserve compatibility with patched Mint 1.10.x
+consumers and allow newer Mint 1.x releases.
+
+All other dependency floors are unchanged. This release does not change the ash_onetime DSL,
+public API, database schema, persisted response format, or token wire format, and it requires
+no migration.
+
+**Release-candidate note:** the required supported-line backports target
+`{:ash_onetime, "~> 1.4.1"}` and `{:ash_onetime, "~> 1.3.3"}`. This note does not claim
+either artifact is published; replace it with verified Hex links during release closeout.
 
 ## v1.4.0 — the pre-peer claim lock and the corrected external-effect contract (2026-09-24)
 
@@ -48,12 +84,17 @@ ambiguous execute is followed by recover in the same transaction), a `:absent` v
 
 ## v1.3.2 — the `Verified` constructor (2026-09-20)
 
-Nothing required. Purely additive: `AshOnetime.Verified.new/1` is the sanctioned
+`AshOnetime.Verified.new/1` is the sanctioned
 constructor for the opaque type, for hosts implementing the `AshOnetime.Verifier`
 verify callback or the `AshOnetime.KeySource` mint callback. Existing struct-literal
 construction keeps working at runtime but violates the opacity contract Dialyzer
 enforces (`contract_with_opaque`) — switch verifier/minter callbacks to
 `Verified.new/1`, which validates at mint time and never raises.
+
+This patch also raised the optional Mint floor to `~> 1.10 and >= 1.10.1` for
+[EEF-CVE-2026-82672](https://cna.erlef.org/osv/EEF-CVE-2026-82672.html). Hosts that carried
+Mint through the optional installer HTTP closure needed to resolve Mint 1.10.1 or newer; core
+consumers did not gain a Mint runtime dependency.
 
 ## v1.3.1 — repository-only hardening (2026-09-17)
 
@@ -227,7 +268,7 @@ closures. No breaking change, no DSL/contract change, no upgrade action for exis
   security floor, Oban queue configuration (advisory), and prefix validity. Run it after install
   and after each upgrade to catch the silent-failure modes (e.g., a missing
   `:ash_onetime_partitions` queue that strands the retention-safety path).
-- **[Phoenix integration guide](phoenix.md)** — a runnable Phoenix controller recipe wiring the
+- **[Phoenix integration guide](phoenix.md)** — a controller integration pattern wiring the
   Plug, the `replayed?/1` signal, and the error-code → HTTP-status mapping into a complete
   controller pattern.
 - **Cleanup delete-guard probe partition-scoped** — the `:complete`-branch cleanup probe
@@ -352,7 +393,8 @@ v0.7.0 tightens the Ash requirement from `>= 3.31.1 and < 4.0.0` to
 keyset pagination cursor — HIGH, CVSS 7.5, unauthenticated, no application-side
 workaround) affects Ash below 3.31.3 and is fixed only in 3.31.3; Hex additionally
 retired 3.31.1 ("breaking change"). A security library must not admit a vulnerable
-floor. **Bump Ash to ≥ 3.31.3**, then bump `ash_onetime`:
+floor. Historical v0.7.0 upgrade instruction: **bump Ash to ≥ 3.31.3**, then pin that
+`ash_onetime` minor:
 
 ```elixir
 {:ash_onetime, "~> 0.7"}
@@ -369,7 +411,8 @@ v0.3.0 tightens the Ash requirement from `>= 3.29.3 and < 4.0.0` to
 below 3.31.1, both patched in 3.31.1: EEF-CVE-2026-70395 (predicate injection in
 `manage_relationship` belongs_to lookup disclosing secret lookup keys) and
 EEF-CVE-2026-69659 (memory exhaustion via unbounded keyset-cursor deserialization). A security
-library must not admit a vulnerable floor. **Bump Ash to ≥ 3.31.1**, then bump `ash_onetime`:
+library must not admit a vulnerable floor. Historical v0.3.0 upgrade instruction:
+**bump Ash to ≥ 3.31.1**, then pin that `ash_onetime` minor:
 
 ```elixir
 {:ash_onetime, "~> 0.3"}
@@ -441,5 +484,5 @@ per release.
 
 If you depend on a private (non-documented) module or function, it may change in any release
 — the public contract is the documented DSL, the modules in the API reference, and the
-behaviours (`AshOnetime.Codec`, the `classify/2` contract on `AshOnetime.ResponseClassifier`,
+behaviors (`AshOnetime.Codec`, the `classify/2` contract on `AshOnetime.ResponseClassifier`,
 verification callbacks returning `AshOnetime.Verified`).

@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*'] # Verify each tagged release artifact before manual Hex publication.
     paths-ignore: ['**/*.md', 'docs/**', 'LICENSE*', '.github/ISSUE_TEMPLATE/**']
   pull_request:
 
@@ -29,8 +30,8 @@ jobs:
   # docs --warnings-as-errors, hex.build) across the supported Ash range —
   # the declared floor plus a floating `latest` cell that auto-exercises the
   # newest published Ash on every run. The release battery (mutation matrix,
-  # unpacked-package check, DSL cheat-sheet freshness) is deliberately not
-  # per-cell: it runs once in the release-checks job against the committed lock.
+  # source Livebook execution, unpacked-package check, DSL cheat-sheet freshness)
+  # runs once in the release-checks job against the committed lock.
   compat:
     name: "Ash ${{ matrix.ash }}"
     runs-on: ubuntu-latest
@@ -38,8 +39,8 @@ jobs:
       fail-fast: false
       matrix:
         ash:
-          - "3.33.4" # declared security floor (EEF-CVE-2026-86338 fixed only here; 82752/82xxx at or below; ADR 0004)
-          - "latest" # floating >= 3.33.4, < 4.0.0 — newest published Ash 3.x
+          - "3.34.3" # declared security floor (EEF-CVE-2026-94201; ADR 0004)
+          - "latest" # floating >= 3.34.3, < 4.0.0 — newest published Ash 3.x
 
     services:
       postgres:
@@ -79,12 +80,14 @@ jobs:
 
       - name: Resolve the matrix Ash version
         # `== X` cells resolve to exactly X; the floating `latest` cell resolves to the
-        # newest Ash satisfying `>= 3.33.4 and < 4.0.0`. Unlock first so the committed
-        # lock's floor pin never holds a cell back.
+        # newest Ash satisfying `>= 3.34.3 and < 4.0.0`. Resolve the full graph:
+        # locked AshPostgres/AshSql versions can otherwise require a newer Ash
+        # than the selected cell, concealing the consumer compatibility result.
+        # Developer tools float with that graph, exercising current tool compatibility;
+        # release-checks uses the committed lock for reproducible artifact verification.
         run: |
-          mix deps.unlock ash
+          mix deps.unlock --all
           mix deps.get
-          mix deps.update ash
 
       - run: mix format --check-formatted
       - run: mix compile --warnings-as-errors
@@ -98,7 +101,7 @@ jobs:
       # The test-env run also analyzes test/support — where the consumer-shaped
       # opacity fixture lives (a host module whose @spec speaks the opaque
       # AshOnetime.Verified.t()); the dev-env run above never compiles it.
-      - run: MIX_ENV=test mix dialyzer
+      - run: MIX_ENV='test' mix dialyzer
       - run: mix docs --warnings-as-errors
       - run: mix hex.build
 
@@ -144,7 +147,7 @@ jobs:
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
       - name: Mutation battery
-        run: MIX_ENV=test mix run scripts/check_mutations.exs -- all
+        run: MIX_ENV='test' mix run scripts/check_mutations.exs -- all
       # check_package.exs inspects the built archive, so hex.build must precede it.
       - name: Build the Hex package
         run: mix hex.build
@@ -153,13 +156,15 @@ jobs:
       # Fails when the committed documentation/dsls/DSL-*.md drifts from the declared schema.
       - name: DSL cheat-sheet freshness
         run: mix spark.cheat_sheets --check --extensions AshOnetime.Resource
+      - name: Execute Livebook source cells
+        run: elixir scripts/check_livebooks.exs --local
       # Optional-integration matrix: which integrations compile per consumer dep set,
       # that no optional dep leaks into the runtime application closure, and two
-      # conflict proofs — exact advised pins (igniter == 0.8.3, mint == 1.9.3)
+      # conflict proofs — exact advised pins (igniter == 0.8.3, mint == 1.10.1)
       # must FAIL to resolve, proving the security floors bind in a real consumer
       # resolution (ADR 0004).
       - name: Optional integration matrix
-        run: MIX_ENV=test mix run scripts/check_optional_matrix.exs
+        run: MIX_ENV='test' mix run scripts/check_optional_matrix.exs
 
   # The other end of the OTP allowlist in config/config.exs: the dev gates run
   # on OTP 28 (the floor of the supported set) so an in-window contributor on

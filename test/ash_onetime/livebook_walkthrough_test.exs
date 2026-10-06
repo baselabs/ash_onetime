@@ -1,15 +1,11 @@
 defmodule AshOnetime.LivebookWalkthroughTest do
   @moduledoc """
-  Pins the runnable code shape shared by the per-concern Livebook notebooks
-  (documentation/livebooks/{idempotency,nonces,external-recovery}.livemd).
+  Exercises the mirrored idempotency and nonce consumer shapes in
+  `test/support/livebook_examples.ex` against the installed store: fresh execution, replay,
+  fingerprint conflict, nonce spend/reuse, and telemetry.
 
-  The consumer modules live in `test/support/livebook_examples.ex` (mirroring the livebook).
-  This test installs the store via the same render/2 path the livebook documents, then asserts
-  every livebook cell: fresh idempotent execution, replay, fingerprint conflict, one-time nonce
-  spend, nonce reuse rejection, and telemetry emission.
-
-  If the livebook's code stops running, this test fails — a non-running livebook is worse than
-  none, so the walkthrough is regression-protected.
+  This test does not read or execute the `.livemd` files and does not cover the external-recovery
+  notebook. `scripts/check_livebooks.exs` is the source-cell gate for all three notebooks.
   """
 
   use AshOnetime.Test.StoreCase, async: false

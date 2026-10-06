@@ -251,7 +251,7 @@ stands as the historical record of the race and the reason the lock exists.*
 
 Before any peer call, `ExternalRecovery` takes the claim row `FOR UPDATE` in the caller's
 open transaction with a bounded wait (`external_lock_timeout_ms`, default 2000 ms, ceiling
-30000 ms), re-resolving the full claim through the finalize-mode resolver: `:processing`
+25000 ms), re-resolving the full claim through the finalize-mode resolver: `:processing`
 proceeds to the peer call under the lock, `:complete` replays, a missing row (reaped and
 re-inserted between the committed claim and the lock) fails closed. The same-key retry's
 committed-claim worker arms the same bounded wait, and a lock timeout on either path maps
@@ -264,3 +264,7 @@ both refused without reaching the peer (one execute in the ledger, block observe
 from MUST to SHOULD accordingly: the peer MUST still enforce idempotency by operation key
 (a sequential retry with a lying `:absent` remains peer-absorbed), and SHOULD claim the key
 atomically.
+
+*Typo correction (October 6, 2026): the ceiling above is 25000 ms, not 30000 ms. OBSERVED in
+`lib/ash_onetime/resource/transformer.ex`, where the accepted range is `1..25_000` and larger
+values are rejected.*

@@ -4,11 +4,12 @@ Date: 2026-08-09
 
 ## Status
 
-Accepted (amended 2026-09-16 — Ash floor raised to 3.33.4 and related dependency floors repaired; see the final amendment).
-Supersedes the `>= 3.29.3` floor documented in the v0.1.x/v0.2.0 README and `mix.exs`
-(not a prior ADR — the floor was an inline documented constraint, not an architecture decision).
-Tightens the published dependency requirement from `>= 3.29.3 and < 4.0.0` to
-`>= 3.31.1 and < 4.0.0` (and, by the amendment below, to `>= 3.31.3 and < 4.0.0`).
+Accepted (amended 2026-10-06 — current Ash floor 3.34.3 and optional Mint floor 1.10.2;
+the dated amendments preserve each earlier decision).
+The original decision superseded the `>= 3.29.3` floor documented in the v0.1.x/v0.2.0
+README and `mix.exs` (not a prior ADR — the floor was an inline documented constraint, not
+an architecture decision). The dated amendments record each later security-floor move through
+the current `>= 3.34.3 and < 4.0.0` requirement.
 
 ## Context
 
@@ -177,3 +178,36 @@ smuggling against strict intermediaries on pooled connections. Mint 1.10.1
 binds only hosts that already carry the installer closure. The doctor,
 package check, and optional-integration matrix mint assertions move together
 in the same commit; the release vehicle is v1.3.2.
+
+## Amendment — Ash 3.34.3 and Mint 1.10.2 security floors (2026-10-06, v1.5.0)
+
+The decision rule remains the lowest release with no known unpatched advisory in the
+published range. The October 6 primary-advisory inventory adds two binding results:
+
+- [EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html) affects Ash
+  `>= 3.5.1 and < 3.34.3`; unsafe atom-attribute filters can exhaust the BEAM atom table.
+  Ash 3.33.11 contains the
+  [EEF-CVE-2026-93477](https://cna.erlef.org/osv/EEF-CVE-2026-93477.html) fix but remains
+  inside EEF-CVE-2026-94201's affected range. The Ash floor therefore moves from 3.33.4 to
+  3.34.3, and the upper bound remains `< 4.0.0`.
+- Mint 1.10.2 backports the fixes for
+  [EEF-CVE-2026-91043](https://cna.erlef.org/osv/EEF-CVE-2026-91043.html),
+  [EEF-CVE-2026-92103](https://cna.erlef.org/osv/EEF-CVE-2026-92103.html), and
+  [EEF-CVE-2026-94194](https://cna.erlef.org/osv/EEF-CVE-2026-94194.html). The optional Mint
+  requirement moves from `~> 1.10 and >= 1.10.1` to `~> 1.10 and >= 1.10.2`; Mint remains
+  optional and runtime-excluded.
+
+The other published floors remain unchanged. The development lock moves to Ash 3.34.4 and
+Mint 1.11.0. The Ash compatibility matrix exercises the exact 3.34.3 floor and floating
+latest Ash 3.x with a fresh full-graph resolution; the optional matrix adds an exact Mint
+1.10.2 floor case and rejects the advised 1.10.1 pin. This is a dependency-contract change,
+so the latest-line release vehicle is the security-driven minor v1.5.0 under the
+forward-compatible floor posture. It does not change the ash_onetime DSL, public API,
+database schema, persisted response format, or token wire format.
+
+The support obligation attaches when the advisory enters intake; publishing a new minor does
+not erase fixes owed to lines that were supported at intake. The October 6 intake occurred
+while 1.4.x was the latest supported line and 1.3.x was the previous supported line.
+Accordingly, floor-only patch backports are required for both: 1.4.1 and 1.3.3 are release
+targets. This amendment does not claim either candidate is published; release closeout must
+replace candidate notes with verified Hex identities.
