@@ -1,6 +1,6 @@
 # ash_onetime
 
-[![mutation battery](https://img.shields.io/badge/mutation_battery-132_sentinels_red--proven-brightgreen)](CONTRIBUTING.md)
+[![mutation battery](https://img.shields.io/badge/mutation_battery-red--proven-brightgreen)](CONTRIBUTING.md)
 
 `ash_onetime` is an Ash extension for explicit keyed-effect semantics. It separates
 replay-safe idempotency from collision-rejecting one-time nonces and uses PostgreSQL as the
@@ -122,9 +122,10 @@ migration, and sets up the schema. See the
 
 ## Try it
 
-Runnable Livebook notebooks — one per concern — walk through each strategy against a real
+Runnable Livebook notebooks — one per concern — exercise each strategy against a real
 PostgreSQL. Open them in [Livebook](https://livebook.dev), set `DATABASE_URL`, and run every
-cell. Each notebook's code is regression-pinned so it never ships broken.
+cell. The nonce notebook performs real Ed25519 signing and verification; the external-effect
+notebook uses an independently committed PostgreSQL receipt ledger.
 
 - [Idempotency](documentation/livebooks/idempotency.livemd) — fresh execution, replay, fingerprint conflict.
 - [One-time nonces](documentation/livebooks/nonces.livemd) — spend, reuse rejection, and the `commit: :independent` replay fence.
@@ -136,83 +137,54 @@ transactional-outbox patterns.
 
 ## Status
 
-The current package release is [v1.4.0 on Hex](https://hex.pm/packages/ash_onetime) — the
-pre-peer claim lock for external effects (ADR-0010: a concurrent same-key retry is refused
-with `:request_in_progress` within `external_lock_timeout_ms` instead of racing into a
-second peer execute under one operation key) plus the corrected external-effect contract
-(the adapter execution environment, the `:absent`/`:unknown` mapping guide, honest reaper
-boundaries, and the transactional-outbox recipe; ADRs 0009-0011). It follows v1.3.2, an
-additive release shipping `AshOnetime.Verified.new/1`, the sanctioned constructor for the
-opaque `Verified` type, so verifier and minter callbacks never build the struct literal.
-It follows v1.3.1, a
-repository-only hardening release (in-repo toolchain enforcement, a compose test database
-with a per-machine port, mechanical dependency currency, and a tri-platform developer
-surface with CI proving the Windows pickup and test battery continuously) with no
-consumer-facing change. It follows v1.3.0, which
-tightened the package's runtime application closure — no optional integration (Plug, Oban,
-Igniter) or property-test dependency is claimed as a runtime application of the extension
-anymore — on top of v1.2.2's `AshOnetime.Transaction.claim_id/1` accessor (the one sanctioned
-read of a fresh admission's claim UUID), v1.2's operations preflight, backup/restore runbook,
-and constant-time digest-comparison unification, and v1.1's transaction-owned admission and
-logical partitions. The
-[source is public](https://github.com/baselabs/ash_onetime). Every protected action chooses
-`:idempotency` or `:one_time_nonce` and declares a nonempty scope; there is no default
-strategy or global scope fallback. PostgreSQL-authoritative admission, transactional Ash
-execution, typed replay, fail-closed nonce spending, signed tokens, external-effect recovery,
-bounded cleanup, optional cache/Plug/Oban integrations, the DPoP replay fence, and release
-gates are present.
+This guide targets [v1.4.1](https://hex.pm/packages/ash_onetime/1.4.1), a
+security patch for the 1.4 feature line. It raises the published Ash and optional Mint
+floors while leaving the 1.4 DSL, public API, database schema, persisted response format,
+token wire format, and pre-peer claim-lock behavior unchanged. Consumers that pin either
+dependency should follow [Upgrading](documentation/upgrading.md).
 
-Test assurance runs deeper than line coverage: every library module sits at 100% line
-coverage, and the bar is the [mutation battery](CONTRIBUTING.md) — 135 sentinels, each
-proven to fail under its own mutation before it is trusted, so a green suite means the
-guards actually guard.
+Every protected action chooses `:idempotency` or `:one_time_nonce` and declares a nonempty
+scope; there is no default strategy or global scope fallback. Full release history is in
+the [CHANGELOG](CHANGELOG.md).
 
 ## Compatibility
 
-- Elixir `~> 1.20` (developed and tested on 1.20.4)
+- Elixir `~> 1.20` (developed and tested on 1.20.4; this requirement admits later 1.x
+  releases and excludes 2.0 or newer)
 - Erlang/OTP 28 or 29
-- Ash `>= 3.33.4` and `< 4.0.0`
+- Ash `>= 3.34.3` and `< 4.0.0`
 - AshPostgres `~> 2.13`, AshSql `~> 0.7 and >= 0.7.1`
+- Optional Mint `~> 1.10 and >= 1.10.2` when the host carries the installer HTTP closure
 - PostgreSQL 18 for the project test harness. The SQL surface requires PostgreSQL 11+
   (declarative hash/range partitioning with default partitions, `SKIP LOCKED`,
   `pg_advisory_xact_lock(bigint)`); versions below 18 are not exercised by this project's
   CI — treat them as unverified.
 
-The security floors follow
-[ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md).
-OBSERVED: the advisory inventory through September 16, 2026 identifies Ash 3.33.4
-as the patched floor — EEF-CVE-2026-86338 (field policies fail to filter-nil
-forbidden calculations and aggregates, an information-disclosure oracle) is fixed
-only there, with EEF-CVE-2026-82752 and the rest of the EEF-CVE-2026-82xxx batch
-fixed at or below it. The optional Igniter and Mint requirements enforce patched floors
-of 0.8.4 and 1.10.1 without adding either to this package's runtime applications.
-Compatibility across the range is verified per matrix cell by the standard gate
-battery — format, compile with warnings-as-errors, `mix hex.audit` (Hex security
-advisories), `mix deps.audit`, the full test suite, `mix credo --strict`,
-`mix dialyzer`, `mix docs --warnings-as-errors`, and `mix hex.build` — run against
-the 3.33.4 floor and the latest published Ash 3.x. The release battery (mutation
-matrix, unpacked-package check, DSL cheat-sheet freshness) runs once per push in the
-`release-checks` job against the committed lock, not per cell.
-`.github/workflows/ci.yml` is configured to re-run this matrix on every push and
-pull request, plus a dedicated OTP 28 leg covering the other end of the supported
-runtime set. The pinned development runtime is Elixir 1.20.4 / Erlang/OTP 29.0.3
-(`.tool-versions`).
+The security floors follow [ADR 0004](https://github.com/baselabs/ash_onetime/blob/v1.4.1/docs/adr/0004-security-driven-ash-floor.md).
+The October 6, 2026 advisory inventory identifies Ash 3.34.3 as the patched floor:
+[EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html) affects Ash
+`>= 3.5.1 and < 3.34.3`; Ash 3.33.11 contains the
+[EEF-CVE-2026-93477](https://cna.erlef.org/osv/EEF-CVE-2026-93477.html) fix but remains
+affected by EEF-CVE-2026-94201. Mint 1.10.2 backports the fixes for
+[EEF-CVE-2026-91043](https://cna.erlef.org/osv/EEF-CVE-2026-91043.html),
+[EEF-CVE-2026-92103](https://cna.erlef.org/osv/EEF-CVE-2026-92103.html), and
+[EEF-CVE-2026-94194](https://cna.erlef.org/osv/EEF-CVE-2026-94194.html). Optional Igniter
+and Mint remain excluded from this package's runtime applications.
 
 ## Development
 
-Start the dedicated test database and run the suite as documented in
-[CONTRIBUTING.md](CONTRIBUTING.md), then:
+Point `.env` at a dedicated PostgreSQL 18 database you already run, then:
 
 ```sh
-cp .env.example .env   # pick a free PGPORT; keep DATABASE_URL's port in sync
-docker compose up -d
-set -a && . ./.env && set +a   # sh; PowerShell: $env:DATABASE_URL = "..."
+cp .env.example .env   # set PGPORT and DATABASE_URL to the same non-default port
+set -a && . ./.env && set +a
 mix deps.get
 mix test
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete gate battery and
-[usage-rules.md](usage-rules.md) for non-negotiable integration boundaries.
+The supported developer platforms are macOS and Linux. Windows developers use WSL2 and
+clone inside the WSL filesystem. See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete
+gate battery and [usage-rules.md](usage-rules.md) for integration boundaries.
 The [Getting started guide](documentation/getting-started.md) covers installing the package
 and protecting your first action.
 

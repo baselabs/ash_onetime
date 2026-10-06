@@ -4,11 +4,11 @@ Date: 2026-08-09
 
 ## Status
 
-Accepted (amended 2026-09-16 — Ash floor raised to 3.33.4 and related dependency floors repaired; see the final amendment).
+Accepted (amended October 6, 2026 — current Ash floor 3.34.3 and optional Mint floor 1.10.2; see the final amendment).
 Supersedes the `>= 3.29.3` floor documented in the v0.1.x/v0.2.0 README and `mix.exs`
 (not a prior ADR — the floor was an inline documented constraint, not an architecture decision).
 Tightens the published dependency requirement from `>= 3.29.3 and < 4.0.0` to
-`>= 3.31.1 and < 4.0.0` (and, by the amendment below, to `>= 3.31.3 and < 4.0.0`).
+`>= 3.31.1 and < 4.0.0` (later amendments raise the current requirement to `>= 3.34.3 and < 4.0.0`).
 
 ## Context
 
@@ -177,3 +177,25 @@ smuggling against strict intermediaries on pooled connections. Mint 1.10.1
 binds only hosts that already carry the installer closure. The doctor,
 package check, and optional-integration matrix mint assertions move together
 in the same commit; the release vehicle is v1.3.2.
+
+## Amendment — Ash 3.34.3 and Mint 1.10.2 security floors (October 6, 2026, v1.4.1)
+
+The decision rule remains the lowest release with no known unpatched advisory in the
+published range. The October 6 primary-advisory inventory adds two binding results:
+
+- [EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html) affects Ash
+  `>= 3.5.1 and < 3.34.3`; unsafe atom-attribute filters can exhaust the BEAM atom table.
+  Ash 3.33.11 contains the
+  [EEF-CVE-2026-93477](https://cna.erlef.org/osv/EEF-CVE-2026-93477.html) fix but remains
+  inside EEF-CVE-2026-94201's affected range. The Ash floor therefore moves from 3.33.4
+  to 3.34.3, and the upper bound remains `< 4.0.0`.
+- Mint 1.10.2 backports the fixes for
+  [EEF-CVE-2026-91043](https://cna.erlef.org/osv/EEF-CVE-2026-91043.html),
+  [EEF-CVE-2026-92103](https://cna.erlef.org/osv/EEF-CVE-2026-92103.html), and
+  [EEF-CVE-2026-94194](https://cna.erlef.org/osv/EEF-CVE-2026-94194.html). The optional Mint
+  requirement moves from `~> 1.10 and >= 1.10.1` to `~> 1.10 and >= 1.10.2`; Mint remains
+  optional and runtime-excluded.
+
+The other published floors remain unchanged. The release vehicle for this supported line
+is v1.4.1, a dependency-contract patch backport. It does not change the 1.4 DSL,
+public API, database schema, persisted response format, token wire format, or migration set.

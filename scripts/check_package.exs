@@ -1,5 +1,3 @@
-Code.require_file("#{__DIR__}/portable.exs")
-
 defmodule AshOnetime.PackageCheck do
   @moduledoc false
 
@@ -184,7 +182,7 @@ defmodule AshOnetime.PackageCheck do
 
   defp command!(directory, environment, arguments) do
     {output, status} =
-      AshOnetime.Portable.cmd("mix", arguments,
+      System.cmd("mix", arguments,
         cd: directory,
         env: environment,
         stderr_to_stdout: true
@@ -230,11 +228,11 @@ defmodule AshOnetime.PackageCheck do
   # every published security floor — plus its optional flag — actually shipped, whatever
   # the current shell holds.
   @published_requirements %{
-    ash: {">= 3.33.4 and < 4.0.0", false},
+    ash: {">= 3.34.3 and < 4.0.0", false},
     ash_postgres: {"~> 2.13", false},
     ash_sql: {"~> 0.7 and >= 0.7.1", false},
     igniter: {"~> 0.8 and >= 0.8.4", true},
-    mint: {"~> 1.10 and >= 1.10.1", true}
+    mint: {"~> 1.10 and >= 1.10.2", true}
   }
 
   defp assert_published_requirements(metadata_path) do

@@ -12,9 +12,7 @@
 # Status literals come from Mix.Tasks.Hex.Outdated (hex 2.5.1):
 #   "Up-to-date" | "Update possible" | "Update not possible"
 #
-# Run: mix run --no-start scripts/check_deps_currency.exs — portable across
-# macOS/Linux/Windows (spawning mix goes through AshOnetime.Portable).
-Code.require_file("#{__DIR__}/portable.exs")
+# Run: mix run --no-start scripts/check_deps_currency.exs
 
 defmodule AshOnetime.DepCurrencyCheck do
   @moduledoc false
@@ -27,7 +25,7 @@ defmodule AshOnetime.DepCurrencyCheck do
     # hex.outdated exits nonzero whenever anything is outdated, which is the
     # normal case this gate classifies itself — never treat that as failure.
     {outdated_output, _outdated_exit} =
-      AshOnetime.Portable.cmd("mix", ["hex.outdated"], stderr_to_stdout: true)
+      System.cmd("mix", ["hex.outdated"], stderr_to_stdout: true)
 
     outdated_output = ansi_stripped(outdated_output)
 
@@ -67,7 +65,7 @@ defmodule AshOnetime.DepCurrencyCheck do
         name = status_row |> String.split(" ") |> hd()
 
         {detail, _exit} =
-          AshOnetime.Portable.cmd("mix", ["hex.outdated", name], stderr_to_stdout: true)
+          System.cmd("mix", ["hex.outdated", name], stderr_to_stdout: true)
 
         detail
         |> ansi_stripped()

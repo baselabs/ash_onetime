@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## v1.4.1 — October 6, 2026
+
+Security dependency-floor backport for the 1.4 line. There is no DSL, public API,
+database schema, persisted response, token wire-format, or migration change.
+
+- Raise the Ash requirement to `>= 3.34.3 and < 4.0.0`.
+  [EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html)
+  affects Ash `>= 3.5.1 and < 3.34.3`; 3.34.3 is the first release outside that range.
+- Raise optional Mint to `~> 1.10 and >= 1.10.2`. Mint 1.10.2 backports
+  [EEF-CVE-2026-91043](https://cna.erlef.org/osv/EEF-CVE-2026-91043.html),
+  [EEF-CVE-2026-92103](https://cna.erlef.org/osv/EEF-CVE-2026-92103.html), and
+  [EEF-CVE-2026-94194](https://cna.erlef.org/osv/EEF-CVE-2026-94194.html).
+- Repair the three Livebooks to use explicit release requirements, real Ed25519 verification,
+  and a real independently committed PostgreSQL receipt ledger. The 1.4 notebook behavior
+  remains the behavior of that line; no later runtime feature is backfilled.
+- Contributor setup uses macOS or Linux; Windows developers use WSL2. See
+  [CONTRIBUTING.md](CONTRIBUTING.md) for the supported setup and executable gates.
+
 ## v1.4.0 — 2026-09-24
 
 **Breaking behavior change (the reason this is a minor, not a patch):** a concurrent
@@ -31,7 +49,7 @@ beneficiaries.
   kept, reds on generation adoption) and `pre-peer-lock-removed` (the lock call removed,
   reds on the unlocked race — B's red-proof). The `lock_timeout` GUC is scoped to the
   lock: captured before, restored after — it never caps the adapter's own writes.
-  `AshOnetime.Store` grows `lock_for_effect/3` and an options-taking `claim_committed/3`
+  The internal AshOnetime.Store grows `lock_for_effect/3` and an options-taking `claim_committed/3`
   (the 2-arity facade is unchanged).
 
 ### Decisions (ADRs 0009-0011, each adversarially reviewed and judged)

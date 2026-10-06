@@ -7,9 +7,8 @@ livebook:{"persist_outputs":true}
 ```elixir
 Mix.install(
   [
-    {:ash_onetime, "~> 1.4"},
-    {:ash_postgres, "~> 2.13"},
-    {:kino, "~> 0.14", only: :dev}
+    {:ash_onetime, "~> 1.4.1"},
+    {:ash_postgres, "~> 2.13"}
   ],
   consolidate_protocols: false
 )
@@ -24,18 +23,15 @@ A retry with the same key but a *changed* request is a terminal conflict, never 
 This notebook walks through fresh execution, replay, and the fingerprint conflict — against a
 real PostgreSQL. Run each cell top to bottom.
 
-> Requires PostgreSQL 18 reachable at `DATABASE_URL`.
+> Requires Elixir 1.20+, Ash 3.34.3+, and PostgreSQL 18 reachable at
+> `DATABASE_URL`. Use a development database where you can create and remove
+> schemas. Each run creates its own schema and removes it in the final cell.
 
 ## Connect to PostgreSQL
 
 ```elixir
-# The default targets the repo's dedicated test database (see CONTRIBUTING.md);
-# set DATABASE_URL to your own host port if your local instance differs.
-database_url =
-  System.get_env(
-    "DATABASE_URL",
-    "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
-  )
+database_url = System.fetch_env!("DATABASE_URL")
+Logger.configure(level: :warning)
 
 :ok = Application.put_env(:ash, :disable_async?, true)
 # Ash >= 3.33 requires an explicit string-length counting mode; codepoints
@@ -143,10 +139,15 @@ end
 alias AshOnetimeDemo.Repo
 alias Ecto.Adapters.SQL
 
-unique = System.unique_integer([:positive])
+unique = Ecto.UUID.generate() |> String.replace("-", "")
 schema = "ash_onetime_demo_#{unique}"
 temp = Path.join(System.tmp_dir!(), "ash_onetime_demo_#{unique}")
 File.mkdir_p!(temp)
+
+{schema, temp}
+```
+
+```elixir
 
 source =
   Mix.Tasks.AshOnetime.Gen.Migrations.render(Repo,
@@ -182,8 +183,6 @@ SQL.query!(
 
 The first `:charge` runs the effect and stores its result. `replayed?/1` is `false`.
 
-<!-- livebook:{"output":true} -->
-
 ```elixir
 account_id = "00000000-0000-0000-0000-000000000001"
 
@@ -196,32 +195,58 @@ account_id = "00000000-0000-0000-0000-000000000001"
 %{amount: fresh.amount, replayed?: AshOnetime.replayed?(fresh)}
 ```
 
+<!-- livebook:{"output":true} -->
+
 ```
 %{amount: 10, replayed?: false}
 ```
 
-## The claim's durable address (v1.2.2)
+## The claim's durable address
 
 `AshOnetime.Transaction.claim_id/1` is the one sanctioned read of a fresh admission's
 claim UUID — `Admission` stays opaque. On the transaction boundary (see
 [Transaction-owned admission](https://hexdocs.pm/ash_onetime/transaction-owned-admission.html)),
-persist the UUID wherever you correlate your own invocation records with the claim, or hand
-it unchanged to an external execute/recover peer:
+persist the UUID wherever you correlate your own invocation records with the claim.
+The following cell reserves a separate key inside a transaction you own, stores the
+current charge count as exact replay bytes, and reads the resulting claim UUID:
 
 ```elixir
-{:execute, admission} = AshOnetime.Transaction.idempotency(Repo, options)
-:ok = AshOnetime.Transaction.complete(admission, exact_response_bytes)
-claim_uuid = AshOnetime.Transaction.claim_id(admission)
+{:ok, claim_uuid} =
+  Repo.transaction(fn ->
+    options = [
+      operation: {AshOnetimeDemo.Charge, :receipt},
+      partition: "notebook",
+      prefix: schema,
+      scope: "charge-count",
+      key: "receipt-1",
+      fingerprint: :crypto.hash(:sha256, "charge-count"),
+      retention_seconds: 3600,
+      codec: "charge-count"
+    ]
+
+    {:execute, admission} = AshOnetime.Transaction.idempotency(Repo, options)
+    [[count]] = SQL.query!(Repo, ~s{SELECT count(*) FROM "#{schema}"."demo_charges"}, []).rows
+    :ok = AshOnetime.Transaction.complete(admission, Integer.to_string(count))
+    AshOnetime.Transaction.claim_id(admission)
+  end)
+
+{:ok, ^claim_uuid} = Ecto.UUID.cast(claim_uuid)
+%{valid_claim_uuid: true}
 ```
 
-A pure read — no process, transaction, or store interaction.
+<!-- livebook:{"output":true} -->
+
+```
+%{valid_claim_uuid: true}
+```
+
+`claim_id/1` itself is a pure read. Reserving and completing admission still
+requires the caller's open PostgreSQL transaction.
 
 ## Retry replays the stored result
 
 The same `idempotency_key` with the same content returns the *stored* record. `replayed?/1`
 flips to `true`, and only one row exists — the effect ran once.
-
-<!-- livebook:{"output":true} -->
 
 ```elixir
 {:ok, replayed} =
@@ -237,6 +262,8 @@ flips to `true`, and only one row exists — the effect ran once.
 }
 ```
 
+<!-- livebook:{"output":true} -->
+
 ```
 %{replayed?: true, rows: 1, same_record: true}
 ```
@@ -245,8 +272,6 @@ flips to `true`, and only one row exists — the effect ran once.
 
 Reusing `idempotency_key` with a changed `amount` is rejected as
 `:key_reused_with_different_request`. The effect does not run again.
-
-<!-- livebook:{"output":true} -->
 
 ```elixir
 {:error, error} =
@@ -257,6 +282,8 @@ Reusing `idempotency_key` with a changed `amount` is rejected as
 
 AshOnetime.Error.code(error)
 ```
+
+<!-- livebook:{"output":true} -->
 
 ```
 :key_reused_with_different_request

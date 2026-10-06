@@ -40,3 +40,7 @@ priv/plts/
 
 # Forge lifecycle artifacts (handoffs, exec-runs, memory) — local only, never tracked
 /.forge/
+
+# Kimosabe lifecycle artifacts (memory, handoffs, reviews) — local only, never tracked;
+# .kimosabe/critical-surfaces is the one tracked exception
+/.kimosabe/

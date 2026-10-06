@@ -33,16 +33,17 @@ distinguishable from "some other error occurred."
 ## Class and HTTP
 
 All `AshOnetime.Error` codes are class `:invalid`. AshJsonApi and AshGraphql auto-map class
-`:invalid` to the 4xx family. That default is correct for the client-input codes below, but a
-family of **server-fault and transport codes overrides it to 5xx** — a consumer mapping
-class→HTTP must special-case those (the two 5xx tables below), or a store outage, a trusted
-clock fault, or an internal invariant violation is mis-reported to the client as a 4xx.
+`:invalid` to the 4xx family. That default is correct for the client-input codes below except
+the explicitly retryable verification timeout. A family of **server-fault and transport codes
+also overrides it to 5xx** — a consumer mapping class→HTTP must special-case those codes, or a
+store outage, a trusted clock fault, or an internal invariant violation is mis-reported to the
+client as a 4xx.
 
 This page lists every code a caller can observe from `AshOnetime.Error.code/1`, including the
 token-verification codes, the trusted-clock codes, and the store-fault/transport codes routed
 through the authoritative store — not only the codes raised on the happy admission path.
 
-### Client-input / operational codes (4xx)
+### Client-input / operational codes (4xx) and verification timeout (503)
 
 | Code | HTTP | Meaning |
 |---|---|---|

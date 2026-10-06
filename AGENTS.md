@@ -28,4 +28,4 @@ mix hex.build
 - Verification callbacks return trusted local facts; action input cannot supply pre-verified facts.
 - Do not depend on `ash_webhook_it`, `core_os`, QorPay, or Bounded Authority packages.
 - Do not place phase, task, slice, release, schema, worker, contract, or API versions in durable project identifiers.
-- macOS/Linux/Windows capability is required — a repo that does not clone, build, and gate on all three is a failure. Gates run in Elixir (`.exs`), never POSIX shell; spawn `mix` through `AshOnetime.Portable` (`scripts/portable.exs`); keep `.gitattributes` (`* text=auto eol=lf`) intact.
+- macOS and Linux are the required developer platforms: a repo that cannot clone, build, and run its gate battery on both, on a developer machine, is a failure. Windows developers use WSL2 (clone inside the WSL filesystem, not under `/mnt/c`), which is the Linux path; no native-Windows developer path is maintained or claimed (owner direction, October 4, 2026). This is a developer-setup property, not a CI leg; CI runs on Linux only. Gates run in Elixir (`.exs`), never POSIX shell; keep `.gitattributes` (`* text=auto eol=lf`) intact.

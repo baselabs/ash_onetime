@@ -3,8 +3,10 @@
 `ash_onetime` does not depend on Phoenix. The integration surface is a [Plug](https://hexdocs.pm/plug)
 module (`AshOnetime.Plug`) that copies request headers into the connection, the
 [`AshOnetime.replayed?/1`](`AshOnetime.replayed?/1`) signal, and the error-code-to-HTTP-status
-table in [Errors and HTTP mapping](errors.md). This guide binds them into a runnable Phoenix
-controller pattern so a consumer does not hand-roll the wiring.
+table in [Errors and HTTP mapping](errors.md). This guide shows an integration pattern to adapt
+inside a Phoenix application. Its resource names, actions, response fields, and routes are host
+application placeholders; verify the adapted controllers in that application's real Phoenix
+request path.
 
 ## Wire the Plug
 
@@ -29,6 +31,122 @@ The header name is the wire name (`"idempotency-key"`); the context key (`:idemp
 matches the action argument. The Plug validates header syntax, rejects multi-valued or
 oversized values, and raises `Plug.BadRequestError` on a violation.
 
+## Share one sanitized error mapper
+
+Ash may return an `AshOnetime.Error` leaf directly or inside an Ash class wrapper. Controllers
+should recover the typed code with `AshOnetime.Error.code/1`, then pass only that code to one
+shared mapper. The mapper below lists every client error explicitly, lists every retryable `503`
+code explicitly, and fails unknown or server-fault codes closed to `500`.
+
+Its public response contains only a recognized code string. It never serializes the exception,
+calls the internal error-message helper on a wrapper, or exposes `details` and provider-supplied
+reasons.
+
+<!-- onetime-errors-helper:start -->
+```elixir
+defmodule MyAppWeb.OnetimeErrors do
+  @moduledoc false
+
+  @client_statuses %{
+    nonce_already_used: :conflict,
+    key_reused_with_different_request: :conflict,
+    request_in_progress: :conflict,
+    verification_failed: :unauthorized,
+    fingerprint_too_large: :unprocessable_entity,
+    fingerprint_unavailable: :unprocessable_entity,
+    key_too_large: :unprocessable_entity,
+    key_unavailable: :unprocessable_entity,
+    key_resolution_failed: :unprocessable_entity,
+    key_not_found: :not_found,
+    scope_unavailable: :unprocessable_entity,
+    invalid_key: :unprocessable_entity,
+    invalid_key_role: :unprocessable_entity,
+    invalid_window: :unprocessable_entity,
+    invalid_nonce_window: :unprocessable_entity,
+    invalid_expires_at: :unprocessable_entity,
+    invalid_token: :unprocessable_entity,
+    malformed_token: :unprocessable_entity,
+    invalid_key_id: :unprocessable_entity,
+    invalid_namespace: :unprocessable_entity,
+    invalid_issued_at: :unprocessable_entity,
+    invalid_trust_boundary: :unprocessable_entity,
+    invalid_encoding: :unprocessable_entity,
+    noncanonical_encoding: :unprocessable_entity,
+    noncanonical_envelope: :unprocessable_entity,
+    invalid_signature: :unprocessable_entity,
+    signing_failed: :unprocessable_entity,
+    invalid_message: :unprocessable_entity,
+    algorithm_mismatch: :unprocessable_entity,
+    unsupported_algorithm: :unprocessable_entity,
+    namespace_mismatch: :unprocessable_entity,
+    token_too_large: :unprocessable_entity,
+    duplicate_field: :unprocessable_entity,
+    duplicate_map_key: :unprocessable_entity,
+    unsupported_term: :unprocessable_entity,
+    limit_exceeded: :unprocessable_entity,
+    missing_option: :unprocessable_entity,
+    invalid_option: :unprocessable_entity,
+    invalid_options: :unprocessable_entity,
+    reserved_verification_input: :unprocessable_entity,
+    response_rejected: :unprocessable_entity,
+    response_rollback: :unprocessable_entity,
+    response_fields_invalid: :unprocessable_entity,
+    response_value_invalid: :unprocessable_entity,
+    response_codec_mismatch: :unprocessable_entity,
+    response_contract_mismatch: :unprocessable_entity,
+    external_effect_unavailable: :unprocessable_entity,
+    external_recovery_unavailable: :unprocessable_entity
+  }
+
+  @retryable_codes [
+    :verification_timeout,
+    :outcome_unknown,
+    :admission_unavailable,
+    :checkout_unavailable,
+    :disconnected,
+    :worker_timeout,
+    :lock_timeout,
+    :dispatched_unknown,
+    :store_failure
+  ]
+
+  @server_codes [
+    :store_invariant,
+    :invalid_evaluated_at,
+    :response_payload_invalid,
+    :response_persisted_state_invalid,
+    :response_digest_mismatch,
+    :response_classifier_failed,
+    :response_classifier_invalid,
+    :response_codec_failed,
+    :response_codec_invalid,
+    :response_contract_invalid,
+    :response_completion_failed,
+    :admission_request_invalid,
+    :telemetry_invalid,
+    :missing_prefix,
+    :not_in_transaction,
+    :unsupported_isolation,
+    :corrupt_payload,
+    :invalid_request
+  ]
+
+  @known_codes Map.keys(@client_statuses) ++ @retryable_codes ++ @server_codes
+
+  def status(code) do
+    case Map.fetch(@client_statuses, code) do
+      {:ok, status} -> status
+      :error when code in @retryable_codes -> :service_unavailable
+      :error -> :internal_server_error
+    end
+  end
+
+  def public_code(code) when code in @known_codes, do: Atom.to_string(code)
+  def public_code(_unknown), do: "internal_error"
+end
+```
+<!-- onetime-errors-helper:end -->
+
 ## Idempotency controller (create action)
 
 A create action protected with `:idempotency` strategy:
@@ -38,6 +156,7 @@ defmodule MyAppWeb.ChargeController do
   use MyAppWeb, :controller
   alias MyApp.Charge
   alias AshOnetime
+  alias MyAppWeb.OnetimeErrors
 
   def create(conn, _params) do
     # Read the untrusted header the Plug stashed.
@@ -66,26 +185,12 @@ defmodule MyAppWeb.ChargeController do
 
   defp maybe_put_replayed_header(conn, _), do: conn
 
-  # Map ash_onetime error codes to HTTP statuses.
-  # See documentation/errors.md for the full table.
   defp render_error(conn, error) do
-    status =
-      case AshOnetime.Error.code(error) do
-        :nonce_already_used -> :conflict
-        :key_reused_with_different_request -> :conflict
-        :request_in_progress -> :too_many_requests
-        :verification_failed -> :unauthorized
-        :verification_timeout -> :service_unavailable
-        # All admission-availability / store-fault codes are 503
-        code when code in [:admission_unavailable, :checkout_unavailable, :disconnected] ->
-          :service_unavailable
-        # Invalid-input family (validation, bounds, reserved) → 422
-        _other -> :unprocessable_entity
-      end
+    code = AshOnetime.Error.code(error)
 
     conn
-    |> put_status(status)
-    |> json(%{errors: %{detail: AshOnetime.Error.message(error)}})
+    |> put_status(OnetimeErrors.status(code))
+    |> json(%{errors: %{code: OnetimeErrors.public_code(code)}})
   end
 end
 ```
@@ -111,6 +216,7 @@ defmodule MyAppWeb.RedemptionController do
   use MyAppWeb, :controller
   alias MyApp.Redemption
   alias AshOnetime
+  alias MyAppWeb.OnetimeErrors
 
   def redeem(conn, _params) do
     proof = conn.private.ash_onetime.untrusted[:proof]
@@ -127,13 +233,11 @@ defmodule MyAppWeb.RedemptionController do
         |> json(%{data: %{id: redemption.id, status: redemption.status}})
 
       {:error, error} ->
-        case AshOnetime.Error.code(error) do
-          :nonce_already_used ->
-            conn |> put_status(:conflict) |> json(%{errors: %{detail: "nonce was already used"}})
+        code = AshOnetime.Error.code(error)
 
-          _other ->
-            conn |> put_status(:internal_server_error) |> json(%{errors: %{detail: "unexpected error"}})
-        end
+        conn
+        |> put_status(OnetimeErrors.status(code))
+        |> json(%{errors: %{code: OnetimeErrors.public_code(code)}})
     end
   end
 end
@@ -146,8 +250,9 @@ the `:proof` argument.
 
 - The Plug's `conn.private.ash_onetime.untrusted` shape is `%{atom => binary}` — every value is
   a raw string. The protected action validates it; the controller must not treat it as trusted.
-- The error-code → status mapping above covers the common codes. The full table (including the
-  5xx store-fault codes that override Ash's class-based mapping) is in
+- The shared error mapper covers every code in the full table, including the 5xx store-fault
+  codes that override Ash's class-based mapping. Keep the mapper synchronized with
   [Errors and HTTP mapping](errors.md).
-- `AshOnetime.Error.code/1` returns the atom code for a given error; use it to build structured
-  JSON error bodies. The error's `message/1` callback returns a human-readable string.
+- `AshOnetime.Error.code/1` accepts either a leaf or an Ash class wrapper. Build the public JSON
+  body from its recognized code; keep the exception, message, `details`, and provider reasons in
+  trusted server-side handling.

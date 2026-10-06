@@ -19,7 +19,7 @@ end
 
 defmodule AshOnetime.Cache do
   @moduledoc """
-  Optional cache behaviour for completed idempotency responses.
+  Optional cache behavior contract for completed idempotency responses.
 
   Cache data is never admission authority. PostgreSQL is consulted first on every request,
   and a hit is usable only after its claim id, fingerprint, codec, digest, size, and payload

@@ -1,7 +1,7 @@
 defmodule AshOnetime.MixProject do
   use Mix.Project
 
-  @version "1.4.0"
+  @version "1.4.1"
   @source_url "https://github.com/baselabs/ash_onetime"
 
   def project do
@@ -9,9 +9,8 @@ defmodule AshOnetime.MixProject do
       app: :ash_onetime,
       version: @version,
       # Elixir requirement — the PUBLIC support window, not a build pin: `~> 1.20`
-      # admits the entire 1.20 minor line (>= 1.20.0 and < 1.21.0) so consumers
-      # are never scoped to one Elixir build, and refuses 1.19.x and 1.21+
-      # (a minor move is a deliberate support decision proven in CI first).
+      # admits >= 1.20.0 and < 2.0.0. The compatibility evidence below names
+      # the exact runtime exercised; this requirement is not a build pin.
       # This repo's OWN exact toolchain identity is enforced separately:
       # .tool-versions and CI's ELIXIR_VERSION/OTP_VERSION pin the build every
       # gate runs on (currently 1.20.4 / OTP 29.0.3), and config/config.exs
@@ -76,12 +75,11 @@ defmodule AshOnetime.MixProject do
       # Constrain the installer's HTTP closure without adding HTTP to core
       # consumers: mint reaches a tree only through igniter → req → finch, so
       # an optional requirement binds exactly the closure that carries it.
-      # Security floor (ADR 0004): Mint 1.10.1 is where EEF-CVE-2026-82672 is
-      # fixed (an unvalidated chunk-size line tail in the HTTP/1 client enabled
-      # response smuggling against strict intermediaries on pooled
-      # connections); 1.10.0 and below carry it. Same next-major cap posture
-      # as ash_sql above.
-      {:mint, "~> 1.10 and >= 1.10.1", optional: true, runtime: false},
+      # Security floor (ADR 0004): Mint 1.10.2 backports the 1.11.0 fixes for
+      # EEF-CVE-2026-91043/-92103 (HTTP/2 memory exhaustion) and -94194
+      # (HTTP/1 response smuggling). Preserve that patched 1.10 release for
+      # consumers while the development lock exercises the latest 1.x.
+      {:mint, "~> 1.10 and >= 1.10.2", optional: true, runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
@@ -90,11 +88,11 @@ defmodule AshOnetime.MixProject do
     ]
   end
 
-  # `>= 3.33.4 and < 4.0.0` is the consumer requirement. ADR 0004 records the
-  # advisory inventory through 2026-09-16: EEF-CVE-2026-86338 (field policies fail to
-  # filter-nil forbidden calculations and aggregates — an information-disclosure
-  # oracle) is fixed only in 3.33.4; EEF-CVE-2026-82752 and the rest of the
-  # EEF-CVE-2026-82xxx batch are fixed at or below this floor.
+  # `>= 3.34.3 and < 4.0.0` is the consumer requirement. The October 6, 2026
+  # package-wide advisory inventory (ADR 0004) finds EEF-CVE-2026-94201
+  # (unsafe atom-attribute filters can exhaust the BEAM atom table) fixed
+  # only in 3.34.3. The bulk private-argument fix for -93477 shipped in
+  # 3.33.11; that version remains affected by -94201.
   # The CI compatibility matrix sets ASH_ONETIME_ASH_VERSION to pin
   # one exact Ash per cell (the floor and each later minor); `latest`/unset keeps the floating
   # requirement so the newest published Ash is exercised. The namespaced var name is extremely
@@ -102,7 +100,7 @@ defmodule AshOnetime.MixProject do
   # the full requirement. A pin is validated at project-config evaluation time: it must be a
   # version inside the published range, else Mix.raise fires — a publish with an out-of-range
   # pin exported would otherwise silently freeze a wrong exact requirement into the package.
-  @ash_floor "3.33.4"
+  @ash_floor "3.34.3"
 
   defp ash_requirement do
     case System.get_env("ASH_ONETIME_ASH_VERSION") do
