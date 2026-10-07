@@ -6,14 +6,14 @@ with the exact edit to make. Dependency-floor changes follow
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md):
 a security-driven minor on the latest line and patch backports for supported lines.
 
-This guide targets v1.3.3 ([Hex package](https://hex.pm/packages/ash_onetime/1.3.3)).
+This guide targets v1.3.4 ([Hex package](https://hex.pm/packages/ash_onetime/1.3.4)).
 Pin the patch release within the 1.3 line:
 
 ```elixir
-{:ash_onetime, "~> 1.3.3"}
+{:ash_onetime, "~> 1.3.4"}
 ```
 
-## v1.3.3 — Ash and Mint security floors (October 6, 2026)
+## v1.3.4 — Ash and Mint security floors (October 6, 2026)
 
 Raise any direct Ash pin to `>= 3.34.3 and < 4.0.0`. If your graph includes Mint, raise
 its pin to `~> 1.10 and >= 1.10.2`, then resolve and audit the graph:
@@ -36,7 +36,7 @@ inside the later advisory's range. Mint 1.10.2 backports
 [EEF-CVE-2026-94194](https://cna.erlef.org/osv/EEF-CVE-2026-94194.html).
 
 The sections below retain the requirements and setup descriptions of their historical
-releases. Current dependency pins follow v1.3.3 above; current developer support is
+releases. Current dependency pins follow v1.3.4 above; current developer support is
 macOS and Linux, with Windows development through WSL2.
 
 ## v1.3.2 — the `Verified` constructor (2026-09-20)

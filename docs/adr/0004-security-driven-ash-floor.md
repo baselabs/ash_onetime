@@ -178,7 +178,7 @@ binds only hosts that already carry the installer closure. The doctor,
 package check, and optional-integration matrix mint assertions move together
 in the same commit; the release vehicle is v1.3.2.
 
-## Amendment — Ash 3.34.3 and Mint 1.10.2 security floors (October 6, 2026, v1.3.3)
+## Amendment — Ash 3.34.3 and Mint 1.10.2 security floors (October 6, 2026, v1.3.4)
 
 The decision rule remains the lowest release with no known unpatched advisory in the
 published range. The October 6 primary-advisory inventory adds two binding results:
@@ -197,5 +197,5 @@ published range. The October 6 primary-advisory inventory adds two binding resul
   optional and runtime-excluded.
 
 The other published floors remain unchanged. The release vehicle for this supported line
-is v1.3.3, a dependency-contract patch backport. It does not change the 1.3 DSL,
+is v1.3.4, a dependency-contract patch backport. It does not change the 1.3 DSL,
 public API, database schema, persisted response format, token wire format, or migration set.

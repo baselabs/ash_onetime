@@ -2,7 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
-## v1.3.3 — October 6, 2026
+## v1.3.4 — October 6, 2026
+
+- **Documentation:** result-handling examples preserve unhandled typed errors for the
+  application’s error handler. The release checks exercise every documented code against all four examples;
+  the shared HTTP mapper produces safe public responses.
 
 Security dependency-floor backport for the 1.3 line. There is no DSL, public API,
 database schema, persisted response, token wire-format, or migration change.

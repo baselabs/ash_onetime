@@ -136,7 +136,7 @@ patterns.
 
 ## Status
 
-This guide targets [v1.3.3](https://hex.pm/packages/ash_onetime/1.3.3), a
+This guide targets [v1.3.4](https://hex.pm/packages/ash_onetime/1.3.4), a
 security patch for the 1.3 feature line. It raises the published Ash and optional Mint
 floors while leaving the 1.3 DSL, public API, database schema, persisted response format,
 token wire format, and external-effect behavior unchanged. The 1.3 line predates the
@@ -161,7 +161,7 @@ the [CHANGELOG](CHANGELOG.md).
   `pg_advisory_xact_lock(bigint)`); versions below 18 are not exercised by this project's
   CI — treat them as unverified.
 
-The security floors follow [ADR 0004](https://github.com/baselabs/ash_onetime/blob/v1.3.3/docs/adr/0004-security-driven-ash-floor.md).
+The security floors follow [ADR 0004](https://github.com/baselabs/ash_onetime/blob/v1.3.4/docs/adr/0004-security-driven-ash-floor.md).
 The October 6, 2026 advisory inventory identifies Ash 3.34.3 as the patched floor:
 [EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html) affects Ash
 `>= 3.5.1 and < 3.34.3`; Ash 3.33.11 contains the

@@ -9,7 +9,7 @@ status column records where it stands now.
 
 ## Security dependency maintenance
 
-The v1.3.3 dependency-security patch continues the policy in
+The v1.3.4 dependency-security patch continues the policy in
 [ADR 0004](adr/0004-security-driven-ash-floor.md). Current consumer floors for this line
 are Ash 3.34.3 (capped below 4.0.0), AshPostgres 2.13.0, AshSql 0.7.1,
 Igniter 0.8.4, and optional Mint 1.10.2. See

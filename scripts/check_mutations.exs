@@ -2,6 +2,50 @@ defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "getting-started-error-fallback" => %{
+      path: "documentation/getting-started.md",
+      original: "      _code -> {:error, error}",
+      mutated: "      nil -> {:internal_server_error, \"unexpected error\"}",
+      test: "test/ash_onetime/phoenix_documentation_test.exs",
+      tag: "documentation_fallback_mutation",
+      test_name: "introductory error examples handle every documented code without losing errors",
+      assertion: "assert {:ok, {result, _binding}} = evaluated"
+    },
+    "errors-guide-error-fallback" => %{
+      path: "documentation/errors.md",
+      original: "      _code -> {:error, error}",
+      mutated: "      nil -> {:internal_server_error, \"unexpected error\"}",
+      test: "test/ash_onetime/phoenix_documentation_test.exs",
+      tag: "documentation_fallback_mutation",
+      test_name: "introductory error examples handle every documented code without losing errors",
+      assertion: "assert {:ok, {result, _binding}} = evaluated"
+    },
+    "charge-recipe-error-fallback" => %{
+      path: "documentation/recipes.md",
+      original:
+        "      :request_in_progress -> {:conflict, \"a request for this key is already processing\"}\n" <>
+          "      _code -> {:error, error}",
+      mutated:
+        "      :request_in_progress -> {:conflict, \"a request for this key is already processing\"}\n" <>
+          "      nil -> {:internal_server_error, \"unexpected error\"}",
+      test: "test/ash_onetime/phoenix_documentation_test.exs",
+      tag: "documentation_fallback_mutation",
+      test_name: "introductory error examples handle every documented code without losing errors",
+      assertion: "assert {:ok, {result, _binding}} = evaluated"
+    },
+    "redemption-recipe-error-fallback" => %{
+      path: "documentation/recipes.md",
+      original:
+        "      :request_in_progress -> {:conflict, \"a redemption for this proof is already processing\"}\n" <>
+          "      _code -> {:error, error}",
+      mutated:
+        "      :request_in_progress -> {:conflict, \"a redemption for this proof is already processing\"}\n" <>
+          "      nil -> {:internal_server_error, \"unexpected error\"}",
+      test: "test/ash_onetime/phoenix_documentation_test.exs",
+      tag: "documentation_fallback_mutation",
+      test_name: "introductory error examples handle every documented code without losing errors",
+      assertion: "assert {:ok, {result, _binding}} = evaluated"
+    },
     "transaction-store-rollback-propagation" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:

@@ -2,9 +2,9 @@
 
 `ash_onetime` targets Elixir `~> 1.20` (which admits later 1.x releases and excludes 2.0
 or newer), Erlang/OTP 28 or 29, Ash `>= 3.34.3 and < 4.0.0`, AshPostgres `~> 2.13`,
-and PostgreSQL 11+ (CI exercises 18). This guide targets v1.3.3
-(`{:ash_onetime, "~> 1.3.3"}`); see its
-[Hex package page](https://hex.pm/packages/ash_onetime/1.3.3). Optional Mint is
+and PostgreSQL 11+ (CI exercises 18). This guide targets v1.3.4
+(`{:ash_onetime, "~> 1.3.4"}`); see its
+[Hex package page](https://hex.pm/packages/ash_onetime/1.3.4). Optional Mint is
 `~> 1.10 and >= 1.10.2` when the host carries the installer HTTP closure.
 
 Ash 3.33 additionally requires every application to declare how it counts string
@@ -119,7 +119,7 @@ case Ash.create(changeset) do
       :nonce_already_used -> {:conflict, "nonce was already used"}
       :key_reused_with_different_request -> {:conflict, "key reused with a different request"}
       :request_in_progress -> {:conflict, "request is already processing"}
-      nil -> {:internal_server_error, "unexpected error"}
+      _code -> {:error, error}
     end
 end
 ```
@@ -127,6 +127,11 @@ end
 `AshOnetime.replayed?/1` is tri-state: `true` (tracked replay), `false` (tracked fresh), or
 `nil` (untracked execution, primitive-return action, or unprotected — see
 [Replay](replay.md)). The full code→HTTP table is in [Errors](errors.md).
+
+The example distinguishes common conflicts and passes other failures to your application's
+error handler with their typed details intact. Before sending an HTTP response, use the
+[complete, safe mapping in the Phoenix guide](phoenix.md#share-one-sanitized-error-mapper); never
+render an exception's diagnostic message to the client.
 
 ## Where to next
 
