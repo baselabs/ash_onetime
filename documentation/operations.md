@@ -437,13 +437,11 @@ using it to sign. Retain every old verification key until the last token it sign
 `max_age + clock_skew`, then remove it. An unknown key identifier fails verification; never
 fall back silently to a different key.
 
-The supported runtime is Elixir `~> 1.20` (verified on 1.20.4) and Erlang/OTP 28 or 29 with
-Ash `>= 3.33.4`, AshPostgres `~> 2.13`, and PostgreSQL 18 (the version the project's test harness
-and release checks run on). The SQL surface itself needs PostgreSQL 11 or newer — declarative
+The supported runtime is Elixir `~> 1.20` (which admits later 1.x releases and
+excludes 2.0 or newer) and Erlang/OTP 28 or 29 with Ash `>= 3.34.3 and < 4.0.0`,
+AshPostgres `~> 2.13`, and optional Mint `~> 1.10 and >= 1.10.2` when the installer
+HTTP closure is present. The SQL surface needs PostgreSQL 11 or newer — declarative
 hash/range partitioning with default partitions, `SELECT ... FOR UPDATE SKIP LOCKED`, and
-`pg_advisory_xact_lock(bigint)` are all 11+ features — but nothing below 18 is exercised by
-this project's CI: treat older servers as unverified, and report (or CI-pin) the version you
-run before relying on one. Release checks include the full suite, mutation
-matrix, warnings-as-errors documentation, exact Hex archive inspection, and an unpacked
-zero-configuration consumer, all run on the runtime pinned in `.tool-versions`; see
+`pg_advisory_xact_lock(bigint)` are all 11+ features. The project's harness and release
+checks exercise PostgreSQL 18; treat older servers as unverified. See
 [CONTRIBUTING](../CONTRIBUTING.md).

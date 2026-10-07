@@ -426,6 +426,26 @@ defmodule AshOnetime.CompileFixturesTest do
   end
 
   for {case_name, {action, option, message}} <- @matrix_expectations do
+    # Each real compiler process keeps its own ExUnit deadline. Mutation groups
+    # reuse these exact-error tests rather than repeat several VMs in one test.
+    if case_name in [
+         :local_around_action,
+         :global_around_action,
+         :nonce_local_around_action,
+         :nonce_global_around_action
+       ] do
+      @tag around_guard_mutation: true
+    end
+
+    if case_name in [
+         :pure_notification_producer,
+         :global_pure_notification_producer,
+         :unclassified_notification_producer,
+         :marker_blind_notification_producer
+       ] do
+      @tag capability_guard_mutation: true
+    end
+
     @tag matrix_case: case_name
     test "rejects matrix case #{case_name} at its semantic option" do
       case_name = unquote(case_name)
@@ -463,40 +483,12 @@ defmodule AshOnetime.CompileFixturesTest do
     assert fixture_fact(output, "LOADED") == "false"
   end
 
-  @tag around_guard_mutation: true
-  test "protected CRUD actions reject every additional around-action producer" do
-    for case_name <- [
-          :local_around_action,
-          :global_around_action,
-          :nonce_local_around_action,
-          :nonce_global_around_action
-        ] do
-      {output, status} = run_matrix_case(case_name)
-      assert status != 0, output
-      assert fixture_fact(output, "RESULT") == "rejected"
-    end
-  end
-
   test "nonce CRUD requires only a closed around-action capability declaration" do
     {output, status} = run_matrix_case(:nonce_non_around_capability)
 
     assert status == 0, output
     assert fixture_fact(output, "RESULT") == "compiled"
     assert fixture_fact(output, "LOADED") == "true"
-  end
-
-  @tag capability_guard_mutation: true
-  test "lifecycle notification and effect capability declarations fail closed" do
-    for case_name <- [
-          :pure_notification_producer,
-          :global_pure_notification_producer,
-          :unclassified_notification_producer,
-          :marker_blind_notification_producer
-        ] do
-      {output, status} = run_matrix_case(case_name)
-      assert status != 0, output
-      assert fixture_fact(output, "RESULT") == "rejected"
-    end
   end
 
   @tag :dsl_idempotency_mutation

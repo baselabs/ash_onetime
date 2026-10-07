@@ -1,5 +1,3 @@
-Code.require_file("#{__DIR__}/portable.exs")
-
 defmodule AshOnetime.OptionalMatrix do
   @moduledoc false
 
@@ -17,7 +15,10 @@ defmodule AshOnetime.OptionalMatrix do
     {"igniter", [{:igniter, "~> 0.8"}], %{plug: false, oban: false, igniter: true}},
     {"all", [{:plug, "~> 1.20"}, {:oban, "~> 2.23"}, {:igniter, "~> 0.8"}],
      %{plug: true, oban: true, igniter: true}},
-    {"mint-pin", [{:mint, "~> 1.9"}], %{plug: false, oban: false, igniter: false}}
+    {"mint-pin", [{:mint, "~> 1.9"}], %{plug: false, oban: false, igniter: false}},
+    {"mint-floor", [{:mint, "== 1.10.2"}], %{plug: false, oban: false, igniter: false}},
+    {"core-floors", [{:ash, "== 3.34.3"}, {:ash_postgres, "== 2.13.0"}, {:ash_sql, "== 0.7.1"}],
+     %{plug: false, oban: false, igniter: false}}
   ]
 
   # Exact advised pins that must CONFLICT with ash_onetime's published floors: a
@@ -25,7 +26,7 @@ defmodule AshOnetime.OptionalMatrix do
   # the non-vacuous proof the floors bind in a real resolution.
   @conflict_cases [
     {"igniter-conflict", {:igniter, "== 0.8.3"}},
-    {"mint-conflict", {:mint, "== 1.9.3"}}
+    {"mint-conflict", {:mint, "== 1.10.1"}}
   ]
 
   # The generated .app's runtime applications: the runtime:true deps plus the
@@ -48,16 +49,31 @@ defmodule AshOnetime.OptionalMatrix do
   def main do
     package = File.cwd!()
 
+    {cases, conflicts} =
+      case System.argv() do
+        [] ->
+          {@cases, @conflict_cases}
+
+        ["--case", name] ->
+          selected = Enum.filter(@cases, &(elem(&1, 0) == name))
+          if selected == [], do: raise("unknown optional case #{name}")
+          {selected, []}
+
+        _ ->
+          raise "usage: mix run scripts/check_optional_matrix.exs [--case NAME]"
+      end
+
     temporary =
       Path.join(System.tmp_dir!(), "ash_onetime_optional_#{System.unique_integer([:positive])}")
 
     try do
-      Enum.each(@cases, &run_case!(&1, package, temporary))
-      Enum.each(@conflict_cases, &run_conflict_case!(&1, package, temporary))
+      Enum.each(cases, &run_case!(&1, package, temporary))
+      Enum.each(conflicts, &run_conflict_case!(&1, package, temporary))
 
       IO.puts(
-        "optional dependency matrix passed: none, plug, oban, igniter, all, mint-pin" <>
-          " (+ conflict proofs: igniter-conflict, mint-conflict)"
+        "optional dependency matrix passed: " <>
+          Enum.map_join(cases, ", ", &elem(&1, 0)) <>
+          " (+ conflict proofs: " <> Enum.map_join(conflicts, ", ", &elem(&1, 0)) <> ")"
       )
     after
       File.rm_rf!(temporary)
@@ -77,7 +93,7 @@ defmodule AshOnetime.OptionalMatrix do
     ]
 
     {output, status} =
-      AshOnetime.Portable.cmd("mix", ["deps.get"],
+      System.cmd("mix", ["deps.get"],
         cd: project,
         env: environment,
         stderr_to_stdout: true
@@ -137,6 +153,13 @@ defmodule AshOnetime.OptionalMatrix do
     # requirements force the patched versions.
     resolved = fn app -> app |> Application.spec(:vsn) |> List.to_string() end
 
+    if #{inspect(name)} == "core-floors" do
+      for {app, expected_version} <- [ash: "3.34.3", ash_postgres: "2.13.0", ash_sql: "0.7.1"] do
+        unless resolved.(app) == expected_version,
+          do: raise("core floor mismatch: \#{app}=\#{resolved.(app)}")
+      end
+    end
+
     if actual.igniter do
       unless Version.match?(resolved.(:igniter), ">= 0.8.4") do
         raise("igniter resolved to \#{resolved.(:igniter)} — the security floor did not bind")
@@ -144,14 +167,20 @@ defmodule AshOnetime.OptionalMatrix do
     end
 
     if Code.ensure_loaded?(Mint.HTTP) do
-      unless Version.match?(resolved.(:mint), ">= 1.10.1") do
+      unless Version.match?(resolved.(:mint), ">= 1.10.2") do
         raise("mint resolved to \#{resolved.(:mint)} — the security floor did not bind")
       end
     end
 
     if #{name == "mint-pin"} do
-      unless Code.ensure_loaded?(Mint.HTTP) and Version.match?(resolved.(:mint), ">= 1.10.1") do
-        raise("mint-pin case: mint must resolve to >= 1.10.1 over the consumer's ~> 1.9 pin")
+      unless Code.ensure_loaded?(Mint.HTTP) and Version.match?(resolved.(:mint), ">= 1.10.2") do
+        raise("mint-pin case: mint must resolve to >= 1.10.2 over the consumer's ~> 1.9 pin")
+      end
+    end
+
+    if #{name == "mint-floor"} do
+      unless Code.ensure_loaded?(Mint.HTTP) and resolved.(:mint) == "1.10.2" do
+        raise("mint-floor case must execute the exact patched minimum 1.10.2")
       end
     end
 
@@ -163,7 +192,7 @@ defmodule AshOnetime.OptionalMatrix do
 
   defp command!(name, project, environment, arguments) do
     {output, status} =
-      AshOnetime.Portable.cmd("mix", arguments,
+      System.cmd("mix", arguments,
         cd: project,
         env: environment,
         stderr_to_stdout: true

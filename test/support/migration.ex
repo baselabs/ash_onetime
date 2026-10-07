@@ -15,9 +15,9 @@ defmodule AshOnetime.Test.Migration do
       )
 
     # The connected server listens either on the URL's own port (a native
-    # install — Windows CI's chocolatey PostgreSQL) or on 5432 behind a host
-    # port mapping (the compose/CI service-container shape). Anything else
-    # means the Repo is not talking to the dedicated instance.
+    # install) or on 5432 behind a host port mapping (the compose/CI
+    # service-container shape). Anything else means the Repo is not talking
+    # to the dedicated instance.
     url_port =
       Application.fetch_env!(:ash_onetime, Repo)[:url]
       |> URI.parse()

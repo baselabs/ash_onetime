@@ -1,15 +1,43 @@
 # Upgrading
 
 Version-to-version migration notes. `ash_onetime` follows semantic versioning: from 1.0.0,
-breaking DSL or contract changes bump the major version (pre-1.0, breaking changes could
-land in a minor), and each breaking change lands here with the exact edit to make.
+breaking DSL or contract changes bump the major version, and each breaking change lands here
+with the exact edit to make. Dependency-floor changes follow
+[ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md):
+a security-driven minor on the latest line and patch backports for supported lines.
 
-The current package release is v1.3.2 on [Hex](https://hex.pm/packages/ash_onetime). Pin the
-minor whose public capabilities you use and review this page on each minor bump:
+This guide targets v1.3.3 ([Hex package](https://hex.pm/packages/ash_onetime/1.3.3)).
+Pin the patch release within the 1.3 line:
 
 ```elixir
-{:ash_onetime, "~> 1.3"}
+{:ash_onetime, "~> 1.3.3"}
 ```
+
+## v1.3.3 — Ash and Mint security floors (October 6, 2026)
+
+Raise any direct Ash pin to `>= 3.34.3 and < 4.0.0`. If your graph includes Mint, raise
+its pin to `~> 1.10 and >= 1.10.2`, then resolve and audit the graph:
+
+```sh
+mix deps.update ash
+mix hex.audit
+mix deps.audit
+```
+
+Update a direct Mint pin with `mix deps.update mint`. No ash_onetime DSL, public API,
+database schema, persisted response, token wire-format, or migration change is required.
+
+[EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html) affects Ash
+`>= 3.5.1 and < 3.34.3`; Ash 3.33.11 contains the
+[EEF-CVE-2026-93477](https://cna.erlef.org/osv/EEF-CVE-2026-93477.html) fix but remains
+inside the later advisory's range. Mint 1.10.2 backports
+[EEF-CVE-2026-91043](https://cna.erlef.org/osv/EEF-CVE-2026-91043.html),
+[EEF-CVE-2026-92103](https://cna.erlef.org/osv/EEF-CVE-2026-92103.html), and
+[EEF-CVE-2026-94194](https://cna.erlef.org/osv/EEF-CVE-2026-94194.html).
+
+The sections below retain the requirements and setup descriptions of their historical
+releases. Current dependency pins follow v1.3.3 above; current developer support is
+macOS and Linux, with Windows development through WSL2.
 
 ## v1.3.2 — the `Verified` constructor (2026-09-20)
 

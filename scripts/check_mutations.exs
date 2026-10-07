@@ -1,5 +1,3 @@
-Code.require_file("#{__DIR__}/portable.exs")
-
 defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
@@ -517,17 +515,17 @@ defmodule AshOnetime.MutationCheck do
     },
     "doctor-ash-floor" => %{
       path: "lib/mix/tasks/ash_onetime.doctor.ex",
-      original: "@ash_floor Version.parse!(\"3.33.4\")",
-      mutated: "@ash_floor Version.parse!(\"3.33.3\")",
+      original: "@ash_floor Version.parse!(\"3.34.3\")",
+      mutated: "@ash_floor Version.parse!(\"3.34.2\")",
       test: "test/mix/tasks/ash_onetime.doctor_test.exs",
       tag: "doctor_ash_floor_mutation",
-      test_name: "rejects the Ash release preceding the patched field-policy floor",
-      assertion: "assert {:fail, message} = Doctor.floor_status(Version.parse!(\"3.33.3\"))"
+      test_name: "rejects the Ash release preceding the patched atom-filter floor",
+      assertion: "assert {:fail, message} = Doctor.floor_status(Version.parse!(\"3.34.2\"))"
     },
     "mixpin-ash-floor" => %{
       path: "mix.exs",
-      original: "@ash_floor \"3.33.4\"",
-      mutated: "@ash_floor \"3.33.3\"",
+      original: "@ash_floor \"3.34.3\"",
+      mutated: "@ash_floor \"3.34.2\"",
       test: "test/mix/ash_pin_validation_test.exs",
       tag: "mixpin_ash_floor_mutation",
       test_name: "rejects a below-floor pin at config evaluation",
@@ -553,12 +551,12 @@ defmodule AshOnetime.MutationCheck do
     },
     "deps-mint-floor" => %{
       path: "mix.exs",
-      original: "{:mint, \"~> 1.10 and >= 1.10.1\", optional: true, runtime: false}",
-      mutated: "{:mint, \"~> 1.9\", optional: true, runtime: false}",
+      original: "{:mint, \"~> 1.10 and >= 1.10.2\", optional: true, runtime: false}",
+      mutated: "{:mint, \"~> 1.10 and >= 1.10.1\", optional: true, runtime: false}",
       test: "test/mix/dependency_security_test.exs",
       tag: "deps_mint_floor_mutation",
       test_name: "mint consumer requirement rejects advised versions",
-      assertion: "refute Version.match?(\"1.9.3\", requirement)"
+      assertion: "refute Version.match?(\"1.10.1\", requirement)"
     },
     "deps-igniter-floor" => %{
       path: "mix.exs",
@@ -891,8 +889,14 @@ defmodule AshOnetime.MutationCheck do
         "effects: effects,\n           around_action: _around_action,\n           marker: :consumed",
       test: "test/compile_fixtures_test.exs",
       tag: "around_guard_mutation",
-      test_name: "protected CRUD actions reject every additional around-action producer",
-      assertion: "for case_name <- ["
+      test_name: "rejects matrix case local_around_action at its semantic option",
+      assertion: "assert status != 0, output",
+      required_failures: [
+        {"rejects matrix case local_around_action at its semantic option",
+         "assert status != 0, output"},
+        {"rejects matrix case global_around_action at its semantic option",
+         "assert status != 0, output"}
+      ]
     },
     "nonce-around-capability" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -902,8 +906,14 @@ defmodule AshOnetime.MutationCheck do
         "effects: _effects,\n           around_action: _around_action,\n           marker: _marker",
       test: "test/compile_fixtures_test.exs",
       tag: "around_guard_mutation",
-      test_name: "protected CRUD actions reject every additional around-action producer",
-      assertion: "for case_name <- ["
+      test_name: "rejects matrix case nonce_local_around_action at its semantic option",
+      assertion: "assert status != 0, output",
+      required_failures: [
+        {"rejects matrix case nonce_local_around_action at its semantic option",
+         "assert status != 0, output"},
+        {"rejects matrix case nonce_global_around_action at its semantic option",
+         "assert status != 0, output"}
+      ]
     },
     "pure-producer-capability" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -913,8 +923,14 @@ defmodule AshOnetime.MutationCheck do
         "%{notifications: _notifications, effects: false, around_action: false, marker: :unused} =\n           capabilities",
       test: "test/compile_fixtures_test.exs",
       tag: "capability_guard_mutation",
-      test_name: "lifecycle notification and effect capability declarations fail closed",
-      assertion: "for case_name <- ["
+      test_name: "rejects matrix case pure_notification_producer at its semantic option",
+      assertion: "assert status != 0, output",
+      required_failures: [
+        {"rejects matrix case pure_notification_producer at its semantic option",
+         "assert status != 0, output"},
+        {"rejects matrix case global_pure_notification_producer at its semantic option",
+         "assert status != 0, output"}
+      ]
     },
     "marker-consumption-capability" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -923,8 +939,12 @@ defmodule AshOnetime.MutationCheck do
       mutated: "effects: effects,\n           around_action: false,\n           marker: _marker",
       test: "test/compile_fixtures_test.exs",
       tag: "capability_guard_mutation",
-      test_name: "lifecycle notification and effect capability declarations fail closed",
-      assertion: "for case_name <- ["
+      test_name: "rejects matrix case marker_blind_notification_producer at its semantic option",
+      assertion: "assert status != 0, output",
+      required_failures: [
+        {"rejects matrix case marker_blind_notification_producer at its semantic option",
+         "assert status != 0, output"}
+      ]
     },
     "wrapper-protection" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -1643,14 +1663,14 @@ defmodule AshOnetime.MutationCheck do
     env = mutation_environment()
 
     {compile_output, compile_status} =
-      AshOnetime.Portable.cmd("mix", ["compile", "--force"], env: env, stderr_to_stdout: true)
+      System.cmd("mix", ["compile", "--force"], env: env, stderr_to_stdout: true)
 
     if compile_status != 0 do
       raise "mutation #{name} failed to compile:\n#{compile_output}"
     end
 
     {output, status} =
-      AshOnetime.Portable.cmd(
+      System.cmd(
         "mix",
         ["run", "--no-compile", "scripts/probe_compile_fixture.exs", fixture, expected],
         env: env,
@@ -1671,7 +1691,7 @@ defmodule AshOnetime.MutationCheck do
   defp run_test(mutation) do
     env = mutation_environment()
 
-    AshOnetime.Portable.cmd(
+    System.cmd(
       "mix",
       ["test", "--force", mutation.test, "--only", mutation.tag, "--seed", "0"],
       env: env,

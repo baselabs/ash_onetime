@@ -33,22 +33,23 @@ distinguishable from "some other error occurred."
 ## Class and HTTP
 
 All `AshOnetime.Error` codes are class `:invalid`. AshJsonApi and AshGraphql auto-map class
-`:invalid` to the 4xx family. That default is correct for the client-input codes below, but a
-family of **server-fault and transport codes overrides it to 5xx** — a consumer mapping
-class→HTTP must special-case those (the two 5xx tables below), or a store outage, a trusted
-clock fault, or an internal invariant violation is mis-reported to the client as a 4xx.
+`:invalid` to the 4xx family. That default is correct for the client-input codes below except
+the explicitly retryable verification timeout. A family of **server-fault and transport codes
+also overrides it to 5xx** — a consumer mapping class→HTTP must special-case those codes, or a
+store outage, a trusted clock fault, or an internal invariant violation is mis-reported to the
+client as a 4xx.
 
 This page lists every code a caller can observe from `AshOnetime.Error.code/1`, including the
 token-verification codes, the trusted-clock codes, and the store-fault/transport codes routed
 through the authoritative store — not only the codes raised on the happy admission path.
 
-### Client-input / operational codes (4xx)
+### Client-input / operational codes (4xx) and verification timeout (503)
 
 | Code | HTTP | Meaning |
 |---|---|---|
 | `:nonce_already_used` | 409 | A one-time nonce was already spent. |
 | `:key_reused_with_different_request` | 409/422 | An idempotency key was reused with a different request fingerprint. |
-| `:request_in_progress` | 409 / 425 | A `processing` claim is still in flight for this key. |
+| `:request_in_progress` | 409 / 425 | A local `processing` claim is still in flight for this key. The 1.3 external-effect path does not have the pre-peer claim lock introduced in 1.4. |
 | `:verification_failed` | 401 | A trusted verifier rejected the token. |
 | `:verification_timeout` | 503 | A trusted verifier timed out (retryable). |
 | `:fingerprint_too_large` | 422 | The request fingerprint exceeded its byte limit. |
@@ -132,6 +133,7 @@ configuration faults that will not clear by retrying.
 |---|---|---|
 | `:checkout_unavailable` | **503** | No database connection could be checked out (pool exhausted or down). |
 | `:disconnected` | **503** | The database connection dropped mid-operation. |
+| `:worker_timeout` | **503** | The independently committed claim's worker exceeded its 30s ceiling. |
 | `:lock_timeout` | **503** | A row lock could not be acquired within the timeout. |
 | `:dispatched_unknown` | **503** | A statement was dispatched but its outcome is unknown (retryable). |
 | `:store_failure` | **503** | The authoritative store failed for an unenumerated reason. |

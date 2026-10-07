@@ -1,9 +1,7 @@
-Code.require_file("../../scripts/portable.exs", __DIR__)
-
 defmodule AshOnetime.MixAshPinValidationTest do
   # Ticket #13: the ASH_ONETIME_ASH_VERSION pin branch in mix.exs ash_requirement/0
   # must fail closed at project-config evaluation time when the pinned value is not a
-  # version inside the published range [3.33.4, 4.0.0). A publish with an invalid pin
+  # version inside the published range [3.34.3, 4.0.0). A publish with an invalid pin
   # exported would otherwise freeze a wrong "==" requirement into the hex package
   # silently. This drives the REAL surface — a mix invocation with the variable set,
   # exactly how a mis-pinned publish or CI cell hits it — rather than calling the
@@ -20,7 +18,7 @@ defmodule AshOnetime.MixAshPinValidationTest do
   @pin_var "ASH_ONETIME_ASH_VERSION"
 
   defp mix_compile(pin) do
-    AshOnetime.Portable.cmd("mix", ["compile", "--no-deps-check"],
+    System.cmd("mix", ["compile", "--no-deps-check"],
       env: %{@pin_var => pin},
       stderr_to_stdout: true,
       cd: File.cwd!()
@@ -29,11 +27,11 @@ defmodule AshOnetime.MixAshPinValidationTest do
 
   @tag :mixpin_ash_floor_mutation
   test "rejects a below-floor pin at config evaluation" do
-    {output, exit} = mix_compile("3.33.3")
+    {output, exit} = mix_compile("3.34.2")
 
     assert exit != 0
-    assert output =~ "3.33.3"
-    assert output =~ "3.33.4"
+    assert output =~ "3.34.2"
+    assert output =~ "3.34.3"
   end
 
   test "rejects a non-version pin" do
@@ -51,7 +49,7 @@ defmodule AshOnetime.MixAshPinValidationTest do
   end
 
   test "accepts the floor pin" do
-    {_output, exit} = mix_compile("3.33.4")
+    {_output, exit} = mix_compile("3.34.3")
 
     assert exit == 0
   end
@@ -64,10 +62,10 @@ defmodule AshOnetime.MixAshPinValidationTest do
   end
 
   test "rejects a build-metadata pin" do
-    {output, exit} = mix_compile("3.33.4+build5")
+    {output, exit} = mix_compile("3.34.3+build5")
 
     assert exit != 0
-    assert output =~ "3.33.4+build5"
+    assert output =~ "3.34.3+build5"
   end
 
   test "keeps the floating default when the variable is unset" do
@@ -75,7 +73,7 @@ defmodule AshOnetime.MixAshPinValidationTest do
     # parent environment cannot prove the unset path — a nil value in the child env
     # deterministically UNSETS the variable for the subprocess instead.
     {output, exit} =
-      AshOnetime.Portable.cmd("mix", ["compile", "--no-deps-check"],
+      System.cmd("mix", ["compile", "--no-deps-check"],
         env: %{@pin_var => nil},
         stderr_to_stdout: true,
         cd: File.cwd!()

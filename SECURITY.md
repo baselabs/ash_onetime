@@ -17,6 +17,11 @@ From 1.0.0 the security window covers the latest two minors. The window may wide
 (announced as a docs change) and never silently narrows — a narrowing is announced one
 minor ahead in the release notes.
 
+The October 6, 2026 dependency-advisory intake occurred while the 1.4 and
+1.3 lines were inside the support obligation. The v1.3.3 patch carries that line's
+Ash 3.34.3 and optional Mint 1.10.2 floor repair. Publishing a newer minor does not
+discharge a security fix owed to a line that was supported when the advisory entered intake.
+
 ## Fix and disclosure policy
 
 - Security fixes ship as patch releases on the supported minors. A fix that takes the

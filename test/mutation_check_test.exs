@@ -1,5 +1,3 @@
-Code.require_file("../scripts/portable.exs", __DIR__)
-
 defmodule AshOnetime.MutationCheckTest do
   use ExUnit.Case, async: false
 
@@ -7,7 +5,7 @@ defmodule AshOnetime.MutationCheckTest do
   @tag :mutation_checker_source_site_mutation
   test "mutation checker self-test proves restoration requires an executed ExUnit result" do
     {output, status} =
-      AshOnetime.Portable.cmd(
+      System.cmd(
         "mix",
         ["run", "scripts/check_mutations.exs", "--self-test"],
         env: [{"MIX_ENV", "test"}],

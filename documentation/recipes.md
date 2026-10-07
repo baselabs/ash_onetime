@@ -3,11 +3,13 @@
 Three end-to-end patterns — payment idempotency, webhook deduplication, and redemption-link
 single-use — showing the resource DSL, a response codec, a classifier, and the call-site
 result handling together. The codec and classifier shapes here match the `AshOnetime.Codec`
-behaviour and the `classify/2` contract on `AshOnetime.ResponseClassifier`; copy them and
+behavior and the `classify/2` contract on `AshOnetime.ResponseClassifier`; copy them and
 adapt the encode/decode/classify logic to your domain.
 
-> Runnable shapes, not a runnable app. The modules compile against the published codec and
-> classifier contracts; wire them into your own Ash domain and actions.
+> Integration shapes, not a standalone app. Supply your application's domain, repository,
+> PostgreSQL table configuration, migrations, and surrounding controller or worker code.
+> The codec, classifier, protection, and call-boundary fragments show the package contracts
+> that those application-owned pieces compose.
 
 ## Response codec and classifier contracts
 
@@ -16,7 +18,7 @@ the Ash return value into a self-describing `(tag, payload)` pair; the classifie
 whether a given value is stored, rejected, or rolled back at the persistence boundary.
 
 ```elixir
-# A codec implements the AshOnetime.Codec behaviour.
+# A codec implements the AshOnetime.Codec behavior.
 #   format_tag/0          -> a stable tag, 1..81 bytes, [A-Za-z0-9._-]+
 #   encode(value, contract, opts)   -> {:ok, tag, payload} | {:error, AshOnetime.Error.t()}
 #   decode(tag, payload, contract, opts) -> {:ok, value} | {:error, AshOnetime.Error.t()}

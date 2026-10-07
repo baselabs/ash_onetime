@@ -1,5 +1,3 @@
-Code.require_file("../../../scripts/portable.exs", __DIR__)
-
 defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
   use ExUnit.Case, async: false
 
@@ -80,7 +78,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
     package = Path.join(temporary, "package")
 
     {output, status} =
-      AshOnetime.Portable.cmd("mix", ["hex.build", "--unpack", "--output", package],
+      System.cmd("mix", ["hex.build", "--unpack", "--output", package],
         cd: File.cwd!(),
         stderr_to_stdout: true
       )
