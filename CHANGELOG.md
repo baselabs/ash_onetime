@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
-## v1.5.0 — 2026-10-06
+## v1.5.0 — October 7, 2026
 
 Security dependency release. The package DSL, public API, database schema, persisted
 response format, and token wire format are unchanged; no migration is required.
@@ -26,13 +26,18 @@ must update those dependencies. See [Upgrading](documentation/upgrading.md) for 
   [EEF-CVE-2026-94194](https://cna.erlef.org/osv/EEF-CVE-2026-94194.html). Mint remains
   optional and runtime-excluded; the requirement binds only dependency graphs that already
   carry the installer HTTP closure.
-- **Supported-line backports remain release obligations.** The advisory entered intake while
-  1.4.x and 1.3.x were the supported latest and previous lines. The floor-only backport
-  targets are 1.4.1 and 1.3.3; this entry does not claim those candidates are published.
+- **Security patches for existing feature lines:**
+  [1.4.2](https://hex.pm/packages/ash_onetime/1.4.2) and
+  [1.3.4](https://hex.pm/packages/ash_onetime/1.3.4) carry the same dependency floors.
+  Applications staying on those lines can take the patch without adopting a newer
+  feature line. Neither patch changes its line's DSL, API, schema, or wire format.
 
 ### Changed
 
-- **Lock:** `ash` 3.33.11 → 3.34.4, `ash_postgres` 2.13.1 → 2.14.2,
+- Result-handling examples preserve unhandled typed errors for the application’s handler;
+  release checks exercise every documented code against all four introductory expressions.
+
+- **Lock:** `ash` 3.33.11 → 3.34.4, `ash_postgres` 2.13.1 → 2.14.3,
   `ash_sql` 0.7.6 → 0.8.1, `spark` 2.7.3 → 2.7.6, `mint` 1.10.1 → 1.11.0, with
   `ex_ast` 0.16.0, `finch` 0.24.0, and `req` 0.7.5 riding the resolution, for the
   dependency-currency gate. The development lock exercises current releases while the

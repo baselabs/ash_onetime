@@ -118,7 +118,7 @@ case Ash.create(changeset) do
       :nonce_already_used -> {:conflict, "nonce was already used"}
       :key_reused_with_different_request -> {:conflict, "key reused with a different request"}
       :request_in_progress -> {:conflict, "request is already processing"}
-      nil -> {:internal_server_error, "unexpected error"}
+      _code -> {:error, error}
     end
 end
 ```
@@ -126,6 +126,11 @@ end
 `AshOnetime.replayed?/1` is tri-state: `true` (tracked replay), `false` (tracked fresh), or
 `nil` (untracked execution, primitive-return action, or unprotected — see
 [Replay](replay.md)). The full code→HTTP table is in [Errors](errors.md).
+
+The example distinguishes common conflicts and passes other failures to your application's
+error handler with their typed details intact. Before sending an HTTP response, use the
+[complete, safe mapping in the Phoenix guide](phoenix.md#share-one-sanitized-error-mapper); never
+render an exception's diagnostic message to the client.
 
 ## Where to next
 

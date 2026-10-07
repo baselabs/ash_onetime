@@ -208,6 +208,7 @@ database schema, persisted response format, or token wire format.
 The support obligation attaches when the advisory enters intake; publishing a new minor does
 not erase fixes owed to lines that were supported at intake. The October 6 intake occurred
 while 1.4.x was the latest supported line and 1.3.x was the previous supported line.
-Accordingly, floor-only patch backports are required for both: 1.4.1 and 1.3.3 are release
-targets. This amendment does not claim either candidate is published; release closeout must
-replace candidate notes with verified Hex identities.
+The floor-only patch backports are
+[1.4.2](https://hex.pm/packages/ash_onetime/1.4.2) and
+[1.3.4](https://hex.pm/packages/ash_onetime/1.3.4). Each preserves its own feature line;
+the 1.3 patch does not acquire the pre-peer claim lock introduced in 1.4.

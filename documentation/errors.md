@@ -21,7 +21,7 @@ case Ash.create(changeset) do
       :request_in_progress -> {:conflict, "request is already processing"}  # 425 Too Early also fits
       :verification_failed -> {:unauthorized, "verification failed"}
       :verification_timeout -> {:service_unavailable, "verification timed out"}
-      nil -> {:internal_server_error, "unexpected error"}  # not an ash_onetime error
+      _code -> {:error, error}
     end
 end
 ```
@@ -29,6 +29,11 @@ end
 `code/1` returns `nil` for any value that is not an `AshOnetime.Error` and contains no
 `AshOnetime.Error` leaf — so "ash_onetime rejected this with a known code" is cleanly
 distinguishable from "some other error occurred."
+
+This example handles common conflicts and verifier failures; other errors return unchanged
+to your application's error handler. Use the [shared HTTP helper](phoenix.md#share-one-sanitized-error-mapper)
+to map every code in the tables below to a public response without exposing diagnostic
+messages. An unlisted code must remain a handled error, never a missing `case` branch.
 
 ## Class and HTTP
 

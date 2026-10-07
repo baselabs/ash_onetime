@@ -21,8 +21,10 @@ Support is fixed at advisory intake, not recalculated to discard work when a new
 If the latest and previous lines are supported when an advisory arrives, both retain their
 patch obligations even when the latest-line fix is released as a new security-driven minor.
 For the October 6, 2026 dependency-floor intake, 1.4.x and 1.3.x were those two lines;
-therefore v1.5.0 does not discharge the required 1.4.1 and 1.3.3 floor-only backports. Those
-versions are release targets, not a claim that the artifacts are already published.
+their dependency-floor patches are
+[1.4.2](https://hex.pm/packages/ash_onetime/1.4.2) and
+[1.3.4](https://hex.pm/packages/ash_onetime/1.3.4). Applications staying on either feature
+line can update its patch version rather than move to 1.5.0.
 
 ## Fix and disclosure policy
 

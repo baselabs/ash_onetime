@@ -14,7 +14,7 @@ minor whose public capabilities you use and review this page on each minor bump:
 {:ash_onetime, "~> 1.5.0"}
 ```
 
-## v1.5.0 — Ash and Mint security floors (2026-10-06)
+## v1.5.0 — Ash and Mint security floors (October 7, 2026)
 
 Raise any direct Ash pin to `>= 3.34.3 and < 4.0.0`. If your dependency graph includes Mint,
 raise its pin to `~> 1.10 and >= 1.10.2`, then resolve the graph again:
@@ -43,9 +43,12 @@ All other dependency floors are unchanged. This release does not change the ash_
 public API, database schema, persisted response format, or token wire format, and it requires
 no migration.
 
-**Release-candidate note:** the required supported-line backports target
-`{:ash_onetime, "~> 1.4.1"}` and `{:ash_onetime, "~> 1.3.3"}`. This note does not claim
-either artifact is published; replace it with verified Hex links during release closeout.
+**Keeping your current feature line:** use
+`{:ash_onetime, "~> 1.4.2"}` ([1.4.2](https://hex.pm/packages/ash_onetime/1.4.2)) or
+`{:ash_onetime, "~> 1.3.4"}` ([1.3.4](https://hex.pm/packages/ash_onetime/1.3.4)). Both
+patches carry these dependency floors and preserve their feature line's public interfaces
+and storage formats.
+The Ash and Mint pin updates above apply to those patches too.
 
 ## v1.4.0 — the pre-peer claim lock and the corrected external-effect contract (2026-09-24)
 
