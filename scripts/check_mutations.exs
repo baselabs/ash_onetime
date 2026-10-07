@@ -2,6 +2,50 @@ defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "getting-started-error-fallback" => %{
+      path: "documentation/getting-started.md",
+      original: "      _code -> {:error, error}",
+      mutated: "      nil -> {:internal_server_error, \"unexpected error\"}",
+      test: "test/ash_onetime/phoenix_documentation_test.exs",
+      tag: "documentation_fallback_mutation",
+      test_name: "introductory error examples handle every documented code without losing errors",
+      assertion: "assert {:ok, {result, _binding}} = evaluated"
+    },
+    "errors-guide-error-fallback" => %{
+      path: "documentation/errors.md",
+      original: "      _code -> {:error, error}",
+      mutated: "      nil -> {:internal_server_error, \"unexpected error\"}",
+      test: "test/ash_onetime/phoenix_documentation_test.exs",
+      tag: "documentation_fallback_mutation",
+      test_name: "introductory error examples handle every documented code without losing errors",
+      assertion: "assert {:ok, {result, _binding}} = evaluated"
+    },
+    "charge-recipe-error-fallback" => %{
+      path: "documentation/recipes.md",
+      original:
+        "      :request_in_progress -> {:conflict, \"a request for this key is already processing\"}\n" <>
+          "      _code -> {:error, error}",
+      mutated:
+        "      :request_in_progress -> {:conflict, \"a request for this key is already processing\"}\n" <>
+          "      nil -> {:internal_server_error, \"unexpected error\"}",
+      test: "test/ash_onetime/phoenix_documentation_test.exs",
+      tag: "documentation_fallback_mutation",
+      test_name: "introductory error examples handle every documented code without losing errors",
+      assertion: "assert {:ok, {result, _binding}} = evaluated"
+    },
+    "redemption-recipe-error-fallback" => %{
+      path: "documentation/recipes.md",
+      original:
+        "      :request_in_progress -> {:conflict, \"a redemption for this proof is already processing\"}\n" <>
+          "      _code -> {:error, error}",
+      mutated:
+        "      :request_in_progress -> {:conflict, \"a redemption for this proof is already processing\"}\n" <>
+          "      nil -> {:internal_server_error, \"unexpected error\"}",
+      test: "test/ash_onetime/phoenix_documentation_test.exs",
+      tag: "documentation_fallback_mutation",
+      test_name: "introductory error examples handle every documented code without losing errors",
+      assertion: "assert {:ok, {result, _binding}} = evaluated"
+    },
     "transaction-store-rollback-propagation" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:
@@ -889,8 +933,14 @@ defmodule AshOnetime.MutationCheck do
         "effects: effects,\n           around_action: _around_action,\n           marker: :consumed",
       test: "test/compile_fixtures_test.exs",
       tag: "around_guard_mutation",
-      test_name: "protected CRUD actions reject every additional around-action producer",
-      assertion: "for case_name <- ["
+      test_name: "rejects matrix case local_around_action at its semantic option",
+      assertion: "assert status != 0, output",
+      required_failures: [
+        {"rejects matrix case local_around_action at its semantic option",
+         "assert status != 0, output"},
+        {"rejects matrix case global_around_action at its semantic option",
+         "assert status != 0, output"}
+      ]
     },
     "nonce-around-capability" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -900,8 +950,14 @@ defmodule AshOnetime.MutationCheck do
         "effects: _effects,\n           around_action: _around_action,\n           marker: _marker",
       test: "test/compile_fixtures_test.exs",
       tag: "around_guard_mutation",
-      test_name: "protected CRUD actions reject every additional around-action producer",
-      assertion: "for case_name <- ["
+      test_name: "rejects matrix case nonce_local_around_action at its semantic option",
+      assertion: "assert status != 0, output",
+      required_failures: [
+        {"rejects matrix case nonce_local_around_action at its semantic option",
+         "assert status != 0, output"},
+        {"rejects matrix case nonce_global_around_action at its semantic option",
+         "assert status != 0, output"}
+      ]
     },
     "pure-producer-capability" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -911,8 +967,14 @@ defmodule AshOnetime.MutationCheck do
         "%{notifications: _notifications, effects: false, around_action: false, marker: :unused} =\n           capabilities",
       test: "test/compile_fixtures_test.exs",
       tag: "capability_guard_mutation",
-      test_name: "lifecycle notification and effect capability declarations fail closed",
-      assertion: "for case_name <- ["
+      test_name: "rejects matrix case pure_notification_producer at its semantic option",
+      assertion: "assert status != 0, output",
+      required_failures: [
+        {"rejects matrix case pure_notification_producer at its semantic option",
+         "assert status != 0, output"},
+        {"rejects matrix case global_pure_notification_producer at its semantic option",
+         "assert status != 0, output"}
+      ]
     },
     "marker-consumption-capability" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -921,8 +983,12 @@ defmodule AshOnetime.MutationCheck do
       mutated: "effects: effects,\n           around_action: false,\n           marker: _marker",
       test: "test/compile_fixtures_test.exs",
       tag: "capability_guard_mutation",
-      test_name: "lifecycle notification and effect capability declarations fail closed",
-      assertion: "for case_name <- ["
+      test_name: "rejects matrix case marker_blind_notification_producer at its semantic option",
+      assertion: "assert status != 0, output",
+      required_failures: [
+        {"rejects matrix case marker_blind_notification_producer at its semantic option",
+         "assert status != 0, output"}
+      ]
     },
     "wrapper-protection" => %{
       path: "lib/ash_onetime/resource/transformer.ex",

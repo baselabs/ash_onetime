@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## v1.4.2 — October 6, 2026
+
+- **Lock:** update AshPostgres from 2.14.2 to 2.14.3 after the dependency-currency
+  gate identified the new patch release. Published dependency requirements are unchanged.
+- **Documentation:** the getting-started, errors, and recipe examples preserve unhandled
+  typed errors for the application’s handler instead of raising on an unlisted code.
+  Release checks exercise every documented code against all four expressions, alongside
+  the complete, safe HTTP mapping in the Phoenix guide.
+
 ## v1.4.1 — October 6, 2026
 
 Security dependency-floor backport for the 1.4 line. There is no DSL, public API,

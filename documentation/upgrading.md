@@ -6,12 +6,21 @@ with the exact edit to make. Dependency-floor changes follow
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md):
 a security-driven minor on the latest line and patch backports for supported lines.
 
-This guide targets v1.4.1 ([Hex package](https://hex.pm/packages/ash_onetime/1.4.1)).
+This guide targets v1.4.2 ([Hex package](https://hex.pm/packages/ash_onetime/1.4.2)).
 Pin the patch release within the 1.4 line:
 
 ```elixir
-{:ash_onetime, "~> 1.4.1"}
+{:ash_onetime, "~> 1.4.2"}
 ```
+
+## v1.4.2 — result-handling examples (October 6, 2026)
+
+This patch corrects the introductory examples so an unlisted typed error returns to
+application error handling instead of raising `CaseClauseError`. If you adapted those
+examples, keep a catch-all branch and use the complete safe mapper in the
+[Phoenix guide](phoenix.md#share-one-sanitized-error-mapper) at the HTTP boundary.
+Dependency floors and AshOnetime's public interfaces are unchanged from 1.4.1;
+no migration is needed.
 
 ## v1.4.1 — Ash and Mint security floors (October 6, 2026)
 

@@ -6,6 +6,48 @@ defmodule AshOnetime.PhoenixDocumentationTest do
   @phoenix_guide "documentation/phoenix.md"
   @errors_guide "documentation/errors.md"
 
+  @tag documentation_fallback_mutation: true
+  test "introductory error examples handle every documented code without losing errors" do
+    documented = documented_statuses!()
+
+    examples =
+      for path <- [@errors_guide, "documentation/getting-started.md", "documentation/recipes.md"],
+          [source] <-
+            Regex.scan(
+              ~r/case AshOnetime\.Error\.code\(error\) do\n.*?\n    end/s,
+              File.read!(path),
+              capture: :first
+            ) do
+        {path, Code.string_to_quoted!(source)}
+      end
+
+    assert length(examples) == 4
+
+    for {path, quoted} <- examples,
+        code <- Map.keys(documented) ++ [:unknown_code] do
+      error = Ash.Error.to_ash_error([Error.new(code, "internal diagnostic")])
+
+      evaluated =
+        try do
+          {:ok, Code.eval_quoted(quoted, [error: error], file: path)}
+        rescue
+          exception -> {:error, exception}
+        end
+
+      assert {:ok, {result, _binding}} = evaluated
+
+      case result do
+        {:error, returned} ->
+          assert returned == error
+
+        {status, public_message} ->
+          assert status_number!(status) in Map.fetch!(documented, code)
+          assert is_binary(public_message)
+          refute public_message =~ "internal diagnostic"
+      end
+    end
+  end
+
   test "the shared guide helper maps every documented code and sanitizes wrapped errors" do
     helper = compile_guide_helper!()
     documented = documented_statuses!()

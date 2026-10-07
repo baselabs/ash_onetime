@@ -136,10 +136,14 @@ case Ash.create(changeset) do
       :key_reused_with_different_request -> {:conflict, "idempotency key reused with a different payload"}
       # A concurrent request for the same key is mid-flight.
       :request_in_progress -> {:conflict, "a request for this key is already processing"}
-      nil -> {:internal_server_error, "unexpected error"}
+      _code -> {:error, error}
     end
 end
 ```
+
+The two conflict branches describe retry behavior. Other failures keep their typed error
+for your application's handler; the [shared HTTP helper](phoenix.md#share-one-sanitized-error-mapper)
+maps the remaining codes to safe public responses.
 
 ## Recipe 2 — Webhook deduplication
 
@@ -244,10 +248,14 @@ case Ash.update(Ash.Changeset.for_update(link, :redeem, %{proof: proof})) do
     case AshOnetime.Error.code(error) do
       :nonce_already_used -> {:conflict, "this redemption link has already been used"}
       :request_in_progress -> {:conflict, "a redemption for this proof is already processing"}
-      nil -> {:internal_server_error, "unexpected error"}
+      _code -> {:error, error}
     end
 end
 ```
+
+Invalid proofs and store failures take the fallback branch without raising. Pass those
+errors through the [shared HTTP helper](phoenix.md#share-one-sanitized-error-mapper) before responding;
+keep exception messages inside the application.
 
 ## Recipe 4 — External effect via a transactional outbox
 

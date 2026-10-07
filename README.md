@@ -137,7 +137,7 @@ transactional-outbox patterns.
 
 ## Status
 
-This guide targets [v1.4.1](https://hex.pm/packages/ash_onetime/1.4.1), a
+This guide targets [v1.4.2](https://hex.pm/packages/ash_onetime/1.4.2), a
 security patch for the 1.4 feature line. It raises the published Ash and optional Mint
 floors while leaving the 1.4 DSL, public API, database schema, persisted response format,
 token wire format, and pre-peer claim-lock behavior unchanged. Consumers that pin either
@@ -160,7 +160,7 @@ the [CHANGELOG](CHANGELOG.md).
   `pg_advisory_xact_lock(bigint)`); versions below 18 are not exercised by this project's
   CI — treat them as unverified.
 
-The security floors follow [ADR 0004](https://github.com/baselabs/ash_onetime/blob/v1.4.1/docs/adr/0004-security-driven-ash-floor.md).
+The security floors follow [ADR 0004](https://github.com/baselabs/ash_onetime/blob/v1.4.2/docs/adr/0004-security-driven-ash-floor.md).
 The October 6, 2026 advisory inventory identifies Ash 3.34.3 as the patched floor:
 [EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html) affects Ash
 `>= 3.5.1 and < 3.34.3`; Ash 3.33.11 contains the
