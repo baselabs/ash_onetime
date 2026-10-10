@@ -413,11 +413,26 @@ defmodule AshOnetime.Store.Postgres do
     WHERE #{@logical_key_predicate}
     """
 
-    case dispatched_query(target, sql, parameters) do
+    case nonce_deadline_query(target, sql, parameters) do
       {:ok, %{rows: [[%DateTime{} = deadline]]}} -> {:ok, deadline}
       {:ok, %{rows: []}} -> :not_found
-      {:ok, _result} -> Result.failure(:store_invariant, :sent, :not_applicable)
+      {:ok, _result} -> Result.failure(:store_invariant, :not_started, :not_applicable)
       {:error, %Result{} = result} -> result
+    end
+  end
+
+  defp nonce_deadline_query(target, sql, parameters) do
+    # A failed observation must not abort the host's earlier writes. Postgrex
+    # savepoint mode requires an existing transaction; outside one use a normal read.
+    mode = if target.repo_module.in_transaction?(), do: :savepoint, else: :transaction
+
+    case SQL.query(target.dynamic_repo, sql, parameters, mode: mode) do
+      {:ok, result} ->
+        {:ok, result}
+
+      {:error, error} ->
+        result = classify_query_error(error)
+        {:error, %{result | admission_dispatch: :not_started, transaction: :not_applicable}}
     end
   end
 
@@ -495,18 +510,47 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   # No admission pre-read: valid proofs still use INSERT/ON CONFLICT. An invalid
-  # window can only reject. Preserve legacy errors when retention was not extended.
-  defp expired_nonce_result(target, %Request{retain_for: retain_for, max_age: max_age} = request)
-       when is_integer(retain_for) and retain_for > max_age do
-    case select_claim(target, :one_time_nonce, logical_key(target, request)) do
-      {:ok, claim} -> collision_result(target, claim)
-      {:error, :missing} -> Result.failure(:invalid_nonce_window, :sent, :open)
-      {:error, %Result{} = result} -> result
+  # window can only reject. Preserve legacy errors when retain_for was omitted.
+  defp expired_nonce_result(target, %Request{retain_for: retain_for} = request)
+       when is_integer(retain_for) do
+    case select_nonce_for_replay(target, request) do
+      {:ok, claim} ->
+        if DateTime.compare(request.clock.now(), claim.retain_until) in [:lt, :eq] do
+          collision_result(target, claim)
+        else
+          Result.failure(:invalid_nonce_window, :sent, :open)
+        end
+
+      {:error, :missing} ->
+        Result.failure(:invalid_nonce_window, :sent, :open)
+
+      {:error, %Result{} = result} ->
+        result
     end
   end
 
   defp expired_nonce_result(_target, _request),
     do: Result.failure(:invalid_nonce_window, :not_started, :open)
+
+  defp select_nonce_for_replay(target, request) do
+    {table, columns} = claim_projection(:one_time_nonce)
+
+    # This lookup only chooses a refusal; it can never admit or mutate a claim.
+    # A plain SELECT observes the committed deadline without blocking on row locks.
+    # Cleanup racing this observation is safe: both possible results refuse admission.
+    sql = """
+    SELECT #{columns}
+    FROM #{relation(target, table)}
+    WHERE #{@logical_key_predicate}
+    """
+
+    case dispatched_query(target, sql, Tuple.to_list(logical_key(target, request))) do
+      {:ok, %{num_rows: 1, rows: [row]}} -> {:ok, decode_claim(:one_time_nonce, row)}
+      {:ok, %{num_rows: 0}} -> {:error, :missing}
+      {:ok, _result} -> {:error, Result.failure(:store_invariant, :sent, :open)}
+      {:error, %Result{} = result} -> {:error, result}
+    end
+  end
 
   defp complete_transaction(target, claim, codec, digest, encoded_response),
     do: complete_transaction(target, claim, codec, digest, encoded_response, :database)

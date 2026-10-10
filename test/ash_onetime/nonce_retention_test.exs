@@ -68,6 +68,7 @@ defmodule AshOnetime.NonceRetentionTest do
     assert {:ok, {:error, %Error{code: :invalid_nonce_window}}} = spend(options)
   end
 
+  @tag retention_acceptance_mutation: true
   test "long retention never widens acceptance", %{prefix: prefix} do
     options = options(prefix, "too-old", Clock.now())
     Clock.freeze(DateTime.add(Clock.now(), 301, :second))
@@ -76,6 +77,8 @@ defmodule AshOnetime.NonceRetentionTest do
     assert count(prefix) == 0
   end
 
+  @tag retention_duration_mutation: true
+  @tag retention_replay_mutation: true
   test "late replay remains a collision and cleanup preserves the stored deadline", %{
     prefix: prefix,
     target: target
@@ -86,6 +89,11 @@ defmodule AshOnetime.NonceRetentionTest do
     Clock.freeze(issued)
     options = options(prefix, "late-replay", issued)
     assert {:ok, :ok} = spend(options)
+    # Age the database admission floor too: legacy retention is now past,
+    # while the extended retention deadline remains in the future.
+    age_row(prefix, 200)
+    issued = DateTime.add(issued, -200, :second)
+    options = options(prefix, "late-replay", issued)
     Clock.freeze(now)
 
     assert {:ok, %{nonce: 0}} = Store.cleanup(target, 100)
@@ -136,20 +144,179 @@ defmodule AshOnetime.NonceRetentionTest do
     assert count(prefix) == 0
   end
 
+  @tag retention_legacy_mutation: true
   test "omitting retain_for preserves the exact old stored deadline", %{prefix: prefix} do
     issued = Clock.now()
-    omitted = options(prefix, "omitted", issued) |> Keyword.delete(:retain_for)
-    explicit = options(prefix, "equal", issued) |> Keyword.put(:retain_for, 300)
-    assert {:ok, :ok} = spend(omitted)
-    assert {:ok, :ok} = spend(explicit)
 
-    assert {:ok, legacy} = Transaction.nonce_retention_deadline(Repo, locator(omitted))
-    assert {:ok, ^legacy} = Transaction.nonce_retention_deadline(Repo, locator(explicit))
-    assert legacy == Window.cleanup_after(issued, 300, 0)
-    assert legacy == DateTime.add(issued, 300 + Window.cleanup_skew_margin_seconds(), :second)
+    for skew <- [0, 7], composite? <- [false, true] do
+      key = "omitted-#{skew}-#{composite?}"
+      omitted = options(prefix, key, issued) |> Keyword.delete(:retain_for)
+      omitted = Keyword.put(omitted, :clock_skew, skew)
 
-    Clock.freeze(DateTime.add(issued, 301, :second))
-    assert {:ok, {:error, %Error{code: :invalid_nonce_window}}} = spend(omitted)
+      omitted =
+        if composite? do
+          {:ok, older} =
+            Verified.new(
+              key: key,
+              issued_at: DateTime.add(issued, -100, :second),
+              expires_at: DateTime.add(issued, 10, :second),
+              verifier_id: "older"
+            )
+
+          Keyword.update!(omitted, :verified, &[older | &1])
+        else
+          omitted
+        end
+
+      explicit = omitted |> Keyword.put(:retain_for, 300) |> Keyword.put(:partition, "explicit")
+      assert {:ok, :ok} = spend(omitted)
+      assert {:ok, legacy} = Transaction.nonce_retention_deadline(Repo, locator(omitted))
+
+      assert legacy ==
+               DateTime.add(issued, 300 + skew + Window.cleanup_skew_margin_seconds(), :second)
+
+      assert {:ok, :ok} = spend(explicit)
+      assert {:ok, ^legacy} = Transaction.nonce_retention_deadline(Repo, locator(explicit))
+      Clock.freeze(DateTime.add(issued, 301 + skew, :second))
+      assert {:ok, {:error, %Error{code: :invalid_nonce_window}}} = spend(omitted)
+      Clock.freeze(issued)
+    end
+  end
+
+  @tag retention_upper_bound_mutation: true
+  test "the positive retention plus skew upper bound stores and reads its deadline", %{
+    prefix: prefix
+  } do
+    issued = Clock.now()
+
+    options =
+      options(prefix, "upper-bound", issued)
+      |> Keyword.merge(retain_for: 2_147_483_640, clock_skew: 7)
+
+    assert {:ok, :ok} = spend(options)
+    assert {:ok, deadline} = Transaction.nonce_retention_deadline(Repo, locator(options))
+
+    assert deadline ==
+             DateTime.add(issued, 2_147_483_647 + Window.cleanup_skew_margin_seconds(), :second)
+
+    assert deadline == stored_deadline(prefix)
+  end
+
+  @tag retention_classification_mutation: true
+  test "late replay classification follows the stored deadline including its endpoint", %{
+    prefix: prefix
+  } do
+    issued = Clock.now()
+    options = options(prefix, "stored-boundary", issued)
+    assert {:ok, :ok} = spend(options)
+    assert {:ok, deadline} = Transaction.nonce_retention_deadline(Repo, locator(options))
+
+    # A caller's new, longer policy cannot extend this already stored deadline.
+    for retention <- [300, 10_000],
+        instant <- [DateTime.add(deadline, -1, :microsecond), deadline] do
+      Clock.freeze(instant)
+      replay = Keyword.put(options, :retain_for, retention)
+      assert {:ok, {:error, %Error{code: :nonce_already_used}}} = spend(replay)
+    end
+
+    Clock.freeze(DateTime.add(deadline, 1, :microsecond))
+    assert count(prefix) == 1
+    replay = Keyword.put(options, :retain_for, 10_000)
+    assert {:ok, {:error, %Error{code: :invalid_nonce_window}}} = spend(replay)
+    assert {:ok, ^deadline} = Transaction.nonce_retention_deadline(Repo, locator(options))
+  end
+
+  @tag retention_read_savepoint_mutation: true
+  test "a deadline query failure preserves caller writes and transaction usability", %{
+    prefix: prefix
+  } do
+    options = options(prefix, "savepoint", Clock.now())
+
+    assert {:ok, :usable} =
+             Repo.transaction(fn ->
+               assert :ok = Transaction.nonce(Repo, options)
+               missing = Keyword.put(locator(options), :prefix, "uninstalled_retention_store")
+
+               assert {:error, %Error{code: :store_invariant}} =
+                        Transaction.nonce_retention_deadline(Repo, missing)
+
+               assert %{rows: [[1]]} = SQL.query!(Repo, "SELECT 1", [])
+
+               assert {:ok, _deadline} =
+                        Transaction.nonce_retention_deadline(Repo, locator(options))
+
+               :usable
+             end)
+
+    assert count(prefix) == 1
+  end
+
+  @tag retention_read_dispatch_mutation: true
+  test "an unexpected deadline row has no admission dispatch", %{prefix: prefix, target: target} do
+    request = nonce_request("invalid-deadline")
+
+    assert {:ok, %Result{status: :admitted}} =
+             Repo.transaction(fn -> Store.claim(target, request) end)
+
+    # Exercise the real decoder against a damaged installation.
+    SQL.query!(
+      Repo,
+      ~s(ALTER TABLE "#{prefix}".ash_onetime_nonce_claims ALTER COLUMN retain_until DROP NOT NULL),
+      []
+    )
+
+    SQL.query!(Repo, ~s(UPDATE "#{prefix}".ash_onetime_nonce_claims SET retain_until = NULL), [])
+
+    assert %Result{reason: :store_invariant, admission_dispatch: :not_started} =
+             Postgres.nonce_retention_deadline(
+               target,
+               request.operation_hash,
+               request.scope_hash,
+               request.key_hash
+             )
+  end
+
+  @tag unboxed: true
+  @tag retention_read_lock_mutation: true
+  test "late replay classification does not wait for a row lock", %{prefix: prefix} do
+    repo = start_unboxed_repo!()
+    previous = Repo.get_dynamic_repo()
+    Repo.put_dynamic_repo(repo)
+
+    try do
+      issued = Clock.now()
+      options = options(prefix, "unlocked-classification", issued)
+      assert {:ok, :ok} = spend(options)
+
+      assert {:ok, {:ok, {:error, %Error{code: :nonce_already_used}}}} =
+               Repo.transaction(fn ->
+                 %{rows: [[holder]]} = SQL.query!(repo, "SELECT pg_backend_pid()", [])
+
+                 assert %{num_rows: 1} =
+                          SQL.query!(
+                            repo,
+                            ~s(SELECT id FROM "#{prefix}".ash_onetime_nonce_claims FOR UPDATE),
+                            []
+                          )
+
+                 Task.async(fn ->
+                   Repo.put_dynamic_repo(repo)
+                   Clock.freeze(DateTime.add(issued, 400, :second))
+
+                   Repo.transaction(fn ->
+                     %{rows: [[reader]]} = SQL.query!(repo, "SELECT pg_backend_pid()", [])
+                     refute reader == holder
+                     SQL.query!(repo, "SET LOCAL lock_timeout = '100ms'", [])
+                     Transaction.nonce(Repo, options)
+                   end)
+                 end)
+                 |> Task.await(5_000)
+               end)
+    after
+      age_row(prefix, 1_000)
+      SQL.query!(Repo, ~s(DELETE FROM "#{prefix}".ash_onetime_nonce_claims), [])
+      Repo.put_dynamic_repo(previous)
+    end
   end
 
   test "invalid retention is refused by both runtime construction paths", %{prefix: prefix} do
@@ -211,6 +378,20 @@ defmodule AshOnetime.NonceRetentionTest do
       assert {:ok, %Result{status: :failure, reason: :invalid_request}} =
                Repo.transaction(fn -> Store.claim(target, altered) end)
     end
+  end
+
+  defp age_row(prefix, elapsed) do
+    SQL.query!(
+      Repo,
+      """
+      UPDATE "#{prefix}".ash_onetime_nonce_claims
+      SET issued_at = issued_at - ($1::bigint * interval '1 second'),
+          admitted_at = admitted_at - ($1::bigint * interval '1 second'),
+          inserted_at = inserted_at - ($1::bigint * interval '1 second'),
+          retain_until = retain_until - ($1::bigint * interval '1 second')
+      """,
+      [elapsed]
+    )
   end
 
   defp options(prefix, key, issued) do

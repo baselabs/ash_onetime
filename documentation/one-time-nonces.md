@@ -53,10 +53,20 @@ also keeps the deadline at least one cleanup margin after admission. Cleanup rem
 only strictly after their stored deadline. Explicit token expiry still limits acceptance;
 it does not shorten retention.
 
-With extended retention configured, a verified replay of a retained nonce returns
-`:nonce_already_used` even after acceptance closes. Keep that configuration on retries;
-omitting it preserves the legacy window error. Verifiers still authenticate proofs before
-admission and may reject them earlier (including `Token.verify/3`'s own window checks).
+With `retain_for` explicitly configured, a verified late replay returns
+`:nonce_already_used` while `now <= retain_until`, using the stored deadline. Past that
+deadline it returns `:invalid_nonce_window`, even if cleanup has not removed the row.
+Changing the presented retention policy cannot extend or shorten an existing deadline.
+Omitting `retain_for` preserves the legacy window error. Verifiers still authenticate
+proofs before admission and may reject them earlier (including `Token.verify/3`'s own
+window checks).
+
+An expired proof with explicit `retain_for` now performs a read to classify the refusal:
+its store result has `admission_dispatch: :sent`, including when no matching row exists.
+Without `retain_for`, the window refusal remains `admission_dispatch: :not_started`.
+Neither refusal admits the request or runs the protected effect. These dispatch fields
+describe the admission attempt; the separate deadline reader always reports
+`:not_started` on failure because it has no admission effect.
 
 Transaction-owned callers pass integer seconds. Inside the caller's existing transaction,
 with a trusted `verified_fact` and an authorized locator, the following also reads the
@@ -88,7 +98,11 @@ deadline
 `nonce_retention_deadline/2` returns `{:ok, datetime}`, `:not_found`, or `{:error, error}`.
 It can also run outside a transaction and observes the stored deadline without changing it.
 It reads claims created by `Transaction.nonce/2` using that boundary's locator; it does not
-translate resource DSL keys. A read grants no admission, and hosts authorize locator access.
+translate resource DSL keys. The complete locator is a capability: the host must authorize
+the caller's access to its partition, scope, key, operation, and schema before this call.
+The library does not perform actor authorization. A read grants no admission. Inside a
+transaction the query uses a savepoint, so a query error (such as an uninstalled schema)
+does not abort the caller's transaction or discard its earlier writes.
 No migration is required: nonce claims already store `retain_until`. Existing rows keep
 their original deadlines; changing configuration affects newly admitted claims.
 

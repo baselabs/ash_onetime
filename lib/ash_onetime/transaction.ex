@@ -10,6 +10,10 @@ defmodule AshOnetime.Transaction do
   `:operation` is a local-code `{module, action}` pair. `:partition`, `:scope`, and `:key` are
   exact bounded UTF-8 binaries. A logical partition isolates otherwise identical locators in one
   store installation without importing a host application's tenant or actor types.
+
+  The locator passed to `nonce_retention_deadline/2` is a capability. The host must
+  authorize the caller's access to the operation, partition, scope, key, and schema;
+  this module does not perform actor authorization.
   """
 
   alias AshOnetime.{Error, Fingerprint, Verified}
@@ -92,7 +96,8 @@ defmodule AshOnetime.Transaction do
   keeps the claim longer without accepting older proofs; it must be an integer at least
   `:max_age`, with `retain_for + clock_skew <= 2_147_483_647`. Omitting it preserves
   the original acceptance, retention, and error behavior. With extended retention, a
-  verified late replay of a stored claim returns `:nonce_already_used`.
+  verified late replay returns `:nonce_already_used` through the stored deadline,
+  inclusive, and `:invalid_nonce_window` after it regardless of cleanup timing.
   """
   @spec nonce(Ecto.Repo.t(), keyword()) :: :ok | {:error, Error.t()}
   def nonce(repo, options) when is_atom(repo) and is_list(options) do
@@ -137,9 +142,11 @@ defmodule AshOnetime.Transaction do
   Supply the same `:operation`, `:partition`, `:scope`, `:key`, and optional `:prefix`
   used by `nonce/2`. Returns `{:ok, datetime}`, `:not_found`, or a typed error. No
   transaction is required; inside a transaction it observes that transaction's writes.
+  The query uses a savepoint so a query error preserves the caller's transaction.
   The deadline includes clock skew and the cleanup safety margin. Cleanup is eligible
   strictly after it; the row may remain longer until cleanup runs. This read is an
-  observation, never permission to execute an effect. Hosts authorize access to the locator.
+  observation, never permission to execute an effect. The locator is a capability that
+  the host must authorize before calling; no actor authorization runs here.
   """
   @spec nonce_retention_deadline(Ecto.Repo.t(), keyword()) ::
           {:ok, DateTime.t()} | :not_found | {:error, Error.t()}

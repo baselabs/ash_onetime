@@ -107,7 +107,7 @@ defmodule AshOnetime.Admission do
   `Store.Postgres.run_committed_claim_transaction/3`), so an action-body failure cannot roll
   the spend back. The result resolves under `:committed_external_claim` — the existing,
   ADR-0001-blessed mode for an independently-committed claim. A reused proof within the
-  acceptance window collides on retry and rejects with `:nonce_already_used` via the existing
+  retention window collides on retry and rejects with `:nonce_already_used` via the existing
   `:collision` decide arm, exactly like the commit-with-action nonce path. See ADR-0003.
   """
   @spec reserve_committed(Ash.Changeset.t() | Ash.ActionInput.t(), struct(), map()) ::

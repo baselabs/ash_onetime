@@ -44,9 +44,9 @@ Add an opt-in `commit: :independent` option on `:one_time_nonce` protections (de
 claim routes through the existing `Store.claim_committed/2` worker, committing in its own
 transaction **before** the action body runs, so the spend survives action-body failure.
 
-A reused `(operation_hash, scope_hash, key_hash)` triple within the acceptance window is rejected
+A reused `(operation_hash, scope_hash, key_hash)` triple within the retention window is rejected
 with `:nonce_already_used` via the existing `:collision` decide arm — no new error code. The burn
-marker is retained for its acceptance window (`retain_until`, unchanged) and reaped by the
+marker is retained for its retention window (`retain_until`) and reaped by the
 existing `ash_onetime_cleanup_nonce` regardless of whether the action ever completed — no new
 SQL, column, or migration. The marker is unreapable inside its window (strict `>` eligibility +
 the `ash_onetime_nonce_delete_guard` BEFORE DELETE trigger).

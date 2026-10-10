@@ -29,12 +29,20 @@ defmodule AshOnetime.TelemetryTest do
         handler,
         @events,
         fn event, measurements, metadata, _config ->
-          send(parent, {:event, event, measurements, metadata})
+          send_if_owner(parent, {:event, event, measurements, metadata})
         end,
         nil
       )
 
     on_exit(fn -> :telemetry.detach(handler) end)
+
+    # Telemetry handlers are global and run in the emitting process. A concurrent
+    # caller must not supply the event this test uses to verify its own emission.
+    assert :ok =
+             Task.async(fn ->
+               Telemetry.admission(1, :idempotency, Resource, :charge, :admitted)
+             end)
+             |> Task.await()
 
     assert :ok = Telemetry.admission(1, :idempotency, Resource, :redeem, :admitted)
     assert :ok = Telemetry.conflict(:idempotency, Resource, :redeem, :complete)
@@ -109,7 +117,7 @@ defmodule AshOnetime.TelemetryTest do
       handler,
       [:ash_onetime, :uncertain_exception],
       fn event, measurements, metadata, _config ->
-        send(parent, {:event, event, measurements, metadata})
+        send_if_owner(parent, {:event, event, measurements, metadata})
       end,
       nil
     )
@@ -140,7 +148,7 @@ defmodule AshOnetime.TelemetryTest do
       handler,
       [:ash_onetime, :uncertain_exception],
       fn event, measurements, metadata, _config ->
-        send(parent, {:event, event, measurements, metadata})
+        send_if_owner(parent, {:event, event, measurements, metadata})
       end,
       nil
     )
@@ -204,7 +212,7 @@ defmodule AshOnetime.TelemetryTest do
             [:ash_onetime, :store_uncertainty, :metric]
           ],
           fn event, measurements, metadata, _config ->
-            send(parent, {:metric, event, measurements, metadata})
+            send_if_owner(parent, {:metric, event, measurements, metadata})
           end,
           nil
         )
@@ -252,7 +260,7 @@ defmodule AshOnetime.TelemetryTest do
           observer,
           [:ash_onetime, :uncertain_exception, :metric],
           fn event, measurements, metadata, _config ->
-            send(parent, {:metric, event, measurements, metadata})
+            send_if_owner(parent, {:metric, event, measurements, metadata})
           end,
           nil
         )
@@ -319,7 +327,7 @@ defmodule AshOnetime.TelemetryTest do
       :telemetry.attach(
         observer,
         [:ash_onetime, :conflict, :metric],
-        fn _event, _meas, metadata, _config -> send(parent, {:vf, metadata}) end,
+        fn _event, _meas, metadata, _config -> send_if_owner(parent, {:vf, metadata}) end,
         nil
       )
 
@@ -345,5 +353,11 @@ defmodule AshOnetime.TelemetryTest do
     refute function_exported?(Telemetry, :reap, 4)
     refute function_exported?(Telemetry, :store_uncertainty, 2)
     refute function_exported?(Telemetry, :untracked_execution, 1)
+  end
+
+  # Scope by emitter process, never by metadata: malformed emissions from this
+  # test still reach its assertions, while other async callers remain independent.
+  defp send_if_owner(owner, message) do
+    if self() == owner, do: send(owner, message)
   end
 end

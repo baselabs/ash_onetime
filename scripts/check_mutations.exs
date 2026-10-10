@@ -2,6 +2,108 @@ defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "nonce-retention-stored-deadline" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "DateTime.compare(request.clock.now(), claim.retain_until) in [:lt, :eq]",
+      mutated: "true",
+      test: "test/ash_onetime/nonce_retention_test.exs",
+      tag: "retention_classification_mutation",
+      test_name: "late replay classification follows the stored deadline including its endpoint",
+      assertion: "assert {:ok, {:error, %Error{code: :invalid_nonce_window}}} = spend(replay)"
+    },
+    "nonce-retention-read-savepoint" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "mode = if target.repo_module.in_transaction?(), do: :savepoint, else: :transaction",
+      mutated:
+        "mode = if target.repo_module.in_transaction?(), do: :transaction, else: :transaction",
+      test: "test/ash_onetime/nonce_retention_test.exs",
+      tag: "retention_read_savepoint_mutation",
+      test_name: "a deadline query failure preserves caller writes and transaction usability",
+      assertion: "ERROR 25P02 (in_failed_sql_transaction)"
+    },
+    "nonce-retention-read-dispatch" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "      {:ok, _result} -> Result.failure(:store_invariant, :not_started, :not_applicable)",
+      mutated: "      {:ok, _result} -> Result.failure(:store_invariant, :sent, :not_applicable)",
+      test: "test/ash_onetime/nonce_retention_test.exs",
+      tag: "retention_read_dispatch_mutation",
+      test_name: "an unexpected deadline row has no admission dispatch",
+      assertion: "assert %Result{reason: :store_invariant, admission_dispatch: :not_started}"
+    },
+    "nonce-retention-read-lock" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "    case dispatched_query(target, sql, Tuple.to_list(logical_key(target, request))) do",
+      mutated:
+        "    sql = sql <> \"\\nFOR UPDATE\"\n    case dispatched_query(target, sql, Tuple.to_list(logical_key(target, request))) do",
+      test: "test/ash_onetime/nonce_retention_test.exs",
+      tag: "retention_read_lock_mutation",
+      test_name: "late replay classification does not wait for a row lock",
+      assertion: "assert {:ok, {:ok, {:error, %Error{code: :nonce_already_used}}}}"
+    },
+    "nonce-retention-duration" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "aggregate_verified_facts(verified_facts, retain_for || max_age, skew)",
+      mutated: "aggregate_verified_facts(verified_facts, max_age, skew)",
+      test: "test/ash_onetime/nonce_retention_test.exs",
+      tag: "retention_duration_mutation",
+      test_name: "late replay remains a collision and cleanup preserves the stored deadline",
+      assertion: "assert {:ok, %{nonce: 0}}"
+    },
+    "nonce-retention-acceptance" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "validate_verified_facts(verified_facts, evaluated_at, max_age, skew),",
+      mutated:
+        "validate_verified_facts(verified_facts, evaluated_at, retain_for || max_age, skew),",
+      test: "test/ash_onetime/nonce_retention_test.exs",
+      tag: "retention_acceptance_mutation",
+      test_name: "long retention never widens acceptance",
+      assertion: "assert {:ok, {:error, %Error{code: :invalid_nonce_window}}}"
+    },
+    "nonce-retention-replay" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "        expired_nonce_result(target, request)",
+      mutated: "        Result.failure(:invalid_nonce_window, :not_started, :open)",
+      test: "test/ash_onetime/nonce_retention_test.exs",
+      tag: "retention_replay_mutation",
+      test_name: "late replay remains a collision and cleanup preserves the stored deadline",
+      assertion: "assert {:ok, {:error, %Error{code: :nonce_already_used}}}"
+    },
+    "nonce-retention-forward" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: "            ] ++ Keyword.take(protection.window, [:retain_for])",
+      mutated: "            ]",
+      test: "test/ash_onetime/resource/nonce_retention_test.exs",
+      tag: "retention_forward_mutation",
+      test_name: "Ash resource retention reaches with_action claims",
+      assertion: "assert deadline == Window.cleanup_after(issued, 664, 0)",
+      required_failures: [
+        {"Ash resource retention reaches with_action claims",
+         "assert deadline == Window.cleanup_after(issued, 664, 0)"},
+        {"Ash resource retention reaches independent claims",
+         "assert deadline == Window.cleanup_after(issued, 664, 0)"}
+      ]
+    },
+    "nonce-retention-legacy-skew" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "aggregate_verified_facts(verified_facts, retain_for || max_age, skew)",
+      mutated: "aggregate_verified_facts(verified_facts, retain_for || max_age, 0)",
+      test: "test/ash_onetime/nonce_retention_test.exs",
+      tag: "retention_legacy_mutation",
+      test_name: "omitting retain_for preserves the exact old stored deadline",
+      assertion: "assert legacy =="
+    },
+    "nonce-retention-upper-bound" => %{
+      path: "lib/ash_onetime/window.ex",
+      original: "max_age + skew <= @max_duration_seconds",
+      mutated: "max_age + skew < @max_duration_seconds",
+      test: "test/ash_onetime/nonce_retention_test.exs",
+      tag: "retention_upper_bound_mutation",
+      test_name: "the positive retention plus skew upper bound stores and reads its deadline",
+      assertion: "assert {:ok, :ok} = spend(options)"
+    },
     "getting-started-error-fallback" => %{
       path: "documentation/getting-started.md",
       original: "      _code -> {:error, error}",
