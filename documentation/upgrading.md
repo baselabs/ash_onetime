@@ -14,7 +14,20 @@ minor whose public capabilities you use and review this page on each minor bump:
 {:ash_onetime, "~> 1.6.0"}
 ```
 
-## v1.6.0 — Separate nonce retention
+## v1.6.0 — Separate nonce retention and Ash security floor
+
+**Consumers locked below Ash 3.34.6 must update Ash to take 1.6.0.** Raise any
+direct Ash constraint to `>= 3.34.6 and < 4.0.0`, then resolve and audit:
+
+```sh
+mix deps.update ash
+mix hex.audit
+mix deps.audit
+```
+
+[EEF-CVE-2026-101028](https://cna.erlef.org/osv/EEF-CVE-2026-101028.html) is fixed
+in Ash 3.34.6. The previous 3.34.3 floor admits this advisory. All other dependency
+floors are unchanged.
 
 Optional `retain_for` keeps nonce claims longer than `max_age` accepts proofs. Set it
 inside the DSL `window` as a duration, or pass integer seconds to `Transaction.nonce/2`.
@@ -26,7 +39,7 @@ Use `Transaction.nonce_retention_deadline/2` to read the stored deadline by the 
 operation, partition, scope, key, and optional prefix used for admission. See the
 [executable nonce examples](one-time-nonces.md#retain-claims-longer-than-proof-acceptance).
 No migration is required: existing rows keep their deadlines, and new claims use the
-configured retention. Dependency ranges are unchanged.
+configured retention.
 
 ## v1.5.0 — Ash and Mint security floors (October 7, 2026)
 

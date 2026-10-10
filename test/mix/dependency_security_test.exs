@@ -21,7 +21,11 @@ defmodule AshOnetime.MixDependencySecurityTest do
     unless String.starts_with?(requirement, "==") do
       refute Version.match?("3.33.11", requirement)
       refute Version.match?("3.34.2", requirement)
-      assert Version.match?("3.34.3", requirement)
+      # EEF-CVE-2026-101028 affects Ash < 3.34.6, including the former floor.
+      refute Version.match?("3.34.3", requirement)
+      refute Version.match?("3.34.4", requirement)
+      refute Version.match?("3.34.5", requirement)
+      assert Version.match?("3.34.6", requirement)
     end
   end
 

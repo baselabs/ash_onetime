@@ -4,12 +4,12 @@ Date: 2026-08-09
 
 ## Status
 
-Accepted (amended 2026-10-06 — current Ash floor 3.34.3 and optional Mint floor 1.10.2;
+Accepted (amended October 10, 2026 — current Ash floor 3.34.6 and optional Mint floor 1.10.2;
 the dated amendments preserve each earlier decision).
 The original decision superseded the `>= 3.29.3` floor documented in the v0.1.x/v0.2.0
 README and `mix.exs` (not a prior ADR — the floor was an inline documented constraint, not
 an architecture decision). The dated amendments record each later security-floor move through
-the current `>= 3.34.3 and < 4.0.0` requirement.
+the current `>= 3.34.6 and < 4.0.0` requirement.
 
 ## Context
 
@@ -212,3 +212,21 @@ The floor-only patch backports are
 [1.4.2](https://hex.pm/packages/ash_onetime/1.4.2) and
 [1.3.4](https://hex.pm/packages/ash_onetime/1.3.4). Each preserves its own feature line;
 the 1.3 patch does not acquire the pre-peer claim lock introduced in 1.4.
+
+## Amendment — Ash 3.34.6 security floor (October 10, 2026, v1.6.0)
+
+OBSERVED: the [EEF-CVE-2026-101028 advisory](https://cna.erlef.org/osv/EEF-CVE-2026-101028.json),
+retrieved with `curl -fLsS` on October 10, 2026, identifies Ash `>= 2.6.0 and < 3.34.6`
+as affected and 3.34.6 as fixed. Aggregate filters and sorts can bypass related resources'
+read policies. The previous 3.34.3 floor is inside the affected range.
+
+Raise the published requirement to `>= 3.34.6 and < 4.0.0` for v1.6.0. Move the runtime
+doctor, exact CI floor lane, optional matrix's `core-floors` case, package metadata check,
+and mutation expectations together. The latest CI lane continues to float within Ash 3.x.
+Keep AshPostgres 2.13.0 and AshSql 0.7.1 as their declared floors; the `core-floors` case
+must resolve and compile all three exact minimums together.
+
+Consumers locked below Ash 3.34.6 must update Ash to take ash_onetime 1.6.0. This floor
+raise requires no migration and does not change ash_onetime's DSL, public API, database
+schema, persisted response format, or token wire format. The v1.6.0 nonce-retention
+additions are documented separately.

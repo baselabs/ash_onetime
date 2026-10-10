@@ -15,7 +15,10 @@ All notable changes to this project are documented in this file.
   `:nonce_already_used`; unclaimed expired proofs remain refused.
 - Add `Transaction.nonce_retention_deadline/2` to read the stored deadline using the
   full transaction locator, without raw SQL or a required transaction.
-- No migration or dependency-range changes. Existing rows keep their stored deadlines.
+- **Ash security floor raised to `>= 3.34.6 and < 4.0.0`** for
+  [EEF-CVE-2026-101028](https://cna.erlef.org/osv/EEF-CVE-2026-101028.html), fixed in
+  Ash 3.34.6. Consumers locked below 3.34.6 must update Ash to take 1.6.0.
+- No migration is required. Existing rows keep their stored deadlines.
 
 ## v1.5.0 — October 7, 2026
 

@@ -17,7 +17,7 @@ defmodule AshOnetime.OptionalMatrix do
      %{plug: true, oban: true, igniter: true}},
     {"mint-pin", [{:mint, "~> 1.9"}], %{plug: false, oban: false, igniter: false}},
     {"mint-floor", [{:mint, "== 1.10.2"}], %{plug: false, oban: false, igniter: false}},
-    {"core-floors", [{:ash, "== 3.34.3"}, {:ash_postgres, "== 2.13.0"}, {:ash_sql, "== 0.7.1"}],
+    {"core-floors", [{:ash, "== 3.34.6"}, {:ash_postgres, "== 2.13.0"}, {:ash_sql, "== 0.7.1"}],
      %{plug: false, oban: false, igniter: false}}
   ]
 
@@ -154,7 +154,7 @@ defmodule AshOnetime.OptionalMatrix do
     resolved = fn app -> app |> Application.spec(:vsn) |> List.to_string() end
 
     if #{inspect(name)} == "core-floors" do
-      for {app, expected_version} <- [ash: "3.34.3", ash_postgres: "2.13.0", ash_sql: "0.7.1"] do
+      for {app, expected_version} <- [ash: "3.34.6", ash_postgres: "2.13.0", ash_sql: "0.7.1"] do
         unless resolved.(app) == expected_version,
           do: raise("core floor mismatch: \#{app}=\#{resolved.(app)}")
       end

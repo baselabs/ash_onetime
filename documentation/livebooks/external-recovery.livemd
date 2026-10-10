@@ -29,7 +29,7 @@ This is an executable database adapter example. An HTTP or payment adapter needs
 own peer's documented idempotency and authoritative recovery API; see the
 [external-effects guide](https://hexdocs.pm/ash_onetime/external-effects.html).
 
-> Requires Elixir 1.20+, Ash 3.34.3+, and PostgreSQL 18 at `DATABASE_URL`.
+> Requires Elixir 1.20+, Ash 3.34.6+, and PostgreSQL 18 at `DATABASE_URL`.
 > Use a development database where you can create and remove schemas. The final cell
 > removes this run's admission objects, receipt ledger, and invocation log.
 

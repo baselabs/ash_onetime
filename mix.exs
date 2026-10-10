@@ -88,11 +88,14 @@ defmodule AshOnetime.MixProject do
     ]
   end
 
-  # `>= 3.34.3 and < 4.0.0` is the consumer requirement. The October 6, 2026
+  # `>= 3.34.6 and < 4.0.0` is the consumer requirement. The October 6, 2026
   # package-wide advisory inventory (ADR 0004) finds EEF-CVE-2026-94201
   # (unsafe atom-attribute filters can exhaust the BEAM atom table) fixed
   # only in 3.34.3. The bulk private-argument fix for -93477 shipped in
   # 3.33.11; that version remains affected by -94201.
+  # EEF-CVE-2026-101028 (aggregate filters and sorts skip related resources'
+  # read policies) is fixed in 3.34.6, raising the floor again (ADR 0004,
+  # October 10, 2026 amendment).
   # The CI compatibility matrix sets ASH_ONETIME_ASH_VERSION to pin
   # one exact Ash per cell (the floor and each later minor); `latest`/unset keeps the floating
   # requirement so the newest published Ash is exercised. The namespaced var name is extremely
@@ -100,7 +103,7 @@ defmodule AshOnetime.MixProject do
   # the full requirement. A pin is validated at project-config evaluation time: it must be a
   # version inside the published range, else Mix.raise fires — a publish with an out-of-range
   # pin exported would otherwise silently freeze a wrong exact requirement into the package.
-  @ash_floor "3.34.3"
+  @ash_floor "3.34.6"
 
   defp ash_requirement do
     case System.get_env("ASH_ONETIME_ASH_VERSION") do

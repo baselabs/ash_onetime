@@ -39,8 +39,8 @@ jobs:
       fail-fast: false
       matrix:
         ash:
-          - "3.34.3" # declared security floor (EEF-CVE-2026-94201; ADR 0004)
-          - "latest" # floating >= 3.34.3, < 4.0.0 — newest published Ash 3.x
+          - "3.34.6" # declared security floor (EEF-CVE-2026-101028; ADR 0004)
+          - "latest" # floating >= 3.34.6, < 4.0.0 — newest published Ash 3.x
 
     services:
       postgres:
@@ -80,7 +80,7 @@ jobs:
 
       - name: Resolve the matrix Ash version
         # `== X` cells resolve to exactly X; the floating `latest` cell resolves to the
-        # newest Ash satisfying `>= 3.34.3 and < 4.0.0`. Resolve the full graph:
+        # newest Ash satisfying `>= 3.34.6 and < 4.0.0`. Resolve the full graph:
         # locked AshPostgres/AshSql versions can otherwise require a newer Ash
         # than the selected cell, concealing the consumer compatibility result.
         # Developer tools float with that graph, exercising current tool compatibility;

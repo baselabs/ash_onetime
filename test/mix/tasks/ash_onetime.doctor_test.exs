@@ -62,14 +62,14 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
     end
 
     @tag :doctor_ash_floor_mutation
-    test "rejects the Ash release preceding the patched atom-filter floor" do
-      assert {:fail, message} = Doctor.floor_status(Version.parse!("3.34.2"))
+    test "rejects the Ash release preceding the patched aggregate-policy floor" do
+      assert {:fail, message} = Doctor.floor_status(Version.parse!("3.34.5"))
       assert message =~ "below the security floor"
-      assert message =~ "3.34.3"
+      assert message =~ "3.34.6"
     end
 
-    test "accepts the 3.34.3 security floor" do
-      assert :ok = Doctor.floor_status(Version.parse!("3.34.3"))
+    test "accepts the 3.34.6 security floor" do
+      assert :ok = Doctor.floor_status(Version.parse!("3.34.6"))
     end
   end
 

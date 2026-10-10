@@ -228,7 +228,7 @@ defmodule AshOnetime.PackageCheck do
   # every published security floor — plus its optional flag — actually shipped, whatever
   # the current shell holds.
   @published_requirements %{
-    ash: {">= 3.34.3 and < 4.0.0", false},
+    ash: {">= 3.34.6 and < 4.0.0", false},
     ash_postgres: {"~> 2.13", false},
     ash_sql: {"~> 0.7 and >= 0.7.1", false},
     igniter: {"~> 0.8 and >= 0.8.4", true},

@@ -9,8 +9,8 @@ status column records where it stands now.
 
 ## Security dependency maintenance
 
-The v1.5.0 dependency-security release (2026-10-06) continues the policy in
-[ADR 0004](adr/0004-security-driven-ash-floor.md). Current consumer floors are Ash 3.34.3
+The v1.6.0 Ash security-floor raise (October 10, 2026) continues the policy in
+[ADR 0004](adr/0004-security-driven-ash-floor.md). Current consumer floors are Ash 3.34.6
 (with the range capped below 4.0.0),
 AshPostgres 2.13.0, AshSql 0.7.1, Igniter 0.8.4, and optional Mint 1.10.2. The doctor,
 package check, optional-integration matrix, and Ash floor/latest CI cells follow these
