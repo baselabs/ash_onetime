@@ -138,7 +138,7 @@ transactional-outbox patterns.
 
 ## Status
 
-This guide targets [v1.6.0](CHANGELOG.md) (unreleased). Nonces can retain claims longer
+This guide targets [v1.6.0](CHANGELOG.md). Nonces can retain claims longer
 than their proof acceptance window with optional `retain_for`, and transaction-owned
 callers can read the stored deadline through `Transaction.nonce_retention_deadline/2`.
 See [One-time nonces](documentation/one-time-nonces.md). No migration is required;

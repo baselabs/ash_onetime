@@ -7,7 +7,7 @@ Security-driven dependency floors follow the documented minor-release policy in
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md);
 their required dependency edits appear here too.
 
-This guide targets v1.6.0 (unreleased). Pin the
+This guide targets v1.6.0. Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir

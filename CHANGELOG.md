@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
-## v1.6.0 — Unreleased
+## v1.6.0 — October 10, 2026
 
 - Add optional nonce `retain_for`: integer seconds for `Transaction.nonce/2`, or a
   `{count, unit}` duration in the resource DSL `window`. Acceptance still uses `max_age`;
