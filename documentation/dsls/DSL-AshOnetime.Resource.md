@@ -8,6 +8,10 @@ Spark resource extension for explicit idempotency and one-time nonce protection.
 A protected action must choose a strategy and a nonempty scope. Nonce protection has no
 stored-response or external-effect surface and always fails closed.
 
+Nonce `window` separates acceptance (`max_age`) from optional claim retention
+(`retain_for`, defaulting to `max_age`). Retention must be at least the acceptance
+duration; both include `clock_skew` under the same bounded duration rule.
+
 
 ## onetime
 Protect effectful Ash actions with explicit keyed-effect semantics.
@@ -48,8 +52,8 @@ Protects one effectful action with explicit keyed-effect semantics.
 | [`key`](#onetime-protect-key){: #onetime-protect-key } | `any` |  | The key source that names a single keyed effect within the scope: a client idempotency argument, a verified proof, or a minted token. |
 | [`fingerprint`](#onetime-protect-fingerprint){: #onetime-protect-fingerprint } | `keyword` |  | Optional content fingerprint (`arguments:` / `attributes:` lists) that distinguishes distinct effects under the same key. |
 | [`retention`](#onetime-protect-retention){: #onetime-protect-retention } | `any` |  | How long a stored idempotent response is retained before it may be re-executed, as a `{count, unit}` tuple (e.g. `{24, :hour}`). |
-| [`window`](#onetime-protect-window){: #onetime-protect-window } | `keyword` |  | Nonce replay window bounds: `max_age:` and `clock_skew:` as `{count, unit}` tuples. Applies to `:one_time_nonce` strategies. |
-| [`commit`](#onetime-protect-commit){: #onetime-protect-commit } | `:with_action \| :independent` | `:with_action` | Nonce commit boundary. `:with_action` (default) commits the nonce claim inside the protected action's transaction, so an action-body failure rolls the spend back (correct for a single-use authenticator whose retry bears a fresh proof). `:independent` commits the claim in its own transaction before the action body runs, so a body failure leaves the proof spent for the acceptance window — RFC 9449 §11.1 request-attempt scope (the DPoP replay fence). Applies to `:one_time_nonce` only; rejected for `:idempotency`. |
+| [`window`](#onetime-protect-window){: #onetime-protect-window } | `keyword` |  | Nonce acceptance bounds: `max_age:` and `clock_skew:` as `{count, unit}` tuples. Optional `retain_for:` uses the same duration syntax, defaults to `max_age`, and must be at least `max_age`. Its sum with `clock_skew` must not exceed 2_147_483_647 seconds. Retention does not widen acceptance. Applies to `:one_time_nonce` strategies. |
+| [`commit`](#onetime-protect-commit){: #onetime-protect-commit } | `:with_action \| :independent` | `:with_action` | Nonce commit boundary. `:with_action` (default) commits the nonce claim inside the protected action's transaction, so an action-body failure rolls the spend back (correct for a single-use authenticator whose retry bears a fresh proof). `:independent` commits the claim in its own transaction before the action body runs, so a body failure leaves the proof spent for the retention window — RFC 9449 §11.1 request-attempt scope (the DPoP replay fence). Applies to `:one_time_nonce` only; rejected for `:idempotency`. |
 | [`external_effect`](#onetime-protect-external_effect){: #onetime-protect-external_effect } | `module` |  | Optional module exporting the external-effect contract for idempotent actions that must observe or reverse a side effect. Not available for nonce strategies. |
 | [`external_lock_timeout_ms`](#onetime-protect-external_lock_timeout_ms){: #onetime-protect-external_lock_timeout_ms } | `integer` |  | How long a same-key concurrent retry waits on the pre-peer claim lock before failing with `:request_in_progress` (milliseconds; default 2000, ceiling 25000). The lock serializes same-key external retries through the peer call so two executes can never overlap under one operation key (ADR-0010). Requires `external_effect`. |
 | [`on_definite_store_failure`](#onetime-protect-on_definite_store_failure){: #onetime-protect-on_definite_store_failure } | `:fail_closed \| :execute_untracked` | `:fail_closed` | What to do when the authoritative store is definitively unavailable: `:fail_closed` (reject) or `:execute_untracked` (run once with telemetry, no replay safety). |

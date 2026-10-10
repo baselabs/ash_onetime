@@ -22,6 +22,7 @@ defmodule AshOnetime.Store.Claim do
       :retention_seconds,
       :verified,
       :max_age,
+      :retain_for,
       :clock_skew,
       clock: AshOnetime.Clock
     ]
@@ -36,6 +37,7 @@ defmodule AshOnetime.Store.Claim do
             retention_seconds: pos_integer() | nil,
             verified: [Verified.t()] | nil,
             max_age: non_neg_integer() | nil,
+            retain_for: non_neg_integer() | nil,
             clock_skew: non_neg_integer() | nil,
             clock: module() | nil
           }
@@ -129,6 +131,7 @@ defmodule AshOnetime.Store.Claim do
          max_age when is_integer(max_age) and max_age >= 0 <- Keyword.get(attributes, :max_age),
          clock_skew when is_integer(clock_skew) and clock_skew >= 0 <-
            Keyword.get(attributes, :clock_skew),
+         true <- valid_retention?(attributes, max_age, clock_skew),
          clock when is_atom(clock) <- Keyword.get(attributes, :clock, AshOnetime.Clock) do
       {:ok,
        struct!(
@@ -138,6 +141,7 @@ defmodule AshOnetime.Store.Claim do
              strategy: :one_time_nonce,
              verified: verified,
              max_age: max_age,
+             retain_for: Keyword.get(attributes, :retain_for),
              clock_skew: clock_skew,
              clock: clock
            ]
@@ -148,6 +152,15 @@ defmodule AshOnetime.Store.Claim do
   end
 
   def nonce(_attributes), do: {:error, :invalid_request}
+
+  defp valid_retention?(attributes, max_age, clock_skew) do
+    not Keyword.has_key?(attributes, :retain_for) or
+      AshOnetime.Window.valid_retention?(
+        max_age,
+        Keyword.get(attributes, :retain_for),
+        clock_skew
+      )
+  end
 
   defp common(attributes) do
     values =

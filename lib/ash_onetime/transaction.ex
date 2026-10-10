@@ -4,8 +4,8 @@ defmodule AshOnetime.Transaction do
 
   This boundary is for hosts that already own one authoritative Ecto transaction and need
   `ash_onetime` admission to commit or roll back with the host's effect. It never starts or
-  commits a transaction. The repository must already be inside a PostgreSQL `READ COMMITTED`
-  transaction.
+  commits a transaction. Admission and completion require an existing PostgreSQL
+  `READ COMMITTED` transaction. The stored nonce deadline read can also run outside one.
 
   `:operation` is a local-code `{module, action}` pair. `:partition`, `:scope`, and `:key` are
   exact bounded UTF-8 binaries. A logical partition isolates otherwise identical locators in one
@@ -18,7 +18,8 @@ defmodule AshOnetime.Transaction do
   @max_identity_bytes 4_096
   @max_codec_bytes 128
   @idempotency_options ~w(operation partition prefix scope key fingerprint retention_seconds codec)a
-  @nonce_options ~w(operation partition prefix scope key verified max_age clock_skew clock)a
+  @nonce_options ~w(operation partition prefix scope key verified max_age retain_for clock_skew clock)a
+  @nonce_locator_options ~w(operation partition prefix scope key)a
 
   defmodule Admission do
     @moduledoc false
@@ -86,6 +87,12 @@ defmodule AshOnetime.Transaction do
 
   `:verified` must contain trusted `AshOnetime.Verified` facts whose exact key equals `:key`.
   A collision returns the typed `:nonce_already_used` error. No response payload is created.
+
+  `:max_age` and `:clock_skew` bound acceptance in seconds. Optional `:retain_for`
+  keeps the claim longer without accepting older proofs; it must be an integer at least
+  `:max_age`, with `retain_for + clock_skew <= 2_147_483_647`. Omitting it preserves
+  the original acceptance, retention, and error behavior. With extended retention, a
+  verified late replay of a stored claim returns `:nonce_already_used`.
   """
   @spec nonce(Ecto.Repo.t(), keyword()) :: :ok | {:error, Error.t()}
   def nonce(repo, options) when is_atom(repo) and is_list(options) do
@@ -99,13 +106,15 @@ defmodule AshOnetime.Transaction do
          clock when is_atom(clock) <- Keyword.get(options, :clock, AshOnetime.Clock),
          {:ok, request} <-
            Claim.nonce(
-             operation_hash: common.operation_hash,
-             scope_hash: common.scope_hash,
-             key_hash: common.key_hash,
-             verified: verified,
-             max_age: max_age,
-             clock_skew: clock_skew,
-             clock: clock
+             [
+               operation_hash: common.operation_hash,
+               scope_hash: common.scope_hash,
+               key_hash: common.key_hash,
+               verified: verified,
+               max_age: max_age,
+               clock_skew: clock_skew,
+               clock: clock
+             ] ++ Keyword.take(options, [:retain_for])
            ) do
       common.target
       |> Postgres.claim(request)
@@ -121,6 +130,40 @@ defmodule AshOnetime.Transaction do
   end
 
   def nonce(_repo, _options), do: invalid_request()
+
+  @doc """
+  Reads a nonce claim's stored retention deadline without reserving or extending it.
+
+  Supply the same `:operation`, `:partition`, `:scope`, `:key`, and optional `:prefix`
+  used by `nonce/2`. Returns `{:ok, datetime}`, `:not_found`, or a typed error. No
+  transaction is required; inside a transaction it observes that transaction's writes.
+  The deadline includes clock skew and the cleanup safety margin. Cleanup is eligible
+  strictly after it; the row may remain longer until cleanup runs. This read is an
+  observation, never permission to execute an effect. Hosts authorize access to the locator.
+  """
+  @spec nonce_retention_deadline(Ecto.Repo.t(), keyword()) ::
+          {:ok, DateTime.t()} | :not_found | {:error, Error.t()}
+  def nonce_retention_deadline(repo, options) when is_atom(repo) and is_list(options) do
+    with :ok <- exact_options(options, @nonce_locator_options),
+         {:ok, common} <- common(repo, options) do
+      case Postgres.nonce_retention_deadline(
+             common.target,
+             common.operation_hash,
+             common.scope_hash,
+             common.key_hash
+           ) do
+        {:ok, %DateTime{}} = found -> found
+        :not_found -> :not_found
+        %Result{} = result -> result_error(result)
+      end
+    end
+  rescue
+    _exception -> unavailable()
+  catch
+    kind, reason -> contain_or_propagate(kind, reason)
+  end
+
+  def nonce_retention_deadline(_repo, _options), do: invalid_request()
 
   @doc """
   Completes a fresh idempotency admission with exact response bytes.
@@ -376,7 +419,7 @@ defmodule AshOnetime.Transaction do
 
   defp optional_absent(options, allowed) do
     Enum.filter(allowed, fn key ->
-      key in [:prefix, :clock] and not Keyword.has_key?(options, key)
+      key in [:prefix, :clock, :retain_for] and not Keyword.has_key?(options, key)
     end)
   end
 

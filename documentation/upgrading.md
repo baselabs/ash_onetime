@@ -7,12 +7,26 @@ Security-driven dependency floors follow the documented minor-release policy in
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md);
 their required dependency edits appear here too.
 
-This guide targets v1.5.0 ([Hex package](https://hex.pm/packages/ash_onetime/1.5.0)). Pin the
+This guide targets v1.6.0 (unreleased). Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 1.5.0"}
+{:ash_onetime, "~> 1.6.0"}
 ```
+
+## v1.6.0 — Separate nonce retention
+
+Optional `retain_for` keeps nonce claims longer than `max_age` accepts proofs. Set it
+inside the DSL `window` as a duration, or pass integer seconds to `Transaction.nonce/2`.
+It must be at least `max_age`, and its sum with `clock_skew` must stay within the existing
+duration ceiling. Omit it to preserve 1.5.0 behavior. Keep the extended configuration on
+retries to classify retained late replays as `:nonce_already_used`.
+
+Use `Transaction.nonce_retention_deadline/2` to read the stored deadline by the same
+operation, partition, scope, key, and optional prefix used for admission. See the
+[executable nonce examples](one-time-nonces.md#retain-claims-longer-than-proof-acceptance).
+No migration is required: existing rows keep their deadlines, and new claims use the
+configured retention. Dependency ranges are unchanged.
 
 ## v1.5.0 — Ash and Mint security floors (October 7, 2026)
 

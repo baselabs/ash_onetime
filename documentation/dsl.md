@@ -55,8 +55,10 @@ or rollback. `on_definite_store_failure :execute_untracked` is available only to
 idempotency and only for proof that admission was never dispatched. `limits` bounds
 canonical input and cache payload work.
 
-Nonce requires `window` and deliberately has no response, retention, external-effect, or
-failure-direction option. `external_effect` is idempotency-only and requires a recoverable
+Nonce requires `window` and deliberately has no response, top-level `retention`, external-effect,
+or failure-direction option. Its optional `window retain_for:` duration extends claim retention
+without changing `max_age` acceptance; it defaults to `max_age` and cannot be smaller.
+`external_effect` is idempotency-only and requires a recoverable
 adapter; its pre-peer claim lock serializes concurrent same-key retries
 (`external_lock_timeout_ms`, default 2000 — ADR-0010).
 

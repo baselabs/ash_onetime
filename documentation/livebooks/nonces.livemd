@@ -7,7 +7,7 @@ livebook:{"persist_outputs":true}
 ```elixir
 Mix.install(
   [
-    {:ash_onetime, "~> 1.5.0"},
+    {:ash_onetime, "~> 1.6.0"},
     {:ash_postgres, "~> 2.13"}
   ],
   consolidate_protocols: false
@@ -154,7 +154,7 @@ defmodule AshOnetimeDemo.Redeemable do
       strategy :one_time_nonce
       scope([{:static, "redeem"}])
       key({:verified, :proof, AshOnetimeDemo.ProofVerifier})
-      window(max_age: {1, :hour}, clock_skew: {5, :second})
+      window(max_age: {5, :minute}, clock_skew: {5, :second}, retain_for: {664, :second})
     end
   end
 end
@@ -230,6 +230,25 @@ value
 7
 ```
 
+## Retention stays separate from acceptance
+
+The resource accepts proofs for five minutes (plus five seconds of skew), but keeps claims
+for 664 seconds plus skew and the cleanup margin. The stored deadline records that choice:
+
+```elixir
+%{rows: [[issued_at, retain_until]]} =
+  SQL.query!(Repo, ~s{SELECT issued_at, retain_until FROM "#{schema}".ash_onetime_nonce_claims}, [])
+
+true = retain_until == AshOnetime.Window.cleanup_after(issued_at, 664, 5)
+:retention_verified
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:retention_verified
+```
+
 ## Reuse is rejected
 
 Reusing the same `proof` is rejected as `:nonce_already_used`. The action body does not run.
@@ -279,7 +298,7 @@ failure rolls the spend back — correct when a retry will bear a fresh proof. F
 protection, declare `commit: :independent` so the claim commits in its own transaction **before**
 the body runs. A DPoP verifier must separately validate the complete RFC proof; this
 cell demonstrates the transaction rule with the signed nonce format above. A body
-failure leaves that nonce spent for the acceptance window:
+failure leaves that nonce spent for the retention window:
 
 ```elixir
 defmodule AshOnetimeDemo.FailureDomain do
@@ -325,7 +344,7 @@ defmodule AshOnetimeDemo.RedeemableFail do
       strategy :one_time_nonce
       scope([{:static, "redeem_fail"}])
       key({:verified, :proof, AshOnetimeDemo.ProofVerifier})
-      window(max_age: {1, :hour}, clock_skew: {5, :second})
+      window(max_age: {5, :minute}, clock_skew: {5, :second}, retain_for: {664, :second})
       commit :independent
     end
   end
@@ -344,6 +363,15 @@ failing_proof = sign_proof.("independent-proof")
   |> Ash.run_action()
 
 true = Exception.message(failure) =~ "the action body failed"
+
+# Both the action-owned and independently committed claims use the declared retention.
+%{rows: retained_claims} =
+  SQL.query!(Repo, ~s{SELECT issued_at, retain_until FROM "#{schema}".ash_onetime_nonce_claims}, [])
+2 = length(retained_claims)
+true = Enum.all?(retained_claims, fn [issued, deadline] ->
+  deadline == AshOnetime.Window.cleanup_after(issued, 664, 5)
+end)
+
 
 {:error, retry} =
   AshOnetimeDemo.RedeemableFail

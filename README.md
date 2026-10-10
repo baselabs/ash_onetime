@@ -21,7 +21,7 @@ concurrent races. There is no admission pre-read.
 - **`commit: :independent`** (nonce, opt-in, RFC 9449 §11.1) — the DPoP replay fence. The
   nonce claim commits in its own transaction *before* the action body runs, so a downstream
   failure cannot make the proof reusable. A reused proof is rejected with `:nonce_already_used`
-  for the acceptance window. Default-off; existing nonce consumers are byte-for-byte unchanged.
+  for the retention window. Default-off; existing nonce consumers are byte-for-byte unchanged.
 
 Optional, non-admitting surfaces: a response cache, a Plug, Oban workers for cleanup and
 forward partition creation, and an external-effect execute/recover protocol for peers that
@@ -138,10 +138,11 @@ transactional-outbox patterns.
 
 ## Status
 
-This guide targets [v1.5.0](https://hex.pm/packages/ash_onetime/1.5.0). It raises
-the published Ash and optional Mint security floors while leaving the DSL, public API, database
-schema, persisted response format, and token wire format unchanged. Consumers that pin either
-dependency should follow the exact steps in [Upgrading](documentation/upgrading.md).
+This guide targets [v1.6.0](CHANGELOG.md) (unreleased). Nonces can retain claims longer
+than their proof acceptance window with optional `retain_for`, and transaction-owned
+callers can read the stored deadline through `Transaction.nonce_retention_deadline/2`.
+See [One-time nonces](documentation/one-time-nonces.md). No migration is required;
+dependency ranges are unchanged.
 
 Every protected action chooses `:idempotency` or `:one_time_nonce` and declares a nonempty
 scope; there is no default strategy or global scope fallback. The release battery includes a

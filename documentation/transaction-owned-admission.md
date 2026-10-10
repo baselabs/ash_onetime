@@ -6,8 +6,8 @@ Available from `ash_onetime` 1.1.0.
 Ecto transaction. It applies the same PostgreSQL-authoritative idempotency and nonce semantics
 without wrapping the host effect in an Ash action.
 
-The boundary never starts or commits a transaction. The caller must already be inside a
-PostgreSQL `READ COMMITTED` transaction. Admission, the host mutation, its audit record, and the
+Admission and completion never start or commit a transaction. Those calls require an existing
+PostgreSQL `READ COMMITTED` transaction; the deadline read can also run outside one. Admission, the host mutation, its audit record, and the
 exact replay bytes therefore commit or roll back together.
 
 ## Idempotency
@@ -73,12 +73,19 @@ returning bytes.
     key: nonce,
     verified: [verified_fact],
     max_age: 300,
+    retain_for: 664,
     clock_skew: 0
   )
 ```
 
 Every verified fact must carry the exact nonce key. A collision returns
 `:nonce_already_used`. The nonce spend rolls back when the caller transaction rolls back.
+Optional `retain_for` (seconds) retains the claim beyond `max_age` without widening acceptance.
+It must be at least `max_age`; `retain_for + clock_skew` is bounded by 2,147,483,647 seconds.
+Omitting it preserves 1.5.0 behavior. Read the stored deadline with
+`Transaction.nonce_retention_deadline/2` using operation, partition, scope, key, and optional
+prefix. The read returns `{:ok, datetime}`, `:not_found`, or a typed error and needs no
+transaction. See the [executable retention example](one-time-nonces.md#retain-claims-longer-than-proof-acceptance).
 
 ## Authority identity
 

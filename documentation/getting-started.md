@@ -3,8 +3,8 @@
 `ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.4; the requirement admits later 1.x
 releases and excludes 2.0 or newer), Erlang/OTP 28 or 29, Ash `>= 3.34.3 and < 4.0.0`,
 AshPostgres `~> 2.13`, and PostgreSQL 11+ (CI exercises 18). This guide targets
-v1.5.0 (`{:ash_onetime, "~> 1.5.0"}`); see its
-[Hex package page](https://hex.pm/packages/ash_onetime/1.5.0).
+v1.6.0 (`{:ash_onetime, "~> 1.6.0"}`, unreleased); see the
+[release notes](../CHANGELOG.md).
 
 Ash 3.33 additionally requires every application to declare how it counts string
 length; without this your resources fail to compile:
@@ -73,7 +73,7 @@ By default a nonce spend commits inside the action's transaction, so an action-b
 rolls the spend back — correct for a single-use authenticator whose retry bears a fresh proof.
 For [RFC 9449 (DPoP)](https://datatracker.ietf.org/doc/html/rfc9449#section-11.1) §11.1 replay
 protection, set `commit: :independent` so the claim commits in its own transaction before the
-body runs. A downstream failure then leaves the proof spent for the acceptance window, and a
+body runs. A downstream failure then leaves the proof spent for the retention window, and a
 retry with the same `jti` is rejected with `:nonce_already_used`:
 
 ```elixir

@@ -18,14 +18,79 @@ The accepted issuance band is inclusive:
 evaluated_at - max_age - clock_skew <= issued_at <= evaluated_at + clock_skew
 ```
 
-An explicit expiry is also inclusive through its skew allowance. Cleanup begins one
-microsecond after the safe replay horizon, so the exact boundary remains protected.
-Composite verified facts use the latest issuance anchor, earliest expiry, and a digest of
-all verifier identities; one invalid sibling rejects the whole claim.
+An explicit expiry is also inclusive through its skew allowance. Composite verified facts
+validate each sibling's issuance and expiry; one invalid sibling rejects the whole claim.
+The stored aggregate uses the latest issuance anchor and a digest of all verifier identities.
 
 Nonce admission always uses authoritative PostgreSQL state and always fails closed when the
 store is unavailable or uncertain. Caches are ignored. There is no configurable untracked
-execution, response replay, external-effect protocol, or retention override in nonce mode.
+execution, response replay, or external-effect protocol in nonce mode.
+
+## Retain claims longer than proof acceptance
+
+From 1.6.0, optional `retain_for` separates claim retention from `max_age`. For example,
+accept proofs up to 300 seconds old while retaining their nonce claims for 664 seconds:
+
+<!-- nonce-retention-dsl:start -->
+```elixir
+protect :redeem do
+  strategy :one_time_nonce
+  scope [{:static, "redeem"}]
+  key {:verified, :proof, MyApp.DPoPVerifier}
+  window max_age: {5, :minute}, clock_skew: {0, :second}, retain_for: {664, :second}
+end
+```
+<!-- nonce-retention-dsl:end -->
+
+`retain_for` defaults to `max_age`, preserving 1.5.0 behavior when omitted. It must be at
+least `max_age`; `retain_for + clock_skew` cannot exceed 2,147,483,647 seconds. Invalid DSL
+values fail compilation; invalid transaction options return `:invalid_request`. An unclaimed
+proof older than `max_age + clock_skew` still returns `:invalid_nonce_window`.
+
+The retention deadline is `issued_at + retain_for + clock_skew + cleanup margin`;
+composite proofs use the latest sibling deadline. The existing PostgreSQL safety floor
+also keeps the deadline at least one cleanup margin after admission. Cleanup removes rows
+only strictly after their stored deadline. Explicit token expiry still limits acceptance;
+it does not shorten retention.
+
+With extended retention configured, a verified replay of a retained nonce returns
+`:nonce_already_used` even after acceptance closes. Keep that configuration on retries;
+omitting it preserves the legacy window error. Verifiers still authenticate proofs before
+admission and may reject them earlier (including `Token.verify/3`'s own window checks).
+
+Transaction-owned callers pass integer seconds. Inside the caller's existing transaction,
+with a trusted `verified_fact` and an authorized locator, the following also reads the
+stored deadline. `repo` is the host repo, `prefix` its schema (or `nil`), and `clock` a
+trusted module implementing `AshOnetime.Clock` (`AshOnetime.Clock` uses UTC time):
+
+<!-- nonce-retention-transaction:start -->
+```elixir
+options = [
+  operation: {MyApp.Gateway, :invoke},
+  partition: tenant_id,
+  scope: principal_id,
+  key: nonce,
+  prefix: prefix,
+  verified: [verified_fact],
+  max_age: 300,
+  retain_for: 664,
+  clock_skew: 0,
+  clock: clock
+]
+
+:ok = AshOnetime.Transaction.nonce(repo, options)
+locator = Keyword.take(options, [:operation, :partition, :scope, :key, :prefix])
+{:ok, deadline} = AshOnetime.Transaction.nonce_retention_deadline(repo, locator)
+deadline
+```
+<!-- nonce-retention-transaction:end -->
+
+`nonce_retention_deadline/2` returns `{:ok, datetime}`, `:not_found`, or `{:error, error}`.
+It can also run outside a transaction and observes the stored deadline without changing it.
+It reads claims created by `Transaction.nonce/2` using that boundary's locator; it does not
+translate resource DSL keys. A read grants no admission, and hosts authorize locator access.
+No migration is required: nonce claims already store `retain_until`. Existing rows keep
+their original deadlines; changing configuration affects newly admitted claims.
 
 ## DPoP replay fencing (`commit: :independent`)
 
@@ -34,7 +99,7 @@ failure rolls the spend back — correct when a retry will bear a fresh proof. F
 [RFC 9449 (DPoP)](https://datatracker.ietf.org/doc/html/rfc9449#section-11.1) §11.1 replay
 protection, declare `commit: :independent` so the claim commits in its own transaction
 **before** the action body runs (via the `claim_committed` worker). A body failure then
-leaves the proof spent for the acceptance window, and a retry with the same proof is rejected
+leaves the proof spent for the retention window, and a retry with the same proof is rejected
 with `:nonce_already_used`:
 
 ```elixir

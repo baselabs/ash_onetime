@@ -2,7 +2,7 @@ defmodule AshOnetime.LivebookCheck do
   @moduledoc false
 
   @notebooks ~w(idempotency nonces external-recovery)
-  @persisted_outputs %{"idempotency" => 4, "nonces" => 4, "external-recovery" => 5}
+  @persisted_outputs %{"idempotency" => 4, "nonces" => 5, "external-recovery" => 5}
 
   def main(arguments) do
     case arguments do

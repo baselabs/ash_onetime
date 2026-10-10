@@ -31,6 +31,12 @@
   External effects require the idempotent execute/recover protocol and are forbidden for nonces.
 - Cleanup occurs only after the strategy-safe horizon. Caches and cleanup jobs never decide
   correctness; processing external effects are not ordinary expiry candidates.
+- Nonce `max_age` controls acceptance. Optional `retain_for` controls claim retention and
+  defaults to `max_age`; it must be at least `max_age`, with `retain_for + clock_skew`
+  bounded by 2,147,483,647 seconds. Use `{count, unit}` in the DSL window and integer
+  seconds in `Transaction.nonce/2`. Read a transaction nonce's stored deadline with
+  `Transaction.nonce_retention_deadline/2`, using the full authorized locator. Neither
+  retention nor a deadline read grants admission outside the acceptance window.
 - A protected action's failure carries a typed `:code` that survives the Ash pipeline. Read it
   with `AshOnetime.Error.code/1` to drive HTTP status; do not assume a blanket class→status
   mapping, because a family of server-fault and transport codes (e.g. `:store_invariant`,

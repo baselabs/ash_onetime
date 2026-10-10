@@ -48,7 +48,8 @@ Retention and cleanup are security boundaries. Deleting a nonce while its accept
 still open can admit a replay. The acceptance window is evaluated on the application clock while
 cleanup eligibility is evaluated on the PostgreSQL clock, so a spent nonce is retained for a
 configurable clock-skew safety margin (`config :ash_onetime, :cleanup_clock_skew_margin_seconds`,
-default 1 second) beyond its acceptance horizon. Cleanup is therefore strictly later than the
+default 1 second) beyond its retention horizon (`retain_for`, defaulting to `max_age`, plus
+`clock_skew`). Retention cannot be shorter than acceptance. Cleanup is therefore strictly later than the
 acceptance window as long as the PostgreSQL clock is not ahead of the application clock by more
 than that margin — keep both clocks synchronized (e.g. via NTP), and raise the margin for looser
 synchronization. Processing external claims are retained for recovery until they are either

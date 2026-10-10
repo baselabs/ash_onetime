@@ -669,7 +669,7 @@ defmodule AshOnetime.Admission do
               verified: verified,
               max_age: Keyword.fetch!(protection.window, :max_age),
               clock_skew: Keyword.fetch!(protection.window, :clock_skew)
-            ]
+            ] ++ Keyword.take(protection.window, [:retain_for])
         )
     end
     |> case do

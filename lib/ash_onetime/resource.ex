@@ -70,6 +70,10 @@ defmodule AshOnetime.Resource do
 
   A protected action must choose a strategy and a nonempty scope. Nonce protection has no
   stored-response or external-effect surface and always fails closed.
+
+  Nonce `window` separates acceptance (`max_age`) from optional claim retention
+  (`retain_for`, defaulting to `max_age`). Retention must be at least the acceptance
+  duration; both include `clock_skew` under the same bounded duration rule.
   """
 
   @response %Spark.Dsl.Entity{
@@ -154,7 +158,10 @@ defmodule AshOnetime.Resource do
       window: [
         type: :keyword_list,
         doc:
-          "Nonce replay window bounds: `max_age:` and `clock_skew:` as `{count, unit}` tuples. " <>
+          "Nonce acceptance bounds: `max_age:` and `clock_skew:` as `{count, unit}` tuples. " <>
+            "Optional `retain_for:` uses the same duration syntax, defaults to `max_age`, " <>
+            "and must be at least `max_age`. Its sum with `clock_skew` must not exceed " <>
+            "2_147_483_647 seconds. Retention does not widen acceptance. " <>
             "Applies to `:one_time_nonce` strategies."
       ],
       commit: [
@@ -165,7 +172,7 @@ defmodule AshOnetime.Resource do
             "protected action's transaction, so an action-body failure rolls the spend back " <>
             "(correct for a single-use authenticator whose retry bears a fresh proof). " <>
             "`:independent` commits the claim in its own transaction before the action body " <>
-            "runs, so a body failure leaves the proof spent for the acceptance window — " <>
+            "runs, so a body failure leaves the proof spent for the retention window — " <>
             "RFC 9449 §11.1 request-attempt scope (the DPoP replay fence). Applies to " <>
             "`:one_time_nonce` only; rejected for `:idempotency`."
       ],

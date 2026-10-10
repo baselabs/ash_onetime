@@ -774,19 +774,44 @@ defmodule AshOnetime.Resource.Transformer do
     window = protection.window
 
     with true <- is_list(window),
-         true <- Keyword.keys(window) -- [:max_age, :clock_skew] == [],
+         true <- Keyword.keys(window) -- [:max_age, :clock_skew, :retain_for] == [],
          {:ok, max_age} <- duration(Keyword.get(window, :max_age)),
          {:ok, clock_skew} <- duration(Keyword.get(window, :clock_skew)),
-         true <- max_age + clock_skew <= @max_seconds do
-      {:ok, [max_age: max_age, clock_skew: clock_skew]}
+         true <- max_age + clock_skew <= @max_seconds,
+         {:ok, retention} <- normalize_nonce_retention(window, max_age, clock_skew) do
+      {:ok, [max_age: max_age, clock_skew: clock_skew] ++ retention}
     else
       _invalid ->
         error(
           context.dsl_state,
           protection,
           :window,
-          "nonce window requires bounded nonnegative max_age and clock_skew"
+          nonce_window_error(window)
         )
+    end
+  end
+
+  defp nonce_window_error(window) do
+    message = "nonce window requires bounded nonnegative max_age and clock_skew"
+
+    if is_list(window) and Keyword.has_key?(window, :retain_for) do
+      message <>
+        "; retain_for must be at least max_age and retain_for + clock_skew must be bounded"
+    else
+      message
+    end
+  end
+
+  defp normalize_nonce_retention(window, max_age, clock_skew) do
+    case Keyword.fetch(window, :retain_for) do
+      :error ->
+        {:ok, []}
+
+      {:ok, value} ->
+        with {:ok, retain_for} <- duration(value),
+             true <- AshOnetime.Window.valid_retention?(max_age, retain_for, clock_skew) do
+          {:ok, [retain_for: retain_for]}
+        end
     end
   end
 

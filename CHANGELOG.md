@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## v1.6.0 — Unreleased
+
+- Add optional nonce `retain_for`: integer seconds for `Transaction.nonce/2`, or a
+  `{count, unit}` duration in the resource DSL `window`. Acceptance still uses `max_age`;
+  stored claim retention uses `retain_for` plus skew and the existing cleanup margin.
+  Omission preserves 1.5.0 behavior. Values below `max_age` or beyond the duration bound
+  are rejected at compile time and runtime.
+- With extended retention configured, verified late replays of retained claims return
+  `:nonce_already_used`; unclaimed expired proofs remain refused.
+- Add `Transaction.nonce_retention_deadline/2` to read the stored deadline using the
+  full transaction locator, without raw SQL or a required transaction.
+- No migration or dependency-range changes. Existing rows keep their stored deadlines.
+
 ## v1.5.0 — October 7, 2026
 
 Security dependency release. The package DSL, public API, database schema, persisted

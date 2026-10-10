@@ -1,13 +1,16 @@
 defmodule AshOnetime.Window do
   @moduledoc """
-  Inclusive replay and expiry window validation.
+  Inclusive acceptance windows and independent nonce retention deadlines.
+
+  Acceptance uses `max_age`; cleanup uses `retain_for` (defaulting to `max_age`).
+  Retention never widens acceptance.
   """
 
   @max_duration_seconds 2_147_483_647
   @default_cleanup_skew_margin_seconds 1
 
   @doc """
-  Retention safety margin, in seconds, added beyond a nonce's acceptance window
+  Retention safety margin, in seconds, added beyond a nonce's retention window
   before the spent nonce becomes eligible for cleanup.
 
   The acceptance window is evaluated against the application clock, while cleanup
@@ -58,10 +61,10 @@ defmodule AshOnetime.Window do
 
   @spec cleanup_after(DateTime.t(), non_neg_integer(), non_neg_integer()) ::
           DateTime.t() | {:error, :invalid}
-  def cleanup_after(%DateTime{} = issued_at, max_age, skew) do
-    if valid_datetime?(issued_at) and valid_durations?(max_age, skew) do
+  def cleanup_after(%DateTime{} = issued_at, retain_for, skew) do
+    if valid_datetime?(issued_at) and valid_durations?(retain_for, skew) do
       issued_at
-      |> DateTime.add(max_age + skew, :second)
+      |> DateTime.add(retain_for + skew, :second)
       |> DateTime.add(cleanup_skew_margin_seconds(), :second)
     else
       {:error, :invalid}
@@ -72,7 +75,14 @@ defmodule AshOnetime.Window do
     _kind, _reason -> {:error, :invalid}
   end
 
-  def cleanup_after(_issued_at, _max_age, _skew), do: {:error, :invalid}
+  def cleanup_after(_issued_at, _retain_for, _skew), do: {:error, :invalid}
+
+  @doc false
+  @spec valid_retention?(term(), term(), term()) :: boolean()
+  def valid_retention?(max_age, retain_for, skew) do
+    valid_durations?(max_age, skew) and valid_durations?(retain_for, skew) and
+      retain_for >= max_age
+  end
 
   defp valid_inputs?(issued_at, expires_at, evaluated_at, max_age, skew) do
     valid_datetime?(issued_at) and valid_optional_datetime?(expires_at) and

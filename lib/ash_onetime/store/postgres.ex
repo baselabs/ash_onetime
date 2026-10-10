@@ -390,6 +390,37 @@ defmodule AshOnetime.Store.Postgres do
   def processing_backlog(_target),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
+  @spec nonce_retention_deadline(Target.t(), binary(), binary(), binary()) ::
+          {:ok, DateTime.t()} | :not_found | Result.t()
+  def nonce_retention_deadline(%Target{} = target, operation_hash, scope_hash, key_hash)
+      when is_binary(operation_hash) and byte_size(operation_hash) == 32 and
+             is_binary(scope_hash) and byte_size(scope_hash) == 32 and
+             is_binary(key_hash) and byte_size(key_hash) == 32 do
+    parameters = [target.logical_partition, operation_hash, scope_hash, key_hash]
+    with_dynamic_repo(target, fn -> nonce_retention_deadline_query(target, parameters) end)
+  rescue
+    _exception -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+  catch
+    :exit, _reason -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+  end
+
+  def nonce_retention_deadline(_target, _operation_hash, _scope_hash, _key_hash),
+    do: Result.failure(:invalid_request, :not_started, :not_applicable)
+
+  defp nonce_retention_deadline_query(target, parameters) do
+    sql = """
+    SELECT retain_until FROM #{relation(target, "ash_onetime_nonce_claims")}
+    WHERE #{@logical_key_predicate}
+    """
+
+    case dispatched_query(target, sql, parameters) do
+      {:ok, %{rows: [[%DateTime{} = deadline]]}} -> {:ok, deadline}
+      {:ok, %{rows: []}} -> :not_found
+      {:ok, _result} -> Result.failure(:store_invariant, :sent, :not_applicable)
+      {:error, %Result{} = result} -> result
+    end
+  end
+
   defp processing_backlog_query(target) do
     sql = """
     SELECT count(*),
@@ -455,13 +486,27 @@ defmodule AshOnetime.Store.Postgres do
       resolve_insert(target, request, result, attempt)
     else
       {:error, :invalid_nonce_window} ->
-        Result.failure(:invalid_nonce_window, :not_started, :open)
+        expired_nonce_result(target, request)
     end
   end
 
   defp claim_attempt(target, %Request{strategy: :idempotency} = request, attempt) do
     resolve_insert(target, request, insert_claim(target, request, nil), attempt)
   end
+
+  # No admission pre-read: valid proofs still use INSERT/ON CONFLICT. An invalid
+  # window can only reject. Preserve legacy errors when retention was not extended.
+  defp expired_nonce_result(target, %Request{retain_for: retain_for, max_age: max_age} = request)
+       when is_integer(retain_for) and retain_for > max_age do
+    case select_claim(target, :one_time_nonce, logical_key(target, request)) do
+      {:ok, claim} -> collision_result(target, claim)
+      {:error, :missing} -> Result.failure(:invalid_nonce_window, :sent, :open)
+      {:error, %Result{} = result} -> result
+    end
+  end
+
+  defp expired_nonce_result(_target, _request),
+    do: Result.failure(:invalid_nonce_window, :not_started, :open)
 
   defp complete_transaction(target, claim, codec, digest, encoded_response),
     do: complete_transaction(target, claim, codec, digest, encoded_response, :database)
@@ -1219,25 +1264,30 @@ defmodule AshOnetime.Store.Postgres do
          strategy: :one_time_nonce,
          verified: verified,
          max_age: max_age,
+         retain_for: retain_for,
          clock_skew: skew,
          clock: clock
        })
        when is_list(verified) and verified != [] and is_integer(max_age) and max_age >= 0 and
-              is_integer(skew) and skew >= 0 and is_atom(clock),
-       do: :ok
+              is_integer(skew) and skew >= 0 and is_atom(clock) do
+    if is_nil(retain_for) or AshOnetime.Window.valid_retention?(max_age, retain_for, skew),
+      do: :ok,
+      else: {:error, :invalid_request}
+  end
 
   defp validate_request(_request), do: {:error, :invalid_request}
 
   defp validate_nonce(%Request{
          verified: verified_facts,
          max_age: max_age,
+         retain_for: retain_for,
          clock_skew: skew,
          clock: clock
        }) do
     evaluated_at = clock.now()
 
     with :ok <- validate_verified_facts(verified_facts, evaluated_at, max_age, skew),
-         {:ok, aggregate} <- aggregate_verified_facts(verified_facts, max_age, skew) do
+         {:ok, aggregate} <- aggregate_verified_facts(verified_facts, retain_for || max_age, skew) do
       {:ok, aggregate}
     else
       _other -> {:error, :invalid_nonce_window}
@@ -1271,22 +1321,22 @@ defmodule AshOnetime.Store.Postgres do
 
   defp valid_verified_fact?(_verified, _evaluated_at, _max_age, _skew), do: false
 
-  defp aggregate_verified_facts([verified], max_age, skew) do
+  defp aggregate_verified_facts([verified], retain_for, skew) do
     {:ok,
      %{
        issued_at: verified.issued_at,
        expires_at: verified.expires_at,
        verifier_id: verified.verifier_id,
-       cleanup_after: AshOnetime.Window.cleanup_after(verified.issued_at, max_age, skew)
+       cleanup_after: AshOnetime.Window.cleanup_after(verified.issued_at, retain_for, skew)
      }}
   end
 
-  defp aggregate_verified_facts(verified_facts, max_age, skew) do
+  defp aggregate_verified_facts(verified_facts, retain_for, skew) do
     latest = Enum.max_by(verified_facts, & &1.issued_at, DateTime)
 
     cleanup_after =
       verified_facts
-      |> Enum.map(&AshOnetime.Window.cleanup_after(&1.issued_at, max_age, skew))
+      |> Enum.map(&AshOnetime.Window.cleanup_after(&1.issued_at, retain_for, skew))
       |> Enum.max(DateTime)
 
     verifier_ids = Enum.map(verified_facts, & &1.verifier_id)
