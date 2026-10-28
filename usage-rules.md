@@ -1,7 +1,8 @@
 # ash_onetime usage rules
 
-- Use Ash `>= 3.34.6 and < 4.0.0`. Consumers locked below 3.34.6 must update Ash
-  before adopting ash_onetime 1.6.0; see [Upgrading](documentation/upgrading.md).
+- Use Ash `>= 3.37.2 and < 4.0.0` and AshPostgres `~> 2.15 and >= 2.15.2`. Consumers locked
+  below those floors must update before adopting the next ash_onetime release (1.6.0 requires
+  Ash 3.34.6); see [Upgrading](documentation/upgrading.md).
 - Choose exactly one strategy for every protected action. Idempotency replays a classified
   stored result; one-time nonce protection rejects reuse. They are not interchangeable.
 - Give equal weight to the two dangerous misuses: never use idempotency response replay as

@@ -8,7 +8,7 @@ livebook:{"persist_outputs":true}
 Mix.install(
   [
     {:ash_onetime, "~> 1.6.0"},
-    {:ash_postgres, "~> 2.13"}
+    {:ash_postgres, "~> 2.15 and >= 2.15.2"}
   ],
   consolidate_protocols: false
 )
@@ -23,7 +23,7 @@ A retry with the same key but a *changed* request is a terminal conflict, never 
 This notebook walks through fresh execution, replay, and the fingerprint conflict — against a
 real PostgreSQL. Run each cell top to bottom.
 
-> Requires Elixir 1.20+, Ash 3.34.6+, and PostgreSQL 18 reachable at
+> Requires Elixir 1.20+, Ash 3.37.2+, and PostgreSQL 18 reachable at
 > `DATABASE_URL`. Use a development database where you can create and remove
 > schemas. Each run creates its own schema and removes it in the final cell.
 

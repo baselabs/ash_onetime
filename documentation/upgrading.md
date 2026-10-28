@@ -14,6 +14,27 @@ minor whose public capabilities you use and review this page on each minor bump:
 {:ash_onetime, "~> 1.6.0"}
 ```
 
+## Unreleased — Ash, AshPostgres, and AshSql security floors (October 28, 2026)
+
+**Consumers locked below Ash 3.37.2 or AshPostgres 2.15.2 must update them to take the next
+release.** Raise any direct constraints to Ash `>= 3.37.2 and < 4.0.0`, AshPostgres
+`~> 2.15 and >= 2.15.2`, and AshSql `~> 0.8 and >= 0.8.4`, then resolve and audit:
+
+```sh
+mix deps.update ash ash_postgres ash_sql
+mix hex.audit
+mix deps.audit
+```
+
+[EEF-CVE-2026-96581](https://cna.erlef.org/osv/EEF-CVE-2026-96581.html) (a primary-key
+upsert ignores attribute multitenancy) is fixed in Ash 3.37.2, and
+[EEF-CVE-2026-114214](https://cna.erlef.org/osv/EEF-CVE-2026-114214.html) in Ash 3.37.1.
+[EEF-CVE-2026-115627](https://cna.erlef.org/osv/EEF-CVE-2026-115627.html) and
+[EEF-CVE-2026-115635](https://cna.erlef.org/osv/EEF-CVE-2026-115635.html) are fixed in
+AshPostgres 2.15.2, which requires AshSql 0.8.4. AshPostgres 2.15 ships version 7 of its SQL
+helper functions; if your own resources use AshPostgres, run `mix ash.codegen` and migrate as
+AshPostgres directs. ash_onetime's own schema and migrations are unchanged.
+
 ## v1.6.0 — Separate nonce retention and Ash security floor
 
 **Consumers locked below Ash 3.34.6 must update Ash to take 1.6.0.** Raise any

@@ -4,12 +4,13 @@ Date: 2026-08-09
 
 ## Status
 
-Accepted (amended October 10, 2026 — current Ash floor 3.34.6 and optional Mint floor 1.10.2;
-the dated amendments preserve each earlier decision).
+Accepted (amended October 28, 2026 — current Ash floor 3.37.2, AshPostgres floor 2.15.2,
+AshSql floor 0.8.4, and optional Mint floor 1.10.2; the dated amendments preserve each earlier
+decision).
 The original decision superseded the `>= 3.29.3` floor documented in the v0.1.x/v0.2.0
 README and `mix.exs` (not a prior ADR — the floor was an inline documented constraint, not
 an architecture decision). The dated amendments record each later security-floor move through
-the current `>= 3.34.6 and < 4.0.0` requirement.
+the current `>= 3.37.2 and < 4.0.0` requirement.
 
 ## Context
 
@@ -230,3 +231,31 @@ Consumers locked below Ash 3.34.6 must update Ash to take ash_onetime 1.6.0. Thi
 raise requires no migration and does not change ash_onetime's DSL, public API, database
 schema, persisted response format, or token wire format. The v1.6.0 nonce-retention
 additions are documented separately.
+
+## Amendment — Ash 3.37.2, AshPostgres 2.15.2 and AshSql 0.8.4 floors (October 28, 2026)
+
+OBSERVED: `mix hex.audit` on October 28, 2026 flagged the committed Ash 3.34.6 for
+[EEF-CVE-2026-96581](https://cna.erlef.org/osv/EEF-CVE-2026-96581.html) (HIGH; a primary-key
+upsert ignores attribute multitenancy) and
+[EEF-CVE-2026-114214](https://cna.erlef.org/osv/EEF-CVE-2026-114214.html) (a limit-1
+through-relationship load ignores the through path); AshPostgres 2.14.5 for
+[EEF-CVE-2026-115627](https://cna.erlef.org/osv/EEF-CVE-2026-115627.html) and
+[EEF-CVE-2026-115635](https://cna.erlef.org/osv/EEF-CVE-2026-115635.html), with 2.14.5 also
+retired; and Plug.Crypto 2.2.0 for
+[EEF-CVE-2026-105963](https://cna.erlef.org/osv/EEF-CVE-2026-105963.html). OSV records retrieved
+the same day give the fixed releases: Ash 3.37.2 (96581) and 3.37.1 (114214), AshPostgres
+2.15.2 (both), and Plug.Crypto 2.2.1. OSV version queries return no advisory for Ash 3.37.2,
+AshPostgres 2.15.2, or AshSql 0.8.4.
+
+Raise the published Ash requirement to `>= 3.37.2 and < 4.0.0` and the AshPostgres requirement
+to `~> 2.15 and >= 2.15.2`. OBSERVED Hex release metadata for AshPostgres 2.15.2 requires
+`ash ~> 3.37 and >= 3.37.1` and `ash_sql ~> 0.8 and >= 0.8.4`. No AshSql advisory is involved;
+the explicit AshSql requirement moves to `~> 0.8 and >= 0.8.4` so the declared minimum is the
+one the `core-floors` case can actually resolve with AshPostgres 2.15.2. The doctor, exact CI
+floor lane, `core-floors` case, package metadata check, dependency-security tests, and mutation
+rows move together. Plug.Crypto is not a direct dependency; only the development lock moves.
+
+Consumers locked below these floors must update them to take the release that carries this
+amendment, a security-driven minor under the forward-compatible floor posture. It does not
+change ash_onetime's DSL, public API, database schema, persisted response format, or token wire
+format.
