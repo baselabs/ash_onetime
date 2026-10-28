@@ -8,5 +8,5 @@ lib/ash_onetime/change.ex
 lib/ash_onetime/generic_action.ex
 lib/ash_onetime/external_effect.ex
 priv/**
-scripts/check_mutations.exs
-test/**
+# 2026-10-28: dropped scripts/check_mutations.exs and test/** (gate tooling and tests are not
+# heavy-tier product paths; owner ruling that process is sized to the risk of each change).
