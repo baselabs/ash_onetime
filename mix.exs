@@ -47,14 +47,16 @@ defmodule AshOnetime.MixProject do
   defp deps do
     [
       {:ash, ash_requirement()},
-      # Security floor (ADR 0004): AshPostgres 2.13.0 is where EEF-CVE-2026-78699 is
-      # fixed, and AshPostgres still admits older ash_sql releases — the explicit
-      # ash_sql floor below closes that gap for consumers. `runtime: false` keeps
+      # Security floor (ADR 0004, October 28, 2026 amendment): AshPostgres 2.15.2 is
+      # where EEF-CVE-2026-115627 and EEF-CVE-2026-115635 are fixed (2.13.0 first fixed
+      # EEF-CVE-2026-78699). AshPostgres 2.15.2 itself requires ash_sql >= 0.8.4; the
+      # explicit ash_sql floor below states that minimum for consumers so the declared
+      # and exercised minimums match (the core-floors case). `runtime: false` keeps
       # AshPostgres the owner of ash_sql's startup; the < 1.0.0 cap is the same
       # matrix-extension posture as the Ash < 4.0.0 bound (a breaking major is
       # proven in CI before the cap moves).
-      {:ash_postgres, "~> 2.13"},
-      {:ash_sql, "~> 0.7 and >= 0.7.1", runtime: false},
+      {:ash_postgres, "~> 2.15 and >= 2.15.2"},
+      {:ash_sql, "~> 0.8 and >= 0.8.4", runtime: false},
       {:spark, "~> 2.7"},
       {:ecto_sql, "~> 3.14"},
       {:postgrex, "~> 0.22"},
@@ -88,14 +90,17 @@ defmodule AshOnetime.MixProject do
     ]
   end
 
-  # `>= 3.34.6 and < 4.0.0` is the consumer requirement. The October 6, 2026
+  # `>= 3.37.2 and < 4.0.0` is the consumer requirement. The October 6, 2026
   # package-wide advisory inventory (ADR 0004) finds EEF-CVE-2026-94201
   # (unsafe atom-attribute filters can exhaust the BEAM atom table) fixed
   # only in 3.34.3. The bulk private-argument fix for -93477 shipped in
   # 3.33.11; that version remains affected by -94201.
   # EEF-CVE-2026-101028 (aggregate filters and sorts skip related resources'
   # read policies) is fixed in 3.34.6, raising the floor again (ADR 0004,
-  # October 10, 2026 amendment).
+  # October 10, 2026 amendment). EEF-CVE-2026-96581 (a primary-key upsert ignores
+  # attribute multitenancy) is fixed in 3.37.2 and EEF-CVE-2026-114214 (a limit-1
+  # through-relationship load ignores the through path) in 3.37.1, raising the
+  # floor to 3.37.2 (ADR 0004, October 28, 2026 amendment).
   # The CI compatibility matrix sets ASH_ONETIME_ASH_VERSION to pin
   # one exact Ash per cell (the floor and each later minor); `latest`/unset keeps the floating
   # requirement so the newest published Ash is exercised. The namespaced var name is extremely
@@ -103,7 +108,7 @@ defmodule AshOnetime.MixProject do
   # the full requirement. A pin is validated at project-config evaluation time: it must be a
   # version inside the published range, else Mix.raise fires — a publish with an out-of-range
   # pin exported would otherwise silently freeze a wrong exact requirement into the package.
-  @ash_floor "3.34.6"
+  @ash_floor "3.37.2"
 
   defp ash_requirement do
     case System.get_env("ASH_ONETIME_ASH_VERSION") do

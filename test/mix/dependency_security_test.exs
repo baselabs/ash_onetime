@@ -21,11 +21,16 @@ defmodule AshOnetime.MixDependencySecurityTest do
     unless String.starts_with?(requirement, "==") do
       refute Version.match?("3.33.11", requirement)
       refute Version.match?("3.34.2", requirement)
-      # EEF-CVE-2026-101028 affects Ash < 3.34.6, including the former floor.
+      # EEF-CVE-2026-101028 affects Ash < 3.34.6, including the 3.34.3 floor.
       refute Version.match?("3.34.3", requirement)
-      refute Version.match?("3.34.4", requirement)
       refute Version.match?("3.34.5", requirement)
-      assert Version.match?("3.34.6", requirement)
+      # EEF-CVE-2026-96581 affects Ash < 3.37.2, including the former 3.34.6 floor;
+      # EEF-CVE-2026-114214 affects Ash < 3.37.1.
+      refute Version.match?("3.34.6", requirement)
+      refute Version.match?("3.36.1", requirement)
+      refute Version.match?("3.37.0", requirement)
+      refute Version.match?("3.37.1", requirement)
+      assert Version.match?("3.37.2", requirement)
     end
   end
 
@@ -33,14 +38,22 @@ defmodule AshOnetime.MixDependencySecurityTest do
   test "ash_postgres consumer requirement rejects advised versions" do
     requirement = requirement!(:ash_postgres)
     refute Version.match?("2.12.0", requirement)
-    assert Version.match?("2.13.0", requirement)
+    # EEF-CVE-2026-115627 and EEF-CVE-2026-115635 affect AshPostgres < 2.15.2,
+    # including the former 2.13.0 floor; 2.14.5 is also retired.
+    refute Version.match?("2.13.0", requirement)
+    refute Version.match?("2.14.5", requirement)
+    refute Version.match?("2.15.1", requirement)
+    assert Version.match?("2.15.2", requirement)
   end
 
   @tag :deps_ash_sql_floor_mutation
   test "ash_sql consumer requirement rejects advised versions" do
     requirement = requirement!(:ash_sql)
     refute Version.match?("0.7.0", requirement)
-    assert Version.match?("0.7.1", requirement)
+    # AshPostgres 2.15.2 requires ash_sql >= 0.8.4; the declared floor matches it.
+    refute Version.match?("0.7.1", requirement)
+    refute Version.match?("0.8.3", requirement)
+    assert Version.match?("0.8.4", requirement)
   end
 
   @tag :deps_mint_floor_mutation

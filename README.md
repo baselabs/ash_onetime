@@ -142,7 +142,8 @@ This guide targets [v1.6.0](CHANGELOG.md). Nonces can retain claims longer
 than their proof acceptance window with optional `retain_for`, and transaction-owned
 callers can read the stored deadline through `Transaction.nonce_retention_deadline/2`.
 See [One-time nonces](documentation/one-time-nonces.md). No migration is required;
-Ash must be at least 3.34.6; see [Upgrading](documentation/upgrading.md).
+the unreleased security floors require Ash 3.37.2 and AshPostgres 2.15.2; see
+[Upgrading](documentation/upgrading.md).
 
 Every protected action chooses `:idempotency` or `:one_time_nonce` and declares a nonempty
 scope; there is no default strategy or global scope fallback. The release battery includes a
@@ -155,8 +156,8 @@ plus direct execution of the three Livebooks against PostgreSQL. Full release hi
 - Elixir `~> 1.20` (developed and tested on 1.20.4; this requirement admits later 1.x releases
   and excludes 2.0 or newer)
 - Erlang/OTP 28 or 29
-- Ash `>= 3.34.6` and `< 4.0.0`
-- AshPostgres `~> 2.13`, AshSql `~> 0.7 and >= 0.7.1`
+- Ash `>= 3.37.2` and `< 4.0.0`
+- AshPostgres `~> 2.15 and >= 2.15.2`, AshSql `~> 0.8 and >= 0.8.4`
 - Optional Mint `~> 1.10 and >= 1.10.2` when the host carries the installer HTTP closure
 - PostgreSQL 18 for the project test harness. The SQL surface requires PostgreSQL 11+
   (declarative hash/range partitioning with default partitions, `SKIP LOCKED`,
@@ -165,9 +166,16 @@ plus direct execution of the three Livebooks against PostgreSQL. Full release hi
 
 The security floors follow
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md).
-The October 10, 2026 amendment raises the Ash floor to 3.34.6 for
-[EEF-CVE-2026-101028](https://cna.erlef.org/osv/EEF-CVE-2026-101028.html), which is
-fixed in that release. The earlier floor addressed these advisories:
+The October 28, 2026 amendment raises the Ash floor to 3.37.2 for
+[EEF-CVE-2026-96581](https://cna.erlef.org/osv/EEF-CVE-2026-96581.html) (fixed in 3.37.2)
+and [EEF-CVE-2026-114214](https://cna.erlef.org/osv/EEF-CVE-2026-114214.html) (fixed in
+3.37.1), and the AshPostgres floor to 2.15.2 for
+[EEF-CVE-2026-115627](https://cna.erlef.org/osv/EEF-CVE-2026-115627.html) and
+[EEF-CVE-2026-115635](https://cna.erlef.org/osv/EEF-CVE-2026-115635.html). AshPostgres 2.15.2
+requires AshSql 0.8.4, which becomes the declared AshSql floor. The October 10, 2026
+amendment raised the Ash floor to 3.34.6 for
+[EEF-CVE-2026-101028](https://cna.erlef.org/osv/EEF-CVE-2026-101028.html). The earlier floor
+addressed these advisories:
 [EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html) affects Ash
 `>= 3.5.1 and < 3.34.3`; Ash 3.33.11 contains the
 [EEF-CVE-2026-93477](https://cna.erlef.org/osv/EEF-CVE-2026-93477.html) fix but remains
@@ -180,7 +188,7 @@ Compatibility across the range is verified per matrix cell by the standard gate
 battery — format, compile with warnings-as-errors, `mix hex.audit` (Hex security
 advisories), `mix deps.audit`, the full test suite, `mix credo --strict`,
 `mix dialyzer`, `mix docs --warnings-as-errors`, and `mix hex.build` — run against
-the 3.34.6 floor and the latest published Ash 3.x. Each compatibility cell unlocks the full
+the 3.37.2 floor and the latest published Ash 3.x. Each compatibility cell unlocks the full
 dependency graph before resolution so the committed lock cannot hold a transitive dependency
 back. The release battery (mutation matrix, executable Livebooks, unpacked-package check, DSL
 cheat-sheet freshness) runs against the committed lock, not per cell.

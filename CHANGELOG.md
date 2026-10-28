@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- **Ash security floor raised to `>= 3.37.2 and < 4.0.0`** for
+  [EEF-CVE-2026-96581](https://cna.erlef.org/osv/EEF-CVE-2026-96581.html) (fixed in 3.37.2)
+  and [EEF-CVE-2026-114214](https://cna.erlef.org/osv/EEF-CVE-2026-114214.html) (fixed in
+  3.37.1).
+- **AshPostgres security floor raised to `~> 2.15 and >= 2.15.2`** for
+  [EEF-CVE-2026-115627](https://cna.erlef.org/osv/EEF-CVE-2026-115627.html) and
+  [EEF-CVE-2026-115635](https://cna.erlef.org/osv/EEF-CVE-2026-115635.html); 2.14.5 is
+  retired. The AshSql floor moves to `~> 0.8 and >= 0.8.4`, the minimum AshPostgres 2.15.2
+  requires.
+- Consumers locked below these floors must update them; see
+  [Upgrading](documentation/upgrading.md). The development lock also moves Plug.Crypto to
+  2.2.1 for [EEF-CVE-2026-105963](https://cna.erlef.org/osv/EEF-CVE-2026-105963.html).
+  The DSL, public API, database schema, persisted response format, and token wire format
+  are unchanged; no ash_onetime migration is required.
+
 ## v1.6.0 — October 10, 2026
 
 - Add optional nonce `retain_for`: integer seconds for `Transaction.nonce/2`, or a
