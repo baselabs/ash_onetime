@@ -28,6 +28,22 @@ end
 
 {:ok, _supervisor} = AshOnetime.Test.Application.start(:normal, [])
 AshOnetime.Test.Migration.assert_isolated_database!()
+
+# Install the AshPostgres SQL helper functions the test repo declares in
+# installed_extensions/0, from the committed codegen output under
+# test/support/priv, as every consumer's own extension migration does. In
+# :auto mode the migration commits before the per-test sandbox transactions.
+# The path is explicit: Ecto would resolve the repo's priv under _build.
+Ecto.Adapters.SQL.Sandbox.mode(AshOnetime.Test.Repo, :auto)
+
+Ecto.Migrator.run(
+  AshOnetime.Test.Repo,
+  Path.expand("support/priv/migrations", __DIR__),
+  :up,
+  all: true,
+  log: false
+)
+
 Ecto.Adapters.SQL.Sandbox.mode(AshOnetime.Test.Repo, :manual)
 
 ExUnit.start()

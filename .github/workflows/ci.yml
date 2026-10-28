@@ -153,6 +153,10 @@ jobs:
         run: mix hex.build
       - name: Unpacked consumer package check
         run: mix run scripts/check_package.exs
+      # Fails when the test repo's committed AshPostgres output (test/support/priv) is stale
+      # against the locked AshPostgres, so the suite always runs with the consumer's helpers.
+      - name: Ash codegen freshness
+        run: MIX_ENV='test' mix ash.codegen --check
       # Fails when the committed documentation/dsls/DSL-*.md drifts from the declared schema.
       - name: DSL cheat-sheet freshness
         run: mix spark.cheat_sheets --check --extensions AshOnetime.Resource
