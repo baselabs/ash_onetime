@@ -29,7 +29,17 @@ filesystem, not under `/mnt/c`), which is the Linux path; no native-Windows deve
 path is maintained. This is a developer-setup property, proven on a developer machine;
 CI runs on Linux only.
 
-Before reporting a change complete, run:
+Process is sized to the risk of the specific change, never the repository (owner ruling,
+October 28, 2026). Each check below names the failure it prevents:
+
+- **Heavy** — the diff touches admission, scope or replay safety, the store and claims,
+  tokens, signers and keys, verification, the effect paths, or migration templates: write
+  the failing test first, get one independent review and do one fix round, and run the
+  declared local gate once before pushing.
+- **Light** — everything else: focused checks on the changed behavior, then push; hosted CI
+  is the gate, and the commit message is the record.
+
+The declared local gate (heavy changes, run once on the exact tree before pushing):
 
 ```sh
 mix format --check-formatted
@@ -40,13 +50,20 @@ mix dialyzer
 MIX_ENV=test mix dialyzer
 mix deps.audit
 mix hex.audit
+mix hex.build
+```
+
+The release battery adds the package-and-artifact proofs. Run it before publishing a
+release; CI's `release-checks` job repeats it against the committed lock on every tag:
+
+```sh
 mix run --no-start scripts/check_deps_currency.exs
 mix spark.cheat_sheets --check --extensions AshOnetime.Resource
 mix docs --warnings-as-errors
+MIX_ENV=test mix ash.codegen --check                      # committed test-repo codegen freshness
 MIX_ENV=test mix run scripts/check_mutations.exs -- all   # with DATABASE_URL exported as in your .env
 elixir scripts/check_livebooks.exs --local                # executes source cells against PostgreSQL
-mix hex.build
-mix run scripts/check_package.exs
+mix run scripts/check_package.exs                         # after the gate's mix hex.build
 mix run scripts/check_optional_matrix.exs
 ```
 
@@ -115,6 +132,3 @@ not at latest carries an inline reason in `mix.exs`; "we never bumped it" is not
 After every dependency move, rerun `mix hex.audit` — Hex advisories lag public disclosures
 by hours, so after a fresh disclosure also check the advisory's affected range (OSV/GHSA)
 for each directly-consumed package in the affected family.
-
-Never commit secrets, provider-specific signature implementations, reference-project
-dependencies, or project-owned version suffixes in durable identifiers.

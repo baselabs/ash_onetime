@@ -9,6 +9,17 @@ process is sized to the risk of each change. Historical record only; not binding
 
 Run these commands before reporting a change complete:
 
+```sh
+mix format --check-formatted
+mix compile --warnings-as-errors
+mix test
+mix credo --strict
+mix dialyzer
+MIX_ENV=test mix dialyzer
+mix deps.audit
+mix hex.audit
+mix hex.build
+```
 
 ## From AGENTS.md: Boundaries, platform bullet (original wording)
 

@@ -136,7 +136,9 @@ idempotent). A rising discard rate on any of the three queues is contention — 
 `pg_stat_activity` for lock waits during the worker's window and consider raising the pool or
 scheduling the worker off-peak.
 
-**Upgrade check — stuck `available` jobs (the unconfigured-queue hazard).** `PartitionWorker`
+#### Upgrade check
+
+**Stuck `available` jobs — the unconfigured-queue hazard.** `PartitionWorker`
 runs on a dedicated `:ash_onetime_partitions` queue (separate from cleanup). If you upgrade
 without adding `:ash_onetime_partitions` to your Oban `queues` config, jobs are enqueued but
 never executed — forward partition creation silently stalls and bounded retention degrades
