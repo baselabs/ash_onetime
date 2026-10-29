@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## v1.7.0 — October 29, 2026
 
 - **Ash security floor raised to `>= 3.37.2 and < 4.0.0`** for
   [EEF-CVE-2026-96581](https://cna.erlef.org/osv/EEF-CVE-2026-96581.html) (fixed in 3.37.2)

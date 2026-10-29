@@ -7,17 +7,17 @@ Security-driven dependency floors follow the documented minor-release policy in
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md);
 their required dependency edits appear here too.
 
-This guide targets v1.6.0. Pin the
+This guide targets v1.7.0. Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 1.6.0"}
+{:ash_onetime, "~> 1.7.0"}
 ```
 
-## Unreleased — Ash, AshPostgres, and AshSql security floors (October 28, 2026)
+## v1.7.0 — Ash, AshPostgres, and AshSql security floors (October 28, 2026)
 
-**Consumers locked below Ash 3.37.2 or AshPostgres 2.15.2 must update them to take the next
-release.** Raise any direct constraints to Ash `>= 3.37.2 and < 4.0.0`, AshPostgres
+**Consumers locked below Ash 3.37.2 or AshPostgres 2.15.2 must update them to take
+1.7.0.** Raise any direct constraints to Ash `>= 3.37.2 and < 4.0.0`, AshPostgres
 `~> 2.15 and >= 2.15.2`, and AshSql `~> 0.8 and >= 0.8.4`, then resolve and audit:
 
 ```sh

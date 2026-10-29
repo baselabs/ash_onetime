@@ -138,11 +138,11 @@ transactional-outbox patterns.
 
 ## Status
 
-This guide targets [v1.6.0](CHANGELOG.md). Nonces can retain claims longer
+This guide targets [v1.7.0](CHANGELOG.md). Nonces can retain claims longer
 than their proof acceptance window with optional `retain_for`, and transaction-owned
 callers can read the stored deadline through `Transaction.nonce_retention_deadline/2`.
-See [One-time nonces](documentation/one-time-nonces.md). No migration is required;
-the unreleased security floors require Ash 3.37.2 and AshPostgres 2.15.2; see
+See [One-time nonces](documentation/one-time-nonces.md). No migration is required.
+v1.7.0 raises the security floors to Ash 3.37.2 and AshPostgres 2.15.2; see
 [Upgrading](documentation/upgrading.md).
 
 Every protected action chooses `:idempotency` or `:one_time_nonce` and declares a nonempty
@@ -187,7 +187,8 @@ Mint remain excluded from this package's runtime applications.
 Compatibility across the range is verified per matrix cell by the standard gate
 battery — format, compile with warnings-as-errors, `mix hex.audit` (Hex security
 advisories), `mix deps.audit`, the full test suite, `mix credo --strict`,
-`mix dialyzer`, `mix docs --warnings-as-errors`, and `mix hex.build` — run against
+`mix dialyzer` in both dev and test environments, `mix docs --warnings-as-errors`, and
+`mix hex.build` — run against
 the 3.37.2 floor and the latest published Ash 3.x. Each compatibility cell unlocks the full
 dependency graph before resolution so the committed lock cannot hold a transitive dependency
 back. The release battery (mutation matrix, executable Livebooks, unpacked-package check, DSL

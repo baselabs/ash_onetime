@@ -9,7 +9,7 @@ status column records where it stands now.
 
 ## Security dependency maintenance
 
-The unreleased October 28, 2026 security-floor raise (after v1.6.0's October 10 raise)
+The v1.7.0 October 28, 2026 security-floor raise (after v1.6.0's October 10 raise)
 continues the policy in [ADR 0004](adr/0004-security-driven-ash-floor.md). Current consumer
 floors are Ash 3.37.2 (with the range capped below 4.0.0),
 AshPostgres 2.15.2, AshSql 0.8.4, Igniter 0.8.4, and optional Mint 1.10.2. The doctor,
