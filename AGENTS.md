@@ -17,38 +17,20 @@
   Gates run in Elixir (`.exs`), never POSIX shell; keep `.gitattributes` (`* text=auto eol=lf`)
   intact.
 
-## Workflow (owner ruling, October 28, 2026)
+## Workflow
 
-Process is sized to the risk of the specific change, never the repository. Each check, gate,
-record or review names the failure it prevents.
+Make the change, run the tests that cover it, commit with named paths, and push to `main`.
+CI runs once on `main`; if it goes red, fix forward.
 
-- **Heavy** when the diff touches admission, scope or replay safety (`admission.ex`, `scope.ex`,
-  `replay_safety.ex`), the store and claims (`store/**`), tokens, signers and keys (`token.ex`,
-  `signer/**`, `key_resolver.ex`, `key_source.ex`), verification (`verifier.ex`), the effect
-  paths (`change.ex`, `generic_action.ex`, `external_effect.ex`) or migration templates
-  (`priv/**`). Write the failing test first, get one independent review and do one fix round,
-  and run the declared local gate once before pushing. Heavy pushes need the owner's approval.
-- **Light** for everything else: focused checks on the changed behavior, then push; hosted CI
-  is the gate. No outcome record, gauge or review; the commit message is the record. A light
-  change the owner asked for lands without a separate push approval.
+CI runs: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix test`,
+`mix credo --strict`, `mix dialyzer`, `MIX_ENV=test mix dialyzer`, `mix deps.audit`,
+`mix hex.audit`, `mix docs --warnings-as-errors`, `mix hex.build`, plus the release battery in
+`CONTRIBUTING.md` on tags. Run the ones that cover your change.
+
 - Publishing, deploying and pushes to mirrors always need the owner's approval for that action.
 - A test that fails on every run is a defect: fix it, or quarantine it with a reason, in the
   change that finds it.
 - Update the CHANGELOG when behavior, a dependency or a contract changes; other docs only when
   a contract changes.
-
-Declared local gate:
-
-```sh
-mix format --check-formatted
-mix compile --warnings-as-errors
-mix test
-mix credo --strict
-mix dialyzer
-MIX_ENV=test mix dialyzer
-mix deps.audit
-mix hex.audit
-mix hex.build
-```
 
 Superseded instruction text lives in `docs/reference/agent-history.md`.

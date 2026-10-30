@@ -29,17 +29,7 @@ filesystem, not under `/mnt/c`), which is the Linux path; no native-Windows deve
 path is maintained. This is a developer-setup property, proven on a developer machine;
 CI runs on Linux only.
 
-Process is sized to the risk of the specific change, never the repository (owner ruling,
-October 28, 2026). Each check below names the failure it prevents:
-
-- **Heavy** — the diff touches admission, scope or replay safety, the store and claims,
-  tokens, signers and keys, verification, the effect paths, or migration templates: write
-  the failing test first, get one independent review and do one fix round, and run the
-  declared local gate once before pushing.
-- **Light** — everything else: focused checks on the changed behavior, then push; hosted CI
-  is the gate, and the commit message is the record.
-
-The declared local gate (heavy changes, run once on the exact tree before pushing):
+CI runs these checks; run the ones that cover your change:
 
 ```sh
 mix format --check-formatted
