@@ -5,7 +5,8 @@ defmodule AshOnetime.Test.Repo.Migrations.AddAshOnetimeBoundaryFacts do
   # identity, tags with a GIN index, tenant-scoped. DDL is owned by this
   # template and the library validates rows before insert; the CHECKs and the
   # append-only trigger are the database-side backstop. When editing DDL here,
-  # regenerate the committed test-support migration so both stay identical.
+  # regenerate and format the committed test-support migration so both stay
+  # identical.
   def up do
     execute("""
     CREATE FUNCTION #{q("ash_onetime_fact_tags_valid")}(candidate_tags text[])
