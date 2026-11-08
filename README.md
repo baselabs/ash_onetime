@@ -22,6 +22,14 @@ concurrent races. There is no admission pre-read.
   nonce claim commits in its own transaction *before* the action body runs, so a downstream
   failure cannot make the proof reusable. A reused proof is rejected with `:nonce_already_used`
   for the retention window. Default-off; existing nonce consumers are byte-for-byte unchanged.
+- **Context boundaries** (v1.8.0, opt-in) — the second admission shape: a resource that
+  declares `context_boundary` is backed by an append-only fact table, and
+  `AshOnetime.Boundary.append_if/5` admits an append only when no fact matching the query
+  moved past the cutoff the caller read. Writers of one context serialize on tenant-scoped
+  advisory locks per tag (so overlapping contexts cannot deadlock and disjoint ones never
+  block); a changed context answers `{:error, {:context_changed, max_seq}}`. It enforces
+  "nothing relevant changed since I looked" rules across records without designing a lock row
+  per rule. See [Context boundaries](documentation/context-boundary.md).
 
 Optional, non-admitting surfaces: a response cache, a Plug, Oban workers for cleanup and
 forward partition creation, and an external-effect execute/recover protocol for peers that

@@ -1,8 +1,13 @@
 defmodule AshOnetime.LivebookCheck do
   @moduledoc false
 
-  @notebooks ~w(idempotency nonces external-recovery)
-  @persisted_outputs %{"idempotency" => 4, "nonces" => 5, "external-recovery" => 5}
+  @notebooks ~w(idempotency nonces external-recovery context-boundary)
+  @persisted_outputs %{
+    "idempotency" => 4,
+    "nonces" => 5,
+    "external-recovery" => 5,
+    "context-boundary" => 3
+  }
 
   def main(arguments) do
     case arguments do
@@ -27,7 +32,9 @@ defmodule AshOnetime.LivebookCheck do
           if status != 0, do: raise("Livebook #{name} failed (exit #{status})")
         end)
 
-        IO.puts("livebook checks passed: idempotency, nonces, external-recovery (#{mode})")
+        IO.puts(
+          "livebook checks passed: idempotency, nonces, external-recovery, context-boundary (#{mode})"
+        )
 
       ["--notebook", path, mode] when mode in ["--local", "--published"] ->
         run_notebook!(path, mode)

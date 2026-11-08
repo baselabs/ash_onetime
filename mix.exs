@@ -190,6 +190,7 @@ defmodule AshOnetime.MixProject do
         "documentation/livebooks/idempotency.livemd",
         "documentation/livebooks/nonces.livemd",
         "documentation/livebooks/external-recovery.livemd",
+        "documentation/livebooks/context-boundary.livemd",
         "documentation/dsls/DSL-AshOnetime.Resource.md",
         "CONTRIBUTING.md",
         "SECURITY.md",

@@ -10,7 +10,8 @@ defmodule AshOnetime.DocumentationCurrencyTest do
     "documentation/upgrading.md",
     "documentation/livebooks/idempotency.livemd",
     "documentation/livebooks/nonces.livemd",
-    "documentation/livebooks/external-recovery.livemd"
+    "documentation/livebooks/external-recovery.livemd",
+    "documentation/livebooks/context-boundary.livemd"
   ]
 
   test "public installation surfaces select the current package minor" do

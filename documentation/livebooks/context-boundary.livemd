@@ -1,0 +1,269 @@
+<!--
+livebook:{"persist_outputs":true}
+-->
+
+# Context boundaries — admit only if nothing relevant changed
+
+```elixir
+Mix.install(
+  [
+    {:ash_onetime, "~> 1.8.0"},
+    {:ash_postgres, "~> 2.15 and >= 2.15.2"}
+  ],
+  consolidate_protocols: false
+)
+```
+
+## What this notebook covers
+
+A context boundary is the second admission shape: `:idempotency` and `:one_time_nonce` admit
+exactly once per key, while a context boundary admits an append only when no fact matching
+your query changed since you read it. It answers rules that span records — "refund only if
+no other refund landed on this capture since I looked", "invite once per email per realm" —
+without designing a lock row for each rule in advance.
+
+This notebook walks the read → decide → append loop, the `:context_changed` refusal, tenant
+isolation, and the exactly-one-admission proof under concurrent writers — against a real
+PostgreSQL. Run each cell top to bottom.
+
+> Requires Elixir 1.20+, Ash 3.37.2+, and PostgreSQL 18 reachable at
+> `DATABASE_URL`. Use a development database where you can create and remove
+> schemas. Each run creates its own schema and removes it in the final cell.
+
+## Connect to PostgreSQL
+
+```elixir
+database_url = System.fetch_env!("DATABASE_URL")
+Logger.configure(level: :warning)
+
+:ok = Application.put_env(:ash, :disable_async?, true)
+# Ash >= 3.33 requires an explicit string-length counting mode; codepoints
+# matches how the SQL data layer counts (EEF-CVE-2026-82752 remediation).
+:ok = Application.put_env(:ash, :default_string_length_count, :codepoints)
+:ok = Application.put_env(:ash_onetime_demo, AshOnetimeDemo.Repo, url: database_url, pool_size: 12)
+```
+
+## Define the Repo, domain, and fact-backed resource
+
+```elixir
+defmodule AshOnetimeDemo.Repo do
+  use AshPostgres.Repo, otp_app: :ash_onetime_demo
+
+  @impl AshPostgres.Repo
+  def installed_extensions, do: ["ash-functions"]
+
+  @impl AshPostgres.Repo
+  def min_pg_version, do: %Version{major: 18, minor: 0, patch: 0}
+end
+
+{:ok, _} = AshOnetimeDemo.Repo.start_link()
+```
+
+```elixir
+defmodule AshOnetimeDemo.Domain do
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshOnetimeDemo.Invitation
+  end
+end
+
+defmodule AshOnetimeDemo.Invitation do
+  use Ash.Resource,
+    domain: AshOnetimeDemo.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshOnetime.Resource]
+
+  postgres do
+    table "demo_invitations"
+    repo AshOnetimeDemo.Repo
+  end
+
+  context_boundary do
+    fact_table "demo_invitation_facts"
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
+:ok
+```
+
+## Install the fact table
+
+The `context_boundary` section names the append-only fact table backing the resource. The
+migration generator's `--fact-tables` option creates it; here we render the same migration
+into a per-run schema. Facts carry a monotonic `seq`, a `type`, and GIN-indexed `tags`, and
+the table refuses updates and deletes by trigger — it is append-only.
+
+```elixir
+alias AshOnetimeDemo.Repo
+alias Ecto.Adapters.SQL
+
+unique = Ecto.UUID.generate() |> String.replace("-", "")
+schema = "ash_onetime_demo_#{unique}"
+temp = Path.join(System.tmp_dir!(), "ash_onetime_demo_#{unique}")
+File.mkdir_p!(temp)
+
+{schema, temp}
+```
+
+```elixir
+source =
+  Mix.Tasks.AshOnetime.Gen.Migrations.render_fact_tables(Repo, fact_tables: ["demo_invitation_facts"])
+
+timestamp = "20260101000001"
+path = Path.join(temp, "#{timestamp}_add_ash_onetime_context_boundary_facts.exs")
+File.write!(path, source)
+[{module, _}] = Code.compile_file(path)
+version = String.to_integer(timestamp)
+
+SQL.query!(Repo, ~s{CREATE SCHEMA "#{schema}"}, [])
+:ok = Ecto.Migrator.up(Repo, version, module, prefix: schema, log: false)
+
+{schema, version, module}
+```
+
+## Read an empty context
+
+`read/3` returns the facts a query matches plus the cutoff — the highest matching `seq`. An
+empty context reads as no facts and cutoff `0`. Every call carries `:tenant`; nothing is
+admitted without one.
+
+```elixir
+tenant = "realm-#{System.unique_integer([:positive])}"
+
+AshOnetime.Boundary.read(AshOnetimeDemo.Invitation, {:tag, "email:ada@example.org"},
+  tenant: tenant,
+  prefix: schema
+)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:ok, %{cutoff: 0, facts: []}}
+```
+
+## Append on an unchanged context
+
+`append_if/5` runs inside the caller's transaction. It takes a transaction-scoped advisory
+lock for every tag the query names and every tag the facts carry, checks that no fact
+matching the query has a `seq` above the cutoff, and only then appends.
+
+```elixir
+query = {:all, [tag: "email:ada@example.org", type: "invitation"]}
+
+{:ok, [%{seq: seq}]} =
+  Repo.transaction(fn ->
+    AshOnetime.Boundary.append_if(AshOnetimeDemo.Invitation, query, 0, [
+      %{type: "invitation", tags: ["email:ada@example.org"]}
+    ], tenant: tenant, prefix: schema)
+  end)
+  |> elem(1)
+
+seq > 0
+```
+
+## A changed context refuses the append
+
+A second writer presenting the same stale cutoff finds the first fact above it and is
+refused with `{:error, {:context_changed, max_seq}}` — the caller re-reads and decides
+again. Facts under another tenant never change this tenant's context.
+
+```elixir
+{:error, {:context_changed, moved_to}} =
+  Repo.transaction(fn ->
+    AshOnetime.Boundary.append_if(AshOnetimeDemo.Invitation, query, 0, [
+      %{type: "invitation", tags: ["email:ada@example.org"]}
+    ], tenant: tenant, prefix: schema)
+  end)
+  |> elem(1)
+
+moved_to == seq
+```
+
+```elixir
+# Another tenant's identical tags are a different context: both read empty,
+# both admit.
+other = tenant <> "-peer"
+
+{:ok, %{cutoff: 0, facts: []}} =
+  AshOnetime.Boundary.read(AshOnetimeDemo.Invitation, {:tag, "email:ada@example.org"},
+    tenant: other,
+    prefix: schema
+  )
+```
+
+## Twelve concurrent writers, one admission
+
+Twelve writers race with the same stale cutoff. The per-tag advisory locks serialize them:
+exactly one appends; the other eleven wait for it to commit and then refuse. This is the
+rule the boundary enforces — no bespoke lock row, no pre-read race.
+
+```elixir
+tasks =
+  for _index <- 1..12 do
+    Task.async(fn ->
+      Repo.transaction(fn ->
+        AshOnetime.Boundary.append_if(AshOnetimeDemo.Invitation, {:tag, "cart:42"}, 0, [
+          %{type: "invitation", tags: ["cart:42"]}
+        ], tenant: tenant, prefix: schema)
+      end)
+    end)
+  end
+
+results = Enum.map(tasks, &Task.await(&1, 10_000))
+
+{admitted, refused} =
+  Enum.reduce(results, {0, 0}, fn
+    {:ok, {:ok, [_fact]}}, {a, r} -> {a + 1, r}
+    {:ok, {:error, {:context_changed, _}}}, {a, r} -> {a, r + 1}
+  end)
+
+{admitted, refused}
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{1, 11}
+```
+
+```elixir
+{:ok, %{facts: facts, cutoff: cutoff}} =
+  AshOnetime.Boundary.read(AshOnetimeDemo.Invitation, {:tag, "cart:42"},
+    tenant: tenant,
+    prefix: schema
+  )
+
+{length(facts), cutoff == hd(facts).seq}
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{1, true}
+```
+
+## Clean up
+
+```elixir
+:ok = Ecto.Migrator.down(Repo, version, module, prefix: schema, log: false)
+SQL.query!(Repo, ~s{DROP SCHEMA IF EXISTS "#{schema}" CASCADE}, [])
+File.rm_rf!(temp)
+:ok
+```
+
+## Where to next
+
+- [Idempotency](idempotency.livemd) — safe retries of an effectful action.
+- [One-time nonces](nonces.livemd) — at-most-once admission, not replay.
+- [Context boundaries guide](https://hexdocs.pm/ash_onetime/context-boundary.html) — the query
+  language, the correctness argument, and when to use a boundary instead of a counter row.

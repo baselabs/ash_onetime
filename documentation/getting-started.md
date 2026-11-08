@@ -3,7 +3,7 @@
 `ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.4; the requirement admits later 1.x
 releases and excludes 2.0 or newer), Erlang/OTP 28 or 29, Ash `>= 3.37.2 and < 4.0.0`,
 AshPostgres `~> 2.15 and >= 2.15.2`, and PostgreSQL 11+ (CI exercises 18). This guide targets
-v1.7.0 (`{:ash_onetime, "~> 1.8.0"}`); see the
+v1.8.0 (`{:ash_onetime, "~> 1.8.0"}`); see the
 [release notes](../CHANGELOG.md).
 
 Ash 3.33 additionally requires every application to declare how it counts string
@@ -25,7 +25,8 @@ This imports `ash_onetime` into your `.formatter.exs`, writes the deterministic 
 migration, and offers optional Plug (`--with-plug`) and Oban (`--with-oban`) dependencies.
 Pass `--resource MyApp.MyResource` (repeatable) to wire `AshOnetime.Resource` into a resource
 and scaffold a starter `onetime` block there in the same step. See [Operations](operations.md)
-for `--claims hash` partitioning and other migration options.
+for `--claims hash` partitioning, `--fact-tables` for context boundaries, and other
+migration options.
 
 Then run the migration:
 

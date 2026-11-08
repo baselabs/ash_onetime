@@ -416,6 +416,11 @@ The two strategies are not interchangeable. See [Idempotency](idempotency.md) an
 - **One-time nonce** — at-most-once admission of a verified request. The first spend
   succeeds; every reuse is rejected. Use when the action must never repeat even if the client
   retries (single-use coupons, one-time redemptions, anti-replay of a captured request).
+- **Context boundary** — admission only if nothing matching changed since read, across
+  records. Use when the rule is "no one else appended to this context after I looked at it"
+  (once-per-email invitations, refunds bounded by everything already landed). It complements
+  the two strategies rather than replacing them; see
+  [Context boundaries](context-boundary.md).
 
 Never use idempotency's stored-result replay as anti-replay protection, and never let a nonce
 inherit idempotency's optional untracked failure direction. See
