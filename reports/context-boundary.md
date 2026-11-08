@@ -63,6 +63,10 @@ mix test test/ash_onetime/boundary_contention_test.exs → Result: 3 passed
 mix test                                              → Result: 748 passed (23 properties, 725 tests)
 ```
 
+CI on main (run 42504211250; Ash latest, Ash 3.37.2 floor, OTP 28, Release gates) completed
+with success after one fix-forward: the first run red-flagged `mix format --check-formatted`
+on the committed test migration, and `1c71d26` formatted it.
+
 Mutation rows (RED demonstrated, exact bytes restored, GREEN confirmed):
 `boundary-check-predicate`, `boundary-lock-noop` — both owned by the overlap-proof assertion
 `assert admitted == 1`.
