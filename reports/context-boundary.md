@@ -38,6 +38,14 @@ from reckon_db's dynamic consistency boundary without the package.
 
 Additive minor: no existing behavior changed; consumers without the section need no migration.
 
+## Commits
+
+- `22666b3` — Add conditional-append context boundaries over append-only fact tables
+- `b67e2da` — Document context boundaries and prepare release 1.8.0
+- The dependency-lock advisory clear landed as `5d6c083` on main while this work ran
+  (ecto 3.14.3, ash_sql 0.8.8); an equivalent local lock commit was rebased away as
+  already applied.
+
 ## Red and green (last lines)
 
 Red (new suite against the absent feature):
@@ -109,7 +117,8 @@ those repositories.
   run individually and the package/consumer check, docs, codegen, and cheat-sheet gates passed.
 - Dependency floors were NOT raised: the lock moved (ash_sql 0.8.8, ecto 3.14.3, ash 3.37.3 —
   `hex.audit`/`deps.audit` were red on main's committed lock from fresh advisories
-  EEF-CVE-2026-118391 and the ash_sql retirement, and are green again), but the declared
+  EEF-CVE-2026-118391 and the ash_sql retirement, and are green again — via `5d6c083` on
+  main), but the declared
   ash/ash_sql floors still admit the advised-against versions for consumers. ADR-0004's
   derivation rule would raise them (ash_sql `>= 0.8.6`, ash `>= 3.37.3`); that is its own
   floor-sweep slice (CI matrix, doctor tripwires, ADR amendment) and the owner's call.
