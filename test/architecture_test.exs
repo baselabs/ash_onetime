@@ -5,6 +5,9 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime,
     AshOnetime.Admission,
     AshOnetime.Admission.State,
+    AshOnetime.Boundary,
+    AshOnetime.Boundary.Change,
+    AshOnetime.Boundary.Query,
     AshOnetime.Cache,
     AshOnetime.Cache.Config,
     AshOnetime.Cache.Entry,
@@ -32,6 +35,8 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.ReplaySafety,
     AshOnetime.Resource,
     AshOnetime.Resource.Info,
+    AshOnetime.Resource.ContextBoundary,
+    AshOnetime.Resource.ContextBoundary.Options,
     AshOnetime.Resource.Onetime.Protect,
     AshOnetime.Resource.Onetime.Protect.Options,
     AshOnetime.Resource.Onetime.Protect.Response,
@@ -76,6 +81,9 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Cache.Entry,
     AshOnetime.Cache.Ets,
     AshOnetime.Cache.None,
+    AshOnetime.Boundary,
+    AshOnetime.Boundary.Change,
+    AshOnetime.Boundary.Query,
     AshOnetime.Canonical,
     AshOnetime.Clock,
     AshOnetime.Codec,
@@ -94,6 +102,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.ReplaySafety,
     AshOnetime.Resource,
     AshOnetime.Resource.Info,
+    AshOnetime.Resource.ContextBoundary,
     AshOnetime.Resource.Protection,
     AshOnetime.Resource.Response,
     AshOnetime.ResponseClassifier,
@@ -119,6 +128,15 @@ defmodule AshOnetime.ArchitectureTest do
 
   @exports %{
     AshOnetime => [replayed?: 1, reserved_verification_inputs: 0],
+    AshOnetime.Boundary => [
+      append_if: 4,
+      append_if: 5,
+      read: 2,
+      read: 3,
+      sorted_lock_tags: 1
+    ],
+    AshOnetime.Boundary.Change => [atomic: 3, batch_change: 3, change: 3, init: 1],
+    AshOnetime.Boundary.Query => [predicate: 2, validate: 1],
     AshOnetime.Admission => [
       bounded_callback_context: 1,
       complete: 2,
@@ -211,7 +229,14 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Plug => [call: 2, init: 1],
     AshOnetime.ReplaySafety => [],
     AshOnetime.Resource => [],
-    AshOnetime.Resource.Info => [protected?: 2, protection: 2, protections: 1, strategy: 2],
+    AshOnetime.Resource.Info => [
+      context_boundary: 1,
+      protected?: 2,
+      protection: 2,
+      protections: 1,
+      strategy: 2
+    ],
+    AshOnetime.Resource.ContextBoundary => [validate_fact_table: 1],
     AshOnetime.Resource.Protection => [],
     AshOnetime.Resource.Response => [],
     AshOnetime.ResponseClassifier => [classify: 3],
@@ -260,6 +285,7 @@ defmodule AshOnetime.ArchitectureTest do
     Mix.Tasks.AshOnetime.Gen.LogicalPartitions => [run: 1],
     Mix.Tasks.AshOnetime.Gen.Migrations => [
       render: 2,
+      render_fact_tables: 2,
       render_logical_partition_upgrade: 2,
       render_roll_forward: 2,
       run: 1,

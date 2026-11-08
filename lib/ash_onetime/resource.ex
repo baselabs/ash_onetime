@@ -221,8 +221,26 @@ defmodule AshOnetime.Resource do
     entities: [@protect]
   }
 
+  @context_boundary %Spark.Dsl.Section{
+    name: :context_boundary,
+    describe:
+      "Opts a resource into conditional-append context boundaries over an append-only " <>
+        "fact table (see `AshOnetime.Boundary`).",
+    schema: [
+      fact_table: [
+        type: :string,
+        required: true,
+        doc:
+          "The append-only fact table backing this resource's context boundary: a lowercase " <>
+            "SQL identifier of at most 48 bytes (letters, digits, underscore, starting with a " <>
+            "letter), without the reserved `ash_onetime_` prefix. Create it with " <>
+            "`mix ash_onetime.gen.migrations --fact-tables`."
+      ]
+    ]
+  }
+
   use Spark.Dsl.Extension,
-    sections: [@onetime],
+    sections: [@onetime, @context_boundary],
     transformers: [AshOnetime.Resource.Transformer],
     verifiers: [AshOnetime.Resource.Verifier]
 end

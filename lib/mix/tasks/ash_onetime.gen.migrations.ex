@@ -4,13 +4,18 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
 
       mix ash_onetime.gen.migrations --repo MyApp.Repo
       mix ash_onetime.gen.migrations --repo MyApp.Repo --claims hash --claim-partitions 8
+      mix ash_onetime.gen.migrations --repo MyApp.Repo --fact-tables ledger_facts,payment_facts
 
+  `--fact-tables` additionally generates the append-only fact tables backing
+  `context_boundary` declarations (one migration creating every named table).
   Use `--tenants` to write to the repo tenant migration directory.
   """
 
   use Mix.Task
 
   import Mix.Generator, only: [create_directory: 1, create_file: 2]
+
+  alias AshOnetime.Resource.ContextBoundary
 
   @shortdoc "Generates ash_onetime PostgreSQL migrations"
   @collision_constraint "UNIQUE (logical_partition, operation_hash, scope_hash, key_hash)"
@@ -20,6 +25,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     repo: :string,
     claims: :string,
     claim_partitions: :integer,
+    fact_tables: :string,
     tenants: :boolean,
     migrations_path: :string,
     partition_start: :string,
@@ -37,16 +43,27 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
 
     repo = parse_repo!(options[:repo])
     hash_partitions = parse_claim_partitioning!(options)
+    fact_tables = parse_fact_tables!(options[:fact_tables])
     path = migration_path(repo, options)
     create_directory(path)
     refuse_existing!(path)
 
+    timestamp = parse_timestamp!(options[:timestamp])
     partition_start = parse_partition_start!(options[:partition_start])
     source = render(repo, hash_partitions: hash_partitions, partition_start: partition_start)
-    file = Path.join(path, "#{parse_timestamp!(options[:timestamp])}_install_ash_onetime.exs")
+    file = Path.join(path, "#{timestamp}_install_ash_onetime.exs")
     create_file(file, source)
     Mix.shell().info("Generated #{file}")
-    file
+
+    if fact_tables != [] do
+      facts_source = render_fact_tables(repo, fact_tables: fact_tables)
+      facts_file = Path.join(path, "#{timestamp}_ash_onetime_context_boundary_facts.exs")
+      create_file(facts_file, facts_source)
+      Mix.shell().info("Generated #{facts_file}")
+      facts_file
+    else
+      file
+    end
   end
 
   @doc "Renders the install migration deterministically for explicit options."
@@ -68,6 +85,28 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
         hash_partitions: hash_partitions,
         response_partitions: response_partitions(partition_start)
       )
+
+    source
+    |> Code.format_string!()
+    |> IO.iodata_to_binary()
+  end
+
+  @doc """
+  Renders the context-boundary fact-table migration deterministically for explicit
+  options. Every table name is validated by
+  `AshOnetime.Resource.ContextBoundary.validate_fact_table/1`; the migration creates
+  each table (identity `seq`, GIN-indexed `tags`, tenant scoping, append-only trigger)
+  and is reversible. Pure (no filesystem writes).
+  """
+  @spec render_fact_tables(module(), keyword()) :: binary()
+  def render_fact_tables(repo, options) when is_atom(repo) and is_list(options) do
+    fact_tables = render_fact_table_names!(Keyword.get(options, :fact_tables))
+    module = Module.concat([repo, Migrations, AddAshOnetimeBoundaryFacts])
+
+    source =
+      "fact_tables.exs"
+      |> template_path()
+      |> EEx.eval_file(module: module, fact_tables: fact_tables)
 
     source
     |> Code.format_string!()
@@ -149,6 +188,31 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
       {_other, _count} -> Mix.raise("--claims must be hash when provided")
     end
   end
+
+  defp parse_fact_tables!(nil), do: []
+
+  defp parse_fact_tables!(names) when is_binary(names) do
+    case names |> String.split(",", trim: true) |> Enum.map(&validate_fact_table!/1) do
+      [] -> Mix.raise("--fact-tables requires at least one table name")
+      tables -> Enum.uniq(tables)
+    end
+  end
+
+  defp validate_fact_table!(name) do
+    case ContextBoundary.validate_fact_table(name) do
+      {:ok, validated} -> validated
+      {:error, message} -> Mix.raise("fact table name #{inspect(name)} is invalid: #{message}")
+    end
+  end
+
+  defp render_fact_table_names!(nil), do: raise(ArgumentError, "fact_tables option is required")
+
+  defp render_fact_table_names!(names) when is_list(names) and names != [] do
+    Enum.map(names, &validate_fact_table!/1)
+  end
+
+  defp render_fact_table_names!(_names),
+    do: raise(ArgumentError, "fact_tables must be a nonempty list of table names")
 
   defp validate_partition_count!(count)
        when count >= 2 and count <= 64 and Bitwise.band(count, count - 1) == 0,

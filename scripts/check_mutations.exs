@@ -582,6 +582,24 @@ defmodule AshOnetime.MutationCheck do
       test_name: "a contended real action commits one append-only effect",
       assertion: "assert first_result.id == second_result.id"
     },
+    "boundary-check-predicate" => %{
+      path: "lib/ash_onetime/boundary.ex",
+      original: ~S|WHERE tenant = $1 AND seq > $2 AND #{predicate}|,
+      mutated: ~S|WHERE tenant = $1 AND seq > $2 + 1000000000 AND #{predicate}|,
+      test: "test/ash_onetime/boundary_contention_test.exs",
+      tag: "boundary_check_mutation",
+      test_name: "overlapping contexts admit exactly one append per read epoch",
+      assertion: "assert admitted == 1"
+    },
+    "boundary-lock-noop" => %{
+      path: "lib/ash_onetime/boundary.ex",
+      original: ~S|"SELECT pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))"|,
+      mutated: ~S|"SELECT $1::text, $2::text"|,
+      test: "test/ash_onetime/boundary_contention_test.exs",
+      tag: "boundary_check_mutation",
+      test_name: "overlapping contexts admit exactly one append per read epoch",
+      assertion: "assert admitted == 1"
+    },
     "cleanup-boundary" => %{
       path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
       original: "@cleanup_comparator \">\"",

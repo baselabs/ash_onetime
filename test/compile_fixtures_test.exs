@@ -51,7 +51,10 @@ defmodule AshOnetime.CompileFixturesTest do
       AshOnetime.CompileFixtures.AttributeMultitenantUnscoped,
     "attribute_multitenant_wrong_attribute.exs" =>
       AshOnetime.CompileFixtures.AttributeMultitenantWrongAttribute,
-    "commit_on_idempotency.exs" => AshOnetime.CompileFixtures.CommitOnIdempotency
+    "commit_on_idempotency.exs" => AshOnetime.CompileFixtures.CommitOnIdempotency,
+    "fact_table_invalid.exs" => AshOnetime.CompileFixtures.FactTableInvalid,
+    "fact_table_reserved.exs" => AshOnetime.CompileFixtures.FactTableReserved,
+    "fact_table_non_postgres.exs" => AshOnetime.CompileFixtures.FactTableNonPostgres
   }
 
   @fixture_expectations %{
@@ -151,7 +154,23 @@ defmodule AshOnetime.CompileFixturesTest do
        9},
     "commit_on_idempotency.exs" =>
       {:charge, :commit,
-       "commit is nonce-only; idempotency commits with its effect and cannot be configured", 18}
+       "commit is nonce-only; idempotency commits with its effect and cannot be configured", 18},
+    "fact_table_invalid.exs" =>
+      {:charge, :fact_table,
+       "fact_table must be a lowercase SQL identifier of at most 48 bytes (letters, digits, underscore) starting with a letter",
+       6},
+    "fact_table_reserved.exs" =>
+      {:charge, :fact_table, "fact_table must not use the reserved \"ash_onetime_\" prefix", 6},
+    "fact_table_non_postgres.exs" =>
+      {:charge, :fact_table, "context_boundary requires AshPostgres.DataLayer", 7}
+  }
+
+  # The context_boundary section sits outside onetime -> protect, and Spark
+  # resolves a section-level option error's path to the section itself.
+  @boundary_fixture_paths %{
+    "fact_table_invalid.exs" => "context_boundary",
+    "fact_table_reserved.exs" => "context_boundary",
+    "fact_table_non_postgres.exs" => "context_boundary"
   }
 
   @matrix_expectations %{
@@ -357,8 +376,17 @@ defmodule AshOnetime.CompileFixturesTest do
   emit_dsl_error = fn %Spark.Error.DslError{} = error ->
     path = Enum.map_join(error.path, " -> ", &to_string/1)
     message = if is_binary(error.message), do: error.message, else: inspect(error.message)
-    file = error.location |> :erl_anno.file() |> to_string() |> Path.relative_to_cwd()
-    location = error.location |> :erl_anno.location() |> then(fn {line, _column} -> line; line -> line end)
+
+    # Section-level option errors carry no entity metadata, so their location
+    # can be nil — print the markers that exist instead of crashing on anno.
+    {file, location} =
+      if not is_nil(error.location) do
+        {error.location |> :erl_anno.file() |> to_string() |> Path.relative_to_cwd(),
+         error.location |> :erl_anno.location() |> then(fn {line, _column} -> line; line -> line end)}
+      else
+        {"unknown", 0}
+      end
+
     IO.puts("ASH_ONETIME_FIXTURE_PATH=#{path}")
     IO.puts("ASH_ONETIME_FIXTURE_MESSAGE=#{message}")
     IO.puts("ASH_ONETIME_FIXTURE_LOCATION=#{file}:#{location}")
@@ -396,8 +424,17 @@ defmodule AshOnetime.CompileFixturesTest do
   emit_dsl_error = fn %Spark.Error.DslError{} = error ->
     path = Enum.map_join(error.path, " -> ", &to_string/1)
     message = if is_binary(error.message), do: error.message, else: inspect(error.message)
-    file = error.location |> :erl_anno.file() |> to_string() |> Path.relative_to_cwd()
-    location = error.location |> :erl_anno.location() |> then(fn {line, _column} -> line; line -> line end)
+
+    # Section-level option errors carry no entity metadata, so their location
+    # can be nil — print the markers that exist instead of crashing on anno.
+    {file, location} =
+      if not is_nil(error.location) do
+        {error.location |> :erl_anno.file() |> to_string() |> Path.relative_to_cwd(),
+         error.location |> :erl_anno.location() |> then(fn {line, _column} -> line; line -> line end)}
+      else
+        {"unknown", 0}
+      end
+
     IO.puts("ASH_ONETIME_FIXTURE_PATH=#{path}")
     IO.puts("ASH_ONETIME_FIXTURE_MESSAGE=#{message}")
     IO.puts("ASH_ONETIME_FIXTURE_LOCATION=#{file}:#{location}")
@@ -429,9 +466,22 @@ defmodule AshOnetime.CompileFixturesTest do
       assert status != 0, output
       assert fixture_fact(output, "RESULT") == "rejected"
       assert fixture_fact(output, "LOADED") == "false"
-      assert fixture_fact(output, "PATH") == "onetime -> protect -> #{action} -> #{option}"
+
+      expected_path =
+        Map.get(
+          @boundary_fixture_paths,
+          fixture,
+          "onetime -> protect -> #{action} -> #{option}"
+        )
+
+      assert fixture_fact(output, "PATH") == expected_path
       assert fixture_fact(output, "MESSAGE") == message
-      assert fixture_fact(output, "LOCATION") == "test/compile_fixtures/#{fixture}:#{line}"
+
+      # Section-level options carry no entity metadata, so a context_boundary
+      # rejection has no DSL location to anchor — the entity fixtures do.
+      unless Map.has_key?(@boundary_fixture_paths, fixture) do
+        assert fixture_fact(output, "LOCATION") == "test/compile_fixtures/#{fixture}:#{line}"
+      end
     end
   end
 

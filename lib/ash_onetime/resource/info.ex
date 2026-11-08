@@ -9,7 +9,7 @@ defmodule AshOnetime.Resource.Info do
   re-running the DSL.
   """
 
-  alias AshOnetime.Resource.Protection
+  alias AshOnetime.Resource.{ContextBoundary, Protection}
   alias Spark.Dsl.Extension
 
   @type protection :: Protection.t()
@@ -45,6 +45,19 @@ defmodule AshOnetime.Resource.Info do
   """
   @spec protected?(Ash.Resource.t(), atom()) :: boolean()
   def protected?(resource, action_name), do: not is_nil(protection(resource, action_name))
+
+  @doc """
+  Returns the resource's `context_boundary` declaration, or `nil` when the resource
+  has not opted in. The declaration names the append-only fact table backing
+  `AshOnetime.Boundary.read/3` and `append_if/5`.
+  """
+  @spec context_boundary(Ash.Resource.t()) :: ContextBoundary.t() | nil
+  def context_boundary(resource) do
+    case Extension.get_opt(resource, [:context_boundary], :fact_table, nil) do
+      nil -> nil
+      table -> %ContextBoundary{fact_table: table}
+    end
+  end
 
   defp index(resource) do
     Extension.get_persisted(

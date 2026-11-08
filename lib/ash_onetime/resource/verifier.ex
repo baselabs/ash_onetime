@@ -3,6 +3,7 @@ defmodule AshOnetime.Resource.Verifier do
   use Spark.Dsl.Verifier
 
   alias Ash.Resource.Info, as: ResourceInfo
+  alias AshOnetime.Resource.ContextBoundary
   alias Spark.Dsl.Verifier
   alias Spark.Error.DslError
 
@@ -19,13 +20,48 @@ defmodule AshOnetime.Resource.Verifier do
 
     case verify_index_count(dsl_state, raw, index) do
       :ok ->
-        with :ok <- verify_required_shape(dsl_state, index.ordered) do
+        with :ok <- verify_required_shape(dsl_state, index.ordered),
+             :ok <- verify_context_boundary(dsl_state) do
           verify_wrappers(dsl_state, index.ordered)
         end
 
       error ->
         error
     end
+  end
+
+  # The fact table lives in the resource's own PostgreSQL schema, resolved the
+  # same way the claims store resolves its target — a non-Postgres resource
+  # cannot back one, and the table name must be a valid unreserved identifier
+  # (the same rules the migration generator enforces).
+  defp verify_context_boundary(dsl_state) do
+    case Verifier.get_option(dsl_state, [:context_boundary], :fact_table, nil) do
+      nil ->
+        :ok
+
+      fact_table ->
+        postgres? = Verifier.get_persisted(dsl_state, :data_layer) == AshPostgres.DataLayer
+
+        case {postgres?, ContextBoundary.validate_fact_table(fact_table)} do
+          {false, _} ->
+            {:error,
+             context_boundary_error(dsl_state, "context_boundary requires AshPostgres.DataLayer")}
+
+          {_, {:ok, _validated}} ->
+            :ok
+
+          {_, {:error, message}} ->
+            {:error, context_boundary_error(dsl_state, message)}
+        end
+    end
+  end
+
+  defp context_boundary_error(dsl_state, message) do
+    DslError.exception(
+      module: Verifier.get_persisted(dsl_state, :module),
+      path: [:context_boundary],
+      message: message
+    )
   end
 
   # Defense-in-depth: the transformer's `required/2` already asserts strategy/scope/key

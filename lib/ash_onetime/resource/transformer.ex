@@ -5,6 +5,7 @@ defmodule AshOnetime.Resource.Transformer do
   alias Ash.Resource.Info, as: ResourceInfo
   alias AshOnetime.Codec
   alias AshOnetime.KeySource
+  alias AshOnetime.Resource.ContextBoundary
   alias AshOnetime.Resource.Protection
   alias AshOnetime.Resource.Response
   alias AshOnetime.Scope
@@ -86,7 +87,8 @@ defmodule AshOnetime.Resource.Transformer do
 
   @impl true
   def transform(dsl_state) do
-    with {:ok, protections} <- validate_and_normalize(dsl_state),
+    with :ok <- validate_context_boundary(dsl_state),
+         {:ok, protections} <- validate_and_normalize(dsl_state),
          {:ok, dsl_state} <- inject_all(dsl_state, protections) do
       index = %{
         ordered: protections,
@@ -95,6 +97,40 @@ defmodule AshOnetime.Resource.Transformer do
 
       {:ok, Transformer.persist(dsl_state, :ash_onetime_protections, index)}
     end
+  end
+
+  # A context_boundary declaration must name a valid, unreserved fact table on
+  # an AshPostgres resource — the table is resolved through the data layer the
+  # same way the claims store resolves its target. A verifier re-asserts this
+  # as defense-in-depth; the transformer carries the compile-time rejection.
+  defp validate_context_boundary(dsl_state) do
+    case Transformer.get_option(dsl_state, [:context_boundary], :fact_table, nil) do
+      nil ->
+        :ok
+
+      fact_table ->
+        postgres? = Transformer.get_persisted(dsl_state, :data_layer) == AshPostgres.DataLayer
+
+        case {postgres?, ContextBoundary.validate_fact_table(fact_table)} do
+          {false, _} ->
+            {:error,
+             context_boundary_error(dsl_state, "context_boundary requires AshPostgres.DataLayer")}
+
+          {_, {:ok, _validated}} ->
+            :ok
+
+          {_, {:error, message}} ->
+            {:error, context_boundary_error(dsl_state, message)}
+        end
+    end
+  end
+
+  defp context_boundary_error(dsl_state, message) do
+    DslError.exception(
+      module: Transformer.get_persisted(dsl_state, :module),
+      path: [:context_boundary],
+      message: message
+    )
   end
 
   defp validate_and_normalize(dsl_state) do
