@@ -138,12 +138,12 @@ transactional-outbox patterns.
 
 ## Status
 
-This guide targets [v1.7.0](CHANGELOG.md). Nonces can retain claims longer
-than their proof acceptance window with optional `retain_for`, and transaction-owned
-callers can read the stored deadline through `Transaction.nonce_retention_deadline/2`.
-See [One-time nonces](documentation/one-time-nonces.md). No migration is required.
-v1.7.0 raises the security floors to Ash 3.37.2 and AshPostgres 2.15.2; see
-[Upgrading](documentation/upgrading.md).
+This guide targets [v1.8.0](CHANGELOG.md). Resources can opt into conditional-append
+context boundaries over an append-only fact table with the `context_boundary` section
+and `AshOnetime.Boundary` — admission only when nothing matching changed since read.
+See [Context boundaries](documentation/context-boundary.md). Existing installs need no
+migration; the fact tables are opt-in via
+`mix ash_onetime.gen.migrations --fact-tables`.
 
 Every protected action chooses `:idempotency` or `:one_time_nonce` and declares a nonempty
 scope; there is no default strategy or global scope fallback. The release battery includes a

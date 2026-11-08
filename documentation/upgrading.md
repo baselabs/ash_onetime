@@ -7,12 +7,21 @@ Security-driven dependency floors follow the documented minor-release policy in
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md);
 their required dependency edits appear here too.
 
-This guide targets v1.7.0. Pin the
+This guide targets v1.8.0. Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 1.7.0"}
+{:ash_onetime, "~> 1.8.0"}
 ```
+
+## v1.8.0 — context boundaries (November 8, 2026)
+
+Additive: no existing behavior changes and existing consumers need no migration. The new
+`context_boundary` section opts a resource into conditional-append semantics over an
+append-only fact table (`AshOnetime.Boundary.read/3` and `append_if/5`, plus
+`AshOnetime.Boundary.Change` for create actions). Resources that adopt it create their
+fact tables with `mix ash_onetime.gen.migrations --fact-tables <names>`; resources that
+do not declare the section are unaffected.
 
 ## v1.7.0 — Ash, AshPostgres, and AshSql security floors (October 28, 2026)
 

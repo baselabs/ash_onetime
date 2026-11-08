@@ -1,7 +1,7 @@
 defmodule AshOnetime.MixProject do
   use Mix.Project
 
-  @version "1.7.0"
+  @version "1.8.0"
   @source_url "https://github.com/baselabs/ash_onetime"
 
   def project do
@@ -175,6 +175,7 @@ defmodule AshOnetime.MixProject do
         "documentation/idempotency.md",
         "documentation/one-time-nonces.md",
         "documentation/external-effects.md",
+        "documentation/context-boundary.md",
         "documentation/replay.md",
         "documentation/custom-lifecycle.md",
         "documentation/transaction-owned-admission.md",

@@ -103,5 +103,24 @@ Target: `AshOnetime.Resource.Protection`
 
 
 
+## context_boundary
+Opts a resource into conditional-append context boundaries over an append-only fact table (see `AshOnetime.Boundary`).
+
+
+
+
+
+
+### Options
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`fact_table`](#context_boundary-fact_table){: #context_boundary-fact_table .spark-required} | `String.t` |  | The append-only fact table backing this resource's context boundary: a lowercase SQL identifier of at most 48 bytes (letters, digits, underscore, starting with a letter), without the reserved `ash_onetime_` prefix. Create it with `mix ash_onetime.gen.migrations --fact-tables`. |
+
+
+
+
+
+
 
 <style type="text/css">.spark-required::after { content: "*"; color: red !important; }</style>

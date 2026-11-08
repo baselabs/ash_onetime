@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## v1.8.0 — November 8, 2026
+
+- **Add conditional-append context boundaries**: a resource that declares the
+  `context_boundary` section is backed by an append-only fact table whose facts carry a
+  monotonic `seq`, a `type`, and a `tags` array. `AshOnetime.Boundary.read/3` returns
+  the matching facts plus the cutoff read at; `AshOnetime.Boundary.append_if/5` appends
+  inside the caller's transaction only when no fact matching the query moved past that
+  cutoff — a changed context answers `{:error, {:context_changed, max_seq}}`. Writers of
+  one context serialize on tenant-scoped advisory locks per tag (sorted, so overlapping
+  contexts cannot deadlock); writers with no tag in common never block.
+- `AshOnetime.Boundary.Change` places the same append on a create action, composing with
+  `onetime` protection so a retried idempotent request replays instead of appending
+  again. Every call requires `:tenant` and fails closed without one.
+- `mix ash_onetime.gen.migrations --fact-tables name,...` generates the fact-table
+  migration (identity `seq`, GIN-indexed `tags`, tenant scoping, append-only trigger).
+  Additive: existing behavior is unchanged and consumers that declare no
+  `context_boundary` need no migration. See
+  [Context boundaries](documentation/context-boundary.md).
+
 ## v1.7.0 — October 29, 2026
 
 - **Ash security floor raised to `>= 3.37.2 and < 4.0.0`** for

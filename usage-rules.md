@@ -50,6 +50,19 @@
   primitive-return action, or unprotected). Treat `nil` as "cannot tell," not as "fresh." See
   [Replay](documentation/replay.md).
 
+- Treat `:context_changed` as a retry signal, not an error: re-read the context with
+  `AshOnetime.Boundary.read/3`, decide again, and append with the fresh cutoff. Map it
+  like other client-input-family failures (409-class), never as a 500.
+- Every context-boundary call carries an explicit `:tenant`; admission fails closed
+  without one. Lock keys, rows, and checks are tenant-scoped — never share fact tables
+  across trust boundaries by omitting it.
+- Context-boundary queries must be tag-anchored (every matching fact carries a named
+  tag); a query naming no tag is refused. Do not bypass validation with raw SQL — the
+  anchoring is what makes the advisory-lock set cover the context.
+- Prefer a counter row for hot numeric totals; prefer a context boundary for
+  "nothing relevant changed since I looked" rules across records. See
+  [Context boundaries](documentation/context-boundary.md).
+
 See [the DSL guide](documentation/dsl.md), [idempotency guide](documentation/idempotency.md),
 [nonce guide](documentation/one-time-nonces.md), [errors guide](documentation/errors.md),
 [replay guide](documentation/replay.md), and [security model](documentation/security.md)

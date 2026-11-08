@@ -30,6 +30,22 @@ onetime do
 end
 ```
 
+## Context boundaries
+
+A resource can additionally opt into conditional-append semantics over an append-only
+fact table. The section names the table; `AshOnetime.Boundary.read/3` and
+`append_if/5` (or `AshOnetime.Boundary.Change` on a create action) enforce
+"admit only if nothing matching changed since read". Every call requires `:tenant`.
+
+```elixir
+context_boundary do
+  fact_table "refund_facts"
+end
+```
+
+See [Context boundaries](context-boundary.md) for the query language, the correctness
+argument, and when to use a boundary instead of a counter row.
+
 ## Closed component types
 
 Scope accepts `{:static, value}`, `{:argument, name}`, `{:attribute, name}`, and
