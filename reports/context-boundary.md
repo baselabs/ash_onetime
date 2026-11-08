@@ -1,14 +1,12 @@
 # Context boundary — build report
 
-**Release line for the owner (not run; publish awaits approval):**
-
-```sh
-git tag -a v1.8.0 -m "1.8.0" && git push origin main v1.8.0
-env -u ASH_ONETIME_ASH_VERSION mix hex.publish --yes
-```
-
-Post-publish: verify hex.pm `latest_version` and the release's `requirements.ash.requirement`, then
-`elixir scripts/check_livebooks.exs --published` with `DATABASE_URL` exported.
+**Published November 8, 2026 (owner approved).** Tag `v1.8.0` → `187a095`;
+[hex.pm/packages/ash_onetime/1.8.0](https://hex.pm/packages/ash_onetime/1.8.0)
+(checksum `8183d1050894f86c55cd5adea9e8640d8a2f7ce0f6c415911db88edd7ba98de2`, the
+verified build). Post-publish verified: hex.pm `latest_version` is `1.8.0`; the release's
+`ash` requirement is the full floating `>= 3.37.2 and < 4.0.0` (the `env -u` guard held);
+and all four livebooks (idempotency, nonces, external-recovery, context-boundary) execute
+against the published package via `scripts/check_livebooks.exs --published`.
 
 ## What was built
 
