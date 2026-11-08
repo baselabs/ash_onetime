@@ -42,6 +42,14 @@ Additive minor: no existing behavior changed; consumers without the section need
 
 - `22666b3` — Add conditional-append context boundaries over append-only fact tables
 - `b67e2da` — Document context boundaries and prepare release 1.8.0
+- `28aadef` — Keep fact-table index and trigger names unqualified for schema prefixes
+  (the new context-boundary livebook caught `CREATE INDEX`/`CREATE TRIGGER` failing under a
+  tenant prefix; pinned by a prefixed up/down migration test)
+- `e97f6ec` — Complete the 1.8.0 docs sweep and add the context-boundary livebook
+  (README capability bullet, getting-started version and `--fact-tables` pointer,
+  recipes chooser, usage-rules adoption line, a fourth executable notebook in
+  `documentation/livebooks/context-boundary.livemd` — all four pass
+  `scripts/check_livebooks.exs --local`)
 - The dependency-lock advisory clear landed as `5d6c083` on main while this work ran
   (ecto 3.14.3, ash_sql 0.8.8); an equivalent local lock commit was rebased away as
   already applied.
@@ -116,9 +124,11 @@ those repositories.
 ## Not proved / not done
 
 - The adoption inventory above is unverified for the stated reason.
-- The release battery's remaining tag-time checks were not run in full here (mutation matrix
-  `-- all`, livebook execution, optional-integration matrix); the two new mutation rows were
-  run individually and the package/consumer check, docs, codegen, and cheat-sheet gates passed.
+- The release battery's remaining tag-time checks were not run in full LOCALLY before the
+  first push (mutation matrix `-- all`, optional-integration matrix); CI's Release gates job
+  ran them green on `main` (run 42504211250), and the two new mutation rows were also run
+  individually. Livebook execution now includes the context-boundary notebook (four books,
+  `--local`).
 - Dependency floors were NOT raised: the lock moved (ash_sql 0.8.8, ecto 3.14.3, ash 3.37.3 —
   `hex.audit`/`deps.audit` were red on main's committed lock from fresh advisories
   EEF-CVE-2026-118391 and the ash_sql retirement, and are green again — via `5d6c083` on
