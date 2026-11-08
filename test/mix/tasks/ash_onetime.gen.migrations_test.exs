@@ -2,6 +2,8 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
   use ExUnit.Case, async: false
 
   alias AshOnetime.Test.Repo
+  alias Ecto.Adapters.SQL
+  alias Ecto.Adapters.SQL.Sandbox
   alias Mix.Tasks.AshOnetime.Gen.LogicalPartitions
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: GenerateMigrations
 
@@ -88,6 +90,35 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
              GenerateMigrations.render_fact_tables(Repo,
                fact_tables: ["ledger_facts", "payment_facts"]
              )
+  end
+
+  # CREATE INDEX and CREATE TRIGGER names must stay unqualified: both land in
+  # the table's schema automatically, and a qualified name is a syntax error
+  # under a tenant prefix (the class the livebook gate caught).
+  test "the fact-table migration runs up and down under a schema prefix", %{temporary: temporary} do
+    File.mkdir_p!(temporary)
+    source = GenerateMigrations.render_fact_tables(Repo, fact_tables: ["prefix_facts"])
+    path = Path.join(temporary, "20261108000002_ash_onetime_context_boundary_facts.exs")
+    File.write!(path, source)
+    [{module, _}] = Code.compile_file(path)
+    version = 2_026_110_800_002
+    schema = "ash_onetime_facts_#{System.unique_integer([:positive])}"
+
+    Sandbox.mode(Repo, :auto)
+
+    try do
+      SQL.query!(Repo, ~s{CREATE SCHEMA "#{schema}"}, [])
+
+      for round <- 1..2 do
+        :ok = Ecto.Migrator.up(Repo, version, module, prefix: schema, log: false)
+        :ok = Ecto.Migrator.down(Repo, version, module, prefix: schema, log: false)
+      end
+
+      :ok = Ecto.Migrator.up(Repo, version, module, prefix: schema, log: false)
+    after
+      SQL.query!(Repo, ~s{DROP SCHEMA IF EXISTS "#{schema}" CASCADE}, [])
+      Sandbox.mode(Repo, :manual)
+    end
   end
 
   test "refuses reserved and malformed fact-table names", %{temporary: temporary} do

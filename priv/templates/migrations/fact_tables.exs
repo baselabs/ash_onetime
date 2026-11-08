@@ -43,16 +43,19 @@ defmodule <%= inspect(module) %> do
       )
       """)
 
+      # CREATE INDEX and CREATE TRIGGER names are never schema-qualified: both
+      # land in the table's schema automatically, and a qualified name is a
+      # syntax error.
       execute("""
-      CREATE INDEX #{q(table <> "_tags")} ON #{q(table)} USING gin (tags)
+      CREATE INDEX #{quote_identifier(table <> "_tags")} ON #{q(table)} USING gin (tags)
       """)
 
       execute("""
-      CREATE INDEX #{q(table <> "_tenant_seq")} ON #{q(table)} (tenant, seq)
+      CREATE INDEX #{quote_identifier(table <> "_tenant_seq")} ON #{q(table)} (tenant, seq)
       """)
 
       execute("""
-      CREATE TRIGGER #{q(table <> "_append_only")}
+      CREATE TRIGGER #{quote_identifier(table <> "_append_only")}
       BEFORE UPDATE OR DELETE ON #{q(table)}
       FOR EACH ROW EXECUTE FUNCTION #{q("ash_onetime_fact_append_only")}()
       """)
