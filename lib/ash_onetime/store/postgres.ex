@@ -1122,7 +1122,58 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
+  # The emptiness decision behind DROP TABLE. Two paths:
+  #
+  #   * the dedicated function (installed by `mix ash_onetime.gen.migrations --rls-prune`)
+  #     counts as the NOLOGIN prune role — SECURITY DEFINER with its own permissive
+  #     policies — so FORCE row-level security cannot filter it;
+  #   * without the function, the counts run with row_security disabled for the
+  #     transaction: PostgreSQL then RAISES instead of filtering whenever a policy
+  #     would apply to the caller, and the prune fails closed (drops nothing)
+  #     with :row_security_blocked. A tenant-filtered count is never trusted,
+  #     even when it happens to be right.
   defp partition_empty?(target, partition) do
+    case prune_function_installed?(target) do
+      true -> function_partition_empty?(target, partition)
+      false -> guarded_partition_empty?(target, partition)
+    end
+  end
+
+  @prune_function "ash_onetime_partition_empty"
+
+  defp prune_function_installed?(target) do
+    sql = """
+    SELECT EXISTS (
+      SELECT 1 FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE p.proname = $1 AND n.nspname = coalesce($2::text, current_schema())
+    )
+    """
+
+    case dispatched_query(target, sql, [@prune_function, target.prefix]) do
+      {:ok, %{rows: [[true]]}} -> true
+      {:ok, %{rows: [[false]]}} -> false
+      _other -> false
+    end
+  end
+
+  defp function_partition_empty?(target, partition) do
+    sql = """
+    SELECT #{relation(target, @prune_function)}($1::text, $2::date, $3::date)
+    """
+
+    case dispatched_query(target, sql, [
+           relation(target, partition.name),
+           partition.from_date,
+           partition.until_date
+         ]) do
+      {:ok, %{rows: [[empty?]]}} when is_boolean(empty?) -> {:ok, empty?}
+      {:error, %Result{} = result} -> {:error, result}
+      _other -> {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
+    end
+  end
+
+  defp guarded_partition_empty?(target, partition) do
     payload_sql = "SELECT count(*) FROM #{relation(target, partition.name)}"
 
     claims_sql = """
@@ -1131,7 +1182,8 @@ defmodule AshOnetime.Store.Postgres do
     WHERE response_partition >= $1 AND response_partition < $2
     """
 
-    with {:ok, %{rows: [[payload_count]]}} <- dispatched_query(target, payload_sql, []),
+    with {:ok, _} <- dispatched_query(target, "SET LOCAL row_security = off", []),
+         {:ok, %{rows: [[payload_count]]}} <- dispatched_query(target, payload_sql, []),
          {:ok, %{rows: [[claim_count]]}} <-
            dispatched_query(target, claims_sql, [partition.from_date, partition.until_date]),
          true <- is_integer(payload_count) and payload_count >= 0,
@@ -1257,7 +1309,7 @@ defmodule AshOnetime.Store.Postgres do
 
     case dispatched_query(target, sql, []) do
       {:ok, _result} ->
-        :ok
+        copy_parent_row_security(target, schema, name)
 
       # A duplicate_relation (42P07) is converted by dispatched_query to a store_invariant
       # Result. Under the advisory lock this should not happen (rolls serialize), but treat it
@@ -1270,6 +1322,75 @@ defmodule AshOnetime.Store.Postgres do
 
       {:error, %Result{} = result} ->
         {:error, result}
+    end
+  end
+
+  # A child partition queried by name applies its OWN row-security grants and
+  # policies, and a freshly created child has none — including under a FORCE
+  # RLS parent. Copy the parent's ENABLE/FORCE settings, every parent policy
+  # the child lacks, and (when the prune role exists) its SELECT grant, so the
+  # RLS prune function keeps counting children created after the --rls-prune
+  # migration ran. Failure here fails the roll closed: a child whose policies
+  # silently drifted would defeat the prune's emptiness check.
+  defp copy_parent_row_security(target, schema, child) do
+    sql = """
+    DO $copy$
+    DECLARE
+      parent_oid regclass := $mig$#{schema}.ash_onetime_response_payloads$mig$::regclass;
+      child_oid regclass := $mig$#{schema}.#{child}$mig$::regclass;
+      parent_flags record;
+      r record;
+      roles text;
+      cmd_part text;
+      using_part text;
+      check_part text;
+      ddl text;
+    BEGIN
+      SELECT relrowsecurity AS enabled, relforcerowsecurity AS forced
+      INTO parent_flags
+      FROM pg_class WHERE oid = parent_oid;
+
+      IF parent_flags.enabled THEN
+        ddl := 'ALTER TABLE ' || child_oid || ' ENABLE ROW LEVEL SECURITY';
+        EXECUTE ddl;
+      END IF;
+
+      IF parent_flags.forced THEN
+        ddl := 'ALTER TABLE ' || child_oid || ' FORCE ROW LEVEL SECURITY';
+        EXECUTE ddl;
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ash_onetime_prune') THEN
+        ddl := 'GRANT SELECT ON ' || child_oid || ' TO ash_onetime_prune';
+        EXECUTE ddl;
+      END IF;
+
+      FOR r IN
+        SELECT * FROM pg_policies WHERE schemaname = '#{schema}' AND tablename = 'ash_onetime_response_payloads'
+      LOOP
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_policies
+          WHERE schemaname = '#{schema}' AND tablename = '#{child}' AND policyname = r.policyname
+        ) THEN
+          roles := coalesce(
+            (SELECT string_agg(quote_ident(member), ', ') FROM unnest(r.roles) AS member),
+            'PUBLIC'
+          );
+          cmd_part := CASE r.cmd WHEN 'ALL' THEN '' ELSE 'FOR ' || r.cmd || ' ' END;
+          using_part := CASE WHEN r.qual IS NULL THEN '' ELSE 'USING (' || r.qual || ') ' END;
+          check_part := CASE WHEN r.with_check IS NULL THEN '' ELSE 'WITH CHECK (' || r.with_check || ')' END;
+          ddl := 'CREATE POLICY ' || quote_ident(r.policyname) || ' ON ' || child_oid ||
+            ' AS ' || r.permissive || ' ' || cmd_part || 'TO ' || roles || ' ' || using_part || check_part;
+          EXECUTE ddl;
+        END IF;
+      END LOOP;
+    END
+    $copy$;
+    """
+
+    case dispatched_query(target, sql, []) do
+      {:ok, _result} -> :ok
+      {:error, %Result{} = result} -> {:error, result}
     end
   end
 
@@ -1483,6 +1604,19 @@ defmodule AshOnetime.Store.Postgres do
   catch
     :exit, _reason -> {:error, Result.failure(:disconnected, :unknown, :unknown)}
     _kind, _reason -> {:error, Result.failure(:dispatched_unknown, :unknown, :unknown)}
+  end
+
+  defp classify_query_error(%Postgrex.Error{postgres: %{code: :insufficient_privilege}} = error) do
+    message = error.postgres.message || ""
+
+    if String.contains?(message, "row-level security") do
+      # The guarded emptiness count ran with row_security disabled, so a policy
+      # that would filter the caller surfaces as this error instead of a
+      # silently-wrong count: fail closed, drop nothing.
+      Result.failure(:row_security_blocked, :sent, :rolled_back)
+    else
+      Result.failure(:store_invariant, :sent, :rolled_back)
+    end
   end
 
   defp classify_query_error(%Postgrex.Error{postgres: %{code: code}})

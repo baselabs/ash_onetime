@@ -21,6 +21,7 @@ defmodule AshOnetime.Store.Result do
           | :rolled_back
           | :corrupt_payload
           | :store_invariant
+          | :row_security_blocked
 
   @type t :: %__MODULE__{
           status: status(),

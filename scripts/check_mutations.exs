@@ -591,6 +591,16 @@ defmodule AshOnetime.MutationCheck do
       test_name: "overlapping contexts admit exactly one append per read epoch",
       assertion: "assert admitted == 1"
     },
+    "rls-prune-fail-closed" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: ~S|"SET LOCAL row_security = off", []|,
+      mutated: ~S|"SET LOCAL row_security = on", []|,
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_prune_fail_closed_mutation",
+      test_name:
+        "a partition with no rows at all still refuses: a filtered count is never trusted",
+      assertion: "assert %{reason: :row_security_blocked} = result"
+    },
     "boundary-lock-noop" => %{
       path: "lib/ash_onetime/boundary.ex",
       original: ~S|"SELECT pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))"|,
