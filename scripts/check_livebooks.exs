@@ -3,7 +3,7 @@ defmodule AshOnetime.LivebookCheck do
 
   @notebooks ~w(idempotency nonces external-recovery context-boundary)
   @persisted_outputs %{
-    "idempotency" => 4,
+    "idempotency" => 5,
     "nonces" => 5,
     "external-recovery" => 5,
     "context-boundary" => 3

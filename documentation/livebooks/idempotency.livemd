@@ -289,6 +289,32 @@ AshOnetime.Error.code(error)
 :key_reused_with_different_request
 ```
 
+## Bounded maintenance and refusal counts
+
+Run partition maintenance as the table owner. Under FORCE RLS, the owner temporarily
+un-FORCEs each candidate inside a savepoint, refuses if a DDL hook reapplies FORCE, and
+counts with `row_security=off`. The parent lock is taken before the child, with a
+bounded wait (default two seconds); a timeout keeps the partition for the next run.
+The kept total includes occupied partitions. `payload_partitions_refused` identifies
+refusals by reason, and only refusals emit `:partitions_kept` telemetry.
+
+An application role that does not own the tables can run claims-only cleanup with
+`partition_limit: 0`; schedule owner-run partition maintenance separately. This cell
+exercises the additive counts contract without pruning this notebook's replay data:
+
+```elixir
+target = AshOnetime.Store.Postgres.for_repo(Repo, schema)
+{:ok, counts} = AshOnetime.Store.cleanup(target, 100, 0)
+%{payload_partitions: 0, payload_partitions_kept: 0, payload_partitions_refused: %{}} = counts
+Map.take(counts, [:payload_partitions, :payload_partitions_kept, :payload_partitions_refused])
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+%{payload_partitions: 0, payload_partitions_kept: 0, payload_partitions_refused: %{}}
+```
+
 ## Clean up
 
 ```elixir

@@ -23,9 +23,20 @@ row-level-security configuration can narrow the count — see
 role, function, or superuser bootstrap exists to install. Two behavior changes to review:
 cleanup now refuses to run outside READ COMMITTED (`:unsupported_isolation`), and a
 refused or kept partition no longer rolls back the claim and nonce deletes — the cleanup
-counts map gains `payload_partitions_kept`. The `:row_security_blocked` error code never
-shipped (it existed only on this unreleased line) and is gone; nothing else from 1.8.0
-changed.
+counts map gains `payload_partitions_kept` (all candidates kept, including occupied ones)
+and `payload_partitions_refused` (reason-to-count map). Refusal telemetry counts only
+refusals. Parent and child locks are taken in order with a bounded wait (default 2 seconds,
+configurable with `:partition_prune_lock_timeout_ms`, 1–5,000 ms); timeout keeps the
+partition for the next run. The `:row_security_blocked` error code never
+shipped (it existed only on this unreleased line) and is gone. The context-boundary DSL
+and API from 1.8.0 stay unchanged.
+
+**Dependency security floor:** AshSql now requires `~> 0.8 and >= 0.8.6`.
+[0.8.4](https://hex.pm/packages/ash_sql/0.8.4) and
+[0.8.5](https://hex.pm/packages/ash_sql/0.8.5) were retired for a query-cache security
+issue; [0.8.6](https://hex.pm/packages/ash_sql/0.8.6) is the patched minimum. Consumers
+locked below it must run `mix deps.update ash_sql` and `mix hex.audit` when upgrading
+to 1.9.0. This constraint change needs no database migration.
 
 ## v1.8.0 — context boundaries (November 8, 2026)
 

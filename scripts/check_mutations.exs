@@ -604,9 +604,9 @@ defmodule AshOnetime.MutationCheck do
     "rls-isolation-precondition" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:
-        "  defp cleanup_counts(target, batch_size, partition_limit) do\n    with :ok <- transaction_preconditions(target),",
+        "  defp cleanup_counts(target, batch_size, partition_limit, lock_timeout) do\n    with :ok <- transaction_preconditions(target),",
       mutated:
-        "  defp cleanup_counts(target, batch_size, partition_limit) do\n    with :ok <- :ok,",
+        "  defp cleanup_counts(target, batch_size, partition_limit, lock_timeout) do\n    with :ok <- :ok,",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_isolation_precondition_mutation",
       test_name: "cleanup refuses when its transaction is not READ COMMITTED",
@@ -717,10 +717,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "rls-error-to-kept" => %{
       path: "lib/ash_onetime/store/postgres.ex",
-      original:
-        "      if count == 0,\n        do: drop_pruned_partition(target, relation),\n        else: rollback_prune(target)\n    else\n      {:error, %Result{reason: reason}} = error\n      when reason in [:disconnected, :checkout_unavailable, :dispatched_unknown] ->\n        error\n\n      {:error, %Result{}} ->\n        rollback_prune(target)",
-      mutated:
-        "      if count == 0,\n        do: drop_pruned_partition(target, relation),\n        else: rollback_prune(target)\n    else\n      {:error, %Result{reason: reason}} = error\n      when reason in [:disconnected, :checkout_unavailable, :dispatched_unknown] ->\n        error\n\n      {:error, %Result{}} ->\n        raise \"mutation: refused prune must not fail the run\"",
+      original: "do: rollback_prune(target, {:refused, fallback})",
+      mutated: "do: raise(\"mutation: refused prune must not fail the run\")",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_error_to_kept_mutation",
       test_name: "an event trigger blocking ALTER TABLE keeps partitions and fails nothing",
@@ -728,13 +726,78 @@ defmodule AshOnetime.MutationCheck do
     },
     "payload-partition-count" => %{
       path: "lib/ash_onetime/store/postgres.ex",
-      original: ~S|"SELECT count(*) FROM #{relation}", []|,
+      original: ~S|"SELECT pg_catalog.count(*) FROM #{relation}", []|,
       mutated: ~S|"SELECT 0", []|,
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_count_mutation",
       test_name:
         "tenant-session cleanup under FORCE RLS drops the empty partition, keeps the occupied one, and still deletes claims",
       assertion: "assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} = result"
+    },
+    "rls-prune-force-gate" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "         {:ok, %{rows: [[false]]}} <-\n           dispatched_query(\n             target,\n             \"SELECT relforcerowsecurity FROM pg_catalog.pg_class WHERE oid = $1::text::pg_catalog.regclass\",\n             [relation]\n           )",
+      mutated: "         :ok <- :ok",
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_prune_force_gate_mutation",
+      test_name:
+        "a DDL hook reapplying FORCE is refused explicitly and preserves hidden payloads",
+      assertion: "assert {:ok, %{payload_partitions_refused: %{force_reapplied: 2}}} = result"
+    },
+    "rls-prune-row-security" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "\"SET LOCAL row_security = off\", []",
+      mutated: "\"SELECT 1\", []",
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_prune_guc_mutation",
+      test_name: "row_security is off before NO FORCE and both caller GUCs are restored",
+      assertion: "assert {:ok, %{payload_partitions: 2}} ="
+    },
+    "rls-prune-parent-lock" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "\"LOCK TABLE ONLY \#{parent} IN ACCESS EXCLUSIVE MODE\"",
+      mutated: "\"LOCK TABLE ONLY \#{parent} IN SHARE UPDATE EXCLUSIVE MODE\"",
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_prune_lock_mutation",
+      test_name: "a parent reader bounds prune and insert waits without a child lock deadlock",
+      assertion: "assert child_locks == 0"
+    },
+    "rls-prune-lock-timeout" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "\"SET LOCAL lock_timeout = \#{timeout}\", []",
+      mutated: "\"SELECT 1\", []",
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_prune_lock_mutation",
+      test_name: "a parent reader bounds prune and insert waits without a child lock deadlock",
+      assertion: "Task.await(prune_task, 3_000)"
+    },
+    "rls-prune-catalog-count" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "\"SELECT pg_catalog.count(*) FROM \#{relation}\", []",
+      mutated: "\"SELECT count(*) FROM \#{relation}\", []",
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_prune_catalog_count_mutation",
+      test_name: "the prune count ignores a consumer aggregate earlier in search_path",
+      assertion: "assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} = result"
+    },
+    "rls-prune-refusal-telemetry" => %{
+      path: "lib/ash_onetime/store.ex",
+      original: "if refused > 0 do",
+      mutated: "if counts.payload_partitions_kept > 0 do",
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_prune_refusal_telemetry_mutation",
+      test_name: "occupied partitions emit no refusal event and a non-owner reports refusals",
+      assertion: "refute_receive {:cleanup_event, _, %{result_class: :partitions_kept}}"
+    },
+    "rls-prune-foreign-child" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "not plain_heap or not payload_child -> {:refused, :not_plain_child}",
+      mutated: "not payload_child -> {:refused, :not_plain_child}",
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_prune_foreign_child_mutation",
+      test_name: "a real foreign child is refused before its remote RLS-filtered count",
+      assertion: "assert {:ok, %{payload_partitions_refused: %{not_plain_child: 1}}} = result"
     },
     "doctor-ash-floor" => %{
       path: "lib/mix/tasks/ash_onetime.doctor.ex",
@@ -765,12 +828,12 @@ defmodule AshOnetime.MutationCheck do
     },
     "deps-ash-sql-floor" => %{
       path: "mix.exs",
-      original: "{:ash_sql, \"~> 0.8 and >= 0.8.4\", runtime: false}",
-      mutated: "{:ash_sql, \"~> 0.8 and >= 0.8.3\", runtime: false}",
+      original: "{:ash_sql, \"~> 0.8 and >= 0.8.6\", runtime: false}",
+      mutated: "{:ash_sql, \"~> 0.8 and >= 0.8.5\", runtime: false}",
       test: "test/mix/dependency_security_test.exs",
       tag: "deps_ash_sql_floor_mutation",
       test_name: "ash_sql consumer requirement rejects advised versions",
-      assertion: "refute Version.match?(\"0.8.3\", requirement)"
+      assertion: "refute Version.match?(\"0.8.5\", requirement)"
     },
     "deps-mint-floor" => %{
       path: "mix.exs",

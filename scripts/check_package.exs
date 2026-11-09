@@ -230,7 +230,7 @@ defmodule AshOnetime.PackageCheck do
   @published_requirements %{
     ash: {">= 3.37.2 and < 4.0.0", false},
     ash_postgres: {"~> 2.15 and >= 2.15.2", false},
-    ash_sql: {"~> 0.8 and >= 0.8.4", false},
+    ash_sql: {"~> 0.8 and >= 0.8.6", false},
     igniter: {"~> 0.8 and >= 0.8.4", true},
     mint: {"~> 1.10 and >= 1.10.2", true}
   }

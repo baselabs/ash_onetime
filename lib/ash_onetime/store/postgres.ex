@@ -285,14 +285,19 @@ defmodule AshOnetime.Store.Postgres do
              idempotency: non_neg_integer(),
              nonce: non_neg_integer(),
              payload_partitions: non_neg_integer(),
-             payload_partitions_kept: non_neg_integer()
+             payload_partitions_kept: non_neg_integer(),
+             payload_partitions_refused: %{optional(atom()) => non_neg_integer()}
            }}
           | Result.t()
   def cleanup(%Target{} = target, batch_size, partition_limit)
       when is_integer(batch_size) and batch_size > 0 and batch_size <= 10_000 and
              is_integer(partition_limit) and partition_limit >= 0 and
              partition_limit <= @max_partition_drops do
-    with_dynamic_repo(target, fn -> cleanup_transaction(target, batch_size, partition_limit) end)
+    lock_timeout = Application.get_env(:ash_onetime, :partition_prune_lock_timeout_ms, 2_000)
+
+    with_dynamic_repo(target, fn ->
+      cleanup_transaction(target, batch_size, partition_limit, lock_timeout)
+    end)
     |> case do
       {:ok, counts} -> {:ok, counts}
       {:error, %Result{} = result} -> result
@@ -439,8 +444,8 @@ defmodule AshOnetime.Store.Postgres do
 
   defp processing_backlog_query(target) do
     sql = """
-    SELECT count(*),
-           EXTRACT(EPOCH FROM (transaction_timestamp() - min(inserted_at)))::bigint
+    SELECT pg_catalog.count(*),
+           EXTRACT(EPOCH FROM (transaction_timestamp() - pg_catalog.min(inserted_at)))::bigint
     FROM #{relation(target, "ash_onetime_idempotency_claims")}
     WHERE state = 'processing'
     """
@@ -482,21 +487,28 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  defp cleanup_transaction(target, batch_size, partition_limit) do
-    target.repo_module.transaction(fn -> cleanup_counts(target, batch_size, partition_limit) end)
+  defp cleanup_transaction(target, batch_size, partition_limit, lock_timeout)
+       when is_integer(lock_timeout) and lock_timeout > 0 and lock_timeout <= 5_000 do
+    target.repo_module.transaction(fn ->
+      cleanup_counts(target, batch_size, partition_limit, lock_timeout)
+    end)
   end
 
-  defp cleanup_counts(target, batch_size, partition_limit) do
+  defp cleanup_transaction(_target, _batch_size, _partition_limit, _lock_timeout),
+    do: {:error, Result.failure(:invalid_request, :not_started, :not_applicable)}
+
+  defp cleanup_counts(target, batch_size, partition_limit, lock_timeout) do
     with :ok <- transaction_preconditions(target),
          {:ok, idempotency} <- cleanup_strategy(target, :idempotency, batch_size),
          {:ok, nonce} <- cleanup_strategy(target, :nonce, batch_size),
-         {:ok, payload_partitions, payload_partitions_kept} <-
-           prune_payload_partitions(target, partition_limit) do
+         {:ok, payload_partitions, payload_partitions_kept, refused} <-
+           prune_payload_partitions(target, partition_limit, lock_timeout) do
       %{
         idempotency: idempotency,
         nonce: nonce,
         payload_partitions: payload_partitions,
-        payload_partitions_kept: payload_partitions_kept
+        payload_partitions_kept: payload_partitions_kept,
+        payload_partitions_refused: refused
       }
     else
       {:error, %Result{} = result} -> target.repo_module.rollback(result)
@@ -810,7 +822,7 @@ defmodule AshOnetime.Store.Postgres do
     WHERE #{@completion_key_predicate}
       AND id = $8::uuid AND state = 'processing'
       AND (
-        SELECT count(*)
+        SELECT pg_catalog.count(*)
         FROM #{relation(target, "ash_onetime_response_payloads")}
         WHERE logical_partition = $4 AND claim_id = $8::uuid
       ) = 1
@@ -1029,16 +1041,16 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  defp prune_payload_partitions(_target, 0), do: {:ok, 0, 0}
+  defp prune_payload_partitions(_target, 0, _lock_timeout), do: {:ok, 0, 0, %{}}
 
-  defp prune_payload_partitions(target, limit) do
+  defp prune_payload_partitions(target, limit, lock_timeout) do
     with {:ok, schema, database_date} <- database_schema_and_date(target),
          {:ok, partitions} <- payload_partitions(target, schema) do
       partitions
       |> Enum.filter(&(Date.compare(database_date, &1.until_date) == :gt))
       |> Enum.sort_by(&{&1.until_date, &1.name})
       |> Enum.take(limit)
-      |> drop_empty_partitions(target, schema)
+      |> drop_empty_partitions(target, schema, lock_timeout)
     end
   end
 
@@ -1051,7 +1063,7 @@ defmodule AshOnetime.Store.Postgres do
   defp database_schema_and_date(target) do
     case dispatched_query(
            target,
-           "SELECT current_schema(), transaction_timestamp()::date",
+           "SELECT pg_catalog.current_schema(), pg_catalog.transaction_timestamp()::date",
            []
          ) do
       {:ok, %{rows: [[schema, %Date{} = date]]}} when is_binary(schema) ->
@@ -1067,11 +1079,11 @@ defmodule AshOnetime.Store.Postgres do
 
   defp payload_partitions(target, schema) do
     sql = """
-    SELECT child.relname, pg_get_expr(child.relpartbound, child.oid)
-    FROM pg_inherits
-    JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
-    JOIN pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
-    JOIN pg_class child ON child.oid = pg_inherits.inhrelid
+    SELECT child.relname, pg_catalog.pg_get_expr(child.relpartbound, child.oid)
+    FROM pg_catalog.pg_inherits i
+    JOIN pg_catalog.pg_class parent ON parent.oid = i.inhparent
+    JOIN pg_catalog.pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
+    JOIN pg_catalog.pg_class child ON child.oid = i.inhrelid
     WHERE parent_namespace.nspname = $1
       AND parent.relname = 'ash_onetime_response_payloads'
     """
@@ -1116,104 +1128,81 @@ defmodule AshOnetime.Store.Postgres do
   defp partition_decode_failure,
     do: {:halt, {:error, Result.failure(:store_invariant, :sent, :rolled_back)}}
 
-  defp drop_empty_partitions(partitions, target, schema) do
-    Enum.reduce_while(partitions, {:ok, 0, 0}, &drop_empty_partition(&1, &2, target, schema))
+  defp drop_empty_partitions(partitions, target, schema, lock_timeout) do
+    Enum.reduce_while(partitions, {:ok, 0, 0, %{}}, fn partition, counts ->
+      drop_empty_partition(partition, counts, target, schema, lock_timeout)
+    end)
   end
 
-  # The DROP decision behind cleanup, as the table owner, inside a
-  # per-partition savepoint. Under row-level security only the table owner can
-  # DROP, so the owner uses its own exemption, scoped to a subtransaction no
-  # other session can observe:
-  #
-  #   1. the DROP's own ACCESS EXCLUSIVE lock, taken up front — an insert that
-  #      commits while the lock waits is then visible to the fresh count, and a
-  #      later insert routes to `_default` (or errors) after the commit, never
-  #      into a dropped partition;
-  #   2. an OID re-check — plain heap (relkind 'r': a sub-partitioned or
-  #      foreign child must refuse, not count through), child of this schema's
-  #      payload parent, owned by the driver;
-  #   3. an uncommitted ALTER TABLE ... NO FORCE ROW LEVEL SECURITY —
-  #      invisible to every other session (the lock guarantees no concurrent
-  #      reader);
-  #   4. a count with row_security disabled. PostgreSQL exempts the owner of a
-  #      non-FORCEd relation BEFORE it consults row_security (check_enable_rls
-  #      in utils/misc/rls.c), so the count is unfiltered or the statement
-  #      errors — whatever policies exist, in any shape, for any roles. That is
-  #      a mechanism, not a list of cases: restrictive policies (direct, TO
-  #      PUBLIC, via group membership), a missing permissive policy, or an
-  #      attached child without grants cannot produce a silently narrowed
-  #      count.
-  #
-  # Empty ⇒ DROP TABLE and release; otherwise — or on any statement error that
-  # leaves the connection usable — ROLLBACK TO SAVEPOINT, which restores FORCE,
-  # and the partition is reported as kept instead of failing the run: a
-  # non-owner driver or a DDL block keeps partitions but never rolls back the
-  # claim and nonce deletes with it. Connection-level failures
-  # (:disconnected/:checkout_unavailable/:dispatched_unknown) still halt the
-  # run: the savepoint rollback would fail anyway.
+  # Each candidate is decided as its owner inside a savepoint. Take the DROP's
+  # actual parent lock before touching a child, with a bounded wait; a late
+  # upgrade can stall every tenant and deadlock a parent reader reaching a child.
+  # READ COMMITTED makes a row committed while we wait visible to the count.
+  # NO FORCE is uncommitted and rolls back for every kept/refused partition.
+  # Both the FORCE re-check and row_security=off are load-bearing defenses:
+  # consumer DDL hooks can reapply FORCE. Never trust a filtered count.
   @prune_savepoint "ash_onetime_partition_prune"
 
-  defp drop_empty_partition(partition, {:ok, dropped, kept}, target, schema) do
+  defp drop_empty_partition(partition, {:ok, dropped, kept, refused}, target, schema, timeout) do
     parent = qualified_relation(schema, "ash_onetime_response_payloads")
     relation = qualified_relation(schema, partition.name)
 
-    case owner_savepoint_prune(target, relation, parent) do
-      {:ok, :dropped} -> {:cont, {:ok, dropped + 1, kept}}
-      {:ok, :kept} -> {:cont, {:ok, dropped, kept + 1}}
-      {:error, %Result{} = result} -> {:halt, {:error, result}}
+    case owner_savepoint_prune(target, relation, parent, timeout) do
+      {:ok, :dropped} ->
+        {:cont, {:ok, dropped + 1, kept, refused}}
+
+      {:ok, :occupied} ->
+        {:cont, {:ok, dropped, kept + 1, refused}}
+
+      {:ok, {:refused, reason}} ->
+        {:cont, {:ok, dropped, kept + 1, Map.update(refused, reason, 1, &(&1 + 1))}}
+
+      {:error, %Result{} = result} ->
+        {:halt, {:error, result}}
     end
   end
 
-  defp owner_savepoint_prune(target, relation, parent) do
+  defp owner_savepoint_prune(target, relation, parent, timeout) do
     with {:ok, _} <- dispatched_query(target, "SAVEPOINT #{@prune_savepoint}", []),
-         # Parent first, child second: PostgreSQL's own partition DDL locks
-         # the parent before the child, and every query through the parent
-         # takes a parent lock before reaching the child, so locking the
-         # child first could deadlock against a reader through the parent
-         # when the DROP later needs the parent lock. SHARE UPDATE EXCLUSIVE
-         # on the parent also serializes ATTACH/DETACH without blocking DML.
-         {:ok, _} <-
+         {:ok, %{rows: [[lock_guc, rls_guc]]}} <-
            dispatched_query(
              target,
-             "LOCK TABLE #{parent} IN SHARE UPDATE EXCLUSIVE MODE",
+             "SELECT pg_catalog.current_setting('lock_timeout'), pg_catalog.current_setting('row_security')",
              []
            ),
+         # Refuse non-owners without relying on a lock privilege error. These
+         # facts are checked again under the locks before any ALTER/count.
+         {:ok, %{rows: [facts]}} <- prune_relation_facts(target, parent, relation),
+         :prunable <- prune_facts(facts),
+         {:ok, _} <- dispatched_query(target, "SET LOCAL lock_timeout = #{timeout}", []),
+         {:ok, _} <- dispatched_query(target, "SET LOCAL row_security = off", []),
          {:ok, _} <-
-           dispatched_query(target, "LOCK TABLE #{relation} IN ACCESS EXCLUSIVE MODE", []),
-         {:ok, %{rows: [facts]}} <- prune_relation_facts(target, parent, relation) do
-      case prune_facts(facts) do
-        :prunable -> owner_count_and_drop(target, relation)
-        :missing -> rollback_prune(target)
-        :refused -> rollback_prune(target)
-      end
+           dispatched_query(target, "LOCK TABLE ONLY #{parent} IN ACCESS EXCLUSIVE MODE", []),
+         {:ok, _} <-
+           dispatched_query(target, "LOCK TABLE ONLY #{relation} IN ACCESS EXCLUSIVE MODE", []),
+         {:ok, %{rows: [facts]}} <- prune_relation_facts(target, parent, relation),
+         :prunable <- prune_facts(facts) do
+      owner_count_and_drop(target, relation, lock_guc, rls_guc)
     else
-      {:error, %Result{reason: reason}} = error
-      when reason in [:disconnected, :checkout_unavailable, :dispatched_unknown] ->
-        error
-
-      {:error, %Result{}} ->
-        # A privilege failure (a non-owner driver cannot take this lock) or a
-        # DDL block: keep the partition, keep the run going.
-        rollback_prune(target)
+      {:refused, reason} -> rollback_prune(target, {:refused, reason})
+      {:error, %Result{} = result} -> prune_error(target, result, :error)
     end
   end
 
-  # One SELECT resolves everything the decision needs about the relation, by
-  # OID, inside the savepoint: whether it exists at all, is a plain heap table,
-  # is a child of this schema's payload parent, and is owned by the driver.
-  # Nothing here resolves a name twice or trusts a caller's search_path.
+  # Resolve the schema-qualified name to an OID, then check the physical and
+  # ownership facts. No policy enumeration or caller search_path is trusted.
   defp prune_relation_facts(target, parent, relation) do
     sql = """
     SELECT
       (c.oid IS NOT NULL) AS present,
       (c.relkind = 'r') AS plain_heap,
-      (c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)) AS owned,
+      (c.relowner = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)) AS owned,
       EXISTS (
-        SELECT 1 FROM pg_inherits i
-        WHERE i.inhrelid = c.oid AND i.inhparent = $1::text::regclass
+        SELECT 1 FROM pg_catalog.pg_inherits i
+        WHERE i.inhrelid = c.oid AND i.inhparent = $1::text::pg_catalog.regclass
       ) AS payload_child
-    FROM pg_class c
-    WHERE c.oid = $2::text::regclass
+    FROM pg_catalog.pg_class c
+    WHERE c.oid = $2::text::pg_catalog.regclass
     """
 
     case dispatched_query(target, sql, [parent, relation]) do
@@ -1227,66 +1216,77 @@ defmodule AshOnetime.Store.Postgres do
        when is_boolean(present) and is_boolean(plain_heap) and is_boolean(owned) and
               is_boolean(payload_child) do
     cond do
-      not present -> :missing
-      plain_heap and owned and payload_child -> :prunable
-      true -> :refused
+      not present -> {:refused, :missing}
+      not plain_heap or not payload_child -> {:refused, :not_plain_child}
+      not owned -> {:refused, :not_owner}
+      true -> :prunable
     end
   end
 
-  defp prune_facts(_other), do: :refused
+  defp prune_facts(_other), do: {:refused, :error}
 
-  defp owner_count_and_drop(target, relation) do
+  defp owner_count_and_drop(target, relation, lock_guc, rls_guc) do
     with {:ok, _} <-
            dispatched_query(target, "ALTER TABLE #{relation} NO FORCE ROW LEVEL SECURITY", []),
-         # Belt only — the owner of an un-FORCEd relation is exempt before
-         # row_security is consulted — but if a count is ever filtered it
-         # must error, not narrow. Restore the caller's own setting after:
-         # SET LOCAL outlives the savepoint on the drop path.
-         {:ok, %{rows: [[guc]]}} when is_binary(guc) <-
-           dispatched_query(target, "SELECT current_setting('row_security')", []),
-         {:ok, _} <- dispatched_query(target, "SET LOCAL row_security = off", []),
-         {:ok, %{rows: [[count]]}} <-
-           dispatched_query(target, "SELECT count(*) FROM #{relation}", []),
+         {:ok, %{rows: [[false]]}} <-
+           dispatched_query(
+             target,
+             "SELECT relforcerowsecurity FROM pg_catalog.pg_class WHERE oid = $1::text::pg_catalog.regclass",
+             [relation]
+           ) do
+      count_and_drop_unforced(target, relation, lock_guc, rls_guc)
+    else
+      {:ok, %{rows: [[true]]}} -> rollback_prune(target, {:refused, :force_reapplied})
+      {:error, %Result{} = result} -> prune_error(target, result, :ddl_blocked)
+      _other -> rollback_prune(target, {:refused, :error})
+    end
+  end
+
+  defp count_and_drop_unforced(target, relation, lock_guc, rls_guc) do
+    # row_security=off stays armed through the count, even after the FORCE gate.
+    # It raises instead of silently narrowing if RLS would still apply.
+    case dispatched_query(target, "SELECT pg_catalog.count(*) FROM #{relation}", []) do
+      {:ok, %{rows: [[count]]}} ->
+        if count == 0,
+          do: drop_pruned_partition(target, relation, lock_guc, rls_guc),
+          else: rollback_prune(target, :occupied)
+
+      {:error, %Result{} = result} ->
+        prune_error(target, result, :error)
+    end
+  end
+
+  defp drop_pruned_partition(target, relation, lock_guc, rls_guc) do
+    with {:ok, _} <- dispatched_query(target, "DROP TABLE #{relation}", []),
          {:ok, _} <-
            dispatched_query(
              target,
-             "SET LOCAL row_security = " <> quote_literal(guc),
-             []
-           ) do
-      if count == 0,
-        do: drop_pruned_partition(target, relation),
-        else: rollback_prune(target)
-    else
-      {:error, %Result{reason: reason}} = error
-      when reason in [:disconnected, :checkout_unavailable, :dispatched_unknown] ->
-        error
-
-      {:error, %Result{}} ->
-        rollback_prune(target)
-    end
-  end
-
-  defp drop_pruned_partition(target, relation) do
-    with {:ok, _} <- dispatched_query(target, "DROP TABLE #{relation}", []),
+             "SELECT pg_catalog.set_config('lock_timeout', $1, true), pg_catalog.set_config('row_security', $2, true)",
+             [lock_guc, rls_guc]
+           ),
          {:ok, _} <- dispatched_query(target, "RELEASE SAVEPOINT #{@prune_savepoint}", []) do
       {:ok, :dropped}
     else
-      {:error, %Result{reason: reason}} = error
-      when reason in [:disconnected, :checkout_unavailable, :dispatched_unknown] ->
-        error
-
-      {:error, %Result{}} ->
-        rollback_prune(target)
+      {:error, %Result{} = result} -> prune_error(target, result, :ddl_blocked)
     end
   end
 
-  # Undoes the uncommitted NO FORCE (restoring the relation's FORCE flag) and
-  # releases the lock. The rollback itself failing means the connection is
-  # gone: that error propagates.
-  defp rollback_prune(target) do
+  defp prune_error(_target, %Result{reason: reason} = result, _fallback)
+       when reason in [:disconnected, :checkout_unavailable, :dispatched_unknown],
+       do: {:error, result}
+
+  defp prune_error(target, %Result{reason: :lock_timeout}, _fallback),
+    do: rollback_prune(target, {:refused, :lock_unavailable})
+
+  defp prune_error(target, %Result{}, fallback),
+    do: rollback_prune(target, {:refused, fallback})
+
+  # Undo NO FORCE, local GUCs, and locks on every occupied/refused candidate.
+  # Connection failures still halt cleanup: a failed rollback cannot be hidden.
+  defp rollback_prune(target, outcome) do
     with {:ok, _} <- dispatched_query(target, "ROLLBACK TO SAVEPOINT #{@prune_savepoint}", []),
          {:ok, _} <- dispatched_query(target, "RELEASE SAVEPOINT #{@prune_savepoint}", []) do
-      {:ok, :kept}
+      {:ok, outcome}
     else
       {:error, %Result{} = result} -> {:error, result}
     end
@@ -1836,8 +1836,6 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   defp quote_identifier(value), do: ~s("#{String.replace(value, "\"", "\"\"")}")
-
-  defp quote_literal(value), do: "'" <> String.replace(value, "'", "''") <> "'"
 
   defp data_layer_repo(options) do
     case Keyword.get(options, :data_layer_context, %{}) do

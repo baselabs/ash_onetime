@@ -40,7 +40,8 @@ defmodule Mix.Tasks.AshOnetime.Prune do
         Mix.shell().info(
           "Pruned idempotency=#{counts.idempotency} nonce=#{counts.nonce} " <>
             "payload_partitions=#{counts.payload_partitions} " <>
-            "payload_partitions_kept=#{counts.payload_partitions_kept}"
+            "payload_partitions_kept=#{counts.payload_partitions_kept} " <>
+            "payload_partitions_refused=#{inspect(counts.payload_partitions_refused)}"
         )
 
         :ok

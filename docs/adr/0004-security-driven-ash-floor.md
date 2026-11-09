@@ -4,8 +4,8 @@ Date: 2026-08-09
 
 ## Status
 
-Accepted (amended October 28, 2026 — current Ash floor 3.37.2, AshPostgres floor 2.15.2,
-AshSql floor 0.8.4, and optional Mint floor 1.10.2; the dated amendments preserve each earlier
+Accepted (amended November 9, 2026 — current Ash floor 3.37.2, AshPostgres floor 2.15.2,
+AshSql floor 0.8.6, and optional Mint floor 1.10.2; the dated amendments preserve each earlier
 decision).
 The original decision superseded the `>= 3.29.3` floor documented in the v0.1.x/v0.2.0
 README and `mix.exs` (not a prior ADR — the floor was an inline documented constraint, not
@@ -259,3 +259,24 @@ Consumers locked below these floors must update them to take the release that ca
 amendment, a security-driven minor under the forward-compatible floor posture. It does not
 change ash_onetime's DSL, public API, database schema, persisted response format, or token wire
 format.
+
+## Amendment — AshSql 0.8.6 security floor (November 9, 2026, v1.9.0)
+
+OBSERVED: Hex release metadata marks AshSql
+[0.8.4](https://hex.pm/packages/ash_sql/0.8.4) and
+[0.8.5](https://hex.pm/packages/ash_sql/0.8.5) retired for security, citing unpredictable
+Ecto query-cache returns and naming [0.8.6](https://hex.pm/packages/ash_sql/0.8.6) as the
+fixed release. Version 0.8.6 is not retired, and its OSV version query returned no
+advisories on November 9. The root lock's safe 0.8.8 did not protect consumers: an exact
+0.8.4 consumer resolved under the previous public requirement and failed `mix hex.audit`.
+
+Raise the published requirement to `~> 0.8 and >= 0.8.6` in the 1.9.0 minor, following
+this ADR's security-floor policy. Keep `runtime: false` and the pre-1.0 range cap.
+The dependency-security regression rejects both retired versions, and its mutation lowers
+the floor to 0.8.5. Move the frozen package metadata assertion and exact `core-floors`
+consumer together; audit every positive optional-matrix consumer and require exact 0.8.4
+and 0.8.5 pins to fail resolution. Historical amendments retain their original floors.
+
+Consumers locked below 0.8.6 must update AshSql and audit the resolved graph. No database
+migration, DSL change, public API change, persisted format change, or token change is needed
+for this dependency constraint. The RLS-prune behavior changes are documented separately.

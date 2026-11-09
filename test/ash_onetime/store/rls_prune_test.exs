@@ -10,8 +10,8 @@ defmodule AshOnetime.Store.RLSPruneTest do
   exist. No role, function, or superuser is involved.
 
   A superuser bypasses RLS, so the owner-driven cells run on a non-superuser
-  CREATEROLE substrate (tier 2 below) that self-bootstraps when the main
-  connection is superuser (CI's containerized postgres, or an ephemeral area
+  CREATEROLE owner (tier 2 below), created by a superuser bootstrap
+  connection (CI's containerized postgres, or an ephemeral area
   run with ASH_ONETIME_RLS_PRUNE_TESTS=1) and is skipped with instructions
   otherwise. Tier 1 (the fail-closed-keeps-cleanup and isolation-refusal
   cells) needs only the shared instance's own non-superuser role.
@@ -37,8 +37,8 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
   @tenant_setting "ash_onetime.tenant"
 
-  # The matrix tier creates roles, which needs a superuser or CREATEROLE
-  # substrate: CI (its containerized postgres sets ASH_ONETIME_RLS_PRUNE_TESTS=1)
+  # The matrix bootstrap installs event triggers and postgres_fdw, requiring
+  # superuser: CI (its containerized postgres sets ASH_ONETIME_RLS_PRUNE_TESTS=1)
   # and an ephemeral area run with the variable exported; the shared dev
   # instance leaves the tier skipped with instructions. A run that sets the
   # variable on a substrate that cannot deliver fails loudly in rls_substrate!/1.
@@ -46,8 +46,8 @@ defmodule AshOnetime.Store.RLSPruneTest do
                     do: [],
                     else: [
                       skip:
-                        "set ASH_ONETIME_RLS_PRUNE_TESTS=1 on a superuser or " <>
-                          "CREATEROLE substrate (CI, or an ephemeral area run with DATABASE_URL " <>
+                        "set ASH_ONETIME_RLS_PRUNE_TESTS=1 on a superuser " <>
+                          "bootstrap substrate (CI, or an ephemeral area run with DATABASE_URL " <>
                           "pointed at it for the command)"
                     ]
 
@@ -91,8 +91,14 @@ defmodule AshOnetime.Store.RLSPruneTest do
     end
   end
 
+  # Ecto.Adapters.SQL.query(Repo, ...) uses that registered pool literally;
+  # it does not follow Repo.put_dynamic_repo/1. Fixtures that select an owner
+  # must address its PID, just as the store's dispatched_query does.
+  defp query_repo(Repo), do: Repo.get_dynamic_repo()
+  defp query_repo(repo), do: repo
+
   defp query!(repo, sql, params \\ []) do
-    case SQL.query(repo, sql, params) do
+    case SQL.query(query_repo(repo), sql, params) do
       {:ok, result} ->
         result
 
@@ -442,6 +448,92 @@ defmodule AshOnetime.Store.RLSPruneTest do
     end
 
     @tag @rls_prune_tier
+    @tag rls_prune_foreign_child_mutation: true
+    test "a real foreign child is refused before its remote RLS-filtered count" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+      child = partition_name(~D[2026-08-01])
+      server = "#{prefix}_remote"
+      assert %{superuser?: false, bypassrls?: false} = role_privileges(substrate.app_repo)
+
+      # Same real PostgreSQL server over TCP, authenticated as the separate
+      # app role. Its forced remote RLS hides the authoritative payload row.
+      query!(Repo, "CREATE EXTENSION IF NOT EXISTS postgres_fdw")
+
+      query!(
+        Repo,
+        "CREATE TABLE #{prefix}.remote_payloads (logical_partition text, partition_date date, claim_id uuid, encoded_response bytea)"
+      )
+
+      query!(
+        Repo,
+        "INSERT INTO #{prefix}.remote_payloads VALUES ('tenant-b', '2026-08-15', $1::uuid, $2)",
+        [Ecto.UUID.dump!(Ecto.UUID.generate()), <<1>>]
+      )
+
+      query!(Repo, "ALTER TABLE #{prefix}.remote_payloads ENABLE ROW LEVEL SECURITY")
+      query!(Repo, "ALTER TABLE #{prefix}.remote_payloads FORCE ROW LEVEL SECURITY")
+
+      query!(
+        Repo,
+        "CREATE POLICY remote_deny ON #{prefix}.remote_payloads FOR SELECT USING (false)"
+      )
+
+      query!(Repo, "GRANT SELECT ON #{prefix}.remote_payloads TO #{substrate.app_role}")
+
+      server_port = scalar!(Repo, "SHOW port", [])
+
+      query!(
+        Repo,
+        "CREATE SERVER #{server} FOREIGN DATA WRAPPER postgres_fdw OPTIONS (host '127.0.0.1', port #{quote_literal(server_port)}, dbname '#{database_name()}')"
+      )
+
+      on_exit(fn ->
+        _ = SQL.query(Repo, "DROP SERVER IF EXISTS #{server} CASCADE", [])
+      end)
+
+      query!(Repo, "GRANT USAGE ON FOREIGN SERVER #{server} TO #{substrate.owner_role}")
+
+      [app_role, encoded_password] =
+        app_url() |> URI.parse() |> Map.fetch!(:userinfo) |> String.split(":", parts: 2)
+
+      password = URI.decode_www_form(encoded_password)
+      # The only SQL carrying a generated credential is never logged or
+      # included in a failing assertion/exception.
+      mapping =
+        "CREATE USER MAPPING FOR #{substrate.owner_role} SERVER #{server} OPTIONS (user #{quote_literal(app_role)}, password #{quote_literal(password)}, password_required 'false')"
+
+      # CI can use loopback trust, where the server never requests a password.
+      # Only the superuser bootstrap may set password_required=false; the
+      # actual connection and every prune query still use the unprivileged roles.
+      case SQL.query(Repo, mapping, [], log: false) do
+        {:ok, _} -> :ok
+        {:error, _} -> flunk("could not create the real FDW user mapping")
+      end
+
+      put_repo(substrate.owner_repo)
+      query!(Repo, "DROP TABLE #{prefix}.#{child}")
+      # PostgreSQL forbids foreign partitions under a primary key. Exercise
+      # the supported consumer DDL shape without that local constraint.
+      query!(
+        Repo,
+        "ALTER TABLE #{prefix}.ash_onetime_response_payloads DROP CONSTRAINT ash_onetime_response_payloads_pkey"
+      )
+
+      query!(
+        Repo,
+        "CREATE FOREIGN TABLE #{prefix}.#{child} PARTITION OF #{prefix}.ash_onetime_response_payloads FOR VALUES FROM ('2026-08-01') TO ('2026-09-01') SERVER #{server} OPTIONS (schema_name '#{prefix}', table_name 'remote_payloads')"
+      )
+
+      assert scalar!(Repo, "SELECT pg_catalog.count(*) FROM #{prefix}.#{child}", []) == 0
+      result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+      assert {:ok, %{payload_partitions_refused: %{not_plain_child: 1}}} = result
+      Repo.put_dynamic_repo(Repo)
+      assert partition_exists?(prefix, child)
+      assert scalar!(Repo, "SELECT pg_catalog.count(*) FROM #{prefix}.remote_payloads", []) == 1
+    end
+
+    @tag @rls_prune_tier
     test "a non-owner driver keeps every partition and still deletes claims" do
       substrate = rls_substrate!()
       %{prefix: prefix} = install_rls_store!(install_context(substrate))
@@ -478,8 +570,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
       empty_partition = partition_name(~D[2026-09-01])
 
-      put_repo(substrate.owner_repo)
-
       query!(
         Repo,
         """
@@ -503,6 +593,8 @@ defmodule AshOnetime.Store.RLSPruneTest do
         :ok
       end)
 
+      put_repo(substrate.owner_repo)
+
       assert {:ok, %{payload_partitions: 0, payload_partitions_kept: 2}} =
                Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
 
@@ -513,6 +605,251 @@ defmodule AshOnetime.Store.RLSPruneTest do
       assert partition_exists?(prefix, empty_partition)
       assert partition_exists?(prefix, partition_name(~D[2026-08-01]))
       assert force_flagged?(prefix, empty_partition)
+    end
+
+    @tag @rls_prune_tier
+    @tag rls_prune_force_gate_mutation: true
+    @tag rls_review: true
+    test "a DDL hook reapplying FORCE is refused explicitly and preserves hidden payloads" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+      occupied = partition_name(~D[2026-08-01])
+      insert_payload!(prefix, occupied, "tenant-b", ~D[2026-08-15])
+
+      install_ddl_hook!(prefix, """
+      IF NOT (SELECT relforcerowsecurity FROM pg_catalog.pg_class WHERE oid = cmd.objid) THEN
+        EXECUTE pg_catalog.format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', cmd.objid::regclass);
+      END IF;
+      """)
+
+      put_repo(substrate.owner_repo)
+      result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+      assert {:ok, %{payload_partitions_refused: %{force_reapplied: 2}}} = result
+      Repo.put_dynamic_repo(Repo)
+      assert partition_exists?(prefix, occupied)
+      assert force_flagged?(prefix, occupied)
+      assert scalar!(Repo, "SELECT pg_catalog.count(*) FROM #{prefix}.#{occupied}", []) == 1
+    end
+
+    @tag @rls_prune_tier
+    @tag rls_prune_guc_mutation: true
+    @tag rls_review: true
+    test "row_security is off before NO FORCE and both caller GUCs are restored" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+
+      # A real consumer DDL hook observes the GUC at the vulnerability boundary.
+      # This pins the second defense independently of the explicit FORCE gate.
+      install_ddl_hook!(prefix, """
+      IF pg_catalog.current_setting('row_security') <> 'off' THEN
+        RAISE EXCEPTION 'prune must arm row_security before ALTER';
+      END IF;
+      """)
+
+      put_repo(substrate.owner_repo)
+
+      assert {:ok, :checked} =
+               Repo.transaction(fn ->
+                 query!(Repo, "SET LOCAL lock_timeout = '7s'")
+                 query!(Repo, "SET LOCAL row_security = on")
+
+                 assert scalar!(Repo, "SELECT pg_catalog.current_setting('lock_timeout')", []) ==
+                          "7s"
+
+                 assert {:ok, %{payload_partitions: 2}} =
+                          Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+
+                 assert scalar!(Repo, "SELECT pg_catalog.current_setting('row_security')", []) ==
+                          "on"
+
+                 assert scalar!(Repo, "SELECT pg_catalog.current_setting('lock_timeout')", []) ==
+                          "7s"
+
+                 :checked
+               end)
+    end
+
+    @tag @rls_prune_tier
+    @tag rls_prune_lock_mutation: true
+    @tag rls_review: true
+    test "a parent reader bounds prune and insert waits without a child lock deadlock" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+      parent = self()
+      reader = start_tenant_repo(owner_url(), "tenant-a")
+      writer = start_tenant_repo(owner_url(), "tenant-b")
+      # Keep the reader until explicitly released: no sleep decides the ordering.
+      reader_task =
+        Task.async(fn ->
+          Repo.put_dynamic_repo(reader)
+
+          Repo.transaction(fn ->
+            query!(
+              reader,
+              "SELECT 1 FROM ONLY #{prefix}.ash_onetime_response_payloads"
+            )
+
+            send(parent, :reader_locked)
+
+            receive do
+              :read_child -> :ok
+            end
+
+            query!(reader, "SELECT 1 FROM #{prefix}.#{partition_name(~D[2026-08-01])}")
+            send(parent, :child_read)
+
+            receive do
+              :release_reader -> :ok
+            end
+          end)
+        end)
+
+      assert_receive :reader_locked, 2_000
+      on_exit(fn -> send(reader_task.pid, :release_reader) end)
+      previous_timeout = Application.get_env(:ash_onetime, :partition_prune_lock_timeout_ms)
+      Application.put_env(:ash_onetime, :partition_prune_lock_timeout_ms, 500)
+
+      on_exit(fn ->
+        if previous_timeout,
+          do:
+            Application.put_env(:ash_onetime, :partition_prune_lock_timeout_ms, previous_timeout),
+          else: Application.delete_env(:ash_onetime, :partition_prune_lock_timeout_ms)
+      end)
+
+      prune_task =
+        Task.async(fn ->
+          Repo.put_dynamic_repo(substrate.owner_repo)
+
+          Repo.transaction(fn ->
+            query!(Repo, "SET LOCAL lock_timeout = '7s'")
+            started = System.monotonic_time(:millisecond)
+            result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 1)
+            elapsed = System.monotonic_time(:millisecond) - started
+            restored = scalar!(Repo, "SELECT pg_catalog.current_setting('lock_timeout')", [])
+            {result, elapsed, restored}
+          end)
+        end)
+
+      waiting_pid = wait_for_parent_waiter!(prefix)
+
+      child_locks =
+        scalar!(
+          Repo,
+          """
+          SELECT pg_catalog.count(*) FROM pg_catalog.pg_locks
+          WHERE pid = $1 AND relation = $2::text::regclass
+            AND mode = 'AccessExclusiveLock' AND granted
+          """,
+          [waiting_pid, "#{prefix}.#{partition_name(~D[2026-08-01])}"]
+        )
+
+      assert child_locks == 0
+      # A child-first/late-upgrade prune would hold the child here and cycle
+      # with this reader. The parent-first prune has not touched any child.
+      send(reader_task.pid, :read_child)
+      assert_receive :child_read, 1_000
+
+      writer_task =
+        Task.async(fn ->
+          started = System.monotonic_time(:millisecond)
+
+          query!(
+            writer,
+            "INSERT INTO #{prefix}.ash_onetime_response_payloads VALUES ($1, CURRENT_DATE, $2::uuid, $3)",
+            ["tenant-b", Ecto.UUID.dump!(Ecto.UUID.generate()), <<1>>]
+          )
+
+          System.monotonic_time(:millisecond) - started
+        end)
+
+      assert {:ok, {result, elapsed, restored}} = Task.await(prune_task, 3_000)
+
+      assert {:ok, %{payload_partitions: 0, payload_partitions_refused: %{lock_unavailable: 1}}} =
+               result
+
+      assert elapsed < 1_500
+      assert restored == "7s"
+      assert Task.await(writer_task, 2_000) < 1_500
+      send(reader_task.pid, :release_reader)
+      assert {:ok, _} = Task.await(reader_task, 2_000)
+    end
+
+    @tag @rls_prune_tier
+    @tag rls_prune_catalog_count_mutation: true
+    @tag rls_review: true
+    test "the prune count ignores a consumer aggregate earlier in search_path" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+      occupied = partition_name(~D[2026-08-01])
+      insert_payload!(prefix, occupied, "tenant-b", ~D[2026-08-15])
+      put_repo(substrate.owner_repo)
+
+      query!(
+        Repo,
+        "CREATE FUNCTION #{prefix}.zero_count(bigint) RETURNS bigint LANGUAGE sql IMMUTABLE AS 'SELECT 0::bigint'"
+      )
+
+      query!(
+        Repo,
+        "CREATE AGGREGATE #{prefix}.count(*) (SFUNC = #{prefix}.zero_count, STYPE = bigint, INITCOND = '0')"
+      )
+
+      assert {:ok, :checked} =
+               Repo.transaction(fn ->
+                 query!(Repo, "SET LOCAL search_path = #{prefix}, pg_catalog")
+                 query!(Repo, "ALTER TABLE #{prefix}.#{occupied} NO FORCE ROW LEVEL SECURITY")
+
+                 assert scalar!(Repo, "SELECT pg_catalog.current_setting('search_path')", []) ==
+                          "#{prefix}, pg_catalog"
+
+                 assert scalar!(Repo, "SELECT #{prefix}.count(*) FROM #{prefix}.#{occupied}", []) ==
+                          0
+
+                 assert scalar!(Repo, "SELECT count(*) FROM #{prefix}.#{occupied}", []) == 0
+
+                 assert scalar!(Repo, "SELECT pg_catalog.count(*) FROM #{prefix}.#{occupied}", []) ==
+                          1
+
+                 query!(Repo, "ALTER TABLE #{prefix}.#{occupied} FORCE ROW LEVEL SECURITY")
+                 result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+                 assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} = result
+                 :checked
+               end)
+
+      Repo.put_dynamic_repo(Repo)
+      assert partition_exists?(prefix, occupied)
+    end
+
+    @tag @rls_prune_tier
+    @tag rls_review: true
+    @tag rls_prune_refusal_telemetry_mutation: true
+    test "occupied partitions emit no refusal event and a non-owner reports refusals" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+      insert_payload!(prefix, partition_name(~D[2026-08-01]), "tenant-b", ~D[2026-08-15])
+      handler = "prune-refusals-#{prefix}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:ash_onetime, :cleanup],
+          fn _, measurements, metadata, pid ->
+            send(pid, {:cleanup_event, measurements, metadata})
+          end,
+          self()
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      put_repo(substrate.owner_repo)
+
+      assert {:ok, %{payload_partitions_kept: 1, payload_partitions_refused: %{}}} =
+               AshOnetime.Store.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+
+      refute_receive {:cleanup_event, _, %{result_class: :partitions_kept}}
+      Repo.put_dynamic_repo(substrate.app_repo)
+      result = AshOnetime.Store.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+      assert {:ok, %{payload_partitions_refused: %{not_owner: 1}}} = result
+      assert_receive {:cleanup_event, %{count: 1}, %{result_class: :partitions_kept}}
     end
 
     @tag @rls_prune_tier
@@ -631,6 +968,49 @@ defmodule AshOnetime.Store.RLSPruneTest do
     end
   end
 
+  defp install_ddl_hook!(prefix, body) do
+    query!(Repo, """
+    CREATE FUNCTION "#{prefix}".prune_hook() RETURNS event_trigger LANGUAGE plpgsql AS $hook$
+    DECLARE cmd record;
+    BEGIN
+      FOR cmd IN SELECT * FROM pg_catalog.pg_event_trigger_ddl_commands() LOOP
+        IF cmd.schema_name = '#{prefix}' AND cmd.object_type = 'table' THEN
+          #{body}
+        END IF;
+      END LOOP;
+    END $hook$
+    """)
+
+    query!(
+      Repo,
+      "CREATE EVENT TRIGGER ash_onetime_test_prune_hook ON ddl_command_end WHEN TAG IN ('ALTER TABLE') EXECUTE FUNCTION #{prefix}.prune_hook()"
+    )
+
+    on_exit(fn ->
+      Repo.put_dynamic_repo(Repo)
+      _ = SQL.query(Repo, "DROP EVENT TRIGGER IF EXISTS ash_onetime_test_prune_hook", [])
+    end)
+  end
+
+  defp wait_for_parent_waiter!(prefix, attempts \\ 100)
+  defp wait_for_parent_waiter!(_prefix, 0), do: flunk("prune did not wait for parent lock")
+
+  defp wait_for_parent_waiter!(prefix, attempts) do
+    waiting =
+      scalar!(
+        Repo,
+        "SELECT pg_catalog.min(pid) FROM pg_catalog.pg_locks WHERE relation = $1::text::regclass AND NOT granted",
+        ["#{prefix}.ash_onetime_response_payloads"]
+      )
+
+    if is_integer(waiting) do
+      waiting
+    else
+      Process.sleep(10)
+      wait_for_parent_waiter!(prefix, attempts - 1)
+    end
+  end
+
   # ------------------------------------------------------------------
   # Substrate helpers
   # ------------------------------------------------------------------
@@ -646,9 +1026,10 @@ defmodule AshOnetime.Store.RLSPruneTest do
   defp rls_substrate! do
     privileges = role_privileges()
 
-    unless privileges.superuser? or privileges.createrole? do
+    unless privileges.superuser? do
       flunk(
-        "ASH_ONETIME_RLS_PRUNE_TESTS=1 needs a superuser or CREATEROLE connection " <>
+        "ASH_ONETIME_RLS_PRUNE_TESTS=1 needs a superuser bootstrap for DDL hooks/FDW; " <>
+          "the prune itself runs as a NOSUPERUSER NOBYPASSRLS CREATEROLE owner " <>
           "(CI, or an ephemeral area run with DATABASE_URL pointed at it for the command)"
       )
     end
@@ -673,7 +1054,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
     query!(
       Repo,
-      "CREATE ROLE #{owner_role} LOGIN CREATEROLE PASSWORD #{quote_literal(owner_password)}",
+      "CREATE ROLE #{owner_role} LOGIN NOSUPERUSER NOBYPASSRLS CREATEROLE PASSWORD #{quote_literal(owner_password)}",
       []
     )
 
@@ -696,6 +1077,9 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
     {:ok, app_repo} =
       Repo.start_link(name: nil, url: app_url, pool: DBConnection.ConnectionPool, pool_size: 2)
+
+    assert %{superuser?: false, bypassrls?: false, createrole?: true} =
+             role_privileges(owner_repo)
 
     Process.unlink(owner_repo)
     Process.unlink(app_repo)
@@ -728,13 +1112,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
      }}
   end
 
-  # Rebuilds a login URL's userinfo for an ad-hoc role created by this test:
-  # the password was generated with random_password/0 and minted into the
-  # role above, so the URL never leaves the process dictionary.
-  defp credential(role) do
-    "#{role}:#{URI.encode_www_form(Process.get({__MODULE__, :bare_password}))}"
-  end
-
   defp random_password do
     :crypto.strong_rand_bytes(18) |> Base.url_encode64(padding: false)
   end
@@ -742,6 +1119,8 @@ defmodule AshOnetime.Store.RLSPruneTest do
   defp quote_literal(value), do: "'" <> String.replace(value, "'", "''") <> "'"
 
   defp drop_leftover_substrate! do
+    _ = SQL.query(Repo, "DROP EVENT TRIGGER IF EXISTS ash_onetime_test_prune_hook", [])
+
     result =
       SQL.query!(
         Repo,
@@ -1070,7 +1449,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
   end
 
   defp scalar!(repo, sql, params) do
-    result = SQL.query!(repo, sql, params)
+    result = SQL.query!(query_repo(repo), sql, params)
     [[value]] = result.rows
     value
   end

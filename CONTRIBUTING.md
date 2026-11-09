@@ -61,10 +61,11 @@ Inspect the Hex archive by exact file allowlist and compile/test an unpacked arc
 building an archive alone is not package proof. Remove the generated tar after verification.
 The optional-integration matrix compiles a consumer per dependency set (none/plug/oban/
 igniter/all/mint-pin/mint-floor/core-floors), asserts none of the optional deps leak into the package's
-runtime application closure, and proves the security floors bind in resolution. The
-`core-floors` case compiles Ash 3.37.2, AshPostgres 2.15.2, and AshSql 0.8.4 together. The
+runtime application closure, audits every resolved consumer, and proves the security floors
+bind in resolution. The `core-floors` case compiles Ash 3.37.2, AshPostgres 2.15.2, and
+AshSql 0.8.6 together. The
 `mint-floor` case executes the exact patched minimum, Mint 1.10.2; exact advised pins
-(Igniter 0.8.3 and Mint 1.10.1) must fail to resolve next to this package.
+(Igniter 0.8.3, Mint 1.10.1, and AshSql 0.8.4/0.8.5) must fail to resolve next to this package.
 
 The notebook gate honors `MIX_INSTALL_DIR`; its default cache is `_build/livebook-install`.
 Remove that directory when you want a fresh install. Every notebook uses its own UUID-named
@@ -93,7 +94,7 @@ dependencies, or project-owned version suffixes in durable identifiers.
 
 The consumer `mix.exs` bounds (`ash_postgres ~> 2.15 and >= 2.15.2`, `spark ~> 2.7`, and the
 Ash floor `>= 3.37.2`) allow forward drift within their major lines. AshSql additionally requires
-`~> 0.8 and >= 0.8.4`; optional Igniter and Mint require `~> 0.8 and >= 0.8.4` and
+`~> 0.8 and >= 0.8.6`; optional Igniter and Mint require `~> 0.8 and >= 0.8.4` and
 `~> 1.10 and >= 1.10.2`. These security floors follow ADR 0004. They are NOT the primary guard
 against a transitive semantic shift — a future `ash_postgres` 2.x or `spark` 2.x minor that
 changes transaction-visibility semantics the fail-closed logic depends on would still satisfy

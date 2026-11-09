@@ -1,8 +1,8 @@
 defmodule AshOnetime.MixDependencySecurityTest do
   # ADR 0004 (2026-09-15 amendment): no published requirement may resolve to a
   # version with a known unpatched advisory. Each test pins its package's consumer
-  # requirement against the exact advised and patched versions from the OSV
-  # inventory, and the mutation battery mutates each requirement string to prove
+  # requirement against the exact advised and patched versions from publisher/OSV
+  # records, and the mutation battery mutates each requirement string to prove
   # these tests go red (deps-*-floor and deps-optional-runtime rows).
   use ExUnit.Case, async: true
 
@@ -50,10 +50,12 @@ defmodule AshOnetime.MixDependencySecurityTest do
   test "ash_sql consumer requirement rejects advised versions" do
     requirement = requirement!(:ash_sql)
     refute Version.match?("0.7.0", requirement)
-    # AshPostgres 2.15.2 requires ash_sql >= 0.8.4; the declared floor matches it.
+    # Hex retires 0.8.4/0.8.5 for query-cache security; 0.8.6 is the patched floor.
     refute Version.match?("0.7.1", requirement)
     refute Version.match?("0.8.3", requirement)
-    assert Version.match?("0.8.4", requirement)
+    refute Version.match?("0.8.4", requirement)
+    refute Version.match?("0.8.5", requirement)
+    assert Version.match?("0.8.6", requirement)
   end
 
   @tag :deps_mint_floor_mutation

@@ -8,17 +8,21 @@ All notable changes to this project are documented in this file.
   per-partition savepoint, and no consumer row-level-security configuration can make it
   drop a partition holding another tenant's rows.** Cleanup already has to run as the
   table owner under RLS (only the owner can DROP). Per past-retention partition it now
-  takes the DROP's own `ACCESS EXCLUSIVE` lock, re-verifies by OID that the relation is a
+  takes the DROP's own `ACCESS EXCLUSIVE` parent lock before the child lock, re-verifies
+  by OID that the relation is a
   plain-heap child of the schema's payload parent owned by the driver, applies an
-  uncommitted `ALTER TABLE … NO FORCE ROW LEVEL SECURITY`, and counts with `row_security`
-  disabled. PostgreSQL exempts the owner of a non-FORCEd table before it consults
+  uncommitted `ALTER TABLE … NO FORCE ROW LEVEL SECURITY`, rechecks that FORCE is off,
+  and uses `pg_catalog.count(*)` with `row_security` disabled before ALTER through count.
+  Both the FORCE gate and GUC are required defenses against consumer DDL hooks.
+  PostgreSQL exempts the owner of a non-FORCEd table before it consults
   `row_security`, so the count is unfiltered or errors — a mechanism (`check_enable_rls`),
   not a list of policy shapes: restrictive policies (direct, `TO PUBLIC`, or via group
   membership), missing permissive policies, and attached partitions without grants all
   resolve to kept-or-error, never a silently narrowed count. Empty ⇒ drop; otherwise (or
   on any error) rollback-to-savepoint — restoring FORCE invisibly to every other session —
   and the partition is reported as kept — counted in `payload_partitions_kept` on the
-  cleanup result and emitted as a `[:ash_onetime, :cleanup]` telemetry event with
+  cleanup result. Refusals are also counted by reason in `payload_partitions_refused`;
+  only their sum is emitted as a `[:ash_onetime, :cleanup]` telemetry event with
   `result_class: :partitions_kept`. Proven by an adversarial matrix on PostgreSQL 18
   (non-superuser CREATEROLE owner, FORCE RLS, real migration output); see
   [Operations](documentation/operations.md#row-level-security).
@@ -33,10 +37,16 @@ All notable changes to this project are documented in this file.
     deletes in the same transaction, wedging all retention cleanup until an operator
     intervened. Each partition now decides inside its own savepoint: refusals are recorded
     as kept and the run continues. `Store.cleanup/3`'s `{:ok, counts}` map gains
-    `payload_partitions_kept` (kept-refusal count; the existing three keys are unchanged)
-    — an additive change to the result contract.
+    `payload_partitions_kept` (all kept candidates, including ordinary occupied partitions)
+    and `payload_partitions_refused` (reason-to-count map; existing keys are unchanged).
+    The `:partitions_kept` telemetry event fires only for refusals.
+  - **Prune lock waits are bounded** by `:partition_prune_lock_timeout_ms` (default 2,000 ms;
+    valid range 1–5,000). Taking the parent's ACCESS EXCLUSIVE lock up front avoids the
+    late DROP upgrade and parent-reader/child-lock deadlock. Timeout means kept with
+    reason `:lock_unavailable`, retried next run; caller GUCs are restored.
   - The `:row_security_blocked` error code (introduced on this unreleased line) is removed:
-    with the owner-savepoint prune there is no filtered-count refusal path left to report.
+    filtered-count errors now keep the candidate and appear in the refusal map instead
+    of aborting cleanup.
 - **`roll_partitions` keeps copying the parent's ENABLE/FORCE row-security settings and
   full policy set onto every partition it creates** (the `ash_onetime_prune` SELECT grant
   from earlier 1.9.0 drafts is gone with the rest of that apparatus). Child partitions are
@@ -49,9 +59,15 @@ All notable changes to this project are documented in this file.
   worker running as a non-owner sets `partition_limit: 0` and cleanup keeps working for
   claims while partitions accumulate. See
   [Operations](documentation/operations.md#row-level-security).
-- Nothing from v1.8.0 (context boundaries) is removed or changed by this release; the
-  1.9.0 line is otherwise additive over 1.8.0.
-
+- **Raise the consumer AshSql floor to `~> 0.8 and >= 0.8.6`.** Versions
+  [0.8.4](https://hex.pm/packages/ash_sql/0.8.4) and
+  [0.8.5](https://hex.pm/packages/ash_sql/0.8.5) were retired for a query-cache security
+  issue, fixed in [0.8.6](https://hex.pm/packages/ash_sql/0.8.6). Consumers locked below
+  0.8.6 must update it; the exact-minimum consumer now compiles and audits 0.8.6, and
+  both retired pins must fail resolution. No database migration is required.
+- The context-boundary DSL and API introduced in v1.8.0 stay unchanged.
+- Update the optional Oban lock from 2.24.1 to 2.24.2 after the release currency check;
+  the consumer requirement remains `~> 2.23` and the integration remains optional.
 
 ## v1.8.0 — November 8, 2026
 

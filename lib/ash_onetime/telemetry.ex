@@ -138,7 +138,9 @@ defmodule AshOnetime.Telemetry do
   `[:claims_deleted, :partitions_dropped, :partitions_created, :partitions_kept]`. A
   bounded cleanup run; `:partitions_kept` fires only when at least one past partition
   was kept by refusal (non-owner driver, DDL block, not a plain child) — the visible
-  signal that pruning is not happening.
+  signal that pruning is not happening. Its count is the sum of
+  `payload_partitions_refused` values; ordinary occupied partitions emit no event.
+  Refusal reasons are returned in the cleanup counts map, not telemetry metadata.
   """
   @spec cleanup(atom(), module(), atom(), non_neg_integer(), atom()) ::
           :ok | {:error, Error.t()}

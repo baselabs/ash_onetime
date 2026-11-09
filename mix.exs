@@ -47,16 +47,16 @@ defmodule AshOnetime.MixProject do
   defp deps do
     [
       {:ash, ash_requirement()},
-      # Security floor (ADR 0004, October 28, 2026 amendment): AshPostgres 2.15.2 is
+      # Security floors (ADR 0004): AshPostgres 2.15.2 is
       # where EEF-CVE-2026-115627 and EEF-CVE-2026-115635 are fixed (2.13.0 first fixed
-      # EEF-CVE-2026-78699). AshPostgres 2.15.2 itself requires ash_sql >= 0.8.4; the
-      # explicit ash_sql floor below states that minimum for consumers so the declared
-      # and exercised minimums match (the core-floors case). `runtime: false` keeps
+      # EEF-CVE-2026-78699). AshSql 0.8.6 fixes the query-cache security issue that
+      # retired 0.8.4/0.8.5 (November 9 amendment), above AshPostgres's transitive
+      # minimum. The core-floors case exercises these exact minimums. `runtime: false` keeps
       # AshPostgres the owner of ash_sql's startup; the < 1.0.0 cap is the same
       # matrix-extension posture as the Ash < 4.0.0 bound (a breaking major is
       # proven in CI before the cap moves).
       {:ash_postgres, "~> 2.15 and >= 2.15.2"},
-      {:ash_sql, "~> 0.8 and >= 0.8.4", runtime: false},
+      {:ash_sql, "~> 0.8 and >= 0.8.6", runtime: false},
       {:spark, "~> 2.7"},
       {:ecto_sql, "~> 3.14"},
       {:postgrex, "~> 0.22"},

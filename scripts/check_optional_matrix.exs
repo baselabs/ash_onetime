@@ -17,7 +17,7 @@ defmodule AshOnetime.OptionalMatrix do
      %{plug: true, oban: true, igniter: true}},
     {"mint-pin", [{:mint, "~> 1.9"}], %{plug: false, oban: false, igniter: false}},
     {"mint-floor", [{:mint, "== 1.10.2"}], %{plug: false, oban: false, igniter: false}},
-    {"core-floors", [{:ash, "== 3.37.2"}, {:ash_postgres, "== 2.15.2"}, {:ash_sql, "== 0.8.4"}],
+    {"core-floors", [{:ash, "== 3.37.2"}, {:ash_postgres, "== 2.15.2"}, {:ash_sql, "== 0.8.6"}],
      %{plug: false, oban: false, igniter: false}}
   ]
 
@@ -26,7 +26,9 @@ defmodule AshOnetime.OptionalMatrix do
   # the non-vacuous proof the floors bind in a real resolution.
   @conflict_cases [
     {"igniter-conflict", {:igniter, "== 0.8.3"}},
-    {"mint-conflict", {:mint, "== 1.10.1"}}
+    {"mint-conflict", {:mint, "== 1.10.1"}},
+    {"ash-sql-0.8.4-conflict", {:ash_sql, "== 0.8.4"}},
+    {"ash-sql-0.8.5-conflict", {:ash_sql, "== 0.8.5"}}
   ]
 
   # The generated .app's runtime applications: the runtime:true deps plus the
@@ -127,6 +129,7 @@ defmodule AshOnetime.OptionalMatrix do
     ]
 
     command!(name, project, environment, ["deps.get"])
+    command!(name, project, environment, ["hex.audit"])
     command!(name, project, environment, ["compile", "--warnings-as-errors"])
 
     expression = """
@@ -154,7 +157,7 @@ defmodule AshOnetime.OptionalMatrix do
     resolved = fn app -> app |> Application.spec(:vsn) |> List.to_string() end
 
     if #{inspect(name)} == "core-floors" do
-      for {app, expected_version} <- [ash: "3.37.2", ash_postgres: "2.15.2", ash_sql: "0.8.4"] do
+      for {app, expected_version} <- [ash: "3.37.2", ash_postgres: "2.15.2", ash_sql: "0.8.6"] do
         unless resolved.(app) == expected_version,
           do: raise("core floor mismatch: \#{app}=\#{resolved.(app)}")
       end

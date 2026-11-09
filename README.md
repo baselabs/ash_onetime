@@ -158,7 +158,7 @@ fact tables are opt-in via `mix ash_onetime.gen.migrations --fact-tables`.
 Every protected action chooses `:idempotency` or `:one_time_nonce` and declares a nonempty
 scope; there is no default strategy or global scope fallback. The release battery includes a
 [mutation battery](CONTRIBUTING.md) whose rows must each fail under their named source mutation,
-plus direct execution of the three Livebooks against PostgreSQL. Full release history is in the
+plus direct execution of the four Livebooks against PostgreSQL. Full release history is in the
 [CHANGELOG](CHANGELOG.md).
 
 ## Compatibility
@@ -167,7 +167,7 @@ plus direct execution of the three Livebooks against PostgreSQL. Full release hi
   and excludes 2.0 or newer)
 - Erlang/OTP 28 or 29
 - Ash `>= 3.37.2` and `< 4.0.0`
-- AshPostgres `~> 2.15 and >= 2.15.2`, AshSql `~> 0.8 and >= 0.8.4`
+- AshPostgres `~> 2.15 and >= 2.15.2`, AshSql `~> 0.8 and >= 0.8.6`
 - Optional Mint `~> 1.10 and >= 1.10.2` when the host carries the installer HTTP closure
 - PostgreSQL 18 for the project test harness. The SQL surface requires PostgreSQL 11+
   (declarative hash/range partitioning with default partitions, `SKIP LOCKED`,
@@ -182,7 +182,10 @@ and [EEF-CVE-2026-114214](https://cna.erlef.org/osv/EEF-CVE-2026-114214.html) (f
 3.37.1), and the AshPostgres floor to 2.15.2 for
 [EEF-CVE-2026-115627](https://cna.erlef.org/osv/EEF-CVE-2026-115627.html) and
 [EEF-CVE-2026-115635](https://cna.erlef.org/osv/EEF-CVE-2026-115635.html). AshPostgres 2.15.2
-requires AshSql 0.8.4, which becomes the declared AshSql floor. The October 10, 2026
+requires AshSql 0.8.4; the November 9 amendment raises the declared floor to 0.8.6
+because [0.8.4](https://hex.pm/packages/ash_sql/0.8.4) and
+[0.8.5](https://hex.pm/packages/ash_sql/0.8.5) were retired for a query-cache security
+issue, fixed in [0.8.6](https://hex.pm/packages/ash_sql/0.8.6). The October 10, 2026
 amendment raised the Ash floor to 3.34.6 for
 [EEF-CVE-2026-101028](https://cna.erlef.org/osv/EEF-CVE-2026-101028.html). The earlier floor
 addressed these advisories:

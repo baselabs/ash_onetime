@@ -48,7 +48,8 @@ defmodule AshOnetime.Store do
           idempotency: non_neg_integer(),
           nonce: non_neg_integer(),
           payload_partitions: non_neg_integer(),
-          payload_partitions_kept: non_neg_integer()
+          payload_partitions_kept: non_neg_integer(),
+          payload_partitions_refused: %{optional(atom()) => non_neg_integer()}
         }
 
   @doc false
@@ -156,12 +157,14 @@ defmodule AshOnetime.Store do
 
     # Only emit when something was kept by refusal — a normal occupied
     # partition is kept every run and would bury the signal.
-    if counts.payload_partitions_kept > 0 do
+    refused = counts.payload_partitions_refused |> Map.values() |> Enum.sum()
+
+    if refused > 0 do
       AshOnetime.Telemetry.cleanup(
         :idempotency,
         repo,
         :cleanup,
-        counts.payload_partitions_kept,
+        refused,
         :partitions_kept
       )
     end

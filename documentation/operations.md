@@ -447,9 +447,11 @@ as empty. ash_onetime's prune never trusts such a count — and never needs to:
 **The prune decides as the table owner, inside a per-partition savepoint.** Only the table
 owner can `DROP TABLE` anyway, so the owner uses its own exemption, scoped to a
 subtransaction no other session can observe. Per past-retention partition it takes the
-DROP's own `ACCESS EXCLUSIVE` lock, re-verifies by OID that the relation is a plain-heap
+DROP's own `ACCESS EXCLUSIVE` lock on the parent first and then the child, re-verifies by OID that the relation is a plain-heap
 child of the schema's payload parent owned by the driver, applies an uncommitted
-`ALTER TABLE … NO FORCE ROW LEVEL SECURITY`, and counts with `row_security` disabled.
+`ALTER TABLE … NO FORCE ROW LEVEL SECURITY`, refuses if FORCE is still on (a DDL hook
+can reapply it), and counts with `row_security` disabled. `row_security=off` is armed
+before the ALTER and remains a required fail-closed defense through the count.
 PostgreSQL exempts the owner of a non-FORCEd table before it consults `row_security`
 (`check_enable_rls`), so the count is unfiltered or errors — whatever policies exist, in
 any shape (restrictive direct, `TO PUBLIC`, via group membership; a missing permissive
@@ -461,7 +463,11 @@ FORCE invisibly to every other session and the partition is reported as kept.
 the schema owner (a CronJob using the migrator Secret is the established shape — the same
 login that runs migrations). An in-app Oban worker running as a non-owner role keeps
 claims/nonce cleanup working; every past partition it cannot prune is counted in
-`payload_partitions_kept` on the cleanup result and emitted as a
+`payload_partitions_kept` on the cleanup result. This total includes ordinary occupied
+partitions. Refusals also appear in `payload_partitions_refused`, a map of reason to count:
+`:not_owner`, `:not_plain_child`, `:missing`, `:ddl_blocked`, `:lock_unavailable`,
+`:force_reapplied`, or `:error` (absent reasons have zero count). Only the sum of these
+refusal counts is emitted as a
 `[:ash_onetime, :cleanup]` telemetry event with `result_class: :partitions_kept` (the
 Oban worker does not log counts itself — attach a telemetry handler to see them). If such
 a worker is all you run, set its `partition_limit: 0` and schedule the owner-run prune
@@ -470,6 +476,14 @@ misconfigured (wrong role, or something is blocking its DDL).
 
 Operational notes:
 
+- **Prune lock waits are bounded.** `config :ash_onetime, :partition_prune_lock_timeout_ms, 2_000`
+  sets the per-lock wait in milliseconds (1–5,000; invalid values return `:invalid_request`).
+  A timeout keeps the candidate with reason `:lock_unavailable` for the next run. Taking
+  the parent lock first prevents the late DROP upgrade cycle; an open parent reader can
+  delay an unrelated insert only until this pending lock times out. The caller's
+  `lock_timeout` and `row_security` settings are restored on every successful drop or
+  savepoint rollback. Successful drops hold their locks until the outer transaction ends,
+  so schedule bounded batches and do not wrap cleanup in a long-lived transaction.
 - **Cleanup requires READ COMMITTED.** Under REPEATABLE READ the prune's snapshot predates
   its lock, so a row committed while the lock waits would be invisible to the count;
   cleanup refuses with `:unsupported_isolation` like every claim path.
@@ -521,7 +535,8 @@ Operational notes:
   arrives while a partition is being dropped blocks, then routes there (dropping `_default`
   converts that into an insert error — still fail-closed, but noisier).
 - **A DDL audit tool or event trigger that blocks `ALTER TABLE`** makes the prune keep
-  every partition (reported via `payload_partitions_kept`) without failing cleanup.
+  every partition (reason `:ddl_blocked`) without failing cleanup. A hook reapplying FORCE
+  similarly refuses with `:force_reapplied`.
 
 
 ## Key rotation
