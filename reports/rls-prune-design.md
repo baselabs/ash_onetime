@@ -1,20 +1,18 @@
 # RLS-safe payload-partition prune — design
 
-Status: **accepted by b-1 review (November 9, 2026) with two changes; implemented red-first
-(b-2 directive), all matrix cells green on ephemeral PostgreSQL 18 and the full suite green
-on the shared instance, held for i-1 review before push. 1.9.0 unpublished.** Scout output
-per `kimosabe-scout`; the judged recommendation survived an adversarial review and an
-independent judge, and every load-bearing claim has executable evidence on a real
-PostgreSQL 18.
+Status: **owner-savepoint design retained; all four i-1 fixes and the FDW proof are
+implemented and verified. The AshSql consumer floor is raised to 0.8.6; covering checks
+and the final local commit range are recorded in `reports/rls-safe-prune.md`.
+1.9.0 remains unpublished; push requires the owner-relayed i-1 answer.**
 
-Implementation notes (November 9): the store's prune is `owner_savepoint_prune/3` and its
+Implementation notes (November 9): the store's prune is `owner_savepoint_prune/4` and its
 helpers in `lib/ash_onetime/store/postgres.ex`; cleanup calls the existing
 `transaction_preconditions/1` (F1) and returns `payload_partitions_kept` additively (F2);
 relations are schema-qualified once (F3) and the OID re-check gates `relkind = 'r'` (F5);
 the claims count is gone (F9). `copy_parent_row_security/3` keeps the ENABLE/FORCE and
 policy copy and no longer grants any prune role (b-1 change 1). The `--rls-prune` generator
-surface, template, and the never-shipped `:row_security_blocked` code are removed. Five
-mutation rows pin the load-bearing lines (`scripts/check_mutations.exs`).
+surface, template, and the never-shipped `:row_security_blocked` code are removed. Six original
+mutation rows plus the review regressions pin the load-bearing lines (`scripts/check_mutations.exs`).
 
 **b-1 changes to the scout's design:**
 
@@ -57,19 +55,23 @@ the owner uses its own exemption, scoped to a subtransaction that no other sessi
 
 Per past-retention partition, inside the cleanup transaction:
 
-1. `SAVEPOINT`.
-2. `LOCK TABLE <partition> IN ACCESS EXCLUSIVE MODE` — the DROP's own lock, taken up front;
-   concurrent writers are serialized behind it (probe: an in-flight parent-routed insert
-   commits, the lock waits it out, the fresh count sees the row, the partition is kept).
-3. Re-verify by OID: the relation is a plain heap (`relkind = 'r'`), is a child of this
-   schema's payload parent, and is owned by `current_user`.
-4. `ALTER TABLE <partition> NO FORCE ROW LEVEL SECURITY` — uncommitted, invisible to every
-   other session (the lock guarantees no concurrent reader).
-5. `SET LOCAL row_security = off` and count the partition. Owner + unforced ⇒ exempt before
-   the `row_security` check; the count is unfiltered or errors. The GUC is belt, not load.
-6. Empty ⇒ `DROP TABLE`, `RELEASE SAVEPOINT`; otherwise (or on any error) `ROLLBACK TO
-   SAVEPOINT` — which restores FORCE — record the partition as kept with a reason, and let the
-   cleanup loop continue.
+1. `SAVEPOINT`; capture the caller's lock_timeout and row_security. Refuse clearly
+   inapplicable physical/owner facts before attempting a lock, then recheck under locks.
+2. Set a bounded local `lock_timeout` and `row_security=off`, then lock ONLY the
+   parent in ACCESS EXCLUSIVE mode, then ONLY the candidate in that same mode. The
+   parent-first order prevents a late DROP lock upgrade; timeout means refused/kept.
+3. Re-verify by OID: plain heap (`relkind = 'r'`), child of this schema's payload
+   parent, owned by `current_user`.
+4. `ALTER TABLE <partition> NO FORCE ROW LEVEL SECURITY` — uncommitted, invisible to
+   every other session. Re-read `relforcerowsecurity`; still FORCE means refused with
+   reason `force_reapplied`.
+5. Count with `pg_catalog.count(*)`, while row_security remains off. Owner + unforced
+   is exempt before policies apply; any RLS-filtered count errors. The GUC remains a
+   load-bearing second defense and is pinned independently of the FORCE gate.
+6. Empty ⇒ DROP, restore caller GUCs, RELEASE SAVEPOINT. Otherwise (or on a recoverable
+   statement error) ROLLBACK TO SAVEPOINT and RELEASE, restoring FORCE and local GUCs
+   and releasing these locks. Kept includes occupied candidates; refusal reasons are
+   additional counts. Claim/nonce cleanup proceeds. Connection failure still halts it.
 
 Claims-count: deleted from the decision (F9, both reviewers): a completed claim and its
 payload commit 1:1 on library paths, so the payload count subsumes it, and the claims count
@@ -107,6 +109,16 @@ all mine, all fixed and re-run) are recorded in the matrix note.
 | 17 event trigger blocking ALTER TABLE | KEPT (fails closed) | DROP | yes |
 | 18 non-owner driver (`app_r`) | KEPT (`permission denied`, fails closed) | KEPT (same) | yes |
 | 16 REPEATABLE READ session | KEPT (refused by isolation precondition) | not attempted | yes |
+| 19 DDL hook reapplying FORCE | KEPT (`force_reapplied`) | KEPT (`force_reapplied`) | yes |
+| 20 DDL hook requiring row_security off before ALTER | KEPT (occupied) | DROP; caller GUCs restored | yes |
+| 21 held parent reader | KEPT (`lock_unavailable`, 500 ms lock timeout); no child lock while waiting | retried next run | yes |
+| 22 consumer count(*) aggregate returns 0 | KEPT (pg_catalog count is 1) | DROP | yes |
+| 23 real postgres_fdw child, remote count filtered to 0 | KEPT (`not_plain_child`) | not attempted | yes |
+
+Cells 19–23 are the executable review regressions in `rls_prune_test.exs`. Cell 21
+also has an unrelated current-month insert and a reader reaching the child; both
+finish without the former lock-order cycle. Occupied/non-owner telemetry is tested
+separately: occupied candidates have no refusal map entries or refusal events.
 
 Concurrency probes: parent-routed insert in flight ⇒ lock waits, count sees both rows, kept;
 insert arriving during the prune window ⇒ blocked, then routed to `_default` (or errored where
@@ -162,13 +174,11 @@ The 1.9.0 line is unpublished, so this is removal, not teardown:
 - `--rls-prune` / `--app-role` in `mix ash_onetime.gen.migrations` (`parse_rls_prune!`,
   `render_rls_prune`).
 - In `store/postgres.ex`: `prune_function_schema/1`, `function_partition_empty?/3`,
-  `guarded_partition_empty?/2`, and `copy_parent_row_security/3`'s policy/flag copying in
-  `roll_partitions` (children no longer need parent policies copied for the prune; consumers'
-  own queries go through the parent, whose policies govern).
+  `guarded_partition_empty?/2`,. Parent ENABLE/FORCE/policy copying is retained by b-1 change 1 for direct child reads.
 - The claims count in the emptiness decision; `test/ash_onetime/store/rls_prune_test.exs`
   tier 2 (replaced by the matrix suite); the "Row-level security" section of
-  `documentation/operations.md` (rewritten: see install steps); the `:row_security_blocked`
-  error-code semantics narrow to the prune's kept-with-reason telemetry; CHANGELOG entry for
+  `documentation/operations.md` (rewritten: see install steps); the never-shipped
+  `:row_security_blocked` error code (refusals now use the counts map/telemetry); CHANGELOG entry for
   the 1.9.0 line updated to describe the final design.
 
 ## Consumer install steps
@@ -176,14 +186,13 @@ The 1.9.0 line is unpublished, so this is removal, not teardown:
 - **Nothing new to install.** No role, no bootstrap, no superuser, no extra migration. The
   existing operational rule stands: under RLS, the table owner drives cleanup (`DROP` needs
   ownership — unchanged).
-- **A consumer that does nothing** (ash_metered today: `partition_limit: 0`, rolling off; AA,
-  Commerce if they use the default worker): identical behavior for RLS-off installs; for RLS
-  installs whose worker is not the owner, partitions are kept with a reason and — once F2
-  lands — claim and nonce cleanup keeps running instead of wedging (an improvement over the
+- **An install with `partition_limit: 0`** keeps partition DDL disabled. For RLS
+  installs whose worker is not the owner, partitions are kept with a reason and
+  claim and nonce cleanup keeps running instead of wedging (an improvement over the
   current shipped behavior, which the adversary showed halts all cleanup).
-- Ops doc: document the READ COMMITTED requirement (F1) and that per-run telemetry now reports
-  per-partition kept-refusals (reasons: not-empty, not-a-plain-child, not-owner, isolation,
-  DDL-blocked).
+- Ops doc: READ COMMITTED is required (F1). `payload_partitions_kept` includes occupied
+  candidates; `payload_partitions_refused` reports refusal reasons, and only its sum
+  emits refusal telemetry. Isolation failures refuse the whole cleanup before deletes.
 
 ## Why the rivals lost
 
@@ -225,14 +234,14 @@ The 1.9.0 line is unpublished, so this is removal, not teardown:
   distinctness between adversary and judge did not. If i-1 wants a cross-family judge pass on
   this design, that is one more attended dispatch.
 
-## Open items and implementation boundary (not started, per instruction)
+## Implementation boundary and remaining approval
 
-- Implementation = the store changes in "Mandatory companions" + the owner-savepoint prune +
-  the deletions above. Its tests are this adversarial matrix written RED-first against the
-  real migration output (all cells, both concurrency probes, the FORCE-restore assertion, the
-  F1 danger/refusal pair, the event-trigger and non-owner cells), per the owner's directive.
-- One design decision left open for review: whether kept-with-reason refusals surface as a new
-  structured reason field on the cleanup result (preferred) or as telemetry events only.
-- The `_default` partition is load-bearing for the no-loss race argument (late inserts route
-  there); the ops doc should say dropping it converts "routed, no loss" into "insert errors" —
-  still fail-closed, but worth stating.
+- DONE: the mandatory companions, owner-savepoint prune, deletions, and real-PG
+  adversarial matrix. The report distinguishes baseline reds from restored greens.
+- DONE: the structured `payload_partitions_refused` result map and refusal-only
+  telemetry resolve the earlier kept-with-reason question.
+- DONE: the operations guide explains that late inserts use `_default`; removing
+  that partition turns late routing into insert errors while preserving fail-closed safety.
+- OPEN — owner rule: i-1 checks the committed fixes before push. The owner relays the
+  answer; no additional reviewer or sub-agent is dispatched here. Tag and publication
+  separately require the owner's yes.
