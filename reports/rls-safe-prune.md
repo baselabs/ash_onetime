@@ -10,6 +10,31 @@ env -u ASH_ONETIME_ASH_VERSION mix hex.publish --yes
 Post-publish: verify hex.pm `latest_version` and the release's `requirements.ash.requirement`,
 then `elixir scripts/check_livebooks.exs --published` with `DATABASE_URL` exported.
 
+## i-1 review round (November 9, 2026) — changes made, push held
+
+Findings from `.kimosabe/reviews/2026-11-08-3958578-i1.md` on the first cut:
+
+- **Blocker fixed (restrictive policies).** A consumer's `AS RESTRICTIVE` tenant
+  policy is ANDed into the SECURITY DEFINER function's counts, so a partition holding
+  only another tenant's payloads read as empty and cleanup dropped it — confirmed RED
+  first (`{:ok, %{payload_partitions: 1}}`). The function now refuses to count when any
+  RESTRICTIVE policy with cmd `ALL` or `SELECT` whose roles include `public` or
+  `ash_onetime_prune` exists on the claims table, the payload parent, or the target
+  partition: it raises SQLSTATE 42501 with "row-level security" in the message, which the
+  store maps to `:row_security_blocked`. It also refuses a `partition_name` that is not a
+  child of the payload parent (`22023`). New RED-first tests cover both.
+- **EXECUTE ordering fixed.** `REVOKE ... FROM PUBLIC` and `GRANT EXECUTE ... TO app` now
+  run while the migrating role still owns the function (the post-transfer versions were
+  silent no-ops — the migrator cannot act as the prune role). A third wrinkle surfaced:
+  a grant to the migrating role made *before* the transfer is also a silent no-op
+  (owner rights are implicit and vanish with the transfer), so after the transfer the
+  migration steps into the prune role via its SET privilege and grants the migrating role
+  EXECUTE there. Test asserts EXECUTE: true for the app role, false for a third role,
+  true for the migrating role.
+- **Nits fixed.** The guarded counts restore `row_security = on` afterwards (`SET LOCAL`
+  otherwise lasts to the end of the caller's transaction); the function is called by the
+  schema-qualified name the existence lookup found (never search_path resolution).
+
 ## What was built
 
 `ash_onetime` 1.9.0: the payload-partition prune can no longer be fooled by row-level
