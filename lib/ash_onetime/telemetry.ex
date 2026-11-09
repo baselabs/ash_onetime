@@ -40,7 +40,7 @@ defmodule AshOnetime.Telemetry do
       :oversized,
       :disabled
     ],
-    cleanup: [:claims_deleted, :partitions_dropped, :partitions_created],
+    cleanup: [:claims_deleted, :partitions_dropped, :partitions_created, :partitions_kept],
     reap: [:claims_reaped],
     external_recovery: [
       :processing_committed,
@@ -135,7 +135,10 @@ defmodule AshOnetime.Telemetry do
 
   @doc """
   Emits `[:ash_onetime, :cleanup]` with `:count` and `result_class` in
-  `[:claims_deleted, :partitions_dropped, :partitions_created]`. A bounded cleanup run.
+  `[:claims_deleted, :partitions_dropped, :partitions_created, :partitions_kept]`. A
+  bounded cleanup run; `:partitions_kept` fires only when at least one past partition
+  was kept by refusal (non-owner driver, DDL block, not a plain child) — the visible
+  signal that pruning is not happening.
   """
   @spec cleanup(atom(), module(), atom(), non_neg_integer(), atom()) ::
           :ok | {:error, Error.t()}

@@ -96,6 +96,8 @@ jobs:
       - run: mix hex.audit
       - run: mix deps.audit
       - run: mix test
+        env:
+          ASH_ONETIME_RLS_PRUNE_TESTS: "1"
       - run: mix credo --strict
       - run: mix dialyzer
       # The test-env run also analyzes test/support — where the consumer-shaped
@@ -148,6 +150,8 @@ jobs:
       - run: mix compile --warnings-as-errors
       - name: Mutation battery
         run: MIX_ENV='test' mix run scripts/check_mutations.exs -- all
+        env:
+          ASH_ONETIME_RLS_PRUNE_TESTS: "1"
       # check_package.exs inspects the built archive, so hex.build must precede it.
       - name: Build the Hex package
         run: mix hex.build
@@ -217,4 +221,6 @@ jobs:
       - run: mix compile --warnings-as-errors
       - run: mix hex.audit
       - run: mix test
+        env:
+          ASH_ONETIME_RLS_PRUNE_TESTS: "1"
       - run: mix credo --strict

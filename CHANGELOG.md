@@ -2,31 +2,56 @@
 
 All notable changes to this project are documented in this file.
 
-## v1.9.0 — November 8, 2026
+## v1.9.0 — RLS-safe payload prune (unreleased)
 
-- **The payload-partition prune can no longer be fooled by row-level security.** A consumer
-  that puts FORCE row-level security on the claims and payload tables (keyed per tenant)
-  made cleanup's `count(*)` see only the current tenant's rows, so a partition holding
-  other tenants' replay payloads could read as empty and be dropped. The emptiness check
-  now runs with `row_security` disabled for the transaction — a policy that would filter
-  the caller surfaces as an error, not a silently-wrong count — and the prune fails closed
-  with the new `:row_security_blocked` code, dropping nothing.
-- **Opt-in RLS-safe pruning via `mix ash_onetime.gen.migrations --rls-prune --app-role NAME`.**
-  The generated migration creates a NOLOGIN role `ash_onetime_prune` (only if missing; it
-  owns no tables and the application role is never a member of it), a boolean SECURITY
-  DEFINER emptiness function owned by that role with a fixed `search_path` and EXECUTE
-  revoked from PUBLIC, SELECT grants plus a permissive `FOR SELECT` policy for the prune
-  role on the claims and payload tables, and the same on every payload child partition —
-  each child also inherits the parent's ENABLE/FORCE row-security settings and full policy
-  set, at creation by `roll_partitions` and for existing children in the migration. The
-  migrating role must differ from the application role; the migration refuses with a clear
-  error when run as the application role or when that role holds SET, USAGE, or ADMIN on
-  the prune role (PostgreSQL 16+ grants a creator ADMIN, so a shared migrating/application
-  role could always become the prune role and read every tenant). Creating the role needs
-  CREATEROLE; a superuser bootstrap is the documented alternative. With the function
-  installed, cleanup counts through it unfiltered and prunes correctly; without it, the
-  fail-closed refusal stands. See
+- **The payload-partition prune now decides `DROP TABLE` as the table owner, inside a
+  per-partition savepoint, and no consumer row-level-security configuration can make it
+  drop a partition holding another tenant's rows.** Cleanup already has to run as the
+  table owner under RLS (only the owner can DROP). Per past-retention partition it now
+  takes the DROP's own `ACCESS EXCLUSIVE` lock, re-verifies by OID that the relation is a
+  plain-heap child of the schema's payload parent owned by the driver, applies an
+  uncommitted `ALTER TABLE … NO FORCE ROW LEVEL SECURITY`, and counts with `row_security`
+  disabled. PostgreSQL exempts the owner of a non-FORCEd table before it consults
+  `row_security`, so the count is unfiltered or errors — a mechanism (`check_enable_rls`),
+  not a list of policy shapes: restrictive policies (direct, `TO PUBLIC`, or via group
+  membership), missing permissive policies, and attached partitions without grants all
+  resolve to kept-or-error, never a silently narrowed count. Empty ⇒ drop; otherwise (or
+  on any error) rollback-to-savepoint — restoring FORCE invisibly to every other session —
+  and the partition is reported as kept — counted in `payload_partitions_kept` on the
+  cleanup result and emitted as a `[:ash_onetime, :cleanup]` telemetry event with
+  `result_class: :partitions_kept`. Proven by an adversarial matrix on PostgreSQL 18
+  (non-superuser CREATEROLE owner, FORCE RLS, real migration output); see
   [Operations](documentation/operations.md#row-level-security).
+- **Behavior changes:**
+  - **Cleanup now refuses to run outside READ COMMITTED** (`:unsupported_isolation`, like
+    every claim path). Under REPEATABLE READ the prune's snapshot predates its lock, so a
+    row committed while the lock waits would be invisible to the count — a data-loss race
+    demonstrated live on PostgreSQL 18. Callers already inside a REPEATABLE READ or
+    SERIALIZABLE transaction get a refusal instead of a prune.
+  - **A refused partition prune no longer rolls back the whole cleanup.** Previously any
+    prune error — including a non-owner worker's failed lock — aborted the claim and nonce
+    deletes in the same transaction, wedging all retention cleanup until an operator
+    intervened. Each partition now decides inside its own savepoint: refusals are recorded
+    as kept and the run continues. `Store.cleanup/3`'s `{:ok, counts}` map gains
+    `payload_partitions_kept` (kept-refusal count; the existing three keys are unchanged)
+    — an additive change to the result contract.
+  - The `:row_security_blocked` error code (introduced on this unreleased line) is removed:
+    with the owner-savepoint prune there is no filtered-count refusal path left to report.
+- **`roll_partitions` keeps copying the parent's ENABLE/FORCE row-security settings and
+  full policy set onto every partition it creates** (the `ash_onetime_prune` SELECT grant
+  from earlier 1.9.0 drafts is gone with the rest of that apparatus). Child partitions are
+  directly queryable by name — in the two-login model the runtime role holds default
+  privileges on everything the owner creates — so the policy copy is what keeps a direct
+  child read tenant-scoped. Pinned by a red test: a default-privileged runtime role reads
+  a rolled child directly and sees only its tenant.
+- **Consumer pattern for RLS installs:** run partition maintenance as the schema owner on a
+  schedule (a CronJob using the migrator Secret is the established shape); an in-app
+  worker running as a non-owner sets `partition_limit: 0` and cleanup keeps working for
+  claims while partitions accumulate. See
+  [Operations](documentation/operations.md#row-level-security).
+- Nothing from v1.8.0 (context boundaries) is removed or changed by this release; the
+  1.9.0 line is otherwise additive over 1.8.0.
+
 
 ## v1.8.0 — November 8, 2026
 

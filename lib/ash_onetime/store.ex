@@ -47,7 +47,8 @@ defmodule AshOnetime.Store do
   @type cleanup_counts :: %{
           idempotency: non_neg_integer(),
           nonce: non_neg_integer(),
-          payload_partitions: non_neg_integer()
+          payload_partitions: non_neg_integer(),
+          payload_partitions_kept: non_neg_integer()
         }
 
   @doc false
@@ -152,6 +153,18 @@ defmodule AshOnetime.Store do
         counts.payload_partitions,
         :partitions_dropped
       )
+
+    # Only emit when something was kept by refusal — a normal occupied
+    # partition is kept every run and would bury the signal.
+    if counts.payload_partitions_kept > 0 do
+      AshOnetime.Telemetry.cleanup(
+        :idempotency,
+        repo,
+        :cleanup,
+        counts.payload_partitions_kept,
+        :partitions_kept
+      )
+    end
 
     :ok
   end

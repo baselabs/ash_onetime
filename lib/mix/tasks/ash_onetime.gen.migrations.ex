@@ -5,15 +5,10 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
       mix ash_onetime.gen.migrations --repo MyApp.Repo
       mix ash_onetime.gen.migrations --repo MyApp.Repo --claims hash --claim-partitions 8
       mix ash_onetime.gen.migrations --repo MyApp.Repo --fact-tables ledger_facts,payment_facts
-      mix ash_onetime.gen.migrations --repo MyApp.Repo --rls-prune --app-role my_app
 
   `--fact-tables` additionally generates the append-only fact tables backing
   `context_boundary` declarations (one migration creating every named table).
-  `--rls-prune --app-role NAME` additionally generates the row-level-security
-  prune support (a NOLOGIN prune role and a SECURITY DEFINER emptiness
-  function) so payload-partition pruning stays correct under FORCE row-level
-  security; the migrating role must differ from the application role. Use
-  `--tenants` to write to the repo tenant migration directory.
+  Use `--tenants` to write to the repo tenant migration directory.
   """
 
   use Mix.Task
@@ -31,8 +26,6 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     claims: :string,
     claim_partitions: :integer,
     fact_tables: :string,
-    rls_prune: :boolean,
-    app_role: :string,
     tenants: :boolean,
     migrations_path: :string,
     partition_start: :string,
@@ -51,7 +44,6 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     repo = parse_repo!(options[:repo])
     hash_partitions = parse_claim_partitioning!(options)
     fact_tables = parse_fact_tables!(options[:fact_tables])
-    rls_prune = parse_rls_prune!(options)
     path = migration_path(repo, options)
     create_directory(path)
     refuse_existing!(path)
@@ -72,15 +64,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
         facts
       end
 
-    if rls_prune do
-      rls_source = render_rls_prune(repo, app_role: rls_prune)
-      rls_file = Path.join(path, "#{timestamp}_ash_onetime_rls_prune.exs")
-      create_file(rls_file, rls_source)
-      Mix.shell().info("Generated #{rls_file}")
-      rls_file
-    else
-      facts_file || file
-    end
+    facts_file || file
   end
 
   @doc "Renders the install migration deterministically for explicit options."
@@ -128,33 +112,6 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     source
     |> Code.format_string!()
     |> IO.iodata_to_binary()
-  end
-
-  @doc """
-  Renders the RLS prune-support migration deterministically for explicit
-  options. The migration creates the NOLOGIN prune role (if missing), the
-  SECURITY DEFINER emptiness function, its grants and policies, and brings
-  payload child partitions in line with the parent. It refuses at run time
-  when executed as the application role or when that role holds SET, USAGE, or
-  ADMIN on the prune role. Pure (no filesystem writes).
-  """
-  @spec render_rls_prune(module(), keyword()) :: binary()
-  def render_rls_prune(repo, options) when is_atom(repo) and is_list(options) do
-    app_role = Keyword.get(options, :app_role)
-    module = Module.concat([repo, Migrations, AddAshOnetimeRlsPrune])
-
-    if is_binary(app_role) do
-      source =
-        "rls_prune.exs"
-        |> template_path()
-        |> EEx.eval_file(module: module, app_role: validate_app_role!(app_role))
-
-      source
-      |> Code.format_string!()
-      |> IO.iodata_to_binary()
-    else
-      raise ArgumentError, "app_role option is required"
-    end
   end
 
   @doc """
@@ -257,38 +214,6 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
 
   defp render_fact_table_names!(_names),
     do: raise(ArgumentError, "fact_tables must be a nonempty list of table names")
-
-  # --rls-prune is paired with --app-role, validated as a plain identifier so
-  # the generated migration can embed it as a literal.
-  defp parse_rls_prune!(options) do
-    case {options[:rls_prune], options[:app_role]} do
-      {true, role} when is_binary(role) ->
-        validate_app_role!(role)
-
-      {true, _role} ->
-        Mix.raise("--rls-prune requires --app-role naming the application role")
-
-      {false, nil} ->
-        false
-
-      {nil, nil} ->
-        false
-
-      {_other, _role} ->
-        Mix.raise("--app-role is only valid together with --rls-prune")
-    end
-  end
-
-  defp validate_app_role!(role) do
-    if byte_size(role) in 1..63 and Regex.match?(~r/^[a-z_][a-z0-9_]*$/, role) do
-      role
-    else
-      Mix.raise(
-        "--app-role must be a lowercase SQL identifier of at most 63 bytes " <>
-          "(letters, digits, underscore) starting with a letter or underscore"
-      )
-    end
-  end
 
   defp validate_partition_count!(count)
        when count >= 2 and count <= 64 and Bitwise.band(count, count - 1) == 0,

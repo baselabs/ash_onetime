@@ -287,7 +287,6 @@ defmodule AshOnetime.ArchitectureTest do
       render: 2,
       render_fact_tables: 2,
       render_logical_partition_upgrade: 2,
-      render_rls_prune: 2,
       render_roll_forward: 2,
       run: 1,
       timestamp: 0

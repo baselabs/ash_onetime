@@ -591,15 +591,51 @@ defmodule AshOnetime.MutationCheck do
       test_name: "overlapping contexts admit exactly one append per read epoch",
       assertion: "assert admitted == 1"
     },
-    "rls-prune-fail-closed" => %{
+    "rls-prune-unforce" => %{
       path: "lib/ash_onetime/store/postgres.ex",
-      original: ~S|"SET LOCAL row_security = off", []|,
-      mutated: ~S|"SET LOCAL row_security = on", []|,
+      original: ~S|"ALTER TABLE #{relation} NO FORCE ROW LEVEL SECURITY", []|,
+      mutated: ~S|"SELECT 1", []|,
       test: "test/ash_onetime/store/rls_prune_test.exs",
-      tag: "rls_prune_fail_closed_mutation",
+      tag: "rls_prune_unforce_mutation",
       test_name:
-        "a partition with no rows at all still refuses: a filtered count is never trusted",
-      assertion: "assert %{reason: :row_security_blocked} = result"
+        "tenant-session cleanup under FORCE RLS drops the empty partition, keeps the occupied one, and still deletes claims",
+      assertion: "assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} = result"
+    },
+    "rls-isolation-precondition" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "  defp cleanup_counts(target, batch_size, partition_limit) do\n    with :ok <- transaction_preconditions(target),",
+      mutated:
+        "  defp cleanup_counts(target, batch_size, partition_limit) do\n    with :ok <- :ok,",
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_isolation_precondition_mutation",
+      test_name: "cleanup refuses when its transaction is not READ COMMITTED",
+      assertion: "assert %Result{reason: :unsupported_isolation} = result"
+    },
+    "rls-partition-kept" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: ~S|"ROLLBACK TO SAVEPOINT #{@prune_savepoint}", []|,
+      mutated: ~S|"RELEASE SAVEPOINT #{@prune_savepoint}", []|,
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_partition_kept_mutation",
+      test_name:
+        "tenant-session cleanup under FORCE RLS drops the empty partition, keeps the occupied one, and still deletes claims",
+      assertion: "assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} = result"
+    },
+    "rls-child-policy-copy" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        ~S|FOR r IN
+        SELECT * FROM pg_policies WHERE schemaname = '#{literal_schema}' AND tablename = 'ash_onetime_response_payloads'|,
+      mutated:
+        ~S|FOR r IN
+        SELECT * FROM pg_policies WHERE schemaname = '#{literal_schema}' AND tablename = 'ash_onetime_none'|,
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_child_policy_copy_mutation",
+      test_name:
+        "a rolled child carries the parent's policies, so a direct tenant read stays scoped",
+      assertion:
+        ~S|assert scalar!(session, "SELECT count(*) FROM \"#{prefix}\".\"#{child}\"", []) == 1|
     },
     "boundary-lock-noop" => %{
       path: "lib/ash_onetime/boundary.ex",
@@ -671,21 +707,34 @@ defmodule AshOnetime.MutationCheck do
     },
     "partitions-created-telemetry" => %{
       path: "lib/ash_onetime/telemetry.ex",
-      original: "cleanup: [:claims_deleted, :partitions_dropped, :partitions_created]",
-      mutated: "cleanup: [:claims_deleted, :partitions_dropped]",
+      original:
+        "cleanup: [:claims_deleted, :partitions_dropped, :partitions_created, :partitions_kept]",
+      mutated: "cleanup: [:claims_deleted, :partitions_dropped, :partitions_kept]",
       test: "test/ash_onetime/store/partition_test.exs",
       tag: "partitions_created_telemetry_mutation",
       test_name: "emits a :cleanup :partitions_created telemetry event on a roll",
       assertion: ":partitions_created"
     },
-    "payload-partition-lock" => %{
+    "rls-error-to-kept" => %{
       path: "lib/ash_onetime/store/postgres.ex",
-      original: "IN SHARE MODE",
-      mutated: "IN ACCESS SHARE MODE",
-      test: "test/mix/tasks/ash_onetime.prune_test.exs",
-      tag: "payload_partition_lock_mutation",
-      test_name: "cleanup locks an empty partition before deciding to drop it",
-      assertion: "payload_partitions: 0"
+      original:
+        "      if count == 0,\n        do: drop_pruned_partition(target, relation),\n        else: rollback_prune(target)\n    else\n      {:error, %Result{reason: reason}} = error\n      when reason in [:disconnected, :checkout_unavailable, :dispatched_unknown] ->\n        error\n\n      {:error, %Result{}} ->\n        rollback_prune(target)",
+      mutated:
+        "      if count == 0,\n        do: drop_pruned_partition(target, relation),\n        else: rollback_prune(target)\n    else\n      {:error, %Result{reason: reason}} = error\n      when reason in [:disconnected, :checkout_unavailable, :dispatched_unknown] ->\n        error\n\n      {:error, %Result{}} ->\n        raise \"mutation: refused prune must not fail the run\"",
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_error_to_kept_mutation",
+      test_name: "an event trigger blocking ALTER TABLE keeps partitions and fails nothing",
+      assertion: "assert {:ok, %{payload_partitions: 0, payload_partitions_kept: 2}} ="
+    },
+    "payload-partition-count" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: ~S|"SELECT count(*) FROM #{relation}", []|,
+      mutated: ~S|"SELECT 0", []|,
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_prune_count_mutation",
+      test_name:
+        "tenant-session cleanup under FORCE RLS drops the empty partition, keeps the occupied one, and still deletes claims",
+      assertion: "assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} = result"
     },
     "doctor-ash-floor" => %{
       path: "lib/mix/tasks/ash_onetime.doctor.ex",

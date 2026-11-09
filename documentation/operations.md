@@ -440,45 +440,89 @@ claims — scope the reconciliation the same way.
 ## Row-level security
 
 A consumer may put FORCE row-level security on the claims and payload tables, keyed per
-tenant on `logical_partition`. Cleanup's payload-partition prune decides `DROP TABLE` from
-a count over a partition and a claims range — under FORCE RLS those counts see only the
-current tenant's rows, so a partition holding other tenants' replay payloads could read
-as empty. ash_onetime refuses to trust a filtered count:
+tenant on `logical_partition`. Under FORCE RLS any count a non-owner runs can be narrowed
+to the current tenant, so a partition holding other tenants' replay payloads could read
+as empty. ash_onetime's prune never trusts such a count — and never needs to:
 
-- **Without extra setup**, the emptiness check runs with `row_security` disabled for the
-  cleanup transaction. PostgreSQL then raises instead of filtering when a policy would
-  apply to the caller, and cleanup fails closed with `:row_security_blocked`, dropping
-  nothing. A tenant-filtered count is never trusted, even when it happens to be right.
-- **With the RLS prune migration** (`mix ash_onetime.gen.migrations --repo MyApp.Repo
-  --rls-prune --app-role my_app`), cleanup counts through a dedicated function and prunes
-  correctly under FORCE RLS.
+**The prune decides as the table owner, inside a per-partition savepoint.** Only the table
+owner can `DROP TABLE` anyway, so the owner uses its own exemption, scoped to a
+subtransaction no other session can observe. Per past-retention partition it takes the
+DROP's own `ACCESS EXCLUSIVE` lock, re-verifies by OID that the relation is a plain-heap
+child of the schema's payload parent owned by the driver, applies an uncommitted
+`ALTER TABLE … NO FORCE ROW LEVEL SECURITY`, and counts with `row_security` disabled.
+PostgreSQL exempts the owner of a non-FORCEd table before it consults `row_security`
+(`check_enable_rls`), so the count is unfiltered or errors — whatever policies exist, in
+any shape (restrictive direct, `TO PUBLIC`, via group membership; a missing permissive
+policy; an attached partition without grants). That is a mechanism, not a list of cases.
+Empty ⇒ drop; otherwise — or on any statement error — rollback-to-savepoint restores
+FORCE invisibly to every other session and the partition is reported as kept.
 
-The generated migration creates (only when missing) a NOLOGIN role `ash_onetime_prune`
-that owns none of the tables, a boolean `SECURITY DEFINER` emptiness function owned by
-that role with a fixed `search_path` (EXECUTE revoked from PUBLIC, granted to the
-application role; it returns only the boolean, never row data), SELECT grants and a
-permissive `FOR SELECT TO ash_onetime_prune USING (true)` policy on the claims and payload
-tables, and the same on every payload child partition — children also inherit the parent's
-ENABLE/FORCE row-security settings and full policy set, at creation by `roll_partitions`
-and for existing children in the migration. The `DROP TABLE` itself needs table
-ownership, so in an RLS deployment the table owner drives cleanup.
+**Consumer pattern: owner-run maintenance on a schedule.** Partition maintenance runs as
+the schema owner (a CronJob using the migrator Secret is the established shape — the same
+login that runs migrations). An in-app Oban worker running as a non-owner role keeps
+claims/nonce cleanup working; every past partition it cannot prune is counted in
+`payload_partitions_kept` on the cleanup result and emitted as a
+`[:ash_onetime, :cleanup]` telemetry event with `result_class: :partitions_kept` (the
+Oban worker does not log counts itself — attach a telemetry handler to see them). If such
+a worker is all you run, set its `partition_limit: 0` and schedule the owner-run prune
+instead; a `:partitions_kept` event that never stops means the owner-run prune is
+misconfigured (wrong role, or something is blocking its DDL).
 
-Two hard requirements, enforced by the migration itself:
+Operational notes:
 
-- **The migrating role must differ from the application role.** Since PostgreSQL 16, a
-  non-superuser with CREATEROLE that creates `ash_onetime_prune` gets ADMIN on it and can
-  grant itself `SET` at any time — a shared migrating/application role could always become
-  the prune role and read every tenant. The migration grants the migrating role `SET` on
-  the prune role (to transfer the function's ownership) and refuses with a clear error
-  when `current_user` is the application role or when the application role holds `SET`,
-  `USAGE`, or `ADMIN` on the prune role.
-- **Creating the role needs CREATEROLE.** A migration run without it (when the role does
-  not yet exist) refuses clearly; creating the role and the function as a superuser
-  bootstrap is the alternative.
+- **Cleanup requires READ COMMITTED.** Under REPEATABLE READ the prune's snapshot predates
+  its lock, so a row committed while the lock waits would be invisible to the count;
+  cleanup refuses with `:unsupported_isolation` like every claim path.
+- **`roll_partitions` copies the parent's ENABLE/FORCE row-security settings and full
+  policy set onto every partition it creates.** Children are directly queryable by name
+  (a runtime role with default privileges holds SELECT on everything the owner creates),
+  so the copied policies are what keep a direct child read tenant-scoped. The store's own
+  writes go through the parent, whose policies govern.
+- **Children that already exist when you enable RLS must be brought in line once** —
+  the copy runs at creation, not retroactively. Include this in the same migration that
+  enables RLS on the parent (the `_default` partition and the install-time months
+  included):
 
-A consumer's own restrictive tenant policy must exempt the prune role, or the check fails
-closed with `:row_security_blocked`. Permissive policies (the default) compose with the
-prune policy as a union, which is the expected shape.
+  ```sql
+  DO $copy$
+  DECLARE r record; ddl text; roles text; cmd text; using_part text; check_part text;
+  BEGIN
+    FOR child_oid IN
+      SELECT c.oid FROM pg_inherits i
+      JOIN pg_class c ON c.oid = i.inhrelid
+      JOIN pg_class p ON p.oid = i.inhparent
+      JOIN pg_namespace n ON n.oid = p.relnamespace
+      WHERE n.nspname = 'your_schema' AND p.relname = 'ash_onetime_response_payloads'
+    LOOP
+      PERFORM format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', child_oid);
+      PERFORM format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', child_oid);
+      FOR r IN SELECT * FROM pg_policies
+               WHERE schemaname = 'your_schema'
+                 AND tablename = 'ash_onetime_response_payloads'
+      LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_policies
+                       WHERE schemaname = 'your_schema'
+                         AND tablename = (SELECT relname FROM pg_class WHERE oid = child_oid)
+                         AND policyname = r.policyname) THEN
+          roles := coalesce((SELECT string_agg(quote_ident(m), ', ') FROM unnest(r.roles) AS m), 'PUBLIC');
+          cmd := CASE r.cmd WHEN 'ALL' THEN '' ELSE 'FOR ' || r.cmd || ' ' END;
+          using_part := CASE WHEN r.qual IS NULL THEN '' ELSE 'USING (' || r.qual || ') ' END;
+          check_part := CASE WHEN r.with_check IS NULL THEN '' ELSE 'WITH CHECK (' || r.with_check || ')' END;
+          ddl := format('CREATE POLICY %I ON %s AS %s %s TO %s %s%s',
+                        r.policyname, child_oid, r.permissive, cmd, roles, using_part, check_part);
+          EXECUTE ddl;
+        END IF;
+      END LOOP;
+    END LOOP;
+  END
+  $copy$;
+  ```
+- **The `_default` partition is load-bearing for the prune's race safety**: an insert that
+  arrives while a partition is being dropped blocks, then routes there (dropping `_default`
+  converts that into an insert error — still fail-closed, but noisier).
+- **A DDL audit tool or event trigger that blocks `ALTER TABLE`** makes the prune keep
+  every partition (reported via `payload_partitions_kept`) without failing cleanup.
+
 
 ## Key rotation
 

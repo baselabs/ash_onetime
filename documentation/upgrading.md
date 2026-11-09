@@ -14,15 +14,18 @@ minor whose public capabilities you use and review this page on each minor bump:
 {:ash_onetime, "~> 1.9.0"}
 ```
 
-## v1.9.0 — RLS-safe payload prune (November 8, 2026)
+## v1.9.0 — RLS-safe payload prune (unreleased)
 
-Additive: no existing behavior changes and no consumer needs any migration. Cleanup's
-payload-partition prune no longer trusts a count that row-level security could have
-filtered: without the new option it fails closed with `:row_security_blocked` instead of
-dropping, and `mix ash_onetime.gen.migrations --rls-prune --app-role <role>` generates the
-dedicated NOLOGIN prune role and its SECURITY DEFINER emptiness function that make the
-prune correct under FORCE row-level security. See
-[Operations](operations.md#row-level-security).
+Cleanup's payload-partition prune decides `DROP TABLE` as the table owner inside a
+per-partition savepoint (an uncommitted `NO FORCE` plus an owner-exempt count), so no
+row-level-security configuration can narrow the count — see
+[Operations](operations.md#row-level-security). No consumer migration is required, and no
+role, function, or superuser bootstrap exists to install. Two behavior changes to review:
+cleanup now refuses to run outside READ COMMITTED (`:unsupported_isolation`), and a
+refused or kept partition no longer rolls back the claim and nonce deletes — the cleanup
+counts map gains `payload_partitions_kept`. The `:row_security_blocked` error code never
+shipped (it existed only on this unreleased line) and is gone; nothing else from 1.8.0
+changed.
 
 ## v1.8.0 — context boundaries (November 8, 2026)
 

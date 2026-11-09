@@ -2,18 +2,25 @@ defmodule AshOnetime.Store.RLSPruneTest do
   @moduledoc """
   The payload-partition prune under FORCE row-level security, on real PostgreSQL.
 
-  A superuser bypasses RLS, so every prune here runs over a connection whose
-  role is asserted to be neither superuser nor BYPASSRLS. Tier 1 (the filtering
-  defect and the fail-closed refusal) needs only that: the shared instance's
-  own non-superuser role owns the tables. Tier 2 (the dedicated prune role and
-  its function) also needs to create roles; it self-bootstraps when the main
-  role is superuser (CI, an ephemeral area run) and is skipped with instructions
-  otherwise — see .kimosabe/memory/test-substrate-and-ephemeral-area.md.
+  The prune decides DROP as the table owner inside a per-partition savepoint: an
+  exclusive lock, an OID re-check (plain heap child of this schema's payload
+  parent, owned by the driver), an uncommitted NO FORCE, and a count with
+  row_security disabled. An owner of an un-FORCEd relation is exempt before the
+  row_security check, so the count is unfiltered or errors — whatever policies
+  exist. No role, function, or superuser is involved.
+
+  A superuser bypasses RLS, so the owner-driven cells run on a non-superuser
+  CREATEROLE substrate (tier 2 below) that self-bootstraps when the main
+  connection is superuser (CI's containerized postgres, or an ephemeral area
+  run with ASH_ONETIME_RLS_PRUNE_TESTS=1) and is skipped with instructions
+  otherwise. Tier 1 (the fail-closed-keeps-cleanup and isolation-refusal
+  cells) needs only the shared instance's own non-superuser role.
   """
 
   use ExUnit.Case, async: false
 
   alias AshOnetime.Store.Postgres
+  alias AshOnetime.Store.Result
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
@@ -29,13 +36,12 @@ defmodule AshOnetime.Store.RLSPruneTest do
   end
 
   @tenant_setting "ash_onetime.tenant"
-  @prune_role "ash_onetime_prune"
 
-  # The function tier creates roles, which needs a superuser or CREATEROLE
-  # substrate: CI (its containerized postgres) and an ephemeral area run set
-  # ASH_ONETIME_RLS_PRUNE_TESTS=1; the shared dev instance leaves the tier
-  # skipped with instructions. A run that sets the variable on a substrate
-  # that cannot deliver fails loudly in rls_substrate!/1.
+  # The matrix tier creates roles, which needs a superuser or CREATEROLE
+  # substrate: CI (its containerized postgres sets ASH_ONETIME_RLS_PRUNE_TESTS=1)
+  # and an ephemeral area run with the variable exported; the shared dev
+  # instance leaves the tier skipped with instructions. A run that sets the
+  # variable on a substrate that cannot deliver fails loudly in rls_substrate!/1.
   @rls_prune_tier if System.get_env("ASH_ONETIME_RLS_PRUNE_TESTS") == "1",
                     do: [],
                     else: [
@@ -60,7 +66,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
     %{superuser?: superuser?, bypassrls?: bypassrls?, createrole?: createrole?}
   end
 
-  defp start_tenant_repo!(base_url, tenant) do
+  defp start_tenant_repo(base_url, tenant) do
     {:ok, repo} =
       Repo.start_link(
         name: nil,
@@ -102,12 +108,34 @@ defmodule AshOnetime.Store.RLSPruneTest do
     :ok
   end
 
+  defp base_url(%{privileged: true}), do: owner_url()
+  defp base_url(%{privileged: false}), do: database_url()
+
+  # A session whose every BEGIN is REPEATABLE READ (the startup-packet
+  # default), so cleanup's own transaction sees the wrong isolation.
+  defp start_rr_repo(base_url) do
+    {:ok, repo} =
+      Repo.start_link(
+        name: nil,
+        url: base_url,
+        pool: DBConnection.ConnectionPool,
+        pool_size: 1,
+        parameters: [{"default_transaction_isolation", "repeatable read"}]
+      )
+
+    Process.unlink(repo)
+    on_exit(fn -> stop_repo(repo) end)
+    repo
+  end
+
   # ------------------------------------------------------------------
-  # Tier 1 — the filtering defect and the fail-closed refusal
+  # Tier 1 — shared-instance cells
   # ------------------------------------------------------------------
 
-  @tag rls_prune_fail_closed_mutation: true
-  test "FORCE RLS must not let a tenant-filtered count drop another tenant's partition" do
+  @tag rls_partition_kept_mutation: true
+  @tag rls_prune_unforce_mutation: true
+  @tag rls_prune_count_mutation: true
+  test "tenant-session cleanup under FORCE RLS drops the empty partition, keeps the occupied one, and still deletes claims" do
     tier1 = tier1_substrate!()
     base_url = if(tier1.privileged, do: owner_url(), else: database_url())
 
@@ -115,11 +143,12 @@ defmodule AshOnetime.Store.RLSPruneTest do
     partition = partition_name(~D[2026-09-01])
     on_exit(fn -> drop_quietly(prefix) end)
 
-    # Tenant B's replay payload sits alone in a past-month partition. Cleanup
-    # for tenant A must never see that as an empty partition.
+    # Tenant B's replay payload sits alone in a past-month partition; tenant
+    # A's claim is past retention and eligible for cleanup.
     insert_payload!(prefix, partition, "tenant-b", ~D[2026-09-15])
+    insert_completed_claim!(prefix, "tenant-a", ~D[2026-09-10])
 
-    tenant_a = start_tenant_repo!(base_url, "tenant-a")
+    tenant_a = start_tenant_repo(base_url, "tenant-a")
 
     # The tier-1 substrate's connection may hold CREATEROLE (the privileged
     # owner role); what it must never hold is superuser or BYPASSRLS.
@@ -127,46 +156,57 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
     put_repo(tenant_a)
 
-    result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 1)
+    # On the shared instance the tenant session IS the table owner, so this is
+    # the owner-driven prune under a tenant context: the empty August sibling
+    # drops, tenant B's occupied partition is kept with FORCE restored, and
+    # the eligible claim is deleted in the same run (the F2 shape).
+    result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
 
     Repo.put_dynamic_repo(Repo)
 
-    assert partition_exists?(prefix, partition),
-           "cleanup dropped a partition that still held tenant B's payload"
+    assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} = result
+    assert partition_exists?(prefix, partition)
+    refute partition_exists?(prefix, partition_name(~D[2026-08-01]))
+    assert force_flagged?(prefix, partition)
 
-    assert %{reason: :row_security_blocked} = result
+    assert scalar!(
+             tenant_a,
+             "SELECT count(*) FROM #{prefix}.\"ash_onetime_idempotency_claims\"",
+             []
+           ) ==
+             0
 
-    tenant_b = start_tenant_repo!(base_url, "tenant-b")
-    count = scalar!(tenant_b, "SELECT count(*) FROM #{prefix}.\"#{partition}\"", [])
-    assert count == 1
+    tenant_b = start_tenant_repo(base_url, "tenant-b")
+    assert scalar!(tenant_b, "SELECT count(*) FROM #{prefix}.\"#{partition}\"", []) == 1
 
     stop_repo(tenant_a)
     stop_repo(tenant_b)
     tier1_takedown(tier1)
   end
 
-  @tag rls_prune_fail_closed_mutation: true
-  test "a partition with no rows at all still refuses: a filtered count is never trusted" do
+  @tag rls_isolation_precondition_mutation: true
+  test "cleanup refuses when its transaction is not READ COMMITTED" do
     tier1 = tier1_substrate!()
-    base_url = if(tier1.privileged, do: owner_url(), else: database_url())
 
     %{prefix: prefix} = install_rls_store!(tier1)
     partition = partition_name(~D[2026-09-01])
+    insert_payload!(prefix, partition, "tenant-b", ~D[2026-09-15])
     on_exit(fn -> drop_quietly(prefix) end)
 
-    tenant_a = start_tenant_repo!(base_url, "tenant-a")
-    put_repo(tenant_a)
+    # A stale REPEATABLE READ snapshot would read a partition empty even after
+    # a row committed while the prune's lock waited (the F1 race the design
+    # probe demonstrated live), so cleanup must refuse like every claim path.
+    # The session-level default puts cleanup's own BEGIN at REPEATABLE READ.
+    rr_repo = start_rr_repo(base_url(tier1))
+    put_repo(rr_repo)
 
     result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 1)
 
     Repo.put_dynamic_repo(Repo)
 
-    # The unfiltered partition holds no rows, but the closed refusal still
-    # wins: a filtered count is never trusted, even when it happens to be
-    # right. The dedicated-function tier below is the sanctioned prune.
-    assert %{reason: :row_security_blocked} = result
+    assert %Result{reason: :unsupported_isolation} = result
     assert partition_exists?(prefix, partition)
-    stop_repo(tenant_a)
+    stop_repo(rr_repo)
     tier1_takedown(tier1)
   end
 
@@ -189,6 +229,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
   end
 
   defp owner_url, do: Process.get({__MODULE__, :owner_url})
+  defp app_url, do: Process.get({__MODULE__, :app_url})
 
   defp tier1_takedown(%{privileged: false}), do: :ok
 
@@ -196,15 +237,58 @@ defmodule AshOnetime.Store.RLSPruneTest do
     stop_repo(install_repo)
   end
 
+  @tag rls_child_policy_copy_mutation: true
+  test "a rolled child carries the parent's policies, so a direct tenant read stays scoped" do
+    tier1 = tier1_substrate!()
+    base_url = base_url(tier1)
+
+    %{prefix: prefix} = install_rls_store!(tier1)
+    on_exit(fn -> drop_quietly(prefix) end)
+
+    # roll_partitions (the library path) creates a child beyond the install
+    # window; the copy under test is Postgres.copy_parent_row_security/3.
+    put_repo(tier1.install_repo)
+    {:ok, _} = Postgres.roll_partitions(Postgres.for_repo(Repo, prefix), 15)
+    Repo.put_dynamic_repo(Repo)
+
+    child = partition_name(shift_months(Date.beginning_of_month(Date.utc_today()), 14))
+    assert partition_exists?(prefix, child)
+
+    child_date = shift_months(Date.utc_today(), 14)
+
+    for tenant <- ["tenant-a", "tenant-b"] do
+      session = start_tenant_repo(base_url, tenant)
+
+      query!(
+        session,
+        "INSERT INTO \"#{prefix}\".\"ash_onetime_response_payloads\" VALUES ($1, $2, $3::uuid, $4)",
+        [tenant, child_date, Ecto.UUID.dump!(Ecto.UUID.generate()), <<0, 1>>]
+      )
+
+      stop_repo(session)
+    end
+
+    # A direct, by-name read of the child: each tenant session sees exactly
+    # its own rows. Without the copied policies the child would answer every
+    # session with a default deny (or, un-RLS-ed, with every tenant's rows).
+    for tenant <- ["tenant-a", "tenant-b"] do
+      session = start_tenant_repo(base_url, tenant)
+      assert scalar!(session, "SELECT count(*) FROM \"#{prefix}\".\"#{child}\"", []) == 1
+      stop_repo(session)
+    end
+
+    tier1_takedown(tier1)
+  end
+
   # ------------------------------------------------------------------
-  # Tier 2 — the dedicated prune role and its function
+  # Tier 2 — the owner-savepoint matrix
   # ------------------------------------------------------------------
 
-  describe "with the --rls-prune function" do
+  describe "owner-driven prune" do
     @tag @rls_prune_tier
-    test "an empty partition drops and another tenant's partition survives" do
+    test "an empty partition drops and an occupied one survives, under benign FORCE RLS" do
       substrate = rls_substrate!()
-      %{prefix: prefix} = install_rls_store_with_function!(install_context(substrate))
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
 
       empty_partition = partition_name(~D[2026-09-01])
       occupied_partition = partition_name(~D[2026-08-01])
@@ -212,15 +296,16 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
       put_repo(substrate.owner_repo)
 
-      assert {:ok, %{payload_partitions: 1}} =
+      assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} =
                Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
 
       Repo.put_dynamic_repo(Repo)
 
       refute partition_exists?(prefix, empty_partition)
       assert partition_exists?(prefix, occupied_partition)
+      assert force_flagged?(prefix, occupied_partition)
 
-      tenant_b = start_tenant_repo!(owner_url(), "tenant-b")
+      tenant_b = start_tenant_repo(owner_url(), "tenant-b")
 
       assert scalar!(tenant_b, "SELECT count(*) FROM #{prefix}.\"#{occupied_partition}\"", []) ==
                1
@@ -229,117 +314,24 @@ defmodule AshOnetime.Store.RLSPruneTest do
     end
 
     @tag @rls_prune_tier
-    test "a child partition created by roll_partitions after the policies inherits them" do
+    test "restrictive tenant policies keep the occupied partition and drop the empty sibling" do
       substrate = rls_substrate!()
-      %{prefix: prefix} = install_rls_store_with_function!(install_context(substrate))
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
 
-      put_repo(substrate.owner_repo)
+      empty_partition = partition_name(~D[2026-09-01])
+      occupied_partition = partition_name(~D[2026-08-01])
+      insert_payload!(prefix, occupied_partition, "tenant-b", ~D[2026-08-15])
 
-      {:ok, _} = Postgres.roll_partitions(Postgres.for_repo(Repo, prefix), 15)
-
-      Repo.put_dynamic_repo(Repo)
-
-      # roll_partitions only creates the current month forward, so prove the
-      # inheritance directly: the fresh child carries the parent's ENABLE and
-      # FORCE row-security settings, every parent policy (the prune policy
-      # included), and the prune role's SELECT grant.
-      # Beyond the install migration's 13-month window, so the child is
-      # genuinely created by this roll.
-      child = partition_name(shift_months(Date.beginning_of_month(Date.utc_today()), 14))
-
-      assert partition_exists?(prefix, child)
-
-      flags =
-        scalar_rows!(
-          Repo,
-          "SELECT relrowsecurity, relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2",
-          [prefix, child]
-        )
-
-      assert flags == [[true, true]]
-
-      inherited =
-        scalar_rows!(
-          Repo,
-          "SELECT policyname FROM pg_policies WHERE schemaname = $1 AND tablename = $2 ORDER BY 1",
-          [prefix, child]
-        )
-
-      assert ["ash_onetime_prune_select", "tenant_isolation"] = Enum.map(inherited, &hd/1)
-
-      # And the function counts a tenant-B row in that child as non-empty,
-      # reading through the inherited prune policy as the application role.
-      insert_payload!(prefix, child, "tenant-b", shift_months(Date.utc_today(), 14))
-      tenant_b = start_tenant_repo!(owner_url(), "tenant-b")
-      assert scalar!(tenant_b, "SELECT count(*) FROM #{prefix}.\"#{child}\"", []) == 1
-      stop_repo(tenant_b)
-
-      app = start_tenant_repo!(Process.get({__MODULE__, :app_url}), "tenant-a")
-
-      empty? =
-        scalar!(
-          app,
-          "SELECT #{prefix}.ash_onetime_partition_empty($1, $2, $3)",
-          ["\"#{prefix}\".\"#{child}\"", ~D[2026-01-01], ~D[2027-01-01]]
-        )
-
-      assert empty? == false
-      stop_repo(app)
-    end
-
-    @tag @rls_prune_tier
-    test "the application role cannot become or read through the prune role" do
-      substrate = rls_substrate!()
-      install_rls_store_with_function!(install_context(substrate))
-
-      # pg_has_role knows MEMBER/USAGE/SET; the admin option shows up as a
-      # pg_auth_members row, so assert no membership row exists at all.
-      set =
-        scalar!(substrate.bootstrap_repo, "SELECT pg_has_role($1, $2, 'SET')", [
-          substrate.app_role,
-          @prune_role
-        ])
-
-      usage =
-        scalar!(substrate.bootstrap_repo, "SELECT pg_has_role($1, $2, 'USAGE')", [
-          substrate.app_role,
-          @prune_role
-        ])
-
-      member_rows =
-        scalar!(
-          substrate.bootstrap_repo,
-          """
-          SELECT count(*) FROM pg_auth_members m
-          JOIN pg_roles pr ON pr.oid = m.roleid
-          JOIN pg_roles ap ON ap.oid = m.member
-          WHERE pr.rolname = $1 AND ap.rolname = $2
-          """,
-          [@prune_role, substrate.app_role]
-        )
-
-      refute set
-      refute usage
-      assert member_rows == 0
-
-      assert_raise Postgrex.Error, ~r/permission denied to set role/i, fn ->
-        SQL.query!(substrate.app_repo, "SET ROLE #{@prune_role}", [])
-      end
-    end
-
-    @tag @rls_prune_tier
-    test "a restrictive tenant policy fails the prune closed instead of miscounting" do
-      substrate = rls_substrate!()
-      %{prefix: prefix} = install_rls_store_with_function!(install_context(substrate))
-      occupied = partition_name(~D[2026-08-01])
-      insert_payload!(prefix, occupied, "tenant-b", ~D[2026-08-15])
-
-      # A consumer's tenant isolation hardened as RESTRICTIVE on the claims
-      # table, the payload parent, and the partition. The prune role's
-      # permissive USING (true) policy is only ORed with permissive policies;
-      # the restrictive one is ANDed in, so the function's counts would see
-      # only the current tenant. The function must refuse to count instead.
-      for table <- ["ash_onetime_idempotency_claims", "ash_onetime_response_payloads", occupied] do
+      # The adversarial shape from the i-1 rounds: a RESTRICTIVE tenant policy
+      # ANDed into any count. Under the owner-savepoint prune it is simply
+      # irrelevant — the owner of an un-FORCEd relation is exempt before any
+      # policy is consulted.
+      for table <-
+            [
+              "ash_onetime_idempotency_claims",
+              "ash_onetime_response_payloads",
+              occupied_partition
+            ] do
         query!(
           substrate.owner_repo,
           """
@@ -353,103 +345,289 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
       put_repo(substrate.owner_repo)
 
-      result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+      assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} =
+               Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
 
       Repo.put_dynamic_repo(Repo)
 
-      assert %{reason: :row_security_blocked} = result
-      assert partition_exists?(prefix, occupied)
+      refute partition_exists?(prefix, empty_partition)
+      assert partition_exists?(prefix, occupied_partition)
+      # The rollback-to-savepoint restored FORCE on the kept partition.
+      assert force_flagged?(prefix, occupied_partition)
+    end
 
-      tenant_b = start_tenant_repo!(owner_url(), "tenant-b")
-      assert scalar!(tenant_b, "SELECT count(*) FROM #{prefix}.\"#{occupied}\"", []) == 1
+    @tag @rls_prune_tier
+    test "a child with no permissive policy for anyone still decides by row count" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+
+      empty_partition = partition_name(~D[2026-09-01])
+      occupied_partition = partition_name(~D[2026-08-01])
+      insert_payload!(prefix, occupied_partition, "tenant-b", ~D[2026-08-15])
+
+      # The default-deny shape that made the old catalog guard read "empty":
+      # the occupied child carries RLS but no policy at all.
+      query!(
+        substrate.owner_repo,
+        "DROP POLICY tenant_isolation ON \"#{prefix}\".\"#{occupied_partition}\"",
+        []
+      )
+
+      put_repo(substrate.owner_repo)
+
+      assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} =
+               Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+
+      Repo.put_dynamic_repo(Repo)
+
+      refute partition_exists?(prefix, empty_partition)
+      assert partition_exists?(prefix, occupied_partition)
+      assert force_flagged?(prefix, occupied_partition)
+    end
+
+    @tag @rls_prune_tier
+    test "a sub-partitioned child is refused; its plain sibling drops" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+
+      empty_partition = partition_name(~D[2026-09-01])
+      nested = partition_name(~D[2026-08-01])
+
+      # Replace the plain August child with a sub-partitioned one holding
+      # tenant B's row in a leaf. relkind 'p' must refuse (pg_relation_size
+      # style emptiness shortcuts would read it as empty; FDW children would
+      # count through a foreign server).
+      query!(
+        substrate.owner_repo,
+        "DROP TABLE \"#{prefix}\".\"#{nested}\"",
+        []
+      )
+
+      query!(
+        substrate.owner_repo,
+        """
+        CREATE TABLE "#{prefix}"."#{nested}"
+        PARTITION OF "#{prefix}"."ash_onetime_response_payloads"
+        FOR VALUES FROM ('2026-08-01') TO ('2026-09-01') PARTITION BY LIST (logical_partition)
+        """,
+        []
+      )
+
+      query!(
+        substrate.owner_repo,
+        """
+        CREATE TABLE "#{prefix}"."#{nested}_b" PARTITION OF "#{prefix}"."#{nested}"
+        FOR VALUES IN ('tenant-b')
+        """,
+        []
+      )
+
+      insert_payload!(prefix, "#{nested}_b", "tenant-b", ~D[2026-08-15])
+
+      put_repo(substrate.owner_repo)
+
+      assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} =
+               Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+
+      Repo.put_dynamic_repo(Repo)
+
+      refute partition_exists?(prefix, empty_partition)
+      assert partition_exists?(prefix, nested)
+
+      tenant_b = start_tenant_repo(owner_url(), "tenant-b")
+
+      assert scalar!(tenant_b, "SELECT count(*) FROM #{prefix}.\"#{nested}_b\"", []) == 1
+
       stop_repo(tenant_b)
     end
 
     @tag @rls_prune_tier
-    test "a partition_name that is not a payload child is refused" do
+    test "a non-owner driver keeps every partition and still deletes claims" do
       substrate = rls_substrate!()
-      %{prefix: prefix} = install_rls_store_with_function!(install_context(substrate))
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
 
-      app = start_tenant_repo!(Process.get({__MODULE__, :app_url}), "tenant-a")
+      empty_partition = partition_name(~D[2026-09-01])
+      occupied_partition = partition_name(~D[2026-08-01])
+      insert_payload!(prefix, occupied_partition, "tenant-b", ~D[2026-08-15])
+      insert_completed_claim!(prefix, "tenant-a", ~D[2026-08-10])
 
-      assert_raise Postgrex.Error,
-                   ~r/row-level security|not a payload partition/,
-                   fn ->
-                     SQL.query!(
-                       app,
-                       "SELECT #{prefix}.ash_onetime_partition_empty($1, $2, $3)",
-                       [
-                         "\"#{prefix}\".\"ash_onetime_idempotency_claims\"",
-                         ~D[2026-08-01],
-                         ~D[2026-09-01]
-                       ]
-                     )
-                   end
+      app = start_tenant_repo(app_url(), "tenant-a")
+      put_repo(app)
+
+      result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+
+      Repo.put_dynamic_repo(Repo)
+
+      # Not the owner: both partitions are kept with a reason and — the F2
+      # fix — the run succeeds and the eligible claim is gone.
+      assert {:ok, %{payload_partitions: 0, payload_partitions_kept: 2}} = result
+      assert partition_exists?(prefix, empty_partition)
+      assert partition_exists?(prefix, occupied_partition)
+
+      assert scalar!(app, "SELECT count(*) FROM #{prefix}.\"ash_onetime_idempotency_claims\"", []) ==
+               0
 
       stop_repo(app)
     end
 
     @tag @rls_prune_tier
-    test "EXECUTE is revoked from PUBLIC and granted only to the application role" do
+    @tag rls_error_to_kept_mutation: true
+    test "an event trigger blocking ALTER TABLE keeps partitions and fails nothing" do
       substrate = rls_substrate!()
-      %{prefix: prefix} = install_rls_store_with_function!(install_context(substrate))
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
 
-      # has_function_privilege's OID form: the text form parses double quotes
-      # as part of the name.
-      privileges =
-        "SELECT has_function_privilege($1, (SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'ash_onetime_partition_empty' AND n.nspname = $2), 'EXECUTE')"
+      empty_partition = partition_name(~D[2026-09-01])
 
-      assert scalar!(Repo, privileges, [substrate.app_role, prefix]) == true
+      put_repo(substrate.owner_repo)
 
-      # Any third role: PUBLIC must not hold EXECUTE.
-      third = "ash_onetime_rls_third_#{System.unique_integer([:positive])}"
-      SQL.query!(Repo, "CREATE ROLE #{third} LOGIN", [])
-
-      on_exit(fn -> drop_role_quietly(Repo, third) end)
-
-      assert scalar!(Repo, privileges, [third, prefix]) == false
-    end
-
-    @tag @rls_prune_tier
-    test "the migration refuses to run as the application role" do
-      substrate = rls_substrate!()
-      installed = install_rls_store_with_function!(install_context(substrate), run_rls: false)
-      %{prefix: prefix, facts: facts} = installed
-
-      Repo.put_dynamic_repo(substrate.app_repo)
-
-      assert_refusal("must not be the application role", fn ->
-        Ecto.Migrator.up(Repo, facts.version, facts.module, prefix: prefix, log: false)
-      end)
-
-      Repo.put_dynamic_repo(Repo)
-      assert function_exists?(substrate.bootstrap_repo, prefix) == false
-    end
-
-    @tag @rls_prune_tier
-    test "the migration refuses when the application role holds SET on the prune role" do
-      substrate = rls_substrate!()
-      installed = install_rls_store_with_function!(install_context(substrate), run_rls: false)
-      %{prefix: prefix, facts: facts} = installed
-
-      # The role must exist for the pre-grant; the owner creates it, so it
-      # holds ADMIN and can grant the application role SET.
-      SQL.query!(substrate.owner_repo, "CREATE ROLE #{@prune_role} NOLOGIN", [])
-
-      SQL.query!(
-        substrate.owner_repo,
-        "GRANT #{@prune_role} TO #{substrate.app_role} WITH INHERIT FALSE, SET TRUE",
+      query!(
+        Repo,
+        """
+        CREATE FUNCTION "#{prefix}".block_ddl() RETURNS event_trigger
+        LANGUAGE plpgsql AS $b$ BEGIN RAISE EXCEPTION 'DDL blocked'; END $b$
+        """,
         []
       )
 
-      Repo.put_dynamic_repo(substrate.owner_repo)
+      query!(
+        Repo,
+        """
+        CREATE EVENT TRIGGER ash_onetime_test_no_alter ON ddl_command_start
+        WHEN TAG IN ('ALTER TABLE') EXECUTE FUNCTION "#{prefix}".block_ddl()
+        """,
+        []
+      )
 
-      assert_refusal("SET, USAGE, or ADMIN", fn ->
-        Ecto.Migrator.up(Repo, facts.version, facts.module, prefix: prefix, log: false)
+      on_exit(fn ->
+        _ = SQL.query(Repo, "DROP EVENT TRIGGER IF EXISTS ash_onetime_test_no_alter", [])
+        :ok
       end)
 
+      assert {:ok, %{payload_partitions: 0, payload_partitions_kept: 2}} =
+               Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+
       Repo.put_dynamic_repo(Repo)
-      assert function_exists?(substrate.bootstrap_repo, prefix) == false
+
+      # Both past partitions were installed empty; both are kept under the
+      # DDL block, and FORCE was restored on each by the savepoint rollback.
+      assert partition_exists?(prefix, empty_partition)
+      assert partition_exists?(prefix, partition_name(~D[2026-08-01]))
+      assert force_flagged?(prefix, empty_partition)
+    end
+
+    @tag @rls_prune_tier
+    test "an insert committed while the prune waits is counted, not dropped" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+
+      occupied_partition = partition_name(~D[2026-08-01])
+      insert_payload!(prefix, occupied_partition, "tenant-b", ~D[2026-08-15])
+
+      # The racer targets the EMPTY September sibling — the discriminating
+      # shape: if the lock-and-count ordering were broken, the count would
+      # read zero while the insert is in flight and the DROP would destroy
+      # the committed row. With the lock, the commit lands first, the fresh
+      # count sees it, and the partition is kept with the row intact.
+      empty_partition = partition_name(~D[2026-09-01])
+      racer = start_tenant_repo(owner_url(), "tenant-c")
+
+      racer_task =
+        Task.async(fn ->
+          # The insert runs through the parent (the store's only write path)
+          # and holds its transaction open. The query addresses the repo PID
+          # explicitly — the same shape the store's dispatched queries use,
+          # so it joins the racer's transaction connection.
+          previous = Repo.get_dynamic_repo()
+          Repo.put_dynamic_repo(racer)
+
+          result =
+            Repo.transaction(fn ->
+              query!(
+                racer,
+                "INSERT INTO \"#{prefix}\".\"ash_onetime_response_payloads\" VALUES ($1, $2, $3::uuid, $4)",
+                ["tenant-c", ~D[2026-09-20], Ecto.UUID.dump!(Ecto.UUID.generate()), <<0, 1>>]
+              )
+
+              Process.sleep(600)
+            end)
+
+          Repo.put_dynamic_repo(previous)
+          result
+        end)
+
+      Process.sleep(150)
+
+      put_repo(substrate.owner_repo)
+
+      result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+
+      Repo.put_dynamic_repo(Repo)
+      {:ok, _} = Task.await(racer_task, 5_000)
+
+      assert {:ok, %{payload_partitions: 0, payload_partitions_kept: 2}} = result
+      assert partition_exists?(prefix, occupied_partition)
+      assert partition_exists?(prefix, empty_partition)
+      assert scalar!(Repo, "SELECT count(*) FROM #{prefix}.\"#{empty_partition}\"", []) == 1
+
+      stop_repo(racer)
+    end
+
+    @tag @rls_prune_tier
+    test "a default-privileged runtime role reads a rolled child directly and sees only its tenant" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+
+      put_repo(substrate.owner_repo)
+
+      # The two-login model: the runtime role gets USAGE on the schema, SELECT
+      # on the parent tables (for normal traffic), and — altered BY the owner,
+      # because default privileges bind to the grantor — SELECT on everything
+      # the owner creates from now on. Children are then directly queryable by
+      # name; without child-level policies that is a cross-tenant read (the
+      # class of leak i-1 proved November 8).
+      query!(Repo, ~s{GRANT USAGE ON SCHEMA "#{prefix}" TO #{substrate.app_role}}, [])
+
+      for table <- ["ash_onetime_idempotency_claims", "ash_onetime_response_payloads"] do
+        query!(Repo, ~s{GRANT SELECT ON "#{prefix}"."#{table}" TO #{substrate.app_role}}, [])
+      end
+
+      query!(
+        substrate.owner_repo,
+        ~s{ALTER DEFAULT PRIVILEGES IN SCHEMA "#{prefix}" GRANT SELECT ON TABLES TO #{substrate.app_role}},
+        []
+      )
+
+      {:ok, _} = Postgres.roll_partitions(Postgres.for_repo(Repo, prefix), 15)
+
+      Repo.put_dynamic_repo(Repo)
+
+      child = partition_name(shift_months(Date.beginning_of_month(Date.utc_today()), 14))
+      assert partition_exists?(prefix, child)
+
+      tenant_a = start_tenant_repo(app_url(), "tenant-a")
+      tenant_b = start_tenant_repo(app_url(), "tenant-b")
+
+      for tenant <- [tenant_a, tenant_b] do
+        query!(
+          tenant,
+          "INSERT INTO \"#{prefix}\".\"ash_onetime_response_payloads\" VALUES ($1, $2, $3::uuid, $4)",
+          [
+            if(tenant == tenant_a, do: "tenant-a", else: "tenant-b"),
+            shift_months(Date.utc_today(), 14),
+            Ecto.UUID.dump!(Ecto.UUID.generate()),
+            <<0, 1>>
+          ]
+        )
+      end
+
+      # Direct, by-name reads of the child: each runtime session sees exactly
+      # its own tenant's rows. The superuser (unfiltered by policy) sees both.
+      assert scalar!(tenant_a, "SELECT count(*) FROM \"#{prefix}\".\"#{child}\"", []) == 1
+      assert scalar!(tenant_b, "SELECT count(*) FROM \"#{prefix}\".\"#{child}\"", []) == 1
+      assert scalar!(Repo, "SELECT count(*) FROM \"#{prefix}\".\"#{child}\"", []) == 2
+
+      stop_repo(tenant_a)
+      stop_repo(tenant_b)
     end
   end
 
@@ -459,25 +637,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
   defp database_url do
     Application.fetch_env!(:ash_onetime, Repo)[:url]
-  end
-
-  # The migrator surfaces its failures as raises inside its task or as
-  # {:error, error} returns depending on the path; accept either.
-  defp assert_refusal(expected, fun) do
-    outcome =
-      try do
-        {:returned, fun.()}
-      rescue
-        e -> {:raised, e}
-      end
-
-    message =
-      case outcome do
-        {:raised, %Postgrex.Error{postgres: %{message: message}}} -> message
-        {:returned, {:error, %Postgrex.Error{postgres: %{message: message}}}} -> message
-      end
-
-    assert message =~ expected
   end
 
   defp database_name do
@@ -569,6 +728,13 @@ defmodule AshOnetime.Store.RLSPruneTest do
      }}
   end
 
+  # Rebuilds a login URL's userinfo for an ad-hoc role created by this test:
+  # the password was generated with random_password/0 and minted into the
+  # role above, so the URL never leaves the process dictionary.
+  defp credential(role) do
+    "#{role}:#{URI.encode_www_form(Process.get({__MODULE__, :bare_password}))}"
+  end
+
   defp random_password do
     :crypto.strong_rand_bytes(18) |> Base.url_encode64(padding: false)
   end
@@ -585,6 +751,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
     Enum.each(result.rows, fn [namespace] ->
       _ = SQL.query(Repo, ~s{DROP SCHEMA IF EXISTS "#{namespace}" CASCADE}, [])
+      _ = SQL.query(Repo, "DROP EVENT TRIGGER IF EXISTS ash_onetime_test_no_alter", [])
     end)
 
     # Leftover owner/app roles from an aborted run on a long-lived instance
@@ -608,8 +775,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
       drop_role_quietly(Repo, role)
     end)
-
-    drop_role_quietly(Repo, @prune_role)
   end
 
   defp drop_role_quietly(repo, role) do
@@ -628,10 +793,10 @@ defmodule AshOnetime.Store.RLSPruneTest do
   # ------------------------------------------------------------------
 
   defp install_rls_store!(tier1) do
-    install_rls_store_with_function!(tier1)
+    install_rls_store_with_matrix!(tier1)
   end
 
-  defp install_rls_store_with_function!(context, options \\ []) do
+  defp install_rls_store_with_matrix!(context) do
     unique = Ecto.UUID.generate() |> String.replace("-", "")
     prefix = "ash_onetime_rls_#{unique}"
     temporary = Path.join(System.tmp_dir!(), "ash_onetime_rls_#{unique}")
@@ -639,43 +804,36 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
     Mix.Task.reenable("ash_onetime.gen.migrations")
 
-    arguments =
-      ["--repo", inspect(Repo), "--migrations-path", migrations, "--timestamp", "20261108000000"] ++
-        if(app_role = context[:app_role],
-          do: ["--rls-prune", "--app-role", app_role],
-          else: []
-        )
+    arguments = [
+      "--repo",
+      inspect(Repo),
+      "--migrations-path",
+      migrations,
+      "--timestamp",
+      "20261109000000"
+    ]
 
     GenerateMigrations.run(arguments)
 
     [install_path] = Path.wildcard(Path.join(migrations, "*_install_ash_onetime.exs"))
     [{install_module, _}] = Code.compile_file(install_path)
-    install_version = 2_026_110_800_000
-
-    rls_facts =
-      if context[:app_role] do
-        [rls_path] = Path.wildcard(Path.join(migrations, "*_ash_onetime_rls_prune.exs"))
-        [{rls_module, _}] = Code.compile_file(rls_path)
-        %{module: rls_module, version: 2_026_110_800_001}
-      end
+    install_version = 2_026_110_900_000
 
     install_repo = context[:install_repo] || Repo
 
     try do
       provision_schema!(context, install_repo, prefix)
-      migrate!(install_repo, prefix, install_version, install_module, rls_facts, options)
+      :ok = Ecto.Migrator.up(Repo, install_version, install_module, prefix: prefix, log: false)
       harden_row_security!(context, install_repo, prefix)
 
-      Map.merge(context, %{prefix: prefix, temporary: temporary, facts: rls_facts})
+      Map.merge(context, %{prefix: prefix, temporary: temporary})
     after
       Repo.put_dynamic_repo(Repo)
     end
   end
 
-  # The migrating role owns its schema (as in a real consumer install), so it
-  # can grant the prune role the CREATE the ownership transfer requires; it
-  # needs CREATE on the database to create the schema.
-  # The shared instance's own role creates its schema directly.
+  # The migrating role owns its schema (as in a real consumer install). The
+  # shared instance's own role creates its schema directly.
   defp provision_schema!(_context, Repo, prefix) do
     query!(Repo, ~s{CREATE SCHEMA "#{prefix}"}, [])
   end
@@ -689,26 +847,17 @@ defmodule AshOnetime.Store.RLSPruneTest do
     Repo.put_dynamic_repo(Repo)
     query!(Repo, ~s{GRANT USAGE ON SCHEMA "#{prefix}" TO #{owner_role}}, [])
 
-    # CREATE too: the refusal tests still need the migrator to reach the
-    # migration's own guards (Ecto writes schema_migrations first).
+    # The runtime role needs schema USAGE for every object it touches — the
+    # two-login model includes it alongside the default privileges.
     if context[:app_role] do
-      query!(Repo, ~s{GRANT USAGE, CREATE ON SCHEMA "#{prefix}" TO #{context.app_role}}, [])
+      query!(Repo, ~s{GRANT USAGE ON SCHEMA "#{prefix}" TO #{context.app_role}}, [])
     end
 
     Repo.put_dynamic_repo(install_repo)
   end
 
-  defp migrate!(_install_repo, prefix, install_version, install_module, rls_facts, options) do
-    :ok = Ecto.Migrator.up(Repo, install_version, install_module, prefix: prefix, log: false)
-
-    if rls_facts && options[:run_rls] != false do
-      :ok =
-        Ecto.Migrator.up(Repo, rls_facts.version, rls_facts.module, prefix: prefix, log: false)
-    end
-  end
-
   # FORCE row-level security with a per-tenant policy, past-month partitions,
-  # and (when present) the application role's ordinary DML over the store.
+  # and the application role's ordinary DML over the store.
   defp harden_row_security!(context, install_repo, prefix) do
     Repo.put_dynamic_repo(Repo)
 
@@ -770,6 +919,9 @@ defmodule AshOnetime.Store.RLSPruneTest do
     name
   end
 
+  # The install-side twin of Postgres.copy_parent_row_security/3: children
+  # are directly queryable by name, so they carry the parent's flags and
+  # policies. This is the two-login isolation the b-1 change pins.
   defp copy_parent_rls!(repo, prefix, child) do
     query!(
       repo,
@@ -784,13 +936,10 @@ defmodule AshOnetime.Store.RLSPruneTest do
         check_part text;
         ddl text;
       BEGIN
-        PERFORM format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', child_oid);
-        PERFORM format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', child_oid);
-
-        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ash_onetime_prune') THEN
-          ddl := 'GRANT SELECT ON ' || child_oid || ' TO ash_onetime_prune';
-          EXECUTE ddl;
-        END IF;
+        ddl := format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', child_oid);
+        EXECUTE ddl;
+        ddl := format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', child_oid);
+        EXECUTE ddl;
 
         FOR r IN
           SELECT * FROM pg_policies
@@ -830,7 +979,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
   end
 
   defp insert_payload!(prefix, partition, logical_partition, date) do
-    tenant_repo = start_tenant_repo!(database_url(), logical_partition)
+    tenant_repo = start_tenant_repo(database_url(), logical_partition)
 
     query!(
       tenant_repo,
@@ -840,6 +989,44 @@ defmodule AshOnetime.Store.RLSPruneTest do
       VALUES ($1, $2, $3::uuid, $4)
       """,
       [logical_partition, date, Ecto.UUID.dump!(Ecto.UUID.generate()), <<0, 1, 2, 3>>]
+    )
+
+    stop_repo(tenant_repo)
+    :ok
+  end
+
+  # A completed claim past its retention horizon, with the one payload row
+  # the delete-guard trigger demands on deletion. The insert path here is
+  # direct SQL with Elixir-side hashes (the store would mint real ones we do
+  # not need for cleanup).
+  defp insert_completed_claim!(prefix, logical_partition, response_partition_date) do
+    tenant_repo = start_tenant_repo(database_url(), logical_partition)
+    claim_id = Ecto.UUID.dump!(Ecto.UUID.generate())
+    hash = :crypto.hash(:sha256, claim_id)
+
+    query!(
+      tenant_repo,
+      """
+      INSERT INTO "#{prefix}"."ash_onetime_idempotency_claims"
+        (id, logical_partition, operation_hash, scope_hash, key_hash, fingerprint, state,
+         response_partition, response_codec, response_digest, admitted_at, retain_until, inserted_at)
+      VALUES ($1::uuid, $2, $3, $3, $3, $3, 'complete',
+              $4::date, 'json', $3,
+              transaction_timestamp() - interval '2 hours',
+              transaction_timestamp() - interval '1 hour',
+              transaction_timestamp() - interval '2 hours')
+      """,
+      [claim_id, logical_partition, hash, response_partition_date]
+    )
+
+    query!(
+      tenant_repo,
+      """
+      INSERT INTO "#{prefix}"."ash_onetime_response_payloads"
+        (logical_partition, partition_date, claim_id, encoded_response)
+      VALUES ($1, $2::date, $3::uuid, $4)
+      """,
+      [logical_partition, response_partition_date, claim_id, <<0, 1, 2, 3>>]
     )
 
     stop_repo(tenant_repo)
@@ -867,18 +1054,16 @@ defmodule AshOnetime.Store.RLSPruneTest do
     result.rows == [[true]]
   end
 
-  defp function_exists?(repo, prefix) do
+  defp force_flagged?(prefix, partition) do
     result =
       SQL.query!(
-        repo,
+        Repo,
         """
-        SELECT EXISTS (
-          SELECT 1 FROM pg_proc p
-          JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE p.proname = 'ash_onetime_partition_empty' AND n.nspname = $1
-        )
+        SELECT c.relforcerowsecurity
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = $2
         """,
-        [prefix]
+        [prefix, partition]
       )
 
     result.rows == [[true]]
@@ -888,11 +1073,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
     result = SQL.query!(repo, sql, params)
     [[value]] = result.rows
     value
-  end
-
-  defp scalar_rows!(repo, sql, params) do
-    result = SQL.query!(repo, sql, params)
-    result.rows
   end
 
   defp drop_quietly(prefix) do

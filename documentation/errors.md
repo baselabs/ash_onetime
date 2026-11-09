@@ -123,7 +123,6 @@ mis-categorize them; the per-code HTTP below overrides the `:invalid` class.
 | `:response_completion_failed` | **500** | Response completion failed. |
 | `:admission_request_invalid` | **500** | The admission request is internally invalid. |
 | `:admission_unavailable` | **503** | Admission is unavailable (fail-closed; retryable). |
-| `:row_security_blocked` | **503** | A row-level security policy would have filtered the payload-partition emptiness count; the prune refused rather than trust a filtered count (fail-closed; retryable). |
 | `:telemetry_invalid` | **500** | A telemetry event was invalid (internal). |
 
 ### Store-fault and transport codes (5xx — override the class default)

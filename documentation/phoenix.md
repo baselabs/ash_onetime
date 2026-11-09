@@ -102,7 +102,6 @@ defmodule MyAppWeb.OnetimeErrors do
     :verification_timeout,
     :outcome_unknown,
     :admission_unavailable,
-    :row_security_blocked,
     :checkout_unavailable,
     :disconnected,
     :worker_timeout,

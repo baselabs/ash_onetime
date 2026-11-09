@@ -123,85 +123,39 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
     end
   end
 
-  test "renders the RLS prune migration only with --rls-prune --app-role", %{temporary: temporary} do
+  test "the RLS-prune generator surface is gone: no flag, no migration, no template", %{
+    temporary: temporary
+  } do
     plain = Path.join(temporary, "plain")
     run_generator(plain, [])
     assert Path.wildcard(Path.join(plain, "*_ash_onetime_rls_prune.exs")) == []
 
-    dir = Path.join(temporary, "rls")
-    Mix.Task.reenable("ash_onetime.gen.migrations")
-
-    path =
-      GenerateMigrations.run([
-        "--repo",
-        inspect(Repo),
-        "--migrations-path",
-        dir,
-        "--rls-prune",
-        "--app-role",
-        "my_app",
-        "--timestamp",
-        "20261109000000"
-      ])
-
-    assert Path.basename(path) == "20261109000000_ash_onetime_rls_prune.exs"
-
-    source = File.read!(path)
-
-    for marker <- [
-          "CREATE ROLE %I NOLOGIN",
-          "GRANT %I TO %I WITH INHERIT FALSE, SET TRUE",
-          "SECURITY DEFINER",
-          "ash_onetime_partition_empty",
-          "must not be the application role",
-          "SET, USAGE, or ADMIN",
-          "ash_onetime_prune_select",
-          "CREATE POLICY",
-          "FORCE ROW LEVEL SECURITY"
+    # The retired flags are invalid arguments now (the prune decides as the
+    # table owner; no role or function migration exists to generate).
+    for extra <- [
+          ["--rls-prune"],
+          ["--rls-prune", "--app-role", "my_app"],
+          ["--app-role", "my_app"]
         ] do
-      assert source =~ marker
+      assert_raise Mix.Error, ~r/invalid ash_onetime migration generator arguments/, fn ->
+        path = Path.join(temporary, "invalid_#{System.unique_integer([:positive])}")
+        File.mkdir_p!(path)
+        Mix.Task.reenable("ash_onetime.gen.migrations")
+
+        GenerateMigrations.run(
+          ["--repo", inspect(Repo), "--migrations-path", path, "--timestamp", "20261109000000"] ++
+            extra
+        )
+      end
     end
 
-    assert source =~ GenerateMigrations.render_rls_prune(Repo, app_role: "my_app")
-
-    assert_raise Mix.Error, ~r/requires --app-role/, fn ->
-      Mix.Task.reenable("ash_onetime.gen.migrations")
-
-      GenerateMigrations.run([
-        "--repo",
-        inspect(Repo),
-        "--migrations-path",
-        dir,
-        "--rls-prune"
-      ])
-    end
-
-    assert_raise Mix.Error, ~r/--app-role is only valid/, fn ->
-      Mix.Task.reenable("ash_onetime.gen.migrations")
-
-      GenerateMigrations.run([
-        "--repo",
-        inspect(Repo),
-        "--migrations-path",
-        dir,
-        "--app-role",
-        "my_app"
-      ])
-    end
-
-    assert_raise Mix.Error, ~r/lowercase SQL identifier/, fn ->
-      Mix.Task.reenable("ash_onetime.gen.migrations")
-
-      GenerateMigrations.run([
-        "--repo",
-        inspect(Repo),
-        "--migrations-path",
-        dir,
-        "--rls-prune",
-        "--app-role",
-        "My-App"
-      ])
-    end
+    assert File.exists?(
+             :ash_onetime
+             |> :code.priv_dir()
+             |> to_string()
+             |> Path.join("templates/migrations/rls_prune.exs")
+           ) ==
+             false
   end
 
   test "refuses reserved and malformed fact-table names", %{temporary: temporary} do
@@ -267,7 +221,6 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
              "priv/templates/migrations/hash_partitioned.exs",
              "priv/templates/migrations/install.exs",
              "priv/templates/migrations/logical_partitions.exs",
-             "priv/templates/migrations/rls_prune.exs",
              "priv/templates/migrations/roll_forward.exs"
            ]
   end
