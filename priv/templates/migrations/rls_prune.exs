@@ -110,11 +110,49 @@ defmodule <%= inspect(module) %> do
     SET search_path = pg_catalog, #{quote_identifier(search_schema())}
     AS $prune$
     DECLARE
+      function_schema text := '#{search_schema()}';
       partition_oid regclass := partition_name::regclass;
+      partition_relname text;
       payload_count bigint;
       claim_count bigint;
       ddl text;
     BEGIN
+      -- Only a child of this schema's payload parent is ever counted.
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_inherits i
+        JOIN pg_class parent ON parent.oid = i.inhparent
+        JOIN pg_namespace ns ON ns.oid = parent.relnamespace
+        WHERE i.inhrelid = partition_oid
+          AND ns.nspname = function_schema
+          AND parent.relname = 'ash_onetime_response_payloads'
+      ) THEN
+        RAISE EXCEPTION 'ash_onetime: % is not a payload partition', partition_name
+          USING ERRCODE = '22023';
+      END IF;
+
+      -- The prune role's permissive USING (true) policy is only ORed with
+      -- other permissive policies. A consumer's RESTRICTIVE tenant policy is
+      -- ANDed in even inside this SECURITY DEFINER function, so the counts
+      -- below would see only the current tenant and a partition holding
+      -- another tenant's payloads could read as empty. Refuse to count
+      -- instead: fail closed with the row-security error the store maps to
+      -- :row_security_blocked.
+      partition_relname := (SELECT relname FROM pg_class WHERE oid = partition_oid);
+
+      IF EXISTS (
+        SELECT 1 FROM pg_policies p
+        WHERE p.schemaname = function_schema
+          AND p.permissive = 'RESTRICTIVE'
+          AND p.cmd IN ('ALL', 'SELECT')
+          AND ('public' = ANY(p.roles) OR 'ash_onetime_prune' = ANY(p.roles))
+          AND p.tablename IN (
+            'ash_onetime_idempotency_claims', 'ash_onetime_response_payloads', partition_relname
+          )
+      ) THEN
+        RAISE EXCEPTION 'ash_onetime: row-level security policy would filter the prune count'
+          USING ERRCODE = '42501';
+      END IF;
+
       ddl := 'SELECT count(*) FROM ' || partition_oid;
       EXECUTE ddl INTO payload_count;
 
@@ -127,14 +165,43 @@ defmodule <%= inspect(module) %> do
     $prune$;
     """)
 
+    # The ACL is set while the migrating role still owns the function; after
+    # the ownership transfer it cannot act as the prune role (INHERIT FALSE),
+    # and a revoke or grant made then is silently a no-op. PUBLIC loses
+    # EXECUTE; the application role gains it (the store's prune calls it as
+    # the application), and so does the migrating role — it created the
+    # function and keeps the right to verify and drive prunes itself once the
+    # ownership transfer takes that implicit right away.
+    execute("REVOKE ALL ON FUNCTION #{q(@prune_function)}(text, date, date) FROM PUBLIC")
+    execute("GRANT EXECUTE ON FUNCTION #{q(@prune_function)}(text, date, date) TO #{@app_role}")
+
     # Transferring ownership requires CREATE on the schema for the NEW owner
     # (PostgreSQL keeps the object creatable by its owner); USAGE stays with
     # the prune role afterwards, CREATE does not.
     execute("GRANT USAGE, CREATE ON SCHEMA #{quote_identifier(prefix_schema())} TO #{@prune_role}")
     execute("ALTER FUNCTION #{q(@prune_function)}(text, date, date) OWNER TO #{@prune_role}")
     execute("REVOKE CREATE ON SCHEMA #{quote_identifier(prefix_schema())} FROM #{@prune_role}")
-    execute("REVOKE ALL ON FUNCTION #{q(@prune_function)}(text, date, date) FROM PUBLIC")
-    execute("GRANT EXECUTE ON FUNCTION #{q(@prune_function)}(text, date, date) TO #{@app_role}")
+
+    # A grant to the migrating role made while it still owns the function is
+    # a silent no-op: the owner's rights are implicit, and they vanish with the
+    # ownership transfer. After the transfer the prune role owns the function,
+    # and the migrating role holds exactly SET on it — so it steps into the
+    # role to grant itself EXECUTE, keeping the right to verify and drive
+    # prunes. PUBLIC still holds nothing; only the app role, the migrating
+    # role, and the prune role itself can call the function.
+    execute("""
+    DO $grant_execute$
+    DECLARE
+      migrator text := current_user;
+    BEGIN
+      EXECUTE format('SET ROLE %I', 'ash_onetime_prune');
+      EXECUTE format('GRANT EXECUTE ON FUNCTION %I.%I(text, date, date) TO %I',
+        '#{search_schema()}', 'ash_onetime_partition_empty', migrator);
+      EXECUTE 'RESET ROLE';
+    END
+    $grant_execute$;
+    """)
+
 
     execute("GRANT SELECT ON #{q("ash_onetime_idempotency_claims")} TO #{@prune_role}")
     execute("GRANT SELECT ON #{q("ash_onetime_response_payloads")} TO #{@prune_role}")

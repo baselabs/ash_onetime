@@ -1126,40 +1126,44 @@ defmodule AshOnetime.Store.Postgres do
   #
   #   * the dedicated function (installed by `mix ash_onetime.gen.migrations --rls-prune`)
   #     counts as the NOLOGIN prune role — SECURITY DEFINER with its own permissive
-  #     policies — so FORCE row-level security cannot filter it;
+  #     policies — so FORCE row-level security cannot filter it. The function itself
+  #     refuses to count under a consumer's RESTRICTIVE tenant policy (which ANDs
+  #     in even here) with the same row-security error, so both paths fail closed;
   #   * without the function, the counts run with row_security disabled for the
-  #     transaction: PostgreSQL then RAISES instead of filtering whenever a policy
-  #     would apply to the caller, and the prune fails closed (drops nothing)
-  #     with :row_security_blocked. A tenant-filtered count is never trusted,
-  #     even when it happens to be right.
+  #     counts themselves: PostgreSQL then RAISES instead of filtering whenever a
+  #     policy would apply to the caller, and the prune fails closed (drops
+  #     nothing) with :row_security_blocked. A tenant-filtered count is never
+  #     trusted, even when it happens to be right.
   defp partition_empty?(target, partition) do
-    case prune_function_installed?(target) do
-      true -> function_partition_empty?(target, partition)
-      false -> guarded_partition_empty?(target, partition)
+    case prune_function_schema(target) do
+      schema when is_binary(schema) -> function_partition_empty?(target, schema, partition)
+      nil -> guarded_partition_empty?(target, partition)
     end
   end
 
   @prune_function "ash_onetime_partition_empty"
 
-  defp prune_function_installed?(target) do
+  # Returns the schema the function was found in (the call site qualifies the
+  # name with exactly this schema, never the search_path), or nil when absent.
+  defp prune_function_schema(target) do
     sql = """
-    SELECT EXISTS (
-      SELECT 1 FROM pg_proc p
-      JOIN pg_namespace n ON n.oid = p.pronamespace
-      WHERE p.proname = $1 AND n.nspname = coalesce($2::text, current_schema())
-    )
+    SELECT n.nspname
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.proname = $1 AND n.nspname = coalesce($2::text, current_schema())
     """
 
     case dispatched_query(target, sql, [@prune_function, target.prefix]) do
-      {:ok, %{rows: [[true]]}} -> true
-      {:ok, %{rows: [[false]]}} -> false
-      _other -> false
+      {:ok, %{rows: [[schema]]}} when is_binary(schema) -> schema
+      _other -> nil
     end
   end
 
-  defp function_partition_empty?(target, partition) do
+  defp function_partition_empty?(target, schema, partition) do
+    qualified = quote_identifier(schema) <> "." <> quote_identifier(@prune_function)
+
     sql = """
-    SELECT #{relation(target, @prune_function)}($1::text, $2::date, $3::date)
+    SELECT #{qualified}($1::text, $2::date, $3::date)
     """
 
     case dispatched_query(target, sql, [
@@ -1182,10 +1186,15 @@ defmodule AshOnetime.Store.Postgres do
     WHERE response_partition >= $1 AND response_partition < $2
     """
 
+    # row_security is armed only for the two counts and restored afterwards:
+    # SET LOCAL lasts to the end of the transaction, and the caller's later
+    # queries must not inherit the disablement. A count that trips a policy
+    # fails the statement; there is nothing to restore into then.
     with {:ok, _} <- dispatched_query(target, "SET LOCAL row_security = off", []),
          {:ok, %{rows: [[payload_count]]}} <- dispatched_query(target, payload_sql, []),
          {:ok, %{rows: [[claim_count]]}} <-
            dispatched_query(target, claims_sql, [partition.from_date, partition.until_date]),
+         {:ok, _} <- dispatched_query(target, "SET LOCAL row_security = on", []),
          true <- is_integer(payload_count) and payload_count >= 0,
          true <- is_integer(claim_count) and claim_count >= 0 do
       {:ok, payload_count == 0 and claim_count == 0}

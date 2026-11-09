@@ -328,6 +328,89 @@ defmodule AshOnetime.Store.RLSPruneTest do
     end
 
     @tag @rls_prune_tier
+    test "a restrictive tenant policy fails the prune closed instead of miscounting" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store_with_function!(install_context(substrate))
+      occupied = partition_name(~D[2026-08-01])
+      insert_payload!(prefix, occupied, "tenant-b", ~D[2026-08-15])
+
+      # A consumer's tenant isolation hardened as RESTRICTIVE on the claims
+      # table, the payload parent, and the partition. The prune role's
+      # permissive USING (true) policy is only ORed with permissive policies;
+      # the restrictive one is ANDed in, so the function's counts would see
+      # only the current tenant. The function must refuse to count instead.
+      for table <- ["ash_onetime_idempotency_claims", "ash_onetime_response_payloads", occupied] do
+        query!(
+          substrate.owner_repo,
+          """
+          CREATE POLICY tenant_hard ON "#{prefix}"."#{table}"
+          AS RESTRICTIVE
+          USING (logical_partition = current_setting('#{@tenant_setting}', true))
+          """,
+          []
+        )
+      end
+
+      put_repo(substrate.owner_repo)
+
+      result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+
+      Repo.put_dynamic_repo(Repo)
+
+      assert %{reason: :row_security_blocked} = result
+      assert partition_exists?(prefix, occupied)
+
+      tenant_b = start_tenant_repo!(owner_url(), "tenant-b")
+      assert scalar!(tenant_b, "SELECT count(*) FROM #{prefix}.\"#{occupied}\"", []) == 1
+      stop_repo(tenant_b)
+    end
+
+    @tag @rls_prune_tier
+    test "a partition_name that is not a payload child is refused" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store_with_function!(install_context(substrate))
+
+      app = start_tenant_repo!(Process.get({__MODULE__, :app_url}), "tenant-a")
+
+      assert_raise Postgrex.Error,
+                   ~r/row-level security|not a payload partition/,
+                   fn ->
+                     SQL.query!(
+                       app,
+                       "SELECT #{prefix}.ash_onetime_partition_empty($1, $2, $3)",
+                       [
+                         "\"#{prefix}\".\"ash_onetime_idempotency_claims\"",
+                         ~D[2026-08-01],
+                         ~D[2026-09-01]
+                       ]
+                     )
+                   end
+
+      stop_repo(app)
+    end
+
+    @tag @rls_prune_tier
+    test "EXECUTE is revoked from PUBLIC and granted only to the application role" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store_with_function!(install_context(substrate))
+
+      # has_function_privilege's OID form: the text form parses double quotes
+      # as part of the name.
+      privileges =
+        "SELECT has_function_privilege($1, (SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'ash_onetime_partition_empty' AND n.nspname = $2), 'EXECUTE')"
+
+      assert scalar!(Repo, privileges, [substrate.app_role, prefix]) == true
+
+      # Any third role: PUBLIC must not hold EXECUTE.
+      third = "ash_onetime_rls_third_#{System.unique_integer([:positive])}"
+      SQL.query!(Repo, "CREATE ROLE #{third} LOGIN", [])
+
+      on_exit(fn -> drop_role_quietly(Repo, third) end)
+
+      assert scalar!(Repo, privileges, [third, prefix]) == false
+    end
+
+    @tag @rls_prune_tier
     test "the migration refuses to run as the application role" do
       substrate = rls_substrate!()
       installed = install_rls_store_with_function!(install_context(substrate), run_rls: false)
