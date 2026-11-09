@@ -50,6 +50,13 @@
   primitive-return action, or unprotected). Treat `nil` as "cannot tell," not as "fresh." See
   [Replay](documentation/replay.md).
 
+- Treat `:row_security_blocked` from cleanup as a fail-closed refusal, never a client error:
+  a row-level security policy would have filtered the payload emptiness count. Install the
+  RLS prune support (`--rls-prune --app-role`, migrating role distinct from the application
+  role) or drop nothing; see [Operations](documentation/operations.md#row-level-security).
+- Never run the `--rls-prune` migration as the application role, and never let that role
+  hold SET, USAGE, or ADMIN on `ash_onetime_prune`: the migration refuses both, because
+  either would let the application read every tenant through the prune function.
 - Treat `:context_changed` as a retry signal, not an error: re-read the context with
   `AshOnetime.Boundary.read/3`, decide again, and append with the fresh cutoff. Map it
   like other client-input-family failures (409-class), never as a 500.

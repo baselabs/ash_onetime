@@ -437,6 +437,49 @@ restore point is in scope for reconciliation.
 Restoring per-tenant schemas (`--prefix`) or logical partitions rewinds only that authority's
 claims — scope the reconciliation the same way.
 
+## Row-level security
+
+A consumer may put FORCE row-level security on the claims and payload tables, keyed per
+tenant on `logical_partition`. Cleanup's payload-partition prune decides `DROP TABLE` from
+a count over a partition and a claims range — under FORCE RLS those counts see only the
+current tenant's rows, so a partition holding other tenants' replay payloads could read
+as empty. ash_onetime refuses to trust a filtered count:
+
+- **Without extra setup**, the emptiness check runs with `row_security` disabled for the
+  cleanup transaction. PostgreSQL then raises instead of filtering when a policy would
+  apply to the caller, and cleanup fails closed with `:row_security_blocked`, dropping
+  nothing. A tenant-filtered count is never trusted, even when it happens to be right.
+- **With the RLS prune migration** (`mix ash_onetime.gen.migrations --repo MyApp.Repo
+  --rls-prune --app-role my_app`), cleanup counts through a dedicated function and prunes
+  correctly under FORCE RLS.
+
+The generated migration creates (only when missing) a NOLOGIN role `ash_onetime_prune`
+that owns none of the tables, a boolean `SECURITY DEFINER` emptiness function owned by
+that role with a fixed `search_path` (EXECUTE revoked from PUBLIC, granted to the
+application role; it returns only the boolean, never row data), SELECT grants and a
+permissive `FOR SELECT TO ash_onetime_prune USING (true)` policy on the claims and payload
+tables, and the same on every payload child partition — children also inherit the parent's
+ENABLE/FORCE row-security settings and full policy set, at creation by `roll_partitions`
+and for existing children in the migration. The `DROP TABLE` itself needs table
+ownership, so in an RLS deployment the table owner drives cleanup.
+
+Two hard requirements, enforced by the migration itself:
+
+- **The migrating role must differ from the application role.** Since PostgreSQL 16, a
+  non-superuser with CREATEROLE that creates `ash_onetime_prune` gets ADMIN on it and can
+  grant itself `SET` at any time — a shared migrating/application role could always become
+  the prune role and read every tenant. The migration grants the migrating role `SET` on
+  the prune role (to transfer the function's ownership) and refuses with a clear error
+  when `current_user` is the application role or when the application role holds `SET`,
+  `USAGE`, or `ADMIN` on the prune role.
+- **Creating the role needs CREATEROLE.** A migration run without it (when the role does
+  not yet exist) refuses clearly; creating the role and the function as a superuser
+  bootstrap is the alternative.
+
+A consumer's own restrictive tenant policy must exempt the prune role, or the check fails
+closed with `:row_security_blocked`. Permissive policies (the default) compose with the
+prune policy as a union, which is the expected shape.
+
 ## Key rotation
 
 Token verification resolves material by the signed key identifier. Add a new key before

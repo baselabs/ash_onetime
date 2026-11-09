@@ -2,6 +2,32 @@
 
 All notable changes to this project are documented in this file.
 
+## v1.9.0 — November 8, 2026
+
+- **The payload-partition prune can no longer be fooled by row-level security.** A consumer
+  that puts FORCE row-level security on the claims and payload tables (keyed per tenant)
+  made cleanup's `count(*)` see only the current tenant's rows, so a partition holding
+  other tenants' replay payloads could read as empty and be dropped. The emptiness check
+  now runs with `row_security` disabled for the transaction — a policy that would filter
+  the caller surfaces as an error, not a silently-wrong count — and the prune fails closed
+  with the new `:row_security_blocked` code, dropping nothing.
+- **Opt-in RLS-safe pruning via `mix ash_onetime.gen.migrations --rls-prune --app-role NAME`.**
+  The generated migration creates a NOLOGIN role `ash_onetime_prune` (only if missing; it
+  owns no tables and the application role is never a member of it), a boolean SECURITY
+  DEFINER emptiness function owned by that role with a fixed `search_path` and EXECUTE
+  revoked from PUBLIC, SELECT grants plus a permissive `FOR SELECT` policy for the prune
+  role on the claims and payload tables, and the same on every payload child partition —
+  each child also inherits the parent's ENABLE/FORCE row-security settings and full policy
+  set, at creation by `roll_partitions` and for existing children in the migration. The
+  migrating role must differ from the application role; the migration refuses with a clear
+  error when run as the application role or when that role holds SET, USAGE, or ADMIN on
+  the prune role (PostgreSQL 16+ grants a creator ADMIN, so a shared migrating/application
+  role could always become the prune role and read every tenant). Creating the role needs
+  CREATEROLE; a superuser bootstrap is the documented alternative. With the function
+  installed, cleanup counts through it unfiltered and prunes correctly; without it, the
+  fail-closed refusal stands. See
+  [Operations](documentation/operations.md#row-level-security).
+
 ## v1.8.0 — November 8, 2026
 
 - **Add conditional-append context boundaries**: a resource that declares the

@@ -7,12 +7,22 @@ Security-driven dependency floors follow the documented minor-release policy in
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md);
 their required dependency edits appear here too.
 
-This guide targets v1.8.0. Pin the
+This guide targets v1.9.0. Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 1.8.0"}
+{:ash_onetime, "~> 1.9.0"}
 ```
+
+## v1.9.0 — RLS-safe payload prune (November 8, 2026)
+
+Additive: no existing behavior changes and no consumer needs any migration. Cleanup's
+payload-partition prune no longer trusts a count that row-level security could have
+filtered: without the new option it fails closed with `:row_security_blocked` instead of
+dropping, and `mix ash_onetime.gen.migrations --rls-prune --app-role <role>` generates the
+dedicated NOLOGIN prune role and its SECURITY DEFINER emptiness function that make the
+prune correct under FORCE row-level security. See
+[Operations](operations.md#row-level-security).
 
 ## v1.8.0 — context boundaries (November 8, 2026)
 

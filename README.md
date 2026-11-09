@@ -146,12 +146,14 @@ transactional-outbox patterns.
 
 ## Status
 
-This guide targets [v1.8.0](CHANGELOG.md). Resources can opt into conditional-append
+This guide targets [v1.9.0](CHANGELOG.md). Resources can opt into conditional-append
 context boundaries over an append-only fact table with the `context_boundary` section
 and `AshOnetime.Boundary` — admission only when nothing matching changed since read.
-See [Context boundaries](documentation/context-boundary.md). Existing installs need no
-migration; the fact tables are opt-in via
-`mix ash_onetime.gen.migrations --fact-tables`.
+See [Context boundaries](documentation/context-boundary.md). The payload-partition prune
+now fails closed under FORCE row-level security instead of trusting a filtered count, with
+opt-in RLS-safe pruning via `mix ash_onetime.gen.migrations --rls-prune --app-role <role>`;
+see [Operations](documentation/operations.md). Existing installs need no migration; the
+fact tables are opt-in via `mix ash_onetime.gen.migrations --fact-tables`.
 
 Every protected action chooses `:idempotency` or `:one_time_nonce` and declares a nonempty
 scope; there is no default strategy or global scope fallback. The release battery includes a
