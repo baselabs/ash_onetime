@@ -802,6 +802,17 @@ defmodule AshOnetime.MutationCheck do
         "a child held by a direct reader is skipped without waiting and its sibling still drops",
       assertion: "payload_partitions: 1"
     },
+    "prune-default-nowait" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "\"LOCK TABLE ONLY \#{qualified_relation(schema, name)} IN ACCESS EXCLUSIVE MODE NOWAIT\"",
+      mutated:
+        "\"LOCK TABLE ONLY \#{qualified_relation(schema, name)} IN ACCESS EXCLUSIVE MODE\"",
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_prune_default_mutation",
+      test_name: "a DEFAULT-only holder is refused without waiting while the parent is held",
+      assertion: "payload_partitions_refused: %{lock_unavailable: 2}"
+    },
     "rls-prune-catalog-count" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original: "\"SELECT EXISTS (SELECT 1 FROM \#{relation})\", []",

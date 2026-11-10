@@ -7,12 +7,19 @@ Security-driven dependency floors follow the documented minor-release policy in
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md);
 their required dependency edits appear here too.
 
-This guide targets v1.9.1. Pin the
+This guide targets v1.9.2. Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
 {:ash_onetime, "~> 1.9.0"}
 ```
+
+## v1.9.2 — Prune never waits on `_default` (November 10, 2026)
+
+No migration, API, option or telemetry change. The partition prune now takes the `_default`
+partition's lock without waiting before a drop; a busy `_default` keeps the candidate as
+`:lock_unavailable`. See [Operations](operations.md#row-level-security) for running the prune
+around long transactions.
 
 ## v1.9.1 — Bounded payload prune (November 10, 2026)
 

@@ -1207,6 +1207,7 @@ defmodule AshOnetime.Store.Postgres do
              "LOCK TABLE ONLY #{relation} IN ACCESS EXCLUSIVE MODE NOWAIT",
              []
            ),
+         :ok <- lock_default_partition(target, parent),
          {:ok, %{rows: [facts]}} <- prune_relation_facts(target, parent, relation),
          :prunable <- prune_facts(facts) do
       owner_count_and_drop(target, relation, lock_guc, rls_guc)
@@ -1214,6 +1215,33 @@ defmodule AshOnetime.Store.Postgres do
       {:refused, reason} -> rollback_prune(target, {:refused, reason})
       :busy -> rollback_prune(target, :pruner_busy)
       {:error, %Result{} = result} -> prune_error(target, result, :error)
+    end
+  end
+
+  # DROP of a partition also takes ACCESS EXCLUSIVE on the parent's DEFAULT
+  # partition. Take it here without waiting, so the DROP never waits on a
+  # DEFAULT-only holder (a direct reader, vacuum) while the parent is held.
+  defp lock_default_partition(target, parent) do
+    sql = """
+    SELECT n.nspname, c.relname
+    FROM pg_catalog.pg_partitioned_table p
+    JOIN pg_catalog.pg_class c ON c.oid = p.partdefid
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE p.partrelid = $1::text::pg_catalog.regclass
+    """
+
+    with {:ok, %{rows: [[schema, name]]}} <- dispatched_query(target, sql, [parent]),
+         {:ok, _} <-
+           dispatched_query(
+             target,
+             "LOCK TABLE ONLY #{qualified_relation(schema, name)} IN ACCESS EXCLUSIVE MODE NOWAIT",
+             []
+           ) do
+      :ok
+    else
+      {:ok, %{rows: []}} -> :ok
+      {:ok, _other} -> {:refused, :error}
+      {:error, %Result{}} = error -> error
     end
   end
 

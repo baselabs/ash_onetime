@@ -493,6 +493,16 @@ Operational notes:
   `:lock_unavailable` and the pass moves on. Taking the parent lock first prevents the late DROP
   upgrade cycle. The caller's `lock_timeout` and `row_security` settings are restored on every
   successful drop or savepoint rollback.
+  Dropping a partition also locks the `_default` partition; that lock is taken without waiting
+  too, so a `_default`-only holder keeps the candidate as `:lock_unavailable` instead of making
+  the drop wait while the parent is held.
+- **Running the prune around long transactions.** While something holds the payload table for
+  longer than the budget (a backup, a long report, a session idle in a transaction), each cleanup
+  run can stall payload traffic once, for up to the budget, and reclaims nothing. Retention is
+  unaffected. To avoid the stall: schedule the owner-run prune outside backup and reporting
+  windows; or run cleanup with `partition_limit: 0` during them (claim cleanup still runs); or
+  lower `:partition_prune_lock_timeout_ms` (a few hundred milliseconds still clears ordinary
+  short transactions). Pruning catches up on the first run after the holder ends.
 - **One pruner per payload table.** Overlapping cleanups (an Oban run and the mix task, or two
   schedules) both hold the parent's row lock from claim deletion, so both requesting the DROP
   lock would deadlock. The prune takes a transaction-scoped advisory key on the parent's OID just

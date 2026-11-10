@@ -800,6 +800,36 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
     @tag @rls_prune_tier
     @tag rls_review: true
+    @tag rls_prune_default_mutation: true
+    test "a DEFAULT-only holder is refused without waiting while the parent is held" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+
+      holder =
+        hold_parent!(
+          start_tenant_repo(owner_url(), "tenant-a"),
+          prefix,
+          "ash_onetime_response_payloads_default"
+        )
+
+      started = System.monotonic_time(:millisecond)
+      put_repo(substrate.owner_repo)
+      result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+      elapsed = System.monotonic_time(:millisecond) - started
+      release_holder!(holder)
+
+      # DROP also locks DEFAULT. Waiting there would hold the parent for the
+      # rest of the budget and refuse one candidate; NOWAIT refuses both at once.
+      assert {:ok, %{payload_partitions: 0, payload_partitions_refused: %{lock_unavailable: 2}}} =
+               result
+
+      assert elapsed < 1_000
+      Repo.put_dynamic_repo(Repo)
+      assert partition_exists?(prefix, partition_name(~D[2026-08-01]))
+    end
+
+    @tag @rls_prune_tier
+    @tag rls_review: true
     @tag rls_prune_budget_mutation: true
     test "the budget spans acquisitions: a second holder gets only what remains" do
       substrate = rls_substrate!()
@@ -1115,13 +1145,13 @@ defmodule AshOnetime.Store.RLSPruneTest do
   end
 
   # An open transaction holding AccessShare on the payload parent until released.
-  defp hold_parent!(repo, prefix) do
-    holder = hold_parent_async!(repo, prefix)
+  defp hold_parent!(repo, prefix, relation \\ "ONLY ash_onetime_response_payloads") do
+    holder = hold_parent_async!(repo, prefix, relation)
     assert_receive {:parent_held, ^holder}, 2_000
     holder
   end
 
-  defp hold_parent_async!(repo, prefix) do
+  defp hold_parent_async!(repo, prefix, relation \\ "ONLY ash_onetime_response_payloads") do
     parent = self()
 
     task =
@@ -1129,7 +1159,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
         Repo.put_dynamic_repo(repo)
 
         Repo.transaction(fn ->
-          query!(repo, "SELECT 1 FROM ONLY #{prefix}.ash_onetime_response_payloads")
+          query!(repo, "SELECT 1 FROM " <> String.replace(relation, "ash_", "#{prefix}.ash_"))
           send(parent, {:parent_held, self()})
 
           receive do

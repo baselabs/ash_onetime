@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## v1.9.2 — November 10, 2026
+
+- **The partition prune no longer waits on the `_default` partition while holding the parent
+  lock.** `DROP TABLE` of a partition also takes `ACCESS EXCLUSIVE` on the parent's default
+  partition, so a `_default`-only holder (a direct reader, vacuum) could make the drop wait, with
+  every tenant's payload traffic queued behind the held parent lock, for the rest of the budget.
+  The prune now requests that lock with `NOWAIT` after the child lock; a busy `_default` keeps
+  the candidate as `:lock_unavailable`.
+- **Docs.** The operations guide explains how to run the prune around long transactions
+  (backups, long reports, idle-in-transaction sessions).
+
 ## v1.9.1 — November 10, 2026
 
 - **One partition-prune pass can no longer stall every tenant's payload traffic once per
