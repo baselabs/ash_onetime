@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'kci/**'] # kci/<sha>: kimosabe-land's pre-merge run of this workflow
     tags: ['v*'] # Verify each tagged release artifact before manual Hex publication.
     paths-ignore: ['**/*.md', 'docs/**', 'LICENSE*', '.github/ISSUE_TEMPLATE/**']
   pull_request:
