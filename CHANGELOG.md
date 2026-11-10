@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## v1.9.1 — November 10, 2026
+
+- **One partition-prune pass can no longer stall every tenant's payload traffic once per
+  candidate.** Each pending parent `ACCESS EXCLUSIVE` queues all payload reads and writes;
+  1.9.0 retried it per candidate, so one run behind a long lock holder could stall traffic for
+  `partition_limit × timeout` (8 × 2 s by default). `:partition_prune_lock_timeout_ms` (same
+  default 2,000 and range 1–5,000) is now one budget for the whole pass: each parent lock waits
+  only for what remains, and candidates left when it is spent are deferred to the next run
+  without being counted. The child lock is requested with `NOWAIT`, because it is always
+  requested while the parent is held; a busy child is kept as `:lock_unavailable`.
+- **Overlapping cleanups no longer deadlock.** Both held the parent's row lock from claim
+  deletion and then requested the DROP lock. The prune now takes a transaction-scoped advisory
+  key on the payload parent's OID just before locking (owners only); a cleanup that finds it
+  taken stops its partition pass and commits its claim cleanup.
+- **Docs.** Retention is enforced by claim cleanup, which deletes expired payload rows in any
+  partition including `_default`; partition drops only reclaim storage. ADR 0001 gains an
+  amendment and the operations guide, upgrading guide, ADR 0005 and module docs that said
+  `_default` payloads defeat retention are corrected. The telemetry contract table now lists
+  `:partitions_kept` (shipped in 1.9.0). The operations guide's RLS child-policy migration
+  snippet is fixed (it referenced an undeclared variable and never executed its `ALTER`s) and
+  gains a lock-holder diagnosis query.
+
 ## v1.9.0 — November 10, 2026
 
 - **The payload-partition prune now decides `DROP TABLE` as the table owner, inside a

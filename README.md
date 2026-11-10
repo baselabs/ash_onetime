@@ -146,7 +146,7 @@ transactional-outbox patterns.
 
 ## Status
 
-This guide targets [v1.9.0](CHANGELOG.md). Resources can opt into conditional-append
+This guide targets [v1.9.1](CHANGELOG.md). Resources can opt into conditional-append
 context boundaries over an append-only fact table with the `context_boundary` section
 and `AshOnetime.Boundary` — admission only when nothing matching changed since read.
 See [Context boundaries](documentation/context-boundary.md). The payload-partition prune

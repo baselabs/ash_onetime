@@ -5,9 +5,10 @@ defmodule Mix.Tasks.AshOnetime.RollPartitions do
       mix ash_onetime.roll_partitions --repo MyApp.Repo
       mix ash_onetime.roll_partitions --repo MyApp.Repo --prefix tenant_1 --months 6
 
-  Forward partition creation keeps retention bounded past the install window: without it,
-  payloads whose `response_partition` falls outside the generated window route to the `_default`
-  partition and are never dropped, silently defeating bounded retention. Idempotent and
+  Forward partition creation keeps payloads past the install window in monthly partitions the
+  prune can drop whole: without it, payloads whose `response_partition` falls outside the
+  generated window route to the `_default` partition, which claim cleanup empties row by row
+  but which is never reclaimed as a table. Idempotent and
   concurrency-safe (advisory-locked). Schedule it via `AshOnetime.Oban.PartitionWorker` or a
   cron cadence; the operator picks `--months` to stay ahead of their retention horizon.
   """

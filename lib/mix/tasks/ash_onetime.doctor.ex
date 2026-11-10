@@ -13,8 +13,8 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
     `mix.exs` `ash_requirement/0`). A below-floor Ash is a security defect, not an advisory.
   - **Oban queues** (advisory when Oban loaded): the three maintenance workers require
     `:ash_onetime_cleanup`, `:ash_onetime_reap`, and `:ash_onetime_partitions`. A missing
-    `:ash_onetime_partitions` queue silently strands the retention-safety path (forward partition
-    creation never executes). The doctor scans the consumer's Oban config for the three queues and
+    `:ash_onetime_partitions` queue silently stops forward partition creation, so new payloads
+    route to `_default`, which is never reclaimed as a table. The doctor scans the consumer's Oban config for the three queues and
     warns on any missing. This is advisory — a consumer may configure Oban dynamically at runtime.
   - **Prefix validity** (when `--prefix` given): the prefix must be 1..63 bytes (PostgreSQL's
     NAMEDATALEN bound).

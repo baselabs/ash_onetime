@@ -604,9 +604,9 @@ defmodule AshOnetime.MutationCheck do
     "rls-isolation-precondition" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:
-        "  defp cleanup_counts(target, batch_size, partition_limit, lock_timeout) do\n    with :ok <- transaction_preconditions(target),",
+        "  defp cleanup_counts(target, batch_size, partition_limit, lock_budget) do\n    with :ok <- transaction_preconditions(target),",
       mutated:
-        "  defp cleanup_counts(target, batch_size, partition_limit, lock_timeout) do\n    with :ok <- :ok,",
+        "  defp cleanup_counts(target, batch_size, partition_limit, lock_budget) do\n    with :ok <- :ok,",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_isolation_precondition_mutation",
       test_name: "cleanup refuses when its transaction is not READ COMMITTED",
@@ -771,6 +771,36 @@ defmodule AshOnetime.MutationCheck do
       tag: "rls_prune_lock_mutation",
       test_name: "a parent reader bounds prune and insert waits without a child lock deadlock",
       assertion: "Task.await(prune_task, 3_000)"
+    },
+    "rls-prune-pass-budget" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "drop_empty_partition(partition, counts, target, schema, remaining)",
+      mutated: "drop_empty_partition(partition, counts, target, schema, remaining + 3_000)",
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_prune_budget_mutation",
+      test_name: "the budget spans acquisitions: a second holder gets only what remains",
+      assertion: "assert elapsed < 3700"
+    },
+    "rls-prune-single-pruner" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "\"SELECT pg_catalog.pg_try_advisory_xact_lock($1::int4, $2::text::pg_catalog.regclass::pg_catalog.oid::int4)\"",
+      mutated: "\"SELECT $1::int4 IS NOT NULL AND $2::text IS NOT NULL\"",
+      test: "test/ash_onetime/store/rls_prune_test.exs",
+      tag: "rls_prune_single_pruner_mutation",
+      test_name: "overlapping cleanups on one payload parent neither deadlock nor double-prune",
+      assertion:
+        "assert {a.payload_partitions_refused, b.payload_partitions_refused} == {%{}, %{}}"
+    },
+    "prune-child-nowait" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "\"LOCK TABLE ONLY \#{relation} IN ACCESS EXCLUSIVE MODE NOWAIT\"",
+      mutated: "\"LOCK TABLE ONLY \#{relation} IN ACCESS EXCLUSIVE MODE\"",
+      test: "test/mix/tasks/ash_onetime.prune_test.exs",
+      tag: "payload_partition_lock_mutation",
+      test_name:
+        "a child held by a direct reader is skipped without waiting and its sibling still drops",
+      assertion: "payload_partitions: 1"
     },
     "rls-prune-catalog-count" => %{
       path: "lib/ash_onetime/store/postgres.ex",

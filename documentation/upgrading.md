@@ -7,12 +7,25 @@ Security-driven dependency floors follow the documented minor-release policy in
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md);
 their required dependency edits appear here too.
 
-This guide targets v1.9.0. Pin the
+This guide targets v1.9.1. Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
 {:ash_onetime, "~> 1.9.0"}
 ```
+
+## v1.9.1 — Bounded payload prune (November 10, 2026)
+
+No migration, API, option or telemetry change. Two behavior changes in cleanup's partition
+pass: `:partition_prune_lock_timeout_ms` (same default and range) now bounds the whole pass
+instead of each lock, so one run can stall payload traffic for at most that budget rather
+than once per candidate, and candidates left when it is spent wait for the next run
+uncounted; and only one cleanup prunes a given payload table at a time, so overlapping runs
+(an Oban job and the mix task) no longer deadlock: the second skips its partition pass and
+still commits its claim cleanup. The child lock no longer waits. See
+[Operations](operations.md#row-level-security) for finding the lock holder that keeps
+empty months attached. Retention never depended on the drop: claim cleanup deletes expired
+payload rows in any partition (ADR-0001 amendment).
 
 ## v1.9.0 — RLS-safe payload prune (November 10, 2026)
 
@@ -351,7 +364,7 @@ closures. No breaking change, no DSL/contract change, no upgrade action for exis
 - **`mix ash_onetime.doctor --repo MyApp.Repo`** — a read-only preflight that checks the Ash
   security floor, Oban queue configuration (advisory), and prefix validity. Run it after install
   and after each upgrade to catch the silent-failure modes (e.g., a missing
-  `:ash_onetime_partitions` queue that strands the retention-safety path).
+  `:ash_onetime_partitions` queue that silently stops forward partition creation).
 - **[Phoenix integration guide](phoenix.md)** — a controller integration pattern wiring the
   Plug, the `replayed?/1` signal, and the error-code → HTTP-status mapping into a complete
   controller pattern.
@@ -382,10 +395,10 @@ upgrade; the rest are internal hardening (no consumer action). Read the four ite
 before upgrading.
 
 - **CONSUMER-VISIBLE — PartitionWorker moved to a dedicated `:ash_onetime_partitions` Oban
-  queue (L4).** Forward partition creation is the retention-safety path; it previously shared
-  `:ash_onetime_cleanup` with routine cleanup. **Add the queue to your Oban config** or
-  `PartitionWorker` jobs sit unscheduled and bounded retention silently degrades past the
-  install window:
+  queue (L4).** Forward partition creation previously shared `:ash_onetime_cleanup` with
+  cleanup. **Add the queue to your Oban config** or `PartitionWorker` jobs sit unscheduled and
+  payloads past the install window route to `_default` (deleted at retention by claim cleanup,
+  never reclaimed as a table; corrected in v1.9.1):
 
   ```elixir
   config :my_app, Oban,
@@ -509,8 +522,8 @@ See ADR-0004 (Security-driven Ash floor). The CI compatibility matrix narrows fr
 
 Two data-layer fixes shipped for the response store: the `response_partition` index (cleanup's
 partition-empty check was a full scan) and forward monthly partition creation (payloads past
-the install window routed to `_default` and were never dropped, silently defeating bounded
-retention). Greenfield installs on the current version get both automatically from the install
+the install window routed to `_default`, which claim cleanup empties row by row but never
+reclaims as a table). Greenfield installs on the current version get both automatically from the install
 migration. **Existing installs should generate and run the forward migration once:**
 
 ```sh

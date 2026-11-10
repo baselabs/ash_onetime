@@ -13,8 +13,8 @@ if Code.ensure_loaded?(Oban.Worker) do
     # Bounded jittered backoff for a maintenance job doing DDL on the authoritative store.
     # These are not request-path jobs. Oban's default (15 + 2^attempt seconds, 0-10% jitter)
     # re-collides at ~17-21s — early enough to hit a lock holder that is still holding.
-    # Unlike a partition roll, cleanup sets no lock_timeout of its own, so a contended
-    # delete/drop simply waits; the linear+jitter shape spaces the two gating retries at
+    # Claim deletes wait without a lock_timeout of their own (the partition pass is bounded
+    # by one lock budget); the linear+jitter shape spaces the two gating retries at
     # [30,60)s and [60,90)s (backoff/1 is called with the FAILED attempt number; at
     # max_attempts: 3 only two delays gate), giving contention time to clear and
     # decorrelating simultaneous failures with a wide ~0-30s spread, and caps the delay at

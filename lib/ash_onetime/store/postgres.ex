@@ -293,10 +293,10 @@ defmodule AshOnetime.Store.Postgres do
       when is_integer(batch_size) and batch_size > 0 and batch_size <= 10_000 and
              is_integer(partition_limit) and partition_limit >= 0 and
              partition_limit <= @max_partition_drops do
-    lock_timeout = Application.get_env(:ash_onetime, :partition_prune_lock_timeout_ms, 2_000)
+    lock_budget = Application.get_env(:ash_onetime, :partition_prune_lock_timeout_ms, 2_000)
 
     with_dynamic_repo(target, fn ->
-      cleanup_transaction(target, batch_size, partition_limit, lock_timeout)
+      cleanup_transaction(target, batch_size, partition_limit, lock_budget)
     end)
     |> case do
       {:ok, counts} -> {:ok, counts}
@@ -351,10 +351,11 @@ defmodule AshOnetime.Store.Postgres do
 
   @doc """
   Creates the next `months_ahead` monthly `ash_onetime_response_payloads` range partitions,
-  from the current month forward, so retention stays bounded past the install window. Without
-  this, payloads whose `response_partition` falls outside the generated window route to the
-  `_default` partition and are never dropped (they are excluded from `prune_payload_partitions`),
-  silently defeating bounded retention (ADR-0001:65).
+  from the current month forward, so payloads past the install window land in monthly
+  partitions the prune can drop whole. Without this, payloads whose `response_partition` falls
+  outside the generated window route to the `_default` partition. Claim cleanup still deletes
+  them row by row (retention holds), but `_default` is excluded from `prune_payload_partitions`
+  and is never reclaimed as a table (ADR-0001, November 2026 amendment).
 
   Idempotent and concurrency-safe: an transaction-scoped advisory lock serializes concurrent
   rolls, and each partition is created only if absent (existence read from `pg_inherits` after
@@ -487,22 +488,22 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  defp cleanup_transaction(target, batch_size, partition_limit, lock_timeout)
-       when is_integer(lock_timeout) and lock_timeout > 0 and lock_timeout <= 5_000 do
+  defp cleanup_transaction(target, batch_size, partition_limit, lock_budget)
+       when is_integer(lock_budget) and lock_budget > 0 and lock_budget <= 5_000 do
     target.repo_module.transaction(fn ->
-      cleanup_counts(target, batch_size, partition_limit, lock_timeout)
+      cleanup_counts(target, batch_size, partition_limit, lock_budget)
     end)
   end
 
-  defp cleanup_transaction(_target, _batch_size, _partition_limit, _lock_timeout),
+  defp cleanup_transaction(_target, _batch_size, _partition_limit, _lock_budget),
     do: {:error, Result.failure(:invalid_request, :not_started, :not_applicable)}
 
-  defp cleanup_counts(target, batch_size, partition_limit, lock_timeout) do
+  defp cleanup_counts(target, batch_size, partition_limit, lock_budget) do
     with :ok <- transaction_preconditions(target),
          {:ok, idempotency} <- cleanup_strategy(target, :idempotency, batch_size),
          {:ok, nonce} <- cleanup_strategy(target, :nonce, batch_size),
          {:ok, payload_partitions, payload_partitions_kept, refused} <-
-           prune_payload_partitions(target, partition_limit, lock_timeout) do
+           prune_payload_partitions(target, partition_limit, lock_budget) do
       %{
         idempotency: idempotency,
         nonce: nonce,
@@ -1041,16 +1042,22 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  defp prune_payload_partitions(_target, 0, _lock_timeout), do: {:ok, 0, 0, %{}}
+  defp prune_payload_partitions(_target, 0, _lock_budget), do: {:ok, 0, 0, %{}}
 
-  defp prune_payload_partitions(target, limit, lock_timeout) do
+  # The lock budget bounds the whole pass, not each lock: every pending parent
+  # ACCESS EXCLUSIVE queues all tenants' payload traffic, so one run may stall
+  # it for at most the budget (plus the candidate in flight), never once per
+  # candidate. Candidates left when it is spent wait for the next run.
+  defp prune_payload_partitions(target, limit, lock_budget) do
+    deadline = System.monotonic_time(:millisecond) + lock_budget
+
     with {:ok, schema, database_date} <- database_schema_and_date(target),
          {:ok, partitions} <- payload_partitions(target, schema) do
       partitions
       |> Enum.filter(&(Date.compare(database_date, &1.until_date) == :gt))
       |> Enum.sort_by(&{&1.until_date, &1.name})
       |> Enum.take(limit)
-      |> drop_empty_partitions(target, schema, lock_timeout)
+      |> drop_empty_partitions(target, schema, deadline)
     end
   end
 
@@ -1128,15 +1135,27 @@ defmodule AshOnetime.Store.Postgres do
   defp partition_decode_failure,
     do: {:halt, {:error, Result.failure(:store_invariant, :sent, :rolled_back)}}
 
-  defp drop_empty_partitions(partitions, target, schema, lock_timeout) do
+  defp drop_empty_partitions(partitions, target, schema, deadline) do
     Enum.reduce_while(partitions, {:ok, 0, 0, %{}}, fn partition, counts ->
-      drop_empty_partition(partition, counts, target, schema, lock_timeout)
+      case deadline - System.monotonic_time(:millisecond) do
+        remaining when remaining > 0 ->
+          drop_empty_partition(partition, counts, target, schema, remaining)
+
+        _spent ->
+          {:halt, counts}
+      end
     end)
   end
 
   # Each candidate is decided as its owner inside a savepoint. Take the DROP's
   # actual parent lock before touching a child, with a bounded wait; a late
   # upgrade can stall every tenant and deadlock a parent reader reaching a child.
+  # The child lock never waits (NOWAIT): it is requested while the parent is
+  # held, so any wait would stall every tenant. Only one cleanup prunes a
+  # physical parent at a time (advisory key on its OID): two cleanups both
+  # hold parent RowExclusive from claim deletion, so both requesting ACCESS
+  # EXCLUSIVE would deadlock. The key is taken only by an owner about to lock,
+  # inside the savepoint: a drop keeps it to commit, a rollback releases it.
   # READ COMMITTED makes a row committed while we wait visible to the count.
   # NO FORCE is uncommitted and rolls back for every kept/refused partition.
   # Both the FORCE re-check and row_security=off are load-bearing defenses:
@@ -1157,6 +1176,9 @@ defmodule AshOnetime.Store.Postgres do
       {:ok, {:refused, reason}} ->
         {:cont, {:ok, dropped, kept + 1, Map.update(refused, reason, 1, &(&1 + 1))}}
 
+      {:ok, :pruner_busy} ->
+        {:halt, {:ok, dropped, kept, refused}}
+
       {:error, %Result{} = result} ->
         {:halt, {:error, result}}
     end
@@ -1174,18 +1196,41 @@ defmodule AshOnetime.Store.Postgres do
          # facts are checked again under the locks before any ALTER/count.
          {:ok, %{rows: [facts]}} <- prune_relation_facts(target, parent, relation),
          :prunable <- prune_facts(facts),
+         :claimed <- claim_parent_pruner(target, parent),
          {:ok, _} <- dispatched_query(target, "SET LOCAL lock_timeout = #{timeout}", []),
          {:ok, _} <- dispatched_query(target, "SET LOCAL row_security = off", []),
          {:ok, _} <-
            dispatched_query(target, "LOCK TABLE ONLY #{parent} IN ACCESS EXCLUSIVE MODE", []),
          {:ok, _} <-
-           dispatched_query(target, "LOCK TABLE ONLY #{relation} IN ACCESS EXCLUSIVE MODE", []),
+           dispatched_query(
+             target,
+             "LOCK TABLE ONLY #{relation} IN ACCESS EXCLUSIVE MODE NOWAIT",
+             []
+           ),
          {:ok, %{rows: [facts]}} <- prune_relation_facts(target, parent, relation),
          :prunable <- prune_facts(facts) do
       owner_count_and_drop(target, relation, lock_guc, rls_guc)
     else
       {:refused, reason} -> rollback_prune(target, {:refused, reason})
+      :busy -> rollback_prune(target, :pruner_busy)
       {:error, %Result{} = result} -> prune_error(target, result, :error)
+    end
+  end
+
+  # The two-int4 advisory key space is disjoint from the roll's bigint keys.
+  # An OID above 2^31 reinterprets to a negative int4: still one key per OID.
+  @prune_advisory_class 0x414F_5052
+
+  defp claim_parent_pruner(target, parent) do
+    case dispatched_query(
+           target,
+           "SELECT pg_catalog.pg_try_advisory_xact_lock($1::int4, $2::text::pg_catalog.regclass::pg_catalog.oid::int4)",
+           [@prune_advisory_class, parent]
+         ) do
+      {:ok, %{rows: [[true]]}} -> :claimed
+      {:ok, %{rows: [[false]]}} -> :busy
+      {:ok, _other} -> {:refused, :error}
+      {:error, %Result{}} = error -> error
     end
   end
 

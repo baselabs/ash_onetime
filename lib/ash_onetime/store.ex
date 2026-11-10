@@ -111,10 +111,11 @@ defmodule AshOnetime.Store do
   end
 
   @doc """
-  Creates the next `months_ahead` monthly `response_payloads` range partitions so retention
-  stays bounded past the install window. Idempotent and concurrency-safe (advisory-locked).
-  Operator-scheduled via `mix ash_onetime.roll_partitions` or `AshOnetime.Oban.PartitionWorker`;
-  without it, payloads past the install window route to `_default` and are never dropped.
+  Creates the next `months_ahead` monthly `response_payloads` range partitions so payloads
+  past the install window land in droppable monthly partitions. Idempotent and
+  concurrency-safe (advisory-locked). Operator-scheduled via `mix ash_onetime.roll_partitions`
+  or `AshOnetime.Oban.PartitionWorker`; without it, payloads route to `_default`, which claim
+  cleanup still empties row by row but which is never reclaimed as a whole table.
 
   Returns `{:ok, %{partitions_created: n}}` or an `AshOnetime.Store.Result` failure.
   """

@@ -80,9 +80,11 @@ against the old guard.
 
 The `ash_onetime_response_payloads` table is range-partitioned by month. The install migration
 generates a fixed window (install month through +12). Cleanup drops only past, empty named
-partitions; the `_default` partition is excluded from drop enumeration. Once retention exceeds
-the generated window, payloads route to `_default` and are never dropped — silently defeating
-bounded retention. Forward monthly partition creation keeps the window ahead of retention:
+partitions; the `_default` partition is excluded from drop enumeration. Retention itself is
+enforced by claim cleanup: deleting an expired claim deletes its payload row in whichever
+partition holds it, `_default` included. Once retention exceeds the generated window, payloads
+route to `_default`, which is emptied row by row but never reclaimed as a table. Forward
+monthly partition creation keeps the window ahead of retention so expired months drop whole:
 
 ```sh
 mix ash_onetime.roll_partitions --repo MyApp.Repo --months 6
@@ -106,10 +108,11 @@ the payload). Within-retention stranded payloads are left — a retry under a ne
 execution, and the rolled-forward partitions now route future inserts correctly.
 
 **Gap recovery:** `roll_partitions` only creates partitions ahead of the current month — it does
-not back-fill. If the worker/cron is down for a month or longer, that month's within-retention
-payloads strand in `_default` (which cleanup never drops). Re-running
-`mix ash_onetime.gen.roll_forward` is the recovery procedure: its drain is idempotent and removes
-any past-retention payloads that aged out while the roll was down. An exhausted `PartitionWorker`
+not back-fill. If the worker/cron is down for a month or longer, that month's payloads land in
+`_default`. Claim cleanup still deletes them at retention, but `_default` is never dropped, so
+its storage is only reused, never reclaimed as a table. Re-running
+`mix ash_onetime.gen.roll_forward` is the recovery procedure: it creates the missing months, and
+its idempotent drain deletes past-retention claims (and their payloads) immediately. An exhausted `PartitionWorker`
 (`max_attempts: 3` discards persistent failures) leaves the same gap — monitor for discarded
 jobs and re-run the forward migration when the worker has been down across a month boundary.
 
@@ -121,8 +124,9 @@ transient failure — lock contention, a slow query, momentary checkout pressure
 30–90 s, giving a still-holding contender time to finish (a failed roll returns fast under its
 own 5 s `lock_timeout`); the wide jitter decorrelates simultaneous failures, and the cap bounds
 the delay however far `max_attempts` is raised (ADR-0005). A job that exhausts its 3 attempts
-is discarded; for the retention-critical `PartitionWorker` a discard strands a month of bounded
-retention. **Alert on discarded jobs:**
+is discarded. A discarded `CleanupWorker` delays retention itself (claim cleanup deletes
+expired payloads); a discarded `PartitionWorker` routes new payloads to `_default`, which is
+emptied at retention but never reclaimed as a table. **Alert on discarded jobs:**
 
 ```sql
 SELECT queue, attempt, max_attempts, inserted_at, discarded_at
@@ -141,9 +145,9 @@ scheduling the worker off-peak.
 **Stuck `available` jobs — the unconfigured-queue hazard.** `PartitionWorker`
 runs on a dedicated `:ash_onetime_partitions` queue (separate from cleanup). If you upgrade
 without adding `:ash_onetime_partitions` to your Oban `queues` config, jobs are enqueued but
-never executed — forward partition creation silently stalls and bounded retention degrades
-past the install window, with NOTHING discarded (so the discard alert above stays green). This
-is the one queue whose silence is a retention-critical failure. Alert on stuck-available jobs:
+never executed — forward partition creation silently stalls and payloads past the install
+window route to `_default` (still deleted at retention, never reclaimed as a table), with
+NOTHING discarded (so the discard alert above stays green). Alert on stuck-available jobs:
 
 ```sql
 SELECT queue, count(*) AS stuck, min(inserted_at) AS oldest
@@ -247,9 +251,9 @@ this bounded steady-state rather than a manual fire drill.
 
 ### partition-discard-detected — a PartitionWorker exhausted its retries
 
-**Symptom.** A discarded `PartitionWorker` job on the `ash_onetime_partitions` queue. This
-strands a month of bounded retention: new payloads route to `_default` and are never dropped
-(ADR-0001). The bounded jittered backoff (ADR-0005) retries transient failures within minutes,
+**Symptom.** A discarded `PartitionWorker` job on the `ash_onetime_partitions` queue. New
+payloads route to `_default` until a roll succeeds. Claim cleanup still deletes them at
+retention, but that month can no longer be reclaimed as a whole table (ADR-0001). The bounded jittered backoff (ADR-0005) retries transient failures within minutes,
 so a discard means a persistent failure (a malformed argument, an unresolvable repo, a DDL
 error) — not a transient stall.
 
@@ -478,14 +482,43 @@ misconfigured (wrong role, or something is blocking its DDL).
 
 Operational notes:
 
-- **Prune lock waits are bounded.** `config :ash_onetime, :partition_prune_lock_timeout_ms, 2_000`
-  sets the per-lock wait in milliseconds (1–5,000; invalid values return `:invalid_request`).
-  A timeout keeps the candidate with reason `:lock_unavailable` for the next run. Taking
-  the parent lock first prevents the late DROP upgrade cycle; an open parent reader can
-  delay an unrelated insert only until this pending lock times out. The caller's
-  `lock_timeout` and `row_security` settings are restored on every successful drop or
-  savepoint rollback. Successful drops hold their locks until the outer transaction ends,
-  so schedule bounded batches and do not wrap cleanup in a long-lived transaction.
+- **One lock budget per prune run.** `config :ash_onetime, :partition_prune_lock_timeout_ms, 2_000`
+  (1–5,000 ms; invalid values return `:invalid_request`) bounds the whole partition pass, not
+  each lock: a pending parent `ACCESS EXCLUSIVE` queues every tenant's payload reads and writes,
+  so one run can stall that traffic for at most the budget plus the candidate in flight. Each
+  parent lock waits only for what remains of the budget; a timeout keeps that candidate with
+  reason `:lock_unavailable`, and candidates left when the budget is spent are not examined
+  (not counted) until the next run. The child lock is requested while the parent is held, so it
+  never waits (`NOWAIT`): a child held by a direct reader or vacuum is kept as
+  `:lock_unavailable` and the pass moves on. Taking the parent lock first prevents the late DROP
+  upgrade cycle. The caller's `lock_timeout` and `row_security` settings are restored on every
+  successful drop or savepoint rollback.
+- **One pruner per payload table.** Overlapping cleanups (an Oban run and the mix task, or two
+  schedules) both hold the parent's row lock from claim deletion, so both requesting the DROP
+  lock would deadlock. The prune takes a transaction-scoped advisory key on the parent's OID just
+  before locking; a cleanup that finds it taken stops its partition pass and still commits its
+  claim cleanup. Non-owner drivers never take the key.
+- **Successful drops hold their locks until the transaction ends**, and the advisory key with
+  them. `Store.cleanup` commits right after the pass; if you call it inside your own
+  transaction, commit promptly.
+- **Why empty months stay attached.** Ordinary short transactions never starve the prune: once
+  its lock request is queued, new work queues behind it. Only a lock holder that outlasts the
+  budget does, such as a session idle in a transaction, a long report, or a backup. Under
+  generic prepared plans, any open transaction that read the payload table holds every
+  partition. Find holders with:
+
+  ```sql
+  SELECT l.pid, l.mode, a.state, now() - a.xact_start AS xact_age
+  FROM pg_locks l LEFT JOIN pg_stat_activity a USING (pid)
+  WHERE l.relation = 'your_schema.ash_onetime_response_payloads'::regclass AND l.granted
+  ORDER BY xact_age DESC NULLS LAST;
+  ```
+
+  Bound them with `idle_in_transaction_session_timeout` and statement timeouts for reporting
+  roles, and schedule the prune clear of backups. Retention does not depend on the drop (claim
+  cleanup deletes expired payload rows); an unpruned month costs an empty table and its index.
+  After lowering retention, months written under the old horizon stay occupied at the front of
+  the oldest-first window; raise `partition_limit` (up to 128) to reach newer empty months.
 - **Cleanup requires READ COMMITTED.** Under REPEATABLE READ the prune's snapshot predates
   its lock, so a row committed while the lock waits would be invisible to the count;
   cleanup refuses with `:unsupported_isolation` like every claim path.
@@ -501,32 +534,29 @@ Operational notes:
 
   ```sql
   DO $copy$
-  DECLARE r record; ddl text; roles text; cmd text; using_part text; check_part text;
+  DECLARE child regclass; r record; roles text; cmd text; using_part text; check_part text;
   BEGIN
-    FOR child_oid IN
-      SELECT c.oid FROM pg_inherits i
+    FOR child IN
+      SELECT c.oid::regclass FROM pg_inherits i
       JOIN pg_class c ON c.oid = i.inhrelid
       JOIN pg_class p ON p.oid = i.inhparent
       JOIN pg_namespace n ON n.oid = p.relnamespace
       WHERE n.nspname = 'your_schema' AND p.relname = 'ash_onetime_response_payloads'
     LOOP
-      PERFORM format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', child_oid);
-      PERFORM format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', child_oid);
+      EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', child);
+      EXECUTE format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', child);
       FOR r IN SELECT * FROM pg_policies
                WHERE schemaname = 'your_schema'
                  AND tablename = 'ash_onetime_response_payloads'
       LOOP
-        IF NOT EXISTS (SELECT 1 FROM pg_policies
-                       WHERE schemaname = 'your_schema'
-                         AND tablename = (SELECT relname FROM pg_class WHERE oid = child_oid)
-                         AND policyname = r.policyname) THEN
+        IF NOT EXISTS (SELECT 1 FROM pg_policy
+                       WHERE polrelid = child AND polname = r.policyname) THEN
           roles := coalesce((SELECT string_agg(quote_ident(m), ', ') FROM unnest(r.roles) AS m), 'PUBLIC');
           cmd := CASE r.cmd WHEN 'ALL' THEN '' ELSE 'FOR ' || r.cmd || ' ' END;
           using_part := CASE WHEN r.qual IS NULL THEN '' ELSE 'USING (' || r.qual || ') ' END;
           check_part := CASE WHEN r.with_check IS NULL THEN '' ELSE 'WITH CHECK (' || r.with_check || ')' END;
-          ddl := format('CREATE POLICY %I ON %s AS %s %s TO %s %s%s',
-                        r.policyname, child_oid, r.permissive, cmd, roles, using_part, check_part);
-          EXECUTE ddl;
+          EXECUTE format('CREATE POLICY %I ON %s AS %s %sTO %s %s%s',
+                         r.policyname, child, r.permissive, cmd, roles, using_part, check_part);
         END IF;
       END LOOP;
     END LOOP;

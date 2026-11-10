@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.AshOnetime.PruneTest do
   use AshOnetime.Test.StoreCase, async: false
 
-  alias AshOnetime.Test.{ExternalPeer, RealConnection}
+  alias AshOnetime.Test.ExternalPeer
   alias Mix.Tasks.AshOnetime.Prune
 
   @moduletag :store
@@ -51,39 +51,39 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
 
   @tag unboxed: true
   @tag payload_partition_lock_mutation: true
-  test "cleanup locks an empty partition before deciding to drop it", %{
-    prefix: prefix,
-    target: target
-  } do
+  test "a child held by a direct reader is skipped without waiting and its sibling still drops",
+       %{prefix: prefix, target: target} do
     today = database_date()
-    from = Date.add(today, -6)
-    until_date = Date.add(today, -5)
-    detach_generated_partitions(prefix, today, ["race"])
-    create_partition(prefix, "race", from, until_date)
+    detach_generated_partitions(prefix, today, ["held", "sibling"])
+    create_partition(prefix, "held", Date.add(today, -8), Date.add(today, -7))
+    create_partition(prefix, "sibling", Date.add(today, -6), Date.add(today, -5))
 
+    # The child lock is requested while the parent ACCESS EXCLUSIVE is held, so
+    # any wait would stall every tenant: a child-only holder must be skipped.
     holder = connection!()
-    observer = connection!()
-    relation = relation(prefix, "ash_onetime_response_payloads_race")
+    relation = relation(prefix, "ash_onetime_response_payloads_held")
     Postgrex.query!(holder, "BEGIN", [])
-    Postgrex.query!(holder, "LOCK TABLE #{relation} IN ROW EXCLUSIVE MODE", [])
+    Postgrex.query!(holder, "SELECT 1 FROM #{relation}", [])
 
-    parent = self()
+    started = System.monotonic_time(:millisecond)
+    result = Store.cleanup(target, 100, 10)
+    elapsed = System.monotonic_time(:millisecond) - started
 
-    worker =
-      spawn(fn ->
-        result = RealConnection.with_connection(fn -> Store.cleanup(target, 100, 10) end)
-        send(parent, {:prune_done, self(), result})
-      end)
+    assert {:ok, %{payload_partitions: 1, payload_partitions_refused: %{lock_unavailable: 1}}} =
+             result
 
-    assert waiting_partition_prune(observer, prefix)
-    insert_live_complete(holder, prefix, from)
+    assert elapsed < 1_000
+    assert partition_exists?(prefix, "held")
+    refute partition_exists?(prefix, "sibling")
+
+    # The holder then reaches the parent and commits: no lock cycle remains.
+    Postgrex.query!(
+      holder,
+      "SELECT 1 FROM #{relation(prefix, "ash_onetime_response_payloads")} LIMIT 1",
+      []
+    )
+
     Postgrex.query!(holder, "COMMIT", [])
-
-    assert_receive {:prune_done, ^worker,
-                    {:ok, %{idempotency: 0, nonce: 0, payload_partitions: 0}}},
-                   2_000
-
-    assert partition_exists?(prefix, "race")
   end
 
   test "Mix task validates inputs and invokes bounded pruning", %{prefix: prefix} do
@@ -223,38 +223,6 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
     )
   end
 
-  defp insert_live_complete(connection, prefix, partition_date) do
-    id = Ecto.UUID.generate()
-    payload = "concurrent-live"
-
-    Postgrex.query!(
-      connection,
-      """
-      INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}
-        (id, operation_hash, scope_hash, key_hash, fingerprint, state, response_partition,
-         response_codec, response_digest, admitted_at, retain_until, inserted_at)
-      VALUES ($1::uuid, $2, $3, $4, $5, 'complete', $6, 'test', $7,
-              transaction_timestamp(), transaction_timestamp() + interval '1 hour',
-              transaction_timestamp())
-      """,
-      [
-        Ecto.UUID.dump!(id),
-        hash("operation:" <> id),
-        hash("scope:" <> id),
-        hash("key:" <> id),
-        hash("fingerprint:" <> id),
-        partition_date,
-        :crypto.hash(:sha256, payload)
-      ]
-    )
-
-    Postgrex.query!(
-      connection,
-      "INSERT INTO #{relation(prefix, "ash_onetime_response_payloads")} (partition_date, claim_id, encoded_response) VALUES ($1, $2::uuid, $3)",
-      [partition_date, Ecto.UUID.dump!(id), payload]
-    )
-  end
-
   defp connection! do
     {:ok, connection} =
       Postgrex.start_link(
@@ -268,39 +236,6 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
     end)
 
     connection
-  end
-
-  defp waiting_partition_prune(observer, _prefix) do
-    # Observe the pruning worker blocked on the race partition. `pg_locks.granted = false`
-    # is a *durable* signal — it persists for the entire time the request is blocked — so a
-    # single snapshot cannot miss the wait the way the transient pg_stat_activity.wait_event
-    # can under battery load. The worker blocks either taking SHARE (correct) or, once the
-    # lock is weakened, ACCESS EXCLUSIVE for the DROP; both are lock requests on the partition,
-    # so either mode is caught. ~30s deadline is far beyond any scheduling delay yet halts the
-    # instant the wait appears.
-    Enum.reduce_while(1..6_000, false, fn _attempt, _last ->
-      %{rows: rows} =
-        Postgrex.query!(
-          observer,
-          """
-          SELECT 1
-          FROM pg_locks l
-          JOIN pg_class c ON c.oid = l.relation
-          WHERE l.granted = false
-            AND l.pid <> pg_backend_pid()
-            AND c.relname LIKE 'ash_onetime_response_payloads_race%'
-          LIMIT 1
-          """,
-          []
-        )
-
-      if rows == [] do
-        Process.sleep(5)
-        {:cont, false}
-      else
-        {:halt, true}
-      end
-    end)
   end
 
   defp relation(prefix, name), do: ~s("#{prefix}"."#{name}")

@@ -3,12 +3,13 @@ if Code.ensure_loaded?(Oban.Worker) do
     @moduledoc """
     Optional Oban entry point for forward response-partition creation, mirroring
     `mix ash_onetime.roll_partitions`. Schedule it ahead of the retention horizon (e.g. daily or
-    weekly) so payloads never route to the `_default` partition; without it, bounded retention
-    silently degrades past the install window.
+    weekly) so payloads never route to the `_default` partition; without it, payloads past the
+    install window land in `_default`, which claim cleanup empties at retention but which is
+    never reclaimed as a table.
 
     Runs on a dedicated `:ash_onetime_partitions` queue (separate from `CleanupWorker`'s
-    `:ash_onetime_cleanup`) so forward partition creation — the retention-safety path — does
-    not compete with routine cleanup for queue slots under saturation. Configure the queue in
+    `:ash_onetime_cleanup`) so forward partition creation does not compete with cleanup for
+    queue slots under saturation. Configure the queue in
     your Oban config (`queues: [ash_onetime_partitions: N]`) or jobs sit unscheduled.
     """
 
@@ -18,9 +19,9 @@ if Code.ensure_loaded?(Oban.Worker) do
     alias AshOnetime.Store.Postgres
     alias AshOnetime.Store.Result
 
-    # Bounded jittered backoff — see CleanupWorker for the rationale. This worker is the
-    # retention-safety path: a discarded job strands a month of bounded retention
-    # (operations.md). A failed roll returns fast under its own 5s lock_timeout, and the
+    # Bounded jittered backoff — see CleanupWorker for the rationale. A discarded job leaves a
+    # month of payloads in `_default`, deleted at retention by claim cleanup but never
+    # reclaimable as a table (operations.md). A failed roll returns fast under its own 5s lock_timeout, and the
     # [30,60)s / [60,90)s spacing gives a still-holding contender time to finish instead of
     # re-colliding with it at the default's ~17-21s.
     @base_backoff_seconds 30

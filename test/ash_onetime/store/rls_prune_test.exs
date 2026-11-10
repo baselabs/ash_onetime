@@ -775,6 +775,117 @@ defmodule AshOnetime.Store.RLSPruneTest do
     end
 
     @tag @rls_prune_tier
+    @tag rls_review: true
+    test "one parent holder costs one budget per pass, not one wait per candidate" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+      put_prune_budget(1_000)
+      holder = hold_parent!(start_tenant_repo(owner_url(), "tenant-a"), prefix)
+
+      started = System.monotonic_time(:millisecond)
+      put_repo(substrate.owner_repo)
+      result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+      elapsed = System.monotonic_time(:millisecond) - started
+      release_holder!(holder)
+
+      # Both past months are empty candidates; 1.9.0 waited the full timeout on each.
+      assert {:ok, %{payload_partitions: 0, payload_partitions_refused: %{lock_unavailable: 1}}} =
+               result
+
+      assert elapsed < 1_600
+      Repo.put_dynamic_repo(Repo)
+      assert partition_exists?(prefix, partition_name(~D[2026-08-01]))
+      assert partition_exists?(prefix, partition_name(~D[2026-09-01]))
+    end
+
+    @tag @rls_prune_tier
+    @tag rls_review: true
+    @tag rls_prune_budget_mutation: true
+    test "the budget spans acquisitions: a second holder gets only what remains" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+      insert_payload!(prefix, partition_name(~D[2026-08-01]), "tenant-b", ~D[2026-08-15])
+      put_prune_budget(3_000)
+      first = hold_parent!(start_tenant_repo(owner_url(), "tenant-a"), prefix)
+      second_repo = start_tenant_repo(owner_url(), "tenant-c")
+
+      prune_task =
+        Task.async(fn ->
+          Repo.put_dynamic_repo(substrate.owner_repo)
+          started = System.monotonic_time(:millisecond)
+          result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
+          {result, System.monotonic_time(:millisecond) - started}
+        end)
+
+      _waiting = wait_for_parent_waiter!(prefix)
+      # Queued behind the prune's pending lock: granted when the prune rolls back
+      # its occupied August candidate, so September's lock must wait on it.
+      second = hold_parent_async!(second_repo, prefix)
+      wait_for_parent_waiters!(prefix, 2)
+      # Spend part of the budget on the first wait, then let August through.
+      Process.sleep(1_000)
+      release_holder!(first)
+
+      assert {{:ok, counts}, elapsed} = Task.await(prune_task, 10_000)
+      release_holder!(second)
+
+      assert %{payload_partitions: 0, payload_partitions_kept: 2} = counts
+      assert counts.payload_partitions_refused == %{lock_unavailable: 1}
+      # The pass ends near the 3,000 ms budget; a fresh per-candidate wait would
+      # end past 4,000 ms (1,000 spent on August plus a full 3,000 on September).
+      assert elapsed < 3700
+    end
+
+    @tag @rls_prune_tier
+    @tag rls_review: true
+    @tag rls_prune_single_pruner_mutation: true
+    test "overlapping cleanups on one payload parent neither deadlock nor double-prune" do
+      substrate = rls_substrate!()
+      %{prefix: prefix} = install_rls_store!(install_context(substrate))
+      parent = self()
+      owner_a = start_tenant_repo(owner_url(), "tenant-a")
+      owner_b = start_tenant_repo(owner_url(), "tenant-b")
+
+      # Each holds the parent's RowExclusive (as claim deletion does) before
+      # either prunes. B names the schema through search_path with prefix nil,
+      # so the single-pruner key must follow the table, not the prefix option.
+      cleanup = fn repo, target_prefix, setup_sql ->
+        Task.async(fn ->
+          Repo.put_dynamic_repo(repo)
+
+          Repo.transaction(fn ->
+            Enum.each(setup_sql, &query!(repo, &1))
+            query!(repo, "DELETE FROM #{prefix}.ash_onetime_response_payloads WHERE false")
+            send(parent, {:row_locked, self()})
+
+            receive do
+              :go -> :ok
+            end
+
+            Postgres.cleanup(Postgres.for_repo(Repo, target_prefix), 100, 4)
+          end)
+        end)
+      end
+
+      task_a = cleanup.(owner_a, prefix, [])
+      task_b = cleanup.(owner_b, nil, [~s{SET LOCAL search_path = "#{prefix}"}])
+      pid_a = task_a.pid
+      pid_b = task_b.pid
+      assert_receive {:row_locked, ^pid_a}, 2_000
+      assert_receive {:row_locked, ^pid_b}, 2_000
+      send(task_a.pid, :go)
+      send(task_b.pid, :go)
+
+      assert {:ok, {:ok, a}} = Task.await(task_a, 10_000)
+      assert {:ok, {:ok, b}} = Task.await(task_b, 10_000)
+      assert {a.payload_partitions_refused, b.payload_partitions_refused} == {%{}, %{}}
+      assert Enum.sort([a.payload_partitions, b.payload_partitions]) == [0, 2]
+      Repo.put_dynamic_repo(Repo)
+      refute partition_exists?(prefix, partition_name(~D[2026-08-01]))
+      refute partition_exists?(prefix, partition_name(~D[2026-09-01]))
+    end
+
+    @tag @rls_prune_tier
     @tag rls_prune_catalog_count_mutation: true
     @tag rls_review: true
     test "the prune count ignores a consumer aggregate earlier in search_path" do
@@ -990,6 +1101,71 @@ defmodule AshOnetime.Store.RLSPruneTest do
       Repo.put_dynamic_repo(Repo)
       _ = SQL.query(Repo, "DROP EVENT TRIGGER IF EXISTS ash_onetime_test_prune_hook", [])
     end)
+  end
+
+  defp put_prune_budget(milliseconds) do
+    previous = Application.get_env(:ash_onetime, :partition_prune_lock_timeout_ms)
+    Application.put_env(:ash_onetime, :partition_prune_lock_timeout_ms, milliseconds)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:ash_onetime, :partition_prune_lock_timeout_ms, previous),
+        else: Application.delete_env(:ash_onetime, :partition_prune_lock_timeout_ms)
+    end)
+  end
+
+  # An open transaction holding AccessShare on the payload parent until released.
+  defp hold_parent!(repo, prefix) do
+    holder = hold_parent_async!(repo, prefix)
+    assert_receive {:parent_held, ^holder}, 2_000
+    holder
+  end
+
+  defp hold_parent_async!(repo, prefix) do
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        Repo.put_dynamic_repo(repo)
+
+        Repo.transaction(fn ->
+          query!(repo, "SELECT 1 FROM ONLY #{prefix}.ash_onetime_response_payloads")
+          send(parent, {:parent_held, self()})
+
+          receive do
+            :release -> :ok
+          end
+        end)
+      end)
+
+    on_exit(fn -> send(task.pid, :release) end)
+    task.pid
+  end
+
+  defp release_holder!(pid) do
+    send(pid, :release)
+    :ok
+  end
+
+  defp wait_for_parent_waiters!(prefix, count, attempts \\ 200)
+
+  defp wait_for_parent_waiters!(_prefix, count, 0),
+    do: flunk("expected #{count} waiters on the payload parent")
+
+  defp wait_for_parent_waiters!(prefix, count, attempts) do
+    waiting =
+      scalar!(
+        Repo,
+        "SELECT pg_catalog.count(*) FROM pg_catalog.pg_locks WHERE relation = $1::text::regclass AND NOT granted",
+        ["#{prefix}.ash_onetime_response_payloads"]
+      )
+
+    if waiting >= count do
+      :ok
+    else
+      Process.sleep(10)
+      wait_for_parent_waiters!(prefix, count, attempts - 1)
+    end
   end
 
   defp wait_for_parent_waiter!(prefix, attempts \\ 100)

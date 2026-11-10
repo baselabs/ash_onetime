@@ -18,12 +18,13 @@ Oban's default exponential `backoff/1`, and none defined a custom backoff.
 Oban 2.23.1's default is a short exponential: `15 + 2^attempt` seconds with 0–10%
 incremental jitter (`Oban.Worker.backoff/1` → `Oban.Backoff.exponential/2` + `jitter/2`),
 which at `max_attempts: 3` spaces attempts 1→3 roughly 36–40 s apart. For DDL-class
-maintenance work on a contended, retention-critical store this is the wrong shape:
+maintenance work on a contended authoritative store this is the wrong shape:
 
 - It re-collides at ~17–21 s. A failed partition roll returns quickly (rolls fail fast
   under their own 5 s `lock_timeout`), so a retry that soon can arrive while the
-  contending lock holder is still holding — and a discarded roll strands a month of
-  bounded retention (ADR-0001): new payloads route to `_default` and are never dropped.
+  contending lock holder is still holding — and a discarded roll routes a month of new
+  payloads to `_default`, which is never reclaimed as a table (ADR-0001; retention itself
+  holds through claim cleanup, per its November 2026 amendment).
 - Its jitter is narrow (0–10% incremental), so simultaneous failures from one contention
   event (lock contention on the unique index, a slow query, momentary checkout pressure)
   retry nearly in lockstep and re-contend together.
@@ -87,7 +88,7 @@ rate is contention, triaged via `pg_stat_activity` and pool sizing.
 
 - A transient failure retries on a spaced cadence that gives contention time to clear
   between attempts instead of re-colliding with it, so a single contention event is far
-  less likely to discard a retention-critical roll.
+  less likely to discard a partition roll.
 - The discard-alert SQL is the operational contract: an operator monitoring `oban_jobs` for
   discarded rows on the queues has the signal ADR-0001's maintenance section requires.
 - The backoff is bounded at 120 s; a job that is genuinely stuck (not transiently contended) still
@@ -100,10 +101,12 @@ rate is contention, triaged via `pg_stat_activity` and pool sizing.
 ## Dedicated partition-creation queue (L4, added 2026-08-10)
 
 `PartitionWorker` runs on a dedicated `:ash_onetime_partitions` queue, separate from
-`CleanupWorker`'s `:ash_onetime_cleanup` and `ReapWorker`'s `:ash_onetime_reap`. Forward
-partition creation is the retention-safety path (a discarded job strands a month of bounded
-retention, per ADR-0001); routine cleanup is not. A shared queue let saturation on the
-cleanup path delay or starve the retention-critical roll. Consumers configuring Oban queues
+`CleanupWorker`'s `:ash_onetime_cleanup` and `ReapWorker`'s `:ash_onetime_reap`. A shared
+queue let saturation on the cleanup path delay or starve the roll, and a stalled roll fails
+silently: new payloads route to `_default`, which claim cleanup empties at retention but which
+is never reclaimed as a table. (This paragraph originally called the roll the retention-safety
+path; ADR-0001's November 2026 amendment corrects that: retention is enforced by claim
+cleanup.) Consumers configuring Oban queues
 must include `:ash_onetime_partitions` or `PartitionWorker` jobs sit unscheduled. The
 discard-alert SQL and the partition-discard triage section in `operations.md` name the new
 queue.
