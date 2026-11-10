@@ -14,11 +14,11 @@ minor whose public capabilities you use and review this page on each minor bump:
 {:ash_onetime, "~> 1.9.0"}
 ```
 
-## v1.9.0 — RLS-safe payload prune (unreleased)
+## v1.9.0 — RLS-safe payload prune (November 10, 2026)
 
 Cleanup's payload-partition prune decides `DROP TABLE` as the table owner inside a
-per-partition savepoint (an uncommitted `NO FORCE` plus an owner-exempt count), so no
-row-level-security configuration can narrow the count — see
+per-partition savepoint (an uncommitted `NO FORCE` plus an owner-exempt emptiness probe), so no
+row-level-security configuration can narrow the probe — see
 [Operations](operations.md#row-level-security). No consumer migration is required, and no
 role, function, or superuser bootstrap exists to install. Two behavior changes to review:
 cleanup now refuses to run outside READ COMMITTED (`:unsupported_isolation`), and a

@@ -1243,16 +1243,17 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   defp count_and_drop_unforced(target, relation, lock_guc, rls_guc) do
-    # row_security=off stays armed through the count, even after the FORCE gate.
-    # It raises instead of silently narrowing if RLS would still apply.
-    case dispatched_query(target, "SELECT pg_catalog.count(*) FROM #{relation}", []) do
-      {:ok, %{rows: [[count]]}} ->
-        if count == 0,
-          do: drop_pruned_partition(target, relation, lock_guc, rls_guc),
-          else: rollback_prune(target, :occupied)
-
-      {:error, %Result{} = result} ->
-        prune_error(target, result, :error)
+    # row_security=off stays armed through the emptiness probe, even after the
+    # FORCE gate: it raises instead of silently narrowing if RLS would still
+    # apply. EXISTS, not count(*): the parent's ACCESS EXCLUSIVE lock is held
+    # here, so an occupied partition must answer at its first live row instead
+    # of stalling every tenant's payload traffic behind a full scan. It also
+    # resolves no function through the caller's search_path.
+    case dispatched_query(target, "SELECT EXISTS (SELECT 1 FROM #{relation})", []) do
+      {:ok, %{rows: [[false]]}} -> drop_pruned_partition(target, relation, lock_guc, rls_guc)
+      {:ok, %{rows: [[true]]}} -> rollback_prune(target, :occupied)
+      {:ok, _other} -> rollback_prune(target, {:refused, :error})
+      {:error, %Result{} = result} -> prune_error(target, result, :error)
     end
   end
 

@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## v1.9.0 — RLS-safe payload prune (unreleased)
+## v1.9.0 — November 10, 2026
 
 - **The payload-partition prune now decides `DROP TABLE` as the table owner, inside a
   per-partition savepoint, and no consumer row-level-security configuration can make it
@@ -12,10 +12,12 @@ All notable changes to this project are documented in this file.
   by OID that the relation is a
   plain-heap child of the schema's payload parent owned by the driver, applies an
   uncommitted `ALTER TABLE … NO FORCE ROW LEVEL SECURITY`, rechecks that FORCE is off,
-  and uses `pg_catalog.count(*)` with `row_security` disabled before ALTER through count.
-  Both the FORCE gate and GUC are required defenses against consumer DDL hooks.
-  PostgreSQL exempts the owner of a non-FORCEd table before it consults
-  `row_security`, so the count is unfiltered or errors — a mechanism (`check_enable_rls`),
+  and probes emptiness with `SELECT EXISTS (SELECT 1 FROM <partition>)` with
+  `row_security` disabled from before the ALTER through the probe. Both the FORCE gate and
+  GUC are required defenses against consumer DDL hooks. The probe stops at the first live
+  row, so an occupied partition never holds the parent lock for a full scan, and it
+  resolves no function through the caller's `search_path`. PostgreSQL exempts the owner of
+  a non-FORCEd table before it consults `row_security`, so the probe is unfiltered or errors — a mechanism (`check_enable_rls`),
   not a list of policy shapes: restrictive policies (direct, `TO PUBLIC`, or via group
   membership), missing permissive policies, and attached partitions without grants all
   resolve to kept-or-error, never a silently narrowed count. Empty ⇒ drop; otherwise (or

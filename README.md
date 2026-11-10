@@ -151,7 +151,7 @@ context boundaries over an append-only fact table with the `context_boundary` se
 and `AshOnetime.Boundary` — admission only when nothing matching changed since read.
 See [Context boundaries](documentation/context-boundary.md). The payload-partition prune
 decides `DROP TABLE` as the table owner inside a per-partition savepoint, so no
-row-level-security configuration can narrow its count; see
+row-level-security configuration can narrow its emptiness check; see
 [Operations](documentation/operations.md). Existing installs need no migration; the
 fact tables are opt-in via `mix ash_onetime.gen.migrations --fact-tables`.
 

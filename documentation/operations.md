@@ -450,10 +450,12 @@ subtransaction no other session can observe. Per past-retention partition it tak
 DROP's own `ACCESS EXCLUSIVE` lock on the parent first and then the child, re-verifies by OID that the relation is a plain-heap
 child of the schema's payload parent owned by the driver, applies an uncommitted
 `ALTER TABLE … NO FORCE ROW LEVEL SECURITY`, refuses if FORCE is still on (a DDL hook
-can reapply it), and counts with `row_security` disabled. `row_security=off` is armed
-before the ALTER and remains a required fail-closed defense through the count.
+can reapply it), and probes emptiness with `EXISTS` while `row_security` is disabled.
+`row_security=off` is armed before the ALTER and remains a required fail-closed defense
+through the probe. The probe stops at the first live row, so an occupied partition holds
+the parent lock only briefly rather than for a full scan.
 PostgreSQL exempts the owner of a non-FORCEd table before it consults `row_security`
-(`check_enable_rls`), so the count is unfiltered or errors — whatever policies exist, in
+(`check_enable_rls`), so the probe is unfiltered or errors — whatever policies exist, in
 any shape (restrictive direct, `TO PUBLIC`, via group membership; a missing permissive
 policy; an attached partition without grants). That is a mechanism, not a list of cases.
 Empty ⇒ drop; otherwise — or on any statement error — rollback-to-savepoint restores

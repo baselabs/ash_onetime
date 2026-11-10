@@ -726,8 +726,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "payload-partition-count" => %{
       path: "lib/ash_onetime/store/postgres.ex",
-      original: ~S|"SELECT pg_catalog.count(*) FROM #{relation}", []|,
-      mutated: ~S|"SELECT 0", []|,
+      original: ~S|"SELECT EXISTS (SELECT 1 FROM #{relation})", []|,
+      mutated: ~S|"SELECT false", []|,
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_count_mutation",
       test_name:
@@ -774,8 +774,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "rls-prune-catalog-count" => %{
       path: "lib/ash_onetime/store/postgres.ex",
-      original: "\"SELECT pg_catalog.count(*) FROM \#{relation}\", []",
-      mutated: "\"SELECT count(*) FROM \#{relation}\", []",
+      original: "\"SELECT EXISTS (SELECT 1 FROM \#{relation})\", []",
+      mutated: "\"SELECT count(*) > 0 FROM \#{relation}\", []",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_catalog_count_mutation",
       test_name: "the prune count ignores a consumer aggregate earlier in search_path",
