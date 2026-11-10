@@ -96,7 +96,8 @@ done so since the store's first commit. Dropping past, empty monthly partitions 
 storage and keeps the partition count bounded; it is not the retention mechanism. Forward
 partition creation keeps `_default` empty so expired months can be dropped whole. Since
 1.9.1 the prune is bounded per run by one lock budget
-(`:partition_prune_lock_timeout_ms`), never waits on a child lock, and runs on one physical
+(`:partition_prune_lock_timeout_ms`), never waits on a child lock (nor, since 1.9.2, on the
+`_default` lock a drop also takes), and runs on one physical
 parent at a time, because every pending parent ACCESS EXCLUSIVE queues all tenants'
 payload traffic.
 

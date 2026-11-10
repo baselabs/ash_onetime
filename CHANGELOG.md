@@ -11,7 +11,8 @@ All notable changes to this project are documented in this file.
   The prune now requests that lock with `NOWAIT` after the child lock; a busy `_default` keeps
   the candidate as `:lock_unavailable`.
 - **Docs.** The operations guide explains how to run the prune around long transactions
-  (backups, long reports, idle-in-transaction sessions).
+  (backups, long reports, idle-in-transaction sessions). The idempotency livebook's maintenance
+  section now describes the per-pass lock budget (it still described the 1.9.0 per-lock wait).
 
 ## v1.9.1 — November 10, 2026
 

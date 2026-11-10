@@ -451,7 +451,8 @@ as empty. ash_onetime's prune never trusts such a count — and never needs to:
 **The prune decides as the table owner, inside a per-partition savepoint.** Only the table
 owner can `DROP TABLE` anyway, so the owner uses its own exemption, scoped to a
 subtransaction no other session can observe. Per past-retention partition it takes the
-DROP's own `ACCESS EXCLUSIVE` lock on the parent first and then the child, re-verifies by OID that the relation is a plain-heap
+DROP's own `ACCESS EXCLUSIVE` lock on the parent first, then the child and the `_default`
+partition without waiting, re-verifies by OID that the relation is a plain-heap
 child of the schema's payload parent owned by the driver, applies an uncommitted
 `ALTER TABLE … NO FORCE ROW LEVEL SECURITY`, refuses if FORCE is still on (a DDL hook
 can reapply it), and probes emptiness with `EXISTS` while `row_security` is disabled.

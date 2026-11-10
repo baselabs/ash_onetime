@@ -293,8 +293,9 @@ AshOnetime.Error.code(error)
 
 Run partition maintenance as the table owner. Under FORCE RLS, the owner temporarily
 un-FORCEs each candidate inside a savepoint, refuses if a DDL hook reapplies FORCE, and
-checks emptiness with `EXISTS` under `row_security=off`. The parent lock is taken before the child, with a
-bounded wait (default two seconds); a timeout keeps the partition for the next run.
+checks emptiness with `EXISTS` under `row_security=off`. The parent lock is taken before the
+child. One lock budget (default two seconds) bounds the whole pass: a parent-lock timeout keeps
+the partition for the next run, and the child and `_default` locks never wait.
 The kept total includes occupied partitions. `payload_partitions_refused` identifies
 refusals by reason, and only refusals emit `:partitions_kept` telemetry.
 
