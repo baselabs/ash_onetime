@@ -1,13 +1,25 @@
 # RLS-safe payload prune — 1.9.0 build report
 
-**Release line (NOT RUN; tag and publication require the owner's yes):**
+**Published November 10, 2026 (owner approved).** Tag `v1.9.0` → `22b31ba`;
+[hex.pm/packages/ash_onetime/1.9.0](https://hex.pm/packages/ash_onetime/1.9.0)
+(checksum `fca832970d2cfa7e54ed30db20179c5a5bd3440d22434582fb8e605b60507209`).
+Landed through `kimosabe-land` (CI run 42798435746: Ash 3.37.2, Ash latest, OTP 28 and
+release gates green; 767/767 suite checks, 174/174 mutations, optional matrix, all four
+source livebooks); tag CI run 42803129480 green on the same SHA. Post-publish verified:
+hex.pm `latest_version` is `1.9.0`; the release's `ash` requirement is the floating
+`>= 3.37.2 and < 4.0.0` and `ash_sql` is `~> 0.8 and >= 0.8.6`; all four livebooks execute
+against the published package (`scripts/check_livebooks.exs --published`).
 
-```sh
-git tag -a v1.9.0 -m "1.9.0" && git push origin main v1.9.0
-env -u ASH_ONETIME_ASH_VERSION mix hex.publish --yes
-```
+**Release check (replaces the owner-relayed i-1 answer).** The owner handed release
+verification to this session. Review of `76b028e..90f0b2e` confirmed i-1's four
+findings fixed, and found one regression in the finding-2 fix: with the parent's ACCESS
+EXCLUSIVE lock taken first, a full `count(*)` of each occupied past partition stalled
+every tenant's payload traffic for the length of the scan on every cleanup run. `82913be`
+replaces it with `SELECT EXISTS (SELECT 1 FROM <partition>)`, which stops at the first
+live row and resolves no function through `search_path`; the count and catalog-count
+mutation rows were retargeted and pass RED→GREEN. `22b31ba` adds `kci/**` to the CI push
+trigger so `kimosabe-land` gets its pre-merge run.
 
-**Status: ready for i-1's check; local commits only. Push, tag, and publication held.**
 The four i-1 findings and the supported AshSql floor repair are implemented and verified.
 The owner requested covering checks only for this continuation; no full suite or
 all-mutation battery was rerun. Earlier complete results are distinguished below.
@@ -174,11 +186,8 @@ reproduce the assertions. No full-suite or all-mutation command was run in this 
 
 ## Remaining items — classified
 
-- **OPEN — owner rule forbids push before the owner-relayed i-1 check.** Its answer
-  must be recorded here when received; landing/CI remains held with the push.
-- **OPEN — owner rule forbids tag and Hex publish without the owner's yes.** No tag
-  or publish occurred. Published-mode livebooks need the unpublished 1.9.0 artifact
-  and were not run. OTP 28/floating-Ash CI lanes wait with the held landing.
+- **DONE — push, tag, Hex publish, published-mode livebooks, OTP 28 and floating-Ash
+  CI lanes** (see the top of this report).
 - **OPEN — needs another product's unbuilt work: Agent Access's upgrade from its
   `~> 1.8.0`/locked 1.8.0 dependency to 1.9.0.** Live maintenance adoption was not
   executed here. Its requested policy-helper source check is **DONE**: it checks
