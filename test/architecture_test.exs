@@ -440,8 +440,6 @@ defmodule AshOnetime.ArchitectureTest do
 
     for forbidden <- [
           "ash_webhook_it",
-          "core_os",
-          "qorpay",
           "bounded_authority",
           "Aws.KMS",
           "GoogleApi.CloudKMS",

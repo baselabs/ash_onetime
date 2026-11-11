@@ -18,7 +18,7 @@ defmodule AshOnetime.PackageCheck do
     "documentation/dsls/DSL-AshOnetime.Resource.md"
   ]
   @forbidden_prefixes [".forge/", ".git/", "_build/", "config/", "deps/", "scripts/", "test/"]
-  @reference_projects ~r/\b(?:ash_age|ash_webhook_it|bounded_authority(?:_protocol)?|core_os|qorpay)\b/i
+  @reference_projects ~r/\b(?:ash_age|ash_webhook_it|bounded_authority(?:_protocol)?)\b/i
   @secret_literal ~r/\b(?:api[_-]?key|password|private[_-]?key|secret)\s*[:=]\s*["'][^"']+["']/i
   @provider_crypto ~r/defmodule\s+\S*(?:Stripe|GitHub|Slack|Twilio)\S*(?:Signature|Verifier)/i
   @versioned_identifier ~r/(?:^|[\/_])[^\/]*_v\d+(?:\.|_|\/|$)|\b(?:defmodule|def|defp)\s+\S*(?:_v\d+|V\d+)\b/i

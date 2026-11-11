@@ -10,7 +10,7 @@
 - Nonce admission fails closed when authoritative state is unavailable.
 - Idempotency may proceed when admission state is unavailable, but must surface that condition through telemetry.
 - Verification callbacks return trusted local facts; action input cannot supply pre-verified facts.
-- Do not depend on `ash_webhook_it`, `core_os`, QorPay, or Bounded Authority packages.
+- Do not depend on `ash_webhook_it` or Bounded Authority packages.
 - Do not place phase, task, slice, release, schema, worker, contract, or API versions in durable project identifiers.
 - macOS and Linux developers clone, build and run the gate as-is; Windows developers use WSL2,
   cloning inside the WSL filesystem (owner direction, October 4, 2026); CI runs on Linux only.

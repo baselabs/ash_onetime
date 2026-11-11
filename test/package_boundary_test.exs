@@ -8,9 +8,7 @@ defmodule AshOnetime.PackageBoundaryTest do
     :ash_age,
     :ash_webhook_it,
     :bounded_authority,
-    :bounded_authority_protocol,
-    :core_os,
-    :qorpay
+    :bounded_authority_protocol
   ]
 
   test "the live package contains no forbidden boundary violations" do
@@ -21,12 +19,10 @@ defmodule AshOnetime.PackageBoundaryTest do
     deps = [
       {:ash_age, path: "../ash_age"},
       {:ash_webhook_it, git: "https://example.invalid/ash_webhook_it.git"},
-      {:bounded_authority_protocol, "~> 0.1"},
-      {:core_os, path: "../../GPT/core_os"},
-      {:qorpay, path: "../../Qor/qorpay"}
+      {:bounded_authority_protocol, "~> 0.1"}
     ]
 
-    assert Enum.count(violations([], deps), &match?({:forbidden_dependency, _, _}, &1)) == 5
+    assert Enum.count(violations([], deps), &match?({:forbidden_dependency, _, _}, &1)) == 3
   end
 
   test "runtime application callbacks are rejected" do
@@ -81,7 +77,7 @@ defmodule AshOnetime.PackageBoundaryTest do
       serialized_options = inspect(options)
 
       if name in @forbidden_dependencies or
-           Regex.match?(~r/(?:Base|BaseLabs|Qor|GPT)\//, serialized_options) do
+           Regex.match?(~r/(?:Base|BaseLabs)\//, serialized_options) do
         [{:forbidden_dependency, name, options}]
       else
         []
