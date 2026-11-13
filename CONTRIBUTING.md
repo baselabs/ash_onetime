@@ -76,8 +76,8 @@ After publishing, run `elixir scripts/check_livebooks.exs --published` with the 
 notebook cells against PostgreSQL; it is the executable consumer check for the artifact users
 will install.
 
-Run the gate battery on the runtime pinned in `.tool-versions` (Elixir 1.20.4 on
-Erlang/OTP 29.0.3) — the primary CI runtime. Development on OTP 28 is equally
+Run the gate battery on the runtime pinned in `.tool-versions` (Elixir 1.20.5 on
+Erlang/OTP 29.1.2) — the primary CI runtime. Development on OTP 28 is equally
 supported: `config/config.exs` refuses any OTP release outside the supported set
 (`28`, `29`) before anything compiles, and CI's dedicated `otp-28` job proves that
 end. The set grows only in the same commit that adds the CI leg.

@@ -24,8 +24,10 @@ CI runs once on `main`; if it goes red, fix forward.
 
 CI runs: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix test`,
 `mix credo --strict`, `mix dialyzer`, `MIX_ENV=test mix dialyzer`, `mix deps.audit`,
-`mix hex.audit`, `mix docs --warnings-as-errors`, `mix hex.build`, plus the release battery in
-`CONTRIBUTING.md` on tags. Run the ones that cover your change.
+`mix hex.audit`, `mix docs --warnings-as-errors`, `mix hex.build`, the `security` job
+(osv-scanner on `mix.lock`, and `mix hex.audit`), plus the release battery in `CONTRIBUTING.md`
+on tags. The lock and `.tool-versions` hold the latest stable releases; the published dependency
+ranges stay as wide as the supported floors. Run the ones that cover your change.
 
 - Publishing, deploying and pushes to mirrors always need the owner's approval for that action.
 - A test that fails on every run is a defect: fix it, or quarantine it with a reason, in the

@@ -20,8 +20,8 @@ env:
   # Lockstep with mix.exs' `elixir:` support window (the pinned toolchain must
   # satisfy it) and .tool-versions — all three move together in ONE commit;
   # divergence between the three is a defect.
-  ELIXIR_VERSION: "1.20.4"
-  OTP_VERSION: "29.0.3"
+  ELIXIR_VERSION: "1.20.5"
+  OTP_VERSION: "29.1.2"
   DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
 
 jobs:
@@ -224,3 +224,45 @@ jobs:
         env:
           ASH_ONETIME_RLS_PRUNE_TESTS: "1"
       - run: mix credo --strict
+
+  # Supply-chain advisories on the committed lock, failing closed. osv-scanner (one pinned 2.x
+  # release, checksum-verified) runs offline: the public Hex advisory database is downloaded
+  # first, with nothing from the lock sent, and the scan then runs in a network namespace with
+  # no network. It fails on any published advisory affecting a locked version, and with no
+  # database. hex.audit fails on any retired package.
+  security:
+    name: "Security"
+    runs-on: ubuntu-latest
+    env:
+      OSV_SCANNER_VERSION: "2.7.1"
+      OSV_SCANNER_SHA256: "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install osv-scanner and download the Hex advisory database
+        run: |
+          curl -sSfLo "$RUNNER_TEMP/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+          mkdir -p "$RUNNER_TEMP/osv-db/osv-scalibr/Hex"
+          curl -sSfLo "$RUNNER_TEMP/osv-db/osv-scalibr/Hex/all.zip" \
+            "https://osv-vulnerabilities.storage.googleapis.com/Hex/all.zip"
+
+      - name: Scan mix.lock offline, with the network denied
+        run: |
+          if sudo unshare --net -- curl -sS -m 5 -o /dev/null https://osv.dev 2>/dev/null; then
+            echo "network is reachable inside the scan namespace" >&2
+            exit 1
+          fi
+          sudo unshare --net -- env OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY="$RUNNER_TEMP/osv-db" \
+            "$RUNNER_TEMP/osv-scanner" scan source --offline -L mix.lock
+
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - run: mix deps.get
+      - run: mix hex.audit

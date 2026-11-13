@@ -13,7 +13,7 @@ defmodule AshOnetime.MixProject do
       # the exact runtime exercised; this requirement is not a build pin.
       # This repo's OWN exact toolchain identity is enforced separately:
       # .tool-versions and CI's ELIXIR_VERSION/OTP_VERSION pin the build every
-      # gate runs on (currently 1.20.4 / OTP 29.0.3), and config/config.exs
+      # gate runs on (currently 1.20.5 / OTP 29.1.2), and config/config.exs
       # refuses a foreign OTP build before anything compiles. Lockstep rule:
       # this requirement, .tool-versions, and CI's ELIXIR_VERSION/OTP_VERSION
       # move together in ONE commit — the pinned toolchain must satisfy this

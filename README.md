@@ -163,7 +163,7 @@ plus direct execution of the four Livebooks against PostgreSQL. Full release his
 
 ## Compatibility
 
-- Elixir `~> 1.20` (developed and tested on 1.20.4; this requirement admits later 1.x releases
+- Elixir `~> 1.20` (developed and tested on 1.20.5; this requirement admits later 1.x releases
   and excludes 2.0 or newer)
 - Erlang/OTP 28 or 29
 - Ash `>= 3.37.2` and `< 4.0.0`
@@ -208,7 +208,7 @@ back. The release battery (mutation matrix, executable Livebooks, unpacked-packa
 cheat-sheet freshness) runs against the committed lock, not per cell.
 `.github/workflows/ci.yml` is configured to re-run this matrix on every push and
 pull request, plus a dedicated OTP 28 leg covering the other end of the supported
-runtime set. The pinned development runtime is Elixir 1.20.4 / Erlang/OTP 29.0.3
+runtime set. The pinned development runtime is Elixir 1.20.5 / Erlang/OTP 29.1.2
 (`.tool-versions`).
 
 ## Development
