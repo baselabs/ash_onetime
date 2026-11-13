@@ -44,12 +44,14 @@ defmodule AshOnetime.MixProject do
 
   defp aliases do
     [
+      # hex.audit runs first: once the project compiles, Mix prunes code paths to the
+      # project's own dependencies, which hides the Hex archive's tasks.
       precommit: [
+        "hex.audit",
         "format --check-formatted",
         "compile --warnings-as-errors",
         "credo --strict",
         "spark.cheat_sheets --check --extensions AshOnetime.Resource",
-        "hex.audit",
         "deps.audit"
       ]
     ]
