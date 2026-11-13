@@ -16,29 +16,32 @@ defmodule <%= inspect(module) %> do
   # only past-retention rows (a re-run drains whatever newly aged out).
 
   def up do
+    schema = installation_schema()
+
     execute("""
     CREATE INDEX IF NOT EXISTS ash_onetime_idempotency_claims_response_partition_index
-    ON #{q("ash_onetime_idempotency_claims")} (response_partition)
+    ON #{q("ash_onetime_idempotency_claims", schema)} (response_partition)
     """)
 
     for %{name: name, from: from, to: to} <- <%= inspect(partitions) %> do
       execute("""
-      CREATE TABLE IF NOT EXISTS #{q(name)} PARTITION OF #{q("ash_onetime_response_payloads")}
+      CREATE TABLE IF NOT EXISTS #{q(name, schema)} PARTITION OF #{q("ash_onetime_response_payloads", schema)}
       FOR VALUES FROM ('#{Date.to_iso8601(from)}') TO ('#{Date.to_iso8601(to)}')
       """)
     end
 
     execute("""
-    DELETE FROM #{q("ash_onetime_idempotency_claims")}
+    DELETE FROM #{q("ash_onetime_idempotency_claims", schema)}
     WHERE state = 'complete'
-      AND #{q("ash_onetime_cleanup_eligible")}(retain_until)
+      AND hold_reference IS NULL
+      AND #{q("ash_onetime_cleanup_eligible", schema)}(retain_until)
       AND id IN (
         SELECT claim_id
-        FROM #{q("ash_onetime_response_payloads")}
+        FROM #{q("ash_onetime_response_payloads", schema)}
         WHERE tableoid IN (
           SELECT oid FROM pg_class
           WHERE relname = 'ash_onetime_response_payloads_default'
-            AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = #{schema_name()})
+            AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = #{schema_name(schema)})
         )
       )
     """)
@@ -52,26 +55,24 @@ defmodule <%= inspect(module) %> do
     :ok
   end
 
-  defp q(name) do
+  defp q(name, schema), do: quote_identifier(schema) <> "." <> quote_identifier(name)
+
+  # Resolve once from the addressed parent: an empty "$user" schema first on search_path
+  # must neither hide public's DEFAULT partition nor receive new monthly partitions.
+  defp installation_schema do
     case prefix() do
-      nil -> quote_identifier(name)
-      prefix_value -> quote_identifier(prefix_value) <> "." <> quote_identifier(name)
+      nil ->
+        %{rows: [[schema]]} = Ecto.Adapters.SQL.query!(repo().get_dynamic_repo(), """
+        SELECT n.nspname FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.oid = 'ash_onetime_response_payloads'::regclass
+        """, [])
+        schema
+      prefix_value -> prefix_value
     end
   end
 
-  # The namespace the drain's _default OID subquery scopes to. ecto_sql does NOT set
-  # search_path for prefixed migrations, so current_schema() resolves to the connection
-  # default (typically 'public'), NOT the migration's prefix — using current_schema() here
-  # would make a prefixed (multi-tenant) drain silently miss the tenant's _default partition
-  # and drain zero rows. Resolve from prefix() (the migration's actual schema), falling back
-  # to current_schema() only for the nil-prefix (single-tenant) case — mirroring the store's
-  # `target.prefix || schema` pattern (postgres.ex database_schema_and_date/1).
-  defp schema_name do
-    case prefix() do
-      nil -> "current_schema()"
-      prefix_value -> "'#{prefix_value}'"
-    end
-  end
+  defp schema_name(schema), do: "'#{String.replace(schema, "'", "''")}'"
 
   defp quote_identifier(value), do: ~s("#{String.replace(value, "\"", "\"\"")}")
 end

@@ -2,6 +2,25 @@ defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "operation-hold-delete-guard" => %{
+      path: "priv/templates/migrations/install.exs",
+      original: "IF OLD.hold_reference IS NOT NULL THEN",
+      mutated: "IF FALSE THEN",
+      test: "test/ash_onetime/operation_hold_test.exs",
+      tag: "hold_guard_mutation",
+      test_name:
+        "the delete guard stops a direct DELETE by the table owner before retention checks",
+      assertion: "assert initial_message =~ \"held idempotency claim\""
+    },
+    "operation-hold-cleanup-exclusion" => %{
+      path: "priv/templates/migrations/install.exs",
+      original: "          AND hold_reference IS NULL",
+      mutated: "          AND TRUE",
+      test: "test/ash_onetime/operation_hold_test.exs",
+      tag: "hold_cleanup_mutation",
+      test_name: "cleanup excludes held rows before the guard; the guard is not invoked",
+      assertion: "assert {:ok, %{idempotency: 0}} = Store.cleanup(ctx.target, 100)"
+    },
     "nonce-retention-stored-deadline" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original: "DateTime.compare(request.clock.now(), claim.retain_until) in [:lt, :eq]",

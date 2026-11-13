@@ -3,8 +3,10 @@ defmodule AshOnetime.ExternalRecoveryTest do
 
   alias AshOnetime.Test.ActionExamples.Resource
   alias AshOnetime.Test.{ExternalEffectSupport, ExternalPeer}
+  alias DBConnection.ConnectionPool
 
   @moduletag unboxed: true
+  @checkpoint_timeout 30_000
 
   setup_all do
     installation = install_store!()
@@ -43,7 +45,9 @@ defmodule AshOnetime.ExternalRecoveryTest do
     {worker, monitor} =
       run_worker(context, {:pause_before_execute, self(), reference}, "crash-before", 10)
 
-    assert_receive {:external_pause, ^reference, :before_execute, operation_key, ^worker}, 5_000
+    assert_receive {:external_pause, ^reference, :before_execute, operation_key, ^worker},
+                   @checkpoint_timeout
+
     assert claim_state(context.prefix, operation_key) == "processing"
     assert ExternalPeer.calls(context.prefix) == []
 
@@ -69,7 +73,9 @@ defmodule AshOnetime.ExternalRecoveryTest do
     {worker, monitor} =
       run_worker(context, {:pause_after_execute, self(), reference}, "crash-after", 11)
 
-    assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^worker}, 5_000
+    assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^worker},
+                   @checkpoint_timeout
+
     assert [["execute", ^operation_key]] = ExternalPeer.calls(context.prefix)
     assert ExternalPeer.count(context.prefix, "external_peer_effects") == 1
     assert ExternalPeer.count(context.prefix, "external_local_effects") == 0
@@ -93,7 +99,9 @@ defmodule AshOnetime.ExternalRecoveryTest do
     {worker, monitor} =
       run_worker(context, {:pause_after_execute, self(), reference}, "divergent-recover", 11)
 
-    assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^worker}, 5_000
+    assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^worker},
+                   @checkpoint_timeout
+
     Process.exit(worker, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 5_000
 
@@ -189,7 +197,9 @@ defmodule AshOnetime.ExternalRecoveryTest do
     {worker, monitor} =
       run_worker(context, {:pause_after_execute, self(), reference}, "lying-absent", 21)
 
-    assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^worker}, 5_000
+    assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^worker},
+                   @checkpoint_timeout
+
     assert ExternalPeer.count(context.prefix, "external_peer_effects") == 1
 
     Process.exit(worker, :kill)
@@ -298,18 +308,21 @@ defmodule AshOnetime.ExternalRecoveryTest do
     {worker, monitor} =
       run_worker(context, {:pause_after_execute, self(), reference}, "retention", 20)
 
-    assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^worker}, 5_000
+    assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^worker},
+                   @checkpoint_timeout
+
     SQL.query!(Repo, "SELECT pg_sleep(0.05)", [])
+    %{rows: [[before_completion]]} = SQL.query!(Repo, "SELECT statement_timestamp()", [])
     send(worker, {:external_continue, reference})
-    assert_receive {:external_action_result, ^worker, {:ok, 20}}, 5_000
+    assert_receive {:external_action_result, ^worker, {:ok, 20}}, @checkpoint_timeout
     assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 5_000
 
-    %{rows: [[from_admission, from_statement]]} =
+    %{rows: [[from_admission, deadline, observed_at]]} =
       SQL.query!(
         Repo,
         """
         SELECT extract(epoch FROM retain_until - admitted_at)::float8,
-               extract(epoch FROM retain_until - statement_timestamp())::float8
+               retain_until, statement_timestamp()
         FROM #{relation(context.prefix, "ash_onetime_idempotency_claims")}
         WHERE id = $1::uuid
         """,
@@ -317,8 +330,96 @@ defmodule AshOnetime.ExternalRecoveryTest do
       )
 
     assert from_admission > 3_600.04
-    assert from_statement > 3_599.0
-    assert from_statement <= 3_600.0
+    assert DateTime.compare(deadline, DateTime.add(before_completion, 3_600)) != :lt
+    assert DateTime.compare(deadline, DateTime.add(observed_at, 3_600)) != :gt
+  end
+
+  @tag :external_checkpoint_wait
+  test "a peer checkpoint can wait for a real unfinished peer transaction", context do
+    parent = self()
+    reference = make_ref()
+
+    holder =
+      Task.async(fn ->
+        {:ok, connection} = Postgrex.start_link(ExternalPeer.database_options())
+
+        try do
+          Postgrex.transaction(connection, fn transaction ->
+            Postgrex.query!(
+              transaction,
+              "LOCK TABLE #{relation(context.prefix, "external_peer_effects")} IN EXCLUSIVE MODE",
+              []
+            )
+
+            send(parent, :peer_lock_held)
+            Postgrex.query!(transaction, "SELECT pg_sleep(6)", [])
+          end)
+        after
+          if Process.alive?(connection), do: GenServer.stop(connection)
+        end
+      end)
+
+    try do
+      assert_receive :peer_lock_held, 5_000
+
+      {worker, monitor} =
+        run_worker(context, {:pause_after_execute, self(), reference}, "peer-lock", 22)
+
+      assert_receive {:external_pause, ^reference, :after_execute, _operation_key, ^worker},
+                     @checkpoint_timeout
+
+      assert ExternalPeer.count(context.prefix, "external_peer_effects") == 1
+      Process.exit(worker, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 5_000
+      assert {:ok, _} = Task.await(holder, 15_000)
+    after
+      Task.shutdown(holder, :brutal_kill)
+    end
+  end
+
+  @tag capture_log: true
+  @tag :external_peer_client_cleanup
+  test "killing a peer caller stops its client pool and rolls back its open transaction",
+       context do
+    parent = self()
+    before = MapSet.new(Process.list())
+
+    {caller, monitor} =
+      start_monitored_worker(fn ->
+        ExternalPeer.execute(context.prefix, Ecto.UUID.generate(), %{value: 23},
+          hold: fn ->
+            send(parent, {:peer_transaction_open, self()})
+            receive do: (:continue -> :ok)
+          end
+        )
+      end)
+
+    assert_receive {:peer_transaction_open, ^caller}, 5_000
+
+    pools =
+      Process.list() |> Enum.reject(&MapSet.member?(before, &1)) |> Enum.filter(&client_pool?/1)
+
+    assert [pool] = pools
+    pool_monitor = Process.monitor(pool)
+
+    try do
+      Process.exit(caller, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^caller, :killed}, 5_000
+      assert_receive {:DOWN, ^pool_monitor, :process, ^pool, _reason}, 5_000
+      assert ExternalPeer.count(context.prefix, "external_peer_effects") == 0
+    after
+      if Process.alive?(pool), do: GenServer.stop(pool)
+    end
+  end
+
+  defp client_pool?(pid) do
+    case Process.info(pid, :dictionary) do
+      {:dictionary, entries} ->
+        Keyword.get(entries, :"$initial_call") == {ConnectionPool, :init, 1}
+
+      _other ->
+        false
+    end
   end
 
   defp run_generic(context, request_key, value) do
@@ -351,7 +452,7 @@ defmodule AshOnetime.ExternalRecoveryTest do
   defp run_worker(context, mode, request_key, value) do
     parent = self()
 
-    spawn_monitor(fn ->
+    start_monitored_worker(fn ->
       ExternalEffectSupport.put_mode(mode)
       send(parent, {:external_action_result, self(), run_generic(context, request_key, value)})
     end)
@@ -363,7 +464,9 @@ defmodule AshOnetime.ExternalRecoveryTest do
     {worker, monitor} =
       run_worker(context, {:pause_before_execute, self(), reference}, request_key, value)
 
-    assert_receive {:external_pause, ^reference, :before_execute, operation_key, ^worker}, 5_000
+    assert_receive {:external_pause, ^reference, :before_execute, operation_key, ^worker},
+                   @checkpoint_timeout
+
     Process.exit(worker, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 5_000
     operation_key

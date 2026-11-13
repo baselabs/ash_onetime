@@ -220,23 +220,27 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   @impl AshOnetime.Store
+  def complete(target, claim, codec, digest, encoded_response),
+    do: complete(target, claim, codec, digest, encoded_response, nil)
+
+  @impl AshOnetime.Store
   def complete(
         %Target{} = target,
         %Claim{strategy: :idempotency} = claim,
         codec,
         digest,
-        encoded_response
+        encoded_response,
+        hold_reference
       ) do
-    with_checkout(target, fn ->
-      case transaction_preconditions(target) do
-        :ok -> complete_transaction(target, claim, codec, digest, encoded_response)
-        {:error, %Result{} = result} -> result
-      end
-    end)
+    complete_mode(target, claim, codec, digest, encoded_response, :database, hold_reference)
   end
 
-  def complete(_target, _claim, _codec, _digest, _encoded_response),
+  def complete(_target, _claim, _codec, _digest, _encoded_response, _hold_reference),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
+
+  @impl AshOnetime.Store
+  def complete_external(target, claim, codec, digest, encoded_response),
+    do: complete_external(target, claim, codec, digest, encoded_response, nil)
 
   @impl AshOnetime.Store
   def complete_external(
@@ -244,21 +248,60 @@ defmodule AshOnetime.Store.Postgres do
         %Claim{strategy: :idempotency} = claim,
         codec,
         digest,
-        encoded_response
+        encoded_response,
+        hold_reference
       ) do
-    with_checkout(target, fn ->
-      case transaction_preconditions(target) do
-        :ok ->
-          complete_transaction(target, claim, codec, digest, encoded_response, :external)
+    complete_mode(target, claim, codec, digest, encoded_response, :external, hold_reference)
+  end
 
-        {:error, %Result{} = result} ->
-          result
+  def complete_external(_target, _claim, _codec, _digest, _encoded_response, _hold_reference),
+    do: Result.failure(:invalid_request, :not_started, :not_applicable)
+
+  defp complete_mode(target, claim, codec, digest, payload, mode, hold_reference) do
+    with_checkout(target, fn ->
+      with :ok <- transaction_preconditions(target),
+           :ok <- validate_hold(hold_reference) do
+        complete_transaction(target, claim, codec, digest, payload, mode, hold_reference)
+      else
+        {:error, %Result{} = result} -> result
+        {:error, _error} -> Result.failure(:invalid_request, :not_started, :open)
       end
     end)
   end
 
-  def complete_external(_target, _claim, _codec, _digest, _encoded_response),
+  @doc false
+  @spec release(Target.t(), binary()) :: {:ok, non_neg_integer()} | Result.t()
+  def release(%Target{} = target, reference) do
+    with_checkout(target, fn ->
+      with :ok <- AshOnetime.Hold.validate_reference(reference),
+           :ok <- transaction_preconditions(target) do
+        release_query(target, reference)
+      else
+        {:error, %Result{} = result} -> result
+        {:error, _error} -> Result.failure(:invalid_request, :not_started, :open)
+      end
+    end)
+  end
+
+  def release(_target, _reference),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
+
+  defp release_query(target, reference) do
+    sql = """
+    UPDATE #{relation(target, "ash_onetime_idempotency_claims")}
+    SET hold_reference = NULL,
+        retain_until = GREATEST(retain_until, statement_timestamp() + (retain_until - admitted_at))
+    WHERE logical_partition = $1 AND hold_reference = $2
+    """
+
+    case dispatched_query(target, sql, [target.logical_partition, reference]) do
+      {:ok, %{num_rows: count}} -> {:ok, count}
+      {:error, %Result{} = result} -> result
+    end
+  end
+
+  defp validate_hold(nil), do: :ok
+  defp validate_hold(reference), do: AshOnetime.Hold.validate_reference(reference)
 
   @impl AshOnetime.Store
   def load(%Target{} = target, %Claim{} = claim) do
@@ -381,6 +424,36 @@ defmodule AshOnetime.Store.Postgres do
 
   def roll_partitions(_target, _months_ahead),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
+
+  @doc false
+  @spec held_backlog(Target.t()) :: {:ok, AshOnetime.Store.held_backlog()} | Result.t()
+  def held_backlog(%Target{} = target) do
+    with_dynamic_repo(target, fn ->
+      sql = """
+      SELECT pg_catalog.count(*),
+             EXTRACT(EPOCH FROM (statement_timestamp() - pg_catalog.min(admitted_at)))::bigint
+      FROM #{relation(target, "ash_onetime_idempotency_claims")}
+      WHERE hold_reference IS NOT NULL
+      """
+
+      case dispatched_query(target, sql, []) do
+        {:ok, %{rows: [[count, age]]}} when is_integer(count) and count >= 0 ->
+          {:ok, %{held_count: count, oldest_age_seconds: oldest_age(count, age)}}
+
+        {:ok, _result} ->
+          Result.failure(:store_invariant, :sent, :not_applicable)
+
+        {:error, %Result{} = result} ->
+          result
+      end
+    end)
+  rescue
+    _exception -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+  catch
+    :exit, _reason -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
+  end
+
+  def held_backlog(_target), do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
   @spec processing_backlog(Target.t()) ::
           {:ok,
@@ -573,14 +646,12 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  defp complete_transaction(target, claim, codec, digest, encoded_response),
-    do: complete_transaction(target, claim, codec, digest, encoded_response, :database)
-
-  defp complete_transaction(target, claim, codec, digest, encoded_response, mode) do
+  defp complete_transaction(target, claim, codec, digest, encoded_response, mode, hold_reference) do
     with :ok <- validate_completion(codec, digest, encoded_response),
          {:ok, partition_date} <- database_date(target, mode),
          :ok <- insert_payload(target, partition_date, claim.id, encoded_response),
-         {:ok, completed} <- update_complete(target, claim, partition_date, codec, digest, mode) do
+         {:ok, completed} <-
+           update_complete(target, claim, partition_date, codec, digest, mode, hold_reference) do
       Result.success(:complete, claim: completed, payload: encoded_response)
     else
       {:error, %Result{} = result} ->
@@ -652,7 +723,7 @@ defmodule AshOnetime.Store.Postgres do
             transaction_timestamp())
     ON CONFLICT DO NOTHING
     RETURNING id, logical_partition, operation_hash, scope_hash, key_hash, fingerprint, state,
-              response_partition, response_codec, response_digest,
+              response_partition, response_codec, response_digest, hold_reference,
               admitted_at, retain_until, inserted_at
     """
 
@@ -778,7 +849,7 @@ defmodule AshOnetime.Store.Postgres do
   defp claim_projection(:idempotency) do
     {"ash_onetime_idempotency_claims",
      "id, logical_partition, operation_hash, scope_hash, key_hash, fingerprint, state, " <>
-       "response_partition, response_codec, response_digest, " <>
+       "response_partition, response_codec, response_digest, hold_reference, " <>
        "admitted_at, retain_until, inserted_at"}
   end
 
@@ -809,7 +880,7 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  defp update_complete(target, claim, partition_date, codec, digest, mode) do
+  defp update_complete(target, claim, partition_date, codec, digest, mode, hold_reference) do
     retention_update =
       case mode do
         :database -> ""
@@ -819,7 +890,7 @@ defmodule AshOnetime.Store.Postgres do
     sql = """
     UPDATE #{relation(target, "ash_onetime_idempotency_claims")}
     SET state = 'complete', response_partition = $1, response_codec = $2,
-        response_digest = $3#{retention_update}
+        response_digest = $3, hold_reference = $9#{retention_update}
     WHERE #{@completion_key_predicate}
       AND id = $8::uuid AND state = 'processing'
       AND (
@@ -833,13 +904,13 @@ defmodule AshOnetime.Store.Postgres do
         WHERE logical_partition = $4 AND claim_id = $8::uuid AND partition_date = $1
       )
     RETURNING id, logical_partition, operation_hash, scope_hash, key_hash, fingerprint, state,
-              response_partition, response_codec, response_digest,
+              response_partition, response_codec, response_digest, hold_reference,
               admitted_at, retain_until, inserted_at
     """
 
     parameters =
       [partition_date, codec, digest] ++
-        Tuple.to_list(logical_key(claim)) ++ [dump_uuid(claim.id)]
+        Tuple.to_list(logical_key(claim)) ++ [dump_uuid(claim.id), hold_reference]
 
     case dispatched_query(target, sql, parameters) do
       {:ok, %{num_rows: 1, rows: [row]}} -> {:ok, decode_claim(:idempotency, row)}
@@ -1068,13 +1139,16 @@ defmodule AshOnetime.Store.Postgres do
     do: quote_identifier(schema) <> "." <> quote_identifier(name)
 
   defp database_schema_and_date(target) do
-    case dispatched_query(
-           target,
-           "SELECT pg_catalog.current_schema(), pg_catalog.transaction_timestamp()::date",
-           []
-         ) do
+    sql = """
+    SELECT namespace.nspname, pg_catalog.transaction_timestamp()::date
+    FROM pg_catalog.pg_class parent
+    JOIN pg_catalog.pg_namespace namespace ON namespace.oid = parent.relnamespace
+    WHERE parent.oid = $1::text::regclass
+    """
+
+    case dispatched_query(target, sql, [relation(target, "ash_onetime_response_payloads")]) do
       {:ok, %{rows: [[schema, %Date{} = date]]}} when is_binary(schema) ->
-        {:ok, target.prefix || schema, date}
+        {:ok, schema, date}
 
       {:ok, _result} ->
         {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
@@ -1829,6 +1903,7 @@ defmodule AshOnetime.Store.Postgres do
          response_partition,
          response_codec,
          response_digest,
+         hold_reference,
          admitted_at,
          retain_until,
          inserted_at
@@ -1845,6 +1920,7 @@ defmodule AshOnetime.Store.Postgres do
       response_partition: response_partition,
       response_codec: response_codec,
       response_digest: response_digest,
+      hold_reference: hold_reference,
       admitted_at: admitted_at,
       retain_until: retain_until,
       inserted_at: inserted_at

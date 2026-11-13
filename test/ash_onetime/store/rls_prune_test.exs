@@ -142,12 +142,13 @@ defmodule AshOnetime.Store.RLSPruneTest do
   @tag rls_prune_unforce_mutation: true
   @tag rls_prune_count_mutation: true
   test "tenant-session cleanup under FORCE RLS drops the empty partition, keeps the occupied one, and still deletes claims" do
+    # Give both real PostgreSQL probes the supported five-second pass budget.
+    put_prune_budget(5_000)
     tier1 = tier1_substrate!()
     base_url = if(tier1.privileged, do: owner_url(), else: database_url())
 
     %{prefix: prefix} = install_rls_store!(tier1)
     partition = partition_name(~D[2026-09-01])
-    on_exit(fn -> drop_quietly(prefix) end)
 
     # Tenant B's replay payload sits alone in a past-month partition; tenant
     # A's claim is past retention and eligible for cleanup.
@@ -197,7 +198,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
     %{prefix: prefix} = install_rls_store!(tier1)
     partition = partition_name(~D[2026-09-01])
     insert_payload!(prefix, partition, "tenant-b", ~D[2026-09-15])
-    on_exit(fn -> drop_quietly(prefix) end)
 
     # A stale REPEATABLE READ snapshot would read a partition empty even after
     # a row committed while the prune's lock waited (the F1 race the design
@@ -249,7 +249,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
     base_url = base_url(tier1)
 
     %{prefix: prefix} = install_rls_store!(tier1)
-    on_exit(fn -> drop_quietly(prefix) end)
 
     # roll_partitions (the library path) creates a child beyond the install
     # window; the copy under test is Postgres.copy_parent_row_security/3.
@@ -1386,6 +1385,17 @@ defmodule AshOnetime.Store.RLSPruneTest do
     prefix = "ash_onetime_rls_#{unique}"
     temporary = Path.join(System.tmp_dir!(), "ash_onetime_rls_#{unique}")
     migrations = Path.join(temporary, "migrations")
+    install_module = Module.concat([Repo, Migrations, InstallAshOnetime])
+
+    on_exit(fn ->
+      try do
+        drop_installation!(prefix)
+      after
+        :code.purge(install_module)
+        :code.delete(install_module)
+        File.rm_rf!(temporary)
+      end
+    end)
 
     Mix.Task.reenable("ash_onetime.gen.migrations")
 
@@ -1401,7 +1411,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
     GenerateMigrations.run(arguments)
 
     [install_path] = Path.wildcard(Path.join(migrations, "*_install_ash_onetime.exs"))
-    [{install_module, _}] = Code.compile_file(install_path)
+    [{^install_module, _}] = Code.compile_file(install_path)
     install_version = 2_026_110_900_000
 
     install_repo = context[:install_repo] || Repo
@@ -1660,9 +1670,9 @@ defmodule AshOnetime.Store.RLSPruneTest do
     value
   end
 
-  defp drop_quietly(prefix) do
+  defp drop_installation!(prefix) do
     Repo.put_dynamic_repo(Repo)
-    _ = SQL.query(Repo, ~s{DROP SCHEMA IF EXISTS "#{prefix}" CASCADE}, [])
+    SQL.query!(Repo, ~s{DROP SCHEMA IF EXISTS "#{prefix}" CASCADE}, [])
     :ok
   end
 end

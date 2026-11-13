@@ -112,3 +112,22 @@ mix ecto.migrate
 The upgrade backfills existing rows to `global`. Its down migration refuses while non-global
 claims or payloads exist, preventing a rollback from merging distinct authorities. See
 [Upgrading](upgrading.md) and [Operations](operations.md).
+
+## Operation holds
+
+`Transaction.complete(admission, bytes, hold: reference)` atomically retains the completed
+claim while the caller's operation is open. References are valid 1..255-byte UTF-8 binaries
+without NUL and unique within the installation's logical partition. A UUID is suitable.
+
+In the caller's READ COMMITTED settling transaction, call
+`Transaction.release(repo, partition: partition, prefix: prefix, reference: reference)`.
+It starts no transaction, obeys the caller's row security, and returns `{:ok, count}` (zero
+for an unknown reference). It clears every visible matching hold in that partition and keeps
+at least the full retention window from release. Rollback preserves the hold. A settling
+transaction cannot release an uncommitted hold on another connection; coordinate lifecycle
+ordering with admission's commit.
+
+If the caller never releases, records remain forever by design. Monitor `Store.held_backlog/1`
+and the live doctor. See [Idempotency](idempotency.md#keep-an-open-operations-record) for the
+Ash-native change and the DELETE guard's administrative boundary, and
+[Upgrading](upgrading.md#unreleased--operation-holds) for existing installations.

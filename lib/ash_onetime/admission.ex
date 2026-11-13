@@ -34,6 +34,7 @@ defmodule AshOnetime.Admission do
       :target,
       :claim,
       :contract,
+      :hold,
       :cache,
       :replayed
     ]
@@ -47,6 +48,7 @@ defmodule AshOnetime.Admission do
             target: AshOnetime.Store.Postgres.Target.t() | nil,
             claim: AshOnetime.Store.Claim.t() | nil,
             contract: AshOnetime.Response.Contract.t() | nil,
+            hold: module() | nil,
             cache: AshOnetime.Cache.Config.t() | nil,
             replayed: term()
           }
@@ -231,7 +233,9 @@ defmodule AshOnetime.Admission do
 
     case Response.encode(result, contract, []) do
       {:ok, encoded} ->
-        persist_completion(state, encoded, started)
+        with {:ok, reference} <- hold_reference(state, result) do
+          persist_completion(state, encoded, started, reference)
+        end
 
       {:reject, _value} ->
         emit_encoding(state, duration(started), :rejected)
@@ -255,10 +259,30 @@ defmodule AshOnetime.Admission do
   def complete(_state, _result),
     do: {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
 
-  defp persist_completion(state, encoded, started) do
-    completion = persist_encoded(state, encoded)
+  defp hold_reference(%State{hold: nil}, _result), do: {:ok, nil}
 
-    with :ok <- validate_complete(completion, state, encoded),
+  defp hold_reference(state, result) do
+    case state.hold.reference(result, %{resource: state.resource, action: state.action}) do
+      :none ->
+        {:ok, nil}
+
+      {:hold, reference} ->
+        with :ok <- AshOnetime.Hold.validate_reference(reference), do: {:ok, reference}
+
+      _other ->
+        {:error,
+         Error.new(:invalid_request, "hold callback must return {:hold, reference} or :none")}
+    end
+  rescue
+    _exception -> {:error, Error.new(:invalid_request, "hold callback failed")}
+  catch
+    _kind, _reason -> {:error, Error.new(:invalid_request, "hold callback failed")}
+  end
+
+  defp persist_completion(state, encoded, started, reference) do
+    completion = persist_encoded(state, encoded, reference)
+
+    with :ok <- validate_complete(completion, state, encoded, reference),
          :ok <- emit_encoding(state, duration(started), :stored) do
       emit_cache(state, Cache.store(state.cache, completion.claim, encoded.payload))
       {:ok, encoded.result}
@@ -267,23 +291,25 @@ defmodule AshOnetime.Admission do
     end
   end
 
-  defp persist_encoded(%State{class: :external_execute} = state, encoded) do
+  defp persist_encoded(%State{class: :external_execute} = state, encoded, reference) do
     store().complete_external(
       state.target,
       state.claim,
       encoded.codec,
       encoded.digest,
-      encoded.payload
+      encoded.payload,
+      reference
     )
   end
 
-  defp persist_encoded(state, encoded) do
+  defp persist_encoded(state, encoded, reference) do
     store().complete(
       state.target,
       state.claim,
       encoded.codec,
       encoded.digest,
-      encoded.payload
+      encoded.payload,
+      reference
     )
   end
 
@@ -379,6 +405,7 @@ defmodule AshOnetime.Admission do
          request: request,
          target: target,
          contract: contract,
+         hold: protection.hold,
          cache: Cache.config(protection.limits)
        }}
     end
@@ -920,7 +947,8 @@ defmodule AshOnetime.Admission do
            claim: %Claim{} = claim
          },
          state,
-         encoded
+         encoded,
+         reference
        )
        when is_binary(payload) do
     with :ok <- validate_locator(claim, state.request, state.target),
@@ -928,6 +956,7 @@ defmodule AshOnetime.Admission do
          :match <- fingerprint_disposition(claim, state.request),
          :ok <- validate_claim_state(claim, :complete),
          true <- claim.response_codec == encoded.codec,
+         true <- claim.hold_reference == reference,
          true <- payload == encoded.payload,
          true <- fixed_digest_equal?(claim.response_digest, encoded.digest),
          true <- fixed_digest_equal?(:crypto.hash(:sha256, payload), encoded.digest) do
@@ -937,7 +966,7 @@ defmodule AshOnetime.Admission do
     end
   end
 
-  defp validate_complete(_result, _state, _encoded),
+  defp validate_complete(_result, _state, _encoded, _reference),
     do: {:error, Error.new(:store_invariant, "store result violated an invariant")}
 
   defp fixed_digest_equal?(left, right)

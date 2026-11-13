@@ -8,6 +8,10 @@ defmodule AshOnetime.Store do
   @callback lock_for_effect(term(), Claim.t(), keyword()) :: Result.t()
   @callback complete(term(), Claim.t(), binary(), binary(), binary()) :: Result.t()
   @callback complete_external(term(), Claim.t(), binary(), binary(), binary()) :: Result.t()
+  @callback complete(term(), Claim.t(), binary(), binary(), binary(), binary() | nil) ::
+              Result.t()
+  @callback complete_external(term(), Claim.t(), binary(), binary(), binary(), binary() | nil) ::
+              Result.t()
   @callback load(term(), Claim.t()) :: Result.t()
 
   @doc false
@@ -41,6 +45,17 @@ defmodule AshOnetime.Store do
   end
 
   @doc false
+  @spec complete(term(), Claim.t(), binary(), binary(), binary(), binary() | nil) :: Result.t()
+  def complete(target, claim, codec, digest, payload, reference),
+    do: Postgres.complete(target, claim, codec, digest, payload, reference)
+
+  @doc false
+  @spec complete_external(term(), Claim.t(), binary(), binary(), binary(), binary() | nil) ::
+          Result.t()
+  def complete_external(target, claim, codec, digest, payload, reference),
+    do: Postgres.complete_external(target, claim, codec, digest, payload, reference)
+
+  @doc false
   @spec load(term(), Claim.t()) :: Result.t()
   def load(target, claim), do: Postgres.load(target, claim)
 
@@ -69,6 +84,21 @@ defmodule AshOnetime.Store do
         result
     end
   end
+
+  @type held_backlog :: %{
+          held_count: non_neg_integer(),
+          oldest_age_seconds: non_neg_integer() | nil
+        }
+
+  @doc """
+  Counts held idempotency claims and reports the oldest admission's age in seconds.
+
+  An unreleased hold is kept forever by design. `oldest_age_seconds` is nil for an empty
+  backlog. Counts include only rows visible to the connecting role under row security;
+  they are not necessarily installation totals. Returns `{:ok, backlog}` or a store failure.
+  """
+  @spec held_backlog(term()) :: {:ok, held_backlog()} | Result.t()
+  def held_backlog(target), do: Postgres.held_backlog(target)
 
   @type processing_backlog :: %{
           processing_count: non_neg_integer(),

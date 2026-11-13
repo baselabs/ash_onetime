@@ -259,7 +259,7 @@ defmodule AshOnetime.Test.ExternalPeer do
 
   defp with_connection(callback) do
     {:ok, connection} = Postgrex.start_link(database_options())
-    Process.unlink(connection)
+    # Caller death must retire the client pool as well as its checked-out transaction.
 
     try do
       callback.(connection)

@@ -5,7 +5,6 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
-  alias AshOnetime.Resource.ContextBoundary
   alias Mix.Tasks.AshOnetime.Gen.LogicalPartitions
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: GenerateMigrations
 
@@ -111,7 +110,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
     try do
       SQL.query!(Repo, ~s{CREATE SCHEMA "#{schema}"}, [])
 
-      for round <- 1..2 do
+      for _round <- 1..2 do
         :ok = Ecto.Migrator.up(Repo, version, module, prefix: schema, log: false)
         :ok = Ecto.Migrator.down(Repo, version, module, prefix: schema, log: false)
       end
@@ -221,6 +220,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
              "priv/templates/migrations/hash_partitioned.exs",
              "priv/templates/migrations/install.exs",
              "priv/templates/migrations/logical_partitions.exs",
+             "priv/templates/migrations/operation_hold.exs",
              "priv/templates/migrations/roll_forward.exs"
            ]
   end

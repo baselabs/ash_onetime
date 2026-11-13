@@ -43,18 +43,14 @@ defmodule AshOnetime.Store.RollForwardTest do
       assert source =~ "DELETE FROM"
       assert source =~ "ash_onetime_idempotency_claims"
       assert source =~ "ash_onetime_response_payloads_default"
-      # L8: the _default OID subquery is namespace-scoped via schema_name/0, which resolves
-      # from prefix() (NOT current_schema() — ecto_sql does not set search_path for prefixed
-      # migrations, so current_schema() would miss a tenant's _default partition, the cross-
-      # vendor BLOCKING finding). schema_name/0 emits current_schema() for the nil-prefix
-      # (single-tenant) case and the literal prefix otherwise. The prefix-resolution is
-      # exercised by the run_drain!/1 integration test (which binds the prefix directly).
+      # Every relation and the DEFAULT OID lookup use the addressed parent's namespace.
+      # Nil-prefix installs resolve it from regclass, even behind an empty user schema.
       assert source =~ "relnamespace"
-      assert source =~ "schema_name()"
-      assert source =~ "defp schema_name do"
+      assert source =~ "schema_name(schema)"
+      assert source =~ "defp schema_name(schema)"
       # The helper must branch on prefix() (not unconditionally use current_schema()).
       assert source =~ "case prefix() do"
-      # The prefix branch emits a quoted literal schema name (the prefix value).
+      # An explicit prefix remains authoritative.
       assert source =~ "prefix_value ->"
     end
   end

@@ -74,6 +74,9 @@ canonical input and cache payload work.
 Nonce requires `window` and deliberately has no response, top-level `retention`, external-effect,
 or failure-direction option. Its optional `window retain_for:` duration extends claim retention
 without changing `max_age` acceptance; it defaults to `max_age` and cannot be smaller.
+`hold MyApp.OperationHold` is idempotency-only and requires `reference/2`, returning
+`{:hold, reference}` or `:none` from the action outcome. Release the reference in the settling
+transaction with `AshOnetime.Changes.ReleaseHold`; see [Idempotency](idempotency.md#keep-an-open-operations-record).
 `external_effect` is idempotency-only and requires a recoverable
 adapter; its pre-peer claim lock serializes concurrent same-key retries
 (`external_lock_timeout_ms`, default 2000 — ADR-0010).

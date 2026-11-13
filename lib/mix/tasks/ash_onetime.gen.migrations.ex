@@ -3,8 +3,13 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
   Generates the PostgreSQL objects required by `ash_onetime`.
 
       mix ash_onetime.gen.migrations --repo MyApp.Repo
+      mix ash_onetime.gen.migrations --repo MyApp.Repo --operation-hold
       mix ash_onetime.gen.migrations --repo MyApp.Repo --claims hash --claim-partitions 8
       mix ash_onetime.gen.migrations --repo MyApp.Repo --fact-tables ledger_facts,payment_facts
+
+  `--operation-hold` generates the reversible upgrade for an existing installation,
+  detecting plain or hash-partitioned claims and building indexes concurrently. It cannot
+  be combined with install-only options. Apply it before running hold-aware callers.
 
   `--fact-tables` additionally generates the append-only fact tables backing
   `context_boundary` declarations (one migration creating every named table).
@@ -23,6 +28,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
   @cleanup_delete_predicate "claims.logical_partition = candidates.logical_partition AND claims.operation_hash = candidates.operation_hash AND claims.id = candidates.id"
   @switches [
     repo: :string,
+    operation_hold: :boolean,
     claims: :string,
     claim_partitions: :integer,
     fact_tables: :string,
@@ -42,6 +48,36 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     end
 
     repo = parse_repo!(options[:repo])
+
+    if options[:operation_hold],
+      do: generate_operation_hold(repo, options),
+      else: generate_install(repo, options)
+  end
+
+  defp generate_operation_hold(repo, options) do
+    if Enum.any?(
+         [:claims, :claim_partitions, :fact_tables, :partition_start],
+         &Keyword.has_key?(options, &1)
+       ),
+       do: Mix.raise("--operation-hold cannot be combined with install options")
+
+    path = migration_path(repo, options)
+    create_directory(path)
+
+    if Path.wildcard(Path.join(path, "*_add_ash_onetime_operation_hold.exs")) != [],
+      do: Mix.raise("an operation-hold upgrade migration already exists")
+
+    file =
+      Path.join(
+        path,
+        "#{parse_timestamp!(options[:timestamp])}_add_ash_onetime_operation_hold.exs"
+      )
+
+    create_file(file, render_operation_hold_upgrade(repo, []))
+    file
+  end
+
+  defp generate_install(repo, options) do
     hash_partitions = parse_claim_partitioning!(options)
     fact_tables = parse_fact_tables!(options[:fact_tables])
     path = migration_path(repo, options)
@@ -161,6 +197,23 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
       |> EEx.eval_file(module: module)
 
     source
+    |> Code.format_string!()
+    |> IO.iodata_to_binary()
+  end
+
+  @doc """
+  Renders the reversible operation-hold upgrade for an existing plain or hash-partitioned
+  installation. Adds and validates the hold constraint, concurrently builds cleanup and
+  release indexes (attaching child indexes for hash claims), recovers invalid builds, and
+  replaces the delete guard and cleanup function. Accepts no rendering options.
+  """
+  @spec render_operation_hold_upgrade(module(), keyword()) :: binary()
+  def render_operation_hold_upgrade(repo, options) when is_atom(repo) and is_list(options) do
+    if options != [], do: raise(ArgumentError, "operation hold upgrade accepts no options")
+
+    "operation_hold.exs"
+    |> template_path()
+    |> EEx.eval_file(module: Module.concat([repo, Migrations, AddAshOnetimeOperationHold]))
     |> Code.format_string!()
     |> IO.iodata_to_binary()
   end

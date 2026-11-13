@@ -62,6 +62,23 @@ defmodule AshOnetime.Test.StoreCase do
     repo
   end
 
+  def start_monitored_worker(callback) when is_function(callback, 0) do
+    {worker, monitor} = spawn_monitor(callback)
+
+    Callbacks.on_exit(fn ->
+      stopped = Process.monitor(worker)
+      Process.exit(worker, :kill)
+
+      receive do
+        {:DOWN, ^stopped, :process, ^worker, _reason} -> :ok
+      after
+        5_000 -> raise "test worker did not stop"
+      end
+    end)
+
+    {worker, monitor}
+  end
+
   def idempotency_request(label, options \\ []) do
     Claim.idempotency(
       operation_hash: hash("operation:" <> label),

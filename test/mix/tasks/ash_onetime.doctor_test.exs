@@ -137,7 +137,7 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
 
   describe "schema currency verdict (pure seam)" do
     test "a complete current schema passes every verdict" do
-      assert [{:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}] =
+      assert [{:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}] =
                Doctor.schema_status(complete_facts())
     end
 
@@ -230,6 +230,7 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
 
   defp complete_facts do
     %{
+      operation_hold: true,
       logical_partition_tables: [
         "ash_onetime_nonce_claims",
         "ash_onetime_idempotency_claims",

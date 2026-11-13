@@ -26,10 +26,10 @@ defmodule AshOnetime.System.ExternalRecoveryTest do
     {worker, monitor} =
       run_worker(context, {:pause_after_execute, self(), reference}, "system-crash", 11)
 
-    assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^worker}, 5_000
+    assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^worker}, 30_000
     assert [["execute", ^operation_key]] = ExternalPeer.calls(context.prefix)
     Process.exit(worker, :kill)
-    assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 5_000
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 30_000
 
     assert {:ok, 11} = run(context, "system-crash", 11)
 
@@ -68,7 +68,7 @@ defmodule AshOnetime.System.ExternalRecoveryTest do
   defp run_worker(context, mode, request_key, value) do
     parent = self()
 
-    spawn_monitor(fn ->
+    start_monitored_worker(fn ->
       ExternalEffectSupport.put_mode(mode)
       send(parent, {:external_result, self(), run(context, request_key, value)})
     end)
@@ -80,9 +80,9 @@ defmodule AshOnetime.System.ExternalRecoveryTest do
     {worker, monitor} =
       run_worker(context, {:pause_before_execute, self(), reference}, request_key, value)
 
-    assert_receive {:external_pause, ^reference, :before_execute, operation_key, ^worker}, 5_000
+    assert_receive {:external_pause, ^reference, :before_execute, operation_key, ^worker}, 30_000
     Process.exit(worker, :kill)
-    assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 5_000
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 30_000
     operation_key
   end
 

@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- **Operation holds.** `Transaction.complete/3` accepts `hold: reference`; the
+  `AshOnetime.Hold` callback and idempotency `hold` option place the same hold on Ash
+  action completions, including external effects. PostgreSQL retains held claims and their
+  payloads until the caller releases them in its settling transaction.
+- **Transactional release.** `Transaction.release/2` and `AshOnetime.Changes.ReleaseHold`
+  release visible claims by a caller-chosen reference, restoring at least the normal retention
+  window from release. Release obeys the caller's row security and requires READ COMMITTED.
+- **Installation and upgrade.** Install templates include the hold CHECK, delete refusal,
+  cleanup exclusion, and partial cleanup/release indexes. `--operation-hold` generates a
+  reversible upgrade with concurrent index builds, hash-child attachment, and invalid-index
+  recovery. The DEFAULT drain excludes held claims.
+- **Hold visibility.** `Store.held_backlog/1` reports count and oldest admission age; the live
+  doctor checks the new schema shape and prints the backlog with an explicit visible-row
+  caveat when row security applies. Unreleased holds are retained forever by design.
+- **Prune schema resolution.** Resolve the payload parent's namespace from its addressed
+  relation, so an empty connecting-user schema first on `search_path` cannot silently skip
+  pruning an installation in `public`. The DEFAULT drain and its monthly partition creation
+  use that same authoritative namespace. Explicit prefixes remain authoritative.
+
 ## v1.9.2 — November 10, 2026
 
 - **The partition prune no longer waits on the `_default` partition while holding the parent

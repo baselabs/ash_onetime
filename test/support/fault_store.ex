@@ -35,6 +35,20 @@ defmodule AshOnetime.Test.FaultStore do
     do: result!(:complete_external, [target, claim, codec, digest, payload])
 
   @impl AshOnetime.Store
+  def complete(target, claim, codec, digest, payload, nil),
+    do: complete(target, claim, codec, digest, payload)
+
+  def complete(target, claim, codec, digest, payload, reference),
+    do: result!(:complete, [target, claim, codec, digest, payload, reference])
+
+  @impl AshOnetime.Store
+  def complete_external(target, claim, codec, digest, payload, nil),
+    do: complete_external(target, claim, codec, digest, payload)
+
+  def complete_external(target, claim, codec, digest, payload, reference),
+    do: result!(:complete_external, [target, claim, codec, digest, payload, reference])
+
+  @impl AshOnetime.Store
   def load(target, claim), do: result!(:load, [target, claim])
 
   defp result!(operation, arguments) do

@@ -25,7 +25,7 @@ defmodule AshOnetime.Resource.Protection do
 
   One `Protection` exists per protected action, carrying its strategy (`:idempotency` or
   `:one_time_nonce`), identity scope, key source, fingerprint, response contract, retention,
-  replay window, external-effect module, store-failure policy, and limits. The struct is the
+  replay window, external-effect and hold modules, store-failure policy, and limits. The struct is the
   return type of `AshOnetime.Resource.Info.protection/2` and `protections/1`; read its fields
   directly for introspection.
   """
@@ -39,6 +39,7 @@ defmodule AshOnetime.Resource.Protection do
     :retention,
     :window,
     :external_effect,
+    :hold,
     :external_lock_timeout_ms,
     on_definite_store_failure: :fail_closed,
     commit: :with_action,
@@ -56,6 +57,7 @@ defmodule AshOnetime.Resource.Protection do
           retention: non_neg_integer() | nil,
           window: Keyword.t() | nil,
           external_effect: module() | nil,
+          hold: module() | nil,
           external_lock_timeout_ms: pos_integer() | nil,
           on_definite_store_failure: :fail_closed | :execute_untracked,
           commit: :with_action | :independent,
@@ -175,6 +177,11 @@ defmodule AshOnetime.Resource do
             "runs, so a body failure leaves the proof spent for the retention window — " <>
             "RFC 9449 §11.1 request-attempt scope (the DPoP replay fence). Applies to " <>
             "`:one_time_nonce` only; rejected for `:idempotency`."
+      ],
+      hold: [
+        type: :module,
+        doc:
+          "An AshOnetime.Hold module exporting reference/2. Holds a completed idempotency claim for an open operation; release in the settling transaction. References are unique within the installation's logical partition."
       ],
       external_effect: [
         type: :module,

@@ -26,6 +26,8 @@ defmodule <%= inspect(module) %> do
       response_partition date,
       response_codec text,
       response_digest bytea,
+      hold_reference text CONSTRAINT ash_onetime_idempotency_claims_hold_check
+        CHECK (hold_reference IS NULL OR (octet_length(hold_reference) BETWEEN 1 AND 255 AND state = 'complete')),
       admitted_at timestamptz NOT NULL,
       retain_until timestamptz NOT NULL,
       inserted_at timestamptz NOT NULL,
@@ -47,8 +49,15 @@ defmodule <%= inspect(module) %> do
     create_claim_partitions("ash_onetime_idempotency_claims")
 
     execute("""
-    CREATE INDEX ash_onetime_idempotency_claims_retain_until_index
+    CREATE INDEX ash_onetime_idempotency_claims_cleanup_index
     ON #{q("ash_onetime_idempotency_claims")} (retain_until)
+    WHERE state = 'complete' AND hold_reference IS NULL
+    """)
+
+    execute("""
+    CREATE INDEX ash_onetime_idempotency_claims_hold_index
+    ON #{q("ash_onetime_idempotency_claims")} (logical_partition, hold_reference)
+    WHERE hold_reference IS NOT NULL
     """)
 
     execute("""
@@ -168,6 +177,11 @@ defmodule <%= inspect(module) %> do
       payload_count integer;
       reap_before text;
     BEGIN
+      IF OLD.hold_reference IS NOT NULL THEN
+        RAISE EXCEPTION 'held idempotency claim cannot be deleted; release its operation hold first'
+          USING ERRCODE = '23514';
+      END IF;
+
       IF OLD.state = 'processing' THEN
         -- Processing rows are recovery points. They are deletable only inside a sanctioned reap:
         -- the reaper arms the ash_onetime.reap_before session variable, and even then only a row
@@ -268,6 +282,7 @@ defmodule <%= inspect(module) %> do
         SELECT logical_partition, operation_hash, id
         FROM #{q("ash_onetime_idempotency_claims")}
         WHERE state = 'complete'
+          AND hold_reference IS NULL
           AND #{q("ash_onetime_cleanup_eligible")}(retain_until)
         ORDER BY retain_until, logical_partition, operation_hash, id
         FOR UPDATE SKIP LOCKED

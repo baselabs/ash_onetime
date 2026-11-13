@@ -23,18 +23,20 @@ defmodule AshOnetime.ExternalContentionTest do
     parent = self()
 
     {winner, winner_monitor} =
-      spawn_monitor(fn ->
+      start_monitored_worker(fn ->
         ExternalEffectSupport.put_mode({:pause_local, parent, reference})
         send(parent, {:external_done, self(), run_generic(context)})
       end)
 
-    assert_receive {:external_pause, ^reference, :local_finalize, operation_key, ^winner}, 5_000
+    assert_receive {:external_pause, ^reference, :local_finalize, operation_key, ^winner}, 30_000
     assert [["execute", ^operation_key]] = ExternalPeer.calls(context.prefix)
     assert ExternalPeer.count(context.prefix, "external_peer_effects") == 1
     assert ExternalPeer.count(context.prefix, "external_local_effects") == 0
 
     {loser, loser_monitor} =
-      spawn_monitor(fn -> send(parent, {:external_done, self(), run_generic(context)}) end)
+      start_monitored_worker(fn ->
+        send(parent, {:external_done, self(), run_generic(context)})
+      end)
 
     assert {_blocked_pid, blockers, query} = wait_for_blocked_query(context.prefix)
     assert blockers != []
@@ -42,10 +44,10 @@ defmodule AshOnetime.ExternalContentionTest do
 
     send(winner, {:external_continue, reference})
 
-    assert_receive {:external_done, ^winner, {:ok, winner_result}}, 5_000
-    assert_receive {:DOWN, ^winner_monitor, :process, ^winner, :normal}, 5_000
-    assert_receive {:external_done, ^loser, {:ok, loser_result}}, 5_000
-    assert_receive {:DOWN, ^loser_monitor, :process, ^loser, :normal}, 5_000
+    assert_receive {:external_done, ^winner, {:ok, winner_result}}, 30_000
+    assert_receive {:DOWN, ^winner_monitor, :process, ^winner, :normal}, 30_000
+    assert_receive {:external_done, ^loser, {:ok, loser_result}}, 30_000
+    assert_receive {:DOWN, ^loser_monitor, :process, ^loser, :normal}, 30_000
     assert winner_result == loser_result
 
     calls = ExternalPeer.calls(context.prefix)
@@ -65,12 +67,12 @@ defmodule AshOnetime.ExternalContentionTest do
     parent = self()
 
     {first, first_monitor} =
-      spawn_monitor(fn ->
+      start_monitored_worker(fn ->
         ExternalEffectSupport.put_mode({:pause_before_execute, parent, reference})
         send(parent, {:external_done, self(), run_quick_lock(context, "unguarded-window")})
       end)
 
-    assert_receive {:external_pause, ^reference, :before_execute, operation_key, ^first}, 5_000
+    assert_receive {:external_pause, ^reference, :before_execute, operation_key, ^first}, 30_000
 
     # The first caller holds the ADR-0010 pre-peer claim lock: taken in its open
     # transaction before the peer call, still held while paused here. Before the lock,
@@ -80,7 +82,7 @@ defmodule AshOnetime.ExternalContentionTest do
     # committed-claim worker blocks on the claims row, times out at the configured wait,
     # and the retry is refused with the local path's concurrent-retry semantic.
     {second, second_monitor} =
-      spawn_monitor(fn ->
+      start_monitored_worker(fn ->
         send(parent, {:external_done, self(), run_quick_lock(context, "unguarded-window")})
       end)
 
@@ -93,14 +95,14 @@ defmodule AshOnetime.ExternalContentionTest do
                      %Ash.Error.Invalid{
                        errors: [%AshOnetime.Error{code: :request_in_progress}]
                      }}},
-                   5_000
+                   30_000
 
-    assert_receive {:DOWN, ^second_monitor, :process, ^second, :normal}, 5_000
+    assert_receive {:DOWN, ^second_monitor, :process, ^second, :normal}, 30_000
 
     send(first, {:external_continue, reference})
 
-    assert_receive {:external_done, ^first, {:ok, _first_result}}, 5_000
-    assert_receive {:DOWN, ^first_monitor, :process, ^first, :normal}, 5_000
+    assert_receive {:external_done, ^first, {:ok, _first_result}}, 30_000
+    assert_receive {:DOWN, ^first_monitor, :process, ^first, :normal}, 30_000
 
     # Exactly one execute reached the peer: the lock serialized the retry away before any
     # peer call. One operation, one effect, one local effect, one stored payload.
@@ -118,7 +120,7 @@ defmodule AshOnetime.ExternalContentionTest do
     parent = self()
 
     {caller, monitor} =
-      spawn_monitor(fn ->
+      start_monitored_worker(fn ->
         ExternalEffectSupport.put_mode({:pause_execute_probe, parent, reference})
         send(parent, {:external_done, self(), run_unguarded(context, "execution-environment")})
       end)
@@ -131,7 +133,7 @@ defmodule AshOnetime.ExternalContentionTest do
     # long as the (here, paused; in production, unbounded) adapter call runs.
     assert_receive {:external_pause, ^reference, :execute_probe, _operation_key, ^caller, true,
                     backend_pid},
-                   5_000
+                   30_000
 
     assert %{rows: [["idle in transaction", true]]} =
              with_observer(fn observer ->
@@ -144,8 +146,8 @@ defmodule AshOnetime.ExternalContentionTest do
 
     send(caller, {:external_continue, reference})
 
-    assert_receive {:external_done, ^caller, {:ok, _result}}, 5_000
-    assert_receive {:DOWN, ^monitor, :process, ^caller, :normal}, 5_000
+    assert_receive {:external_done, ^caller, {:ok, _result}}, 30_000
+    assert_receive {:DOWN, ^monitor, :process, ^caller, :normal}, 30_000
   end
 
   @tag external_operation_key_mutation: true
@@ -155,7 +157,7 @@ defmodule AshOnetime.ExternalContentionTest do
     parent = self()
 
     {first, first_monitor} =
-      spawn_monitor(fn ->
+      start_monitored_worker(fn ->
         ExternalEffectSupport.put_mode({:hold_execute, parent, reference})
         send(parent, {:external_done, self(), run_quick_lock(context, "held-execute")})
       end)
@@ -165,10 +167,10 @@ defmodule AshOnetime.ExternalContentionTest do
     # in which, pre-lock, an honest retry recovered :absent and its execute BLOCKED on
     # the in-flight key claim (the observed overlap). With the claim lock held across
     # the peer call, the retry never reaches the peer at all.
-    assert_receive {:external_pause, ^reference, :held_execute, operation_key, ^first}, 5_000
+    assert_receive {:external_pause, ^reference, :held_execute, operation_key, ^first}, 30_000
 
     {second, second_monitor} =
-      spawn_monitor(fn ->
+      start_monitored_worker(fn ->
         send(parent, {:external_done, self(), run_quick_lock(context, "held-execute")})
       end)
 
@@ -184,14 +186,14 @@ defmodule AshOnetime.ExternalContentionTest do
                      %Ash.Error.Invalid{
                        errors: [%AshOnetime.Error{code: :request_in_progress}]
                      }}},
-                   5_000
+                   30_000
 
-    assert_receive {:DOWN, ^second_monitor, :process, ^second, :normal}, 5_000
+    assert_receive {:DOWN, ^second_monitor, :process, ^second, :normal}, 30_000
 
     send(first, {:external_continue, reference})
 
-    assert_receive {:external_done, ^first, {:ok, _first_result}}, 5_000
-    assert_receive {:DOWN, ^first_monitor, :process, ^first, :normal}, 5_000
+    assert_receive {:external_done, ^first, {:ok, _first_result}}, 30_000
+    assert_receive {:DOWN, ^first_monitor, :process, ^first, :normal}, 30_000
 
     calls = ExternalPeer.calls(context.prefix)
     assert Enum.count(calls, fn [kind, _key] -> kind == "execute" end) == 1
@@ -207,34 +209,34 @@ defmodule AshOnetime.ExternalContentionTest do
     settled = make_ref()
 
     {abandoned, abandoned_monitor} =
-      spawn_monitor(fn ->
+      start_monitored_worker(fn ->
         ExternalEffectSupport.put_mode({:pause_before_execute, parent, settled})
         send(parent, {:external_done, self(), run_unguarded(context, "recover-environment")})
       end)
 
     assert_receive {:external_pause, ^settled, :before_execute, operation_key, ^abandoned},
-                   5_000
+                   30_000
 
     Process.exit(abandoned, :kill)
-    assert_receive {:DOWN, ^abandoned_monitor, :process, ^abandoned, :killed}, 5_000
+    assert_receive {:DOWN, ^abandoned_monitor, :process, ^abandoned, :killed}, 30_000
 
     # The abandoned caller leaves a processing claim; the retry recovers it from inside
     # its own open transaction.
     reference = make_ref()
 
     {retry, retry_monitor} =
-      spawn_monitor(fn ->
+      start_monitored_worker(fn ->
         ExternalEffectSupport.put_mode({:pause_recover_probe, parent, reference})
         send(parent, {:external_done, self(), run_unguarded(context, "recover-environment")})
       end)
 
     assert_receive {:external_pause, ^reference, :recover_probe, ^operation_key, ^retry, true},
-                   5_000
+                   30_000
 
     send(retry, {:external_continue, reference})
 
-    assert_receive {:external_done, ^retry, {:ok, _result}}, 5_000
-    assert_receive {:DOWN, ^retry_monitor, :process, ^retry, :normal}, 5_000
+    assert_receive {:external_done, ^retry, {:ok, _result}}, 30_000
+    assert_receive {:DOWN, ^retry_monitor, :process, ^retry, :normal}, 30_000
   end
 
   defp run_generic(context) do
@@ -371,7 +373,7 @@ defmodule AshOnetime.ExternalContentionTest do
     try do
       callback.(observer)
     after
-      if Process.alive?(observer), do: GenServer.stop(observer, :normal, 5_000)
+      if Process.alive?(observer), do: GenServer.stop(observer, :normal, 30_000)
     end
   end
 end

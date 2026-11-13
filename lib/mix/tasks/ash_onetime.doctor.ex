@@ -23,7 +23,10 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
     failure mode of upgrading the package without running its migrations. Checks: the
     `logical_partition` column on both claim tables (the 1.1 logical-partition upgrade), the
     `ash_onetime_response_payloads` partitioned table and its `_default` partition, the three
-    cleanup/reap functions (by name and arity), and the two delete-guard triggers.
+    cleanup/reap functions (by name and arity), the two delete-guard triggers, and the
+    operation-hold column, validated CHECK, partial indexes, and function definitions.
+    Prints the held backlog and oldest admission age; when row security applies to this
+    role, labels the figures as visible rows rather than an installation total.
 
       mix ash_onetime.doctor --repo MyApp.Repo --live
       mix ash_onetime.doctor --repo MyApp.Repo --live --prefix tenant_1
@@ -37,6 +40,8 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
 
   use Mix.Task
 
+  alias AshOnetime.Store
+  alias AshOnetime.Store.Postgres
   alias Ecto.Adapters.SQL
 
   @shortdoc "Checks ash_onetime install health (Ash floor, Oban queues, prefix validity)"
@@ -295,12 +300,75 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
     AND c.relname = ANY($2)
   """
 
+  @operation_hold_sql """
+  SELECT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1 AND c.relname = 'ash_onetime_idempotency_claims'
+      AND EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid = c.oid
+        AND a.attname = 'hold_reference' AND NOT a.attisdropped AND a.atttypid = 'text'::regtype AND NOT a.attnotnull)
+      AND EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k WHERE k.conrelid = c.oid
+        AND k.conname = 'ash_onetime_idempotency_claims_hold_check' AND k.convalidated
+        AND pg_catalog.pg_get_constraintdef(k.oid) LIKE '%hold_reference IS NULL%octet_length(hold_reference)%1%255%state%complete%')
+      AND (SELECT count(*) FROM pg_catalog.pg_index i
+        JOIN pg_catalog.pg_class idx ON idx.oid = i.indexrelid
+        WHERE i.indrelid = c.oid AND i.indisvalid AND (
+          (idx.relname = 'ash_onetime_idempotency_claims_cleanup_index'
+           AND pg_catalog.pg_get_indexdef(i.indexrelid) LIKE '%(retain_until) WHERE%state%complete%hold_reference IS NULL%') OR
+          (idx.relname = 'ash_onetime_idempotency_claims_hold_index'
+           AND pg_catalog.pg_get_indexdef(i.indexrelid) LIKE '%(logical_partition, hold_reference) WHERE%hold_reference IS NOT NULL%')
+        )) = 2
+      AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class old_index
+        WHERE old_index.relnamespace = n.oid AND old_index.relname = 'ash_onetime_idempotency_claims_retain_until_index')
+      AND EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace = n.oid
+        AND p.proname = 'ash_onetime_guard_idempotency_delete' AND p.pronargs = 0
+        AND p.prosrc LIKE '%IF OLD.hold_reference IS NOT NULL THEN%')
+      AND EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace = n.oid
+        AND p.proname = 'ash_onetime_cleanup_idempotency' AND p.pronargs = 1
+        AND p.prosrc LIKE '%AND hold_reference IS NULL%')
+  )
+  """
+
+  @row_security_sql """
+  SELECT c.relrowsecurity AND (c.relforcerowsecurity OR c.relowner <> r.oid)
+         AND NOT r.rolsuper AND NOT r.rolbypassrls
+  FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  CROSS JOIN pg_catalog.pg_roles r
+  WHERE n.nspname = $1 AND c.relname = 'ash_onetime_idempotency_claims'
+    AND r.rolname = current_user
+  """
+
+  defp check_held_backlog(repo, schema) do
+    target = Postgres.for_repo(repo, schema)
+
+    with {:ok, security} <- query(repo, @row_security_sql, [schema]),
+         {:ok, backlog} <- Store.held_backlog(target) do
+      scope =
+        if security.rows == [[true]],
+          do: "rows visible to this role, not an installation total",
+          else: "installation total"
+
+      age =
+        if is_nil(backlog.oldest_age_seconds), do: "none", else: "#{backlog.oldest_age_seconds}s"
+
+      Mix.shell().info(
+        "Held idempotency claims: #{backlog.held_count}; oldest age: #{age} (#{scope})."
+      )
+
+      :ok
+    else
+      _failure -> live_query_failure(repo, "held backlog could not be read")
+    end
+  end
+
   defp check_schema(repo, prefix) do
     schema = prefix || "public"
 
     with :ok <- ensure_repo_started(repo),
          {:ok, facts} <- live_schema_facts(repo, schema) do
-      render_schema_verdicts(schema_status(facts), schema)
+      status = render_schema_verdicts(schema_status(facts), schema)
+      if status == :ok, do: check_held_backlog(repo, schema), else: status
     else
       {:error, reason} -> live_query_failure(repo, reason)
     end
@@ -319,6 +387,8 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
       {length(facts.logical_partition_tables) == length(@authority_tables),
        "logical_partition column present on all three authority tables " <>
          "(found on: #{inspect(Enum.sort(facts.logical_partition_tables))})"},
+      {Map.get(facts, :operation_hold, false),
+       "operation-hold column, validated check, indexes, and functions current"},
       {facts.payload_table, "ash_onetime_response_payloads table present"},
       {facts.default_partition, "ash_onetime_response_payloads_default partition present"},
       {MapSet.new(facts.functions) == MapSet.new(@expected_functions),
@@ -337,20 +407,22 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
          {:ok, default} <- query(repo, @default_partition_sql, [schema]),
          {:ok, functions} <-
            query(repo, @function_sql, [schema, Enum.map(@expected_functions, &elem(&1, 0))]),
-         {:ok, triggers} <- query(repo, @trigger_sql, [schema, @claim_tables]) do
+         {:ok, triggers} <- query(repo, @trigger_sql, [schema, @claim_tables]),
+         {:ok, hold} <- query(repo, @operation_hold_sql, [schema]) do
       {:ok,
        %{
          logical_partition_tables: Enum.map(columns.rows, &hd/1),
          payload_table: payload.num_rows == 1,
          default_partition: default.num_rows == 1,
          functions: Enum.map(functions.rows, &List.to_tuple/1),
-         triggers: Enum.map(triggers.rows, &hd/1)
+         triggers: Enum.map(triggers.rows, &hd/1),
+         operation_hold: hold.rows == [[true]]
        }}
     end
   end
 
   defp query(repo, sql, params) do
-    case SQL.query(repo, sql, params) do
+    case SQL.query(repo.get_dynamic_repo(), sql, params) do
       {:ok, result} -> {:ok, result}
       {:error, exception} -> {:error, Exception.message(exception)}
     end

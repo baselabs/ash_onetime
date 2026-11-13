@@ -482,7 +482,8 @@ defmodule AshOnetime.Resource.Transformer do
          :ok <-
            reject_present(protection.window, protection, context, :window, "window is nonce-only"),
          :ok <- reject_explicit_commit(protection, context),
-         :ok <- verify_external_effect(protection, context) do
+         :ok <- verify_external_effect(protection, context),
+         :ok <- verify_hold(protection, context) do
       {:ok, %{protection | fingerprint: fingerprint, retention: retention, window: nil}}
     end
   end
@@ -506,6 +507,8 @@ defmodule AshOnetime.Resource.Transformer do
 
   defp verify_nonce_details(protection, context) do
     with :ok <- verify_nonce_key(protection, context),
+         :ok <-
+           reject_present(protection.hold, protection, context, :hold, "hold is idempotency-only"),
          :ok <-
            reject_present(
              protection.response,
@@ -729,6 +732,18 @@ defmodule AshOnetime.Resource.Transformer do
     case ResourceInfo.attribute(context.dsl_state, field) do
       %{public?: true, sensitive?: false} -> true
       _other -> false
+    end
+  end
+
+  defp verify_hold(%{hold: nil}, _context), do: :ok
+
+  defp verify_hold(protection, context) do
+    case ensure_callbacks(protection.hold, reference: 2) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        error(context.dsl_state, protection, :hold, "hold must export reference/2: " <> reason)
     end
   end
 

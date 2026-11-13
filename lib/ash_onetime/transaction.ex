@@ -180,20 +180,73 @@ defmodule AshOnetime.Transaction do
   atomically to the claim.
   """
   @spec complete(admission(), binary()) :: :ok | {:error, Error.t()}
-  def complete(%Admission{owner: owner} = admission, payload)
-      when owner == self() and is_binary(payload) do
-    digest = :crypto.hash(:sha256, payload)
+  def complete(admission, payload), do: complete(admission, payload, [])
 
-    admission.target
-    |> Postgres.complete(admission.claim, admission.codec, digest, payload)
-    |> resolve_completion(admission, digest, payload)
+  @doc """
+  Completes an admission, optionally holding its claim for an open operation.
+
+  `hold: reference` atomically sets a hold with completion. The reference must be a valid
+  1..255-byte UTF-8 binary without NUL and unique within the installation's logical partition.
+  Release it in the caller's settling transaction with `release/2`; otherwise it is retained
+  forever. Only the `:hold` option is accepted, without duplicates.
+  """
+  @spec complete(admission(), binary(), keyword()) :: :ok | {:error, Error.t()}
+  def complete(%Admission{owner: owner} = admission, payload, options)
+      when owner == self() and is_binary(payload) and is_list(options) do
+    with :ok <- completion_options(options) do
+      digest = :crypto.hash(:sha256, payload)
+
+      admission.target
+      |> Postgres.complete(admission.claim, admission.codec, digest, payload, options[:hold])
+      |> resolve_completion(admission, digest, payload, options[:hold])
+    end
   rescue
     _exception -> unavailable()
   catch
     kind, reason -> contain_or_propagate(kind, reason)
   end
 
-  def complete(_admission, _payload), do: invalid_request()
+  def complete(_admission, _payload, _options), do: invalid_request()
+
+  @doc """
+  Releases every visible held claim with `:reference` in exactly `:partition` and optional
+  `:prefix`, using the caller's existing READ COMMITTED transaction. Never starts or commits
+  a transaction. Unknown references return `{:ok, 0}`. Accepts exactly these options, without
+  duplicates. References have the same bounds as `complete/3`.
+
+  Release runs as the caller's database role and obeys row security. It resets retention to
+  at least its full window from release, never shortening the existing deadline. The caller
+  must authorize the installation and logical partition being addressed.
+  """
+  @spec release(Ecto.Repo.t(), keyword()) :: {:ok, non_neg_integer()} | {:error, Error.t()}
+  def release(repo, options) when is_atom(repo) and is_list(options) do
+    with :ok <- exact_options(options, [:partition, :prefix, :reference]),
+         partition when is_binary(partition) <- options[:partition],
+         :ok <- bounded_utf8(partition, 255),
+         :ok <- valid_prefix(options[:prefix]),
+         :ok <- AshOnetime.Hold.validate_reference(options[:reference]) do
+      case Postgres.release(
+             Postgres.for_repo(repo, options[:prefix], logical_partition: partition),
+             options[:reference]
+           ) do
+        {:ok, count} -> {:ok, count}
+        %Result{} = result -> result_error(result)
+      end
+    else
+      {:error, %Error{}} = error -> error
+      _other -> invalid_request()
+    end
+  rescue
+    _exception -> unavailable()
+  catch
+    kind, reason -> contain_or_propagate(kind, reason)
+  end
+
+  def release(_repo, _options), do: invalid_request()
+
+  defp completion_options([]), do: :ok
+  defp completion_options(hold: reference), do: AshOnetime.Hold.validate_reference(reference)
+  defp completion_options(_options), do: invalid_request()
 
   @doc """
   Returns the claim UUID of a fresh admission.
@@ -362,11 +415,13 @@ defmodule AshOnetime.Transaction do
          },
          admission,
          digest,
-         payload
+         payload,
+         reference
        ) do
     if locator_matches?(claim, admission.target, admission.request) and
          claim.id == admission.claim.id and claim.state == :complete and
-         claim.response_codec == admission.codec and stored == payload and
+         claim.response_codec == admission.codec and claim.hold_reference == reference and
+         stored == payload and
          digest_matches?(claim.response_digest, digest) do
       :ok
     else
@@ -374,10 +429,17 @@ defmodule AshOnetime.Transaction do
     end
   end
 
-  defp resolve_completion(%Result{status: :failure} = result, _admission, _digest, _payload),
-    do: result_error(result)
+  defp resolve_completion(
+         %Result{status: :failure} = result,
+         _admission,
+         _digest,
+         _payload,
+         _reference
+       ),
+       do: result_error(result)
 
-  defp resolve_completion(_result, _admission, _digest, _payload), do: invariant_error()
+  defp resolve_completion(_result, _admission, _digest, _payload, _reference),
+    do: invariant_error()
 
   defp admitted_claim?(claim, target, request) do
     locator_matches?(claim, target, request) and claim.id == request.id and

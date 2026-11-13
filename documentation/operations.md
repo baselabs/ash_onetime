@@ -34,10 +34,41 @@ Run bounded cleanup manually or with the optional Oban worker:
 mix ash_onetime.prune --repo MyApp.Repo --batch-size 500
 ```
 
-Cleanup deletes only claims strictly past their replay/retention horizon, keeps processing
+Cleanup deletes only unheld claims strictly past their replay/retention horizon, keeps processing
 external recovery points, removes response bytes atomically with completed claims, and drops
 only empty expired payload partitions after obtaining the required lock. Batch size and
 prefix are explicit. Schedule `AshOnetime.Oban.CleanupWorker` only if Oban is installed.
+
+### Operation holds
+
+A completed idempotency claim with `hold_reference` is retained regardless of `retain_until`.
+The caller must release it in the operation's settling transaction. If it never releases, the
+record and its payload are kept forever by design. Monitor:
+
+```elixir
+AshOnetime.Store.held_backlog(target)
+# {:ok, %{held_count: count, oldest_age_seconds: seconds_or_nil}}
+```
+
+The age is measured from the oldest held claim's admission; no held claims means `nil`.
+`mix ash_onetime.doctor --repo MyApp.Repo --live` prints the same figures and verifies the
+operation-hold column, validated CHECK, partial indexes, and guard/cleanup definitions. With
+row security applying to its current role (row security enabled and FORCE or a non-owner,
+without superuser/BYPASSRLS), it explicitly labels them **rows visible to this role, not an
+installation total**. The Store read likewise observes only visible rows. Use a maintenance
+role with the appropriate policy when an installation-wide view is needed.
+
+Cleanup and the DEFAULT drain exclude held rows; reap never selects complete rows. The
+BEFORE DELETE guard stops ordinary DELETEs even by an owner or superuser with SQLSTATE `23514`.
+It does not stop TRUNCATE, DROP, disabled triggers, or a superuser's
+`session_replication_role = replica`. No additional guards are installed for those operations.
+The payload prune retains an occupied month even when its held claim's deadline is long past.
+
+Existing installations need the [operation-hold upgrade](upgrading.md#unreleased--operation-holds).
+References are unique within the installation's logical partition; release clears every visible
+claim sharing the reference, so use a UUID per operation. See
+[Idempotency](idempotency.md#keep-an-open-operations-record) for the transaction and Ash change
+APIs and the settle-before-commit race.
 
 Abandoned external `processing` claims — committed recovery points whose peer effect never
 settles and that no retry ever recovers — are immortal under cleanup (it skips them) and the

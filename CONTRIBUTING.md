@@ -123,3 +123,21 @@ not at latest carries an inline reason in `mix.exs`; "we never bumped it" is not
 After every dependency move, rerun `mix hex.audit` — Hex advisories lag public disclosures
 by hours, so after a fresh disclosure also check the advisory's affected range (OSV/GHSA)
 for each directly-consumed package in the affected family.
+
+## Privileged operation-hold probes
+
+`test/ash_onetime/store/operation_hold_privileged_test.exs` carries the
+`:operation_hold_superuser` tag. It skips unless `ASH_ONETIME_SUPERUSER_URL` supplies a separate,
+throwaway PostgreSQL 18 superuser connection. The ordinary `DATABASE_URL` stays on the
+project's dedicated test database. Run:
+
+```sh
+mix test test/ash_onetime/store/operation_hold_privileged_test.exs --only operation_hold_superuser
+```
+
+Supply the auxiliary URL in the command environment without committing it. The tests create
+isolated schemas and non-superuser owner/runtime roles, verify DELETE refusal by a superuser,
+probe TRUNCATE, replica-mode DELETE, and DROP, and check runtime-role release under FORCE row
+security. Each destructive probe rolls back; the tests remove their schema and roles. Use a
+throwaway server, and retire that server when the command ends, pass or fail. Ordinary hold,
+upgrade, doctor, and schema-resolution tests use the shared real PostgreSQL test database.

@@ -35,6 +35,13 @@
   External effects require the idempotent execute/recover protocol and are forbidden for nonces.
 - Cleanup occurs only after the strategy-safe horizon. Caches and cleanup jobs never decide
   correctness; processing external effects are not ordinary expiry candidates.
+- Hold completed idempotency claims for open operations with `Transaction.complete/3`
+  (`hold: reference`) or a DSL `hold` module implementing the `AshOnetime.Hold` behaviour.
+  Release in the settling READ COMMITTED transaction using `Transaction.release/2` or
+  `AshOnetime.Changes.ReleaseHold`. The change derives its target like admission and accepts
+  only `reference:` plus optional `resource:`, never a partition string. References are
+  unique within the installation's logical partition; release obeys the caller's row security.
+  Never released means kept forever by design; watch `AshOnetime.Store.held_backlog(target)` and the live doctor.
 - Nonce `max_age` controls acceptance. Optional `retain_for` controls claim retention and
   defaults to `max_age`; it must be at least `max_age`, with `retain_for + clock_skew`
   bounded by 2,147,483,647 seconds. Use `{count, unit}` in the DSL window and integer

@@ -22,6 +22,10 @@ concurrent races. There is no admission pre-read.
   nonce claim commits in its own transaction *before* the action body runs, so a downstream
   failure cannot make the proof reusable. A reused proof is rejected with `:nonce_already_used`
   for the retention window. Default-off; existing nonce consumers are byte-for-byte unchanged.
+- **Operation holds** (idempotency, opt-in) — retain a completed claim while the caller's
+  operation stays open, then release it in the settling transaction. Unreleased holds remain
+  forever by design; monitor the held backlog and the doctor. See
+  [Idempotency](documentation/idempotency.md#keep-an-open-operations-record).
 - **Context boundaries** (v1.8.0, opt-in) — the second admission shape: a resource that
   declares `context_boundary` is backed by an append-only fact table, and
   `AshOnetime.Boundary.append_if/5` admits an append only when no fact matching the query

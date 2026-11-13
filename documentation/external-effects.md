@@ -245,3 +245,12 @@ What the package does with an ambiguous `execute/3` is precise, and worth readin
 - That recovery returning `:unknown` leaves the outcome genuinely unknown
   (`:outcome_unknown` to the caller); the claim stays `processing` and a later retry
   recovers it.
+
+## Holds after external completion
+
+An idempotency protection's `hold` callback also runs when an external effect completes.
+The hold and response become authoritative together in the local completing transaction;
+a processing recovery point cannot carry a hold. The caller must release an open operation's
+reference in its settling transaction. See
+[Idempotency](idempotency.md#keep-an-open-operations-record) for reference uniqueness,
+retention after release, row security, and the race with an uncommitted completion.

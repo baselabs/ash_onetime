@@ -16,6 +16,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Canonical,
     AshOnetime.Canonical.Decoder,
     AshOnetime.Change,
+    AshOnetime.Changes.ReleaseHold,
     AshOnetime.Clock,
     AshOnetime.Codec,
     AshOnetime.Codec.ActionResult,
@@ -26,6 +27,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.ExternalRecovery,
     AshOnetime.Fingerprint,
     AshOnetime.GenericAction,
+    AshOnetime.Hold,
     AshOnetime.KeyResolver,
     AshOnetime.KeySource,
     AshOnetime.Oban.CleanupWorker,
@@ -85,6 +87,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Boundary.Change,
     AshOnetime.Boundary.Query,
     AshOnetime.Canonical,
+    AshOnetime.Changes.ReleaseHold,
     AshOnetime.Clock,
     AshOnetime.Codec,
     AshOnetime.Codec.ActionResult,
@@ -93,6 +96,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Error,
     AshOnetime.ExternalEffect,
     AshOnetime.Fingerprint,
+    AshOnetime.Hold,
     AshOnetime.KeyResolver,
     AshOnetime.KeySource,
     AshOnetime.Oban.CleanupWorker,
@@ -135,6 +139,8 @@ defmodule AshOnetime.ArchitectureTest do
       read: 3,
       sorted_lock_tags: 1
     ],
+    AshOnetime.Changes.ReleaseHold => [atomic: 3, batch_change: 3, change: 3, init: 1],
+    AshOnetime.Hold => [validate_reference: 1],
     AshOnetime.Boundary.Change => [atomic: 3, batch_change: 3, change: 3, init: 1],
     AshOnetime.Boundary.Query => [predicate: 2, validate: 1],
     AshOnetime.Admission => [
@@ -270,9 +276,51 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Transaction => [
       claim_id: 1,
       complete: 2,
+      complete: 3,
       idempotency: 2,
       nonce: 2,
-      nonce_retention_deadline: 2
+      nonce_retention_deadline: 2,
+      release: 2
+    ],
+    AshOnetime.Store => [
+      claim: 2,
+      claim_committed: 2,
+      claim_committed: 3,
+      cleanup: 2,
+      cleanup: 3,
+      complete: 5,
+      complete: 6,
+      complete_external: 5,
+      complete_external: 6,
+      held_backlog: 1,
+      load: 2,
+      lock_for_effect: 3,
+      processing_backlog: 1,
+      reap: 3,
+      roll_partitions: 2
+    ],
+    AshOnetime.Store.Postgres => [
+      claim: 2,
+      claim_committed: 3,
+      cleanup: 3,
+      complete: 5,
+      complete: 6,
+      complete_external: 5,
+      complete_external: 6,
+      for_repo: 1,
+      for_repo: 2,
+      for_repo: 3,
+      held_backlog: 1,
+      load: 2,
+      lock_for_effect: 3,
+      nonce_retention_deadline: 4,
+      processing_backlog: 1,
+      reap: 3,
+      release: 2,
+      roll_advisory_key: 1,
+      roll_partitions: 2,
+      target: 1,
+      target: 2
     ],
     AshOnetime.Verified => [new: 1],
     AshOnetime.Verifier => [],
@@ -287,6 +335,7 @@ defmodule AshOnetime.ArchitectureTest do
       render: 2,
       render_fact_tables: 2,
       render_logical_partition_upgrade: 2,
+      render_operation_hold_upgrade: 2,
       render_roll_forward: 2,
       run: 1,
       timestamp: 0
@@ -315,7 +364,9 @@ defmodule AshOnetime.ArchitectureTest do
   # exactly like a documented module's exports would. The pinned set is the full authored
   # surface, not a hand-picked subset: the census compares exactly.
   @pinned_internal_modules [
-    AshOnetime.Admission
+    AshOnetime.Admission,
+    AshOnetime.Store,
+    AshOnetime.Store.Postgres
   ]
 
   # The exact-export census compares a hand-maintained `@exports` snapshot against

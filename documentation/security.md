@@ -70,3 +70,12 @@ Telemetry is deliberately value-free to avoid exporting keys, tokens, signatures
 or verifier identities.
 
 Report suspected vulnerabilities through the private process in [SECURITY](../SECURITY.md).
+
+Completed idempotency claims may carry an operation hold. The caller must release a hold in
+its settling transaction; an unreleased hold retains the claim and payload forever by design.
+Use references unique within the installation's logical partition (a UUID is suitable).
+References do not replace caller authorization or row-security policies: release touches only
+rows visible to the caller's role. Monitor the held backlog and the live doctor for leaks.
+The DELETE guard refuses held claims even for an owner or superuser, but does not stop
+TRUNCATE, DROP, or a superuser's `session_replication_role = replica`. See
+[Operation holds](idempotency.md#keep-an-open-operations-record) for the complete contract.

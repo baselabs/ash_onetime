@@ -14,6 +14,45 @@ minor whose public capabilities you use and review this page on each minor bump:
 {:ash_onetime, "~> 1.9.0"}
 ```
 
+## Unreleased — Operation holds
+
+Existing installations must generate and apply the operation-hold migration before running
+the new store code or enabling holds:
+
+```sh
+mix ash_onetime.gen.migrations --repo MyApp.Repo --operation-hold
+mix ecto.migrate
+mix ash_onetime.doctor --repo MyApp.Repo --live
+```
+
+For schema-based installations, use `--tenants` and run the generated migration for every
+installation prefix using the repo's tenant migration process. The upgrade detects plain or
+hash-partitioned claims automatically. It adds nullable `hold_reference`, adds the CHECK as
+NOT VALID and then validates it, builds the partial cleanup and release indexes CONCURRENTLY,
+and drops the superseded full retention index. For hash claims it creates each parent index
+ON ONLY, builds each child concurrently, and attaches them. A failed concurrent build's INVALID
+index is dropped and rebuilt on retry; an incomplete parent resumes child attachment. The
+migration disables both the DDL transaction and migration lock because concurrent index
+creation cannot run inside a transaction. Run one instance of this migration per installation
+at a time; rerun it after a failed index build. It also replaces the delete guard and cleanup
+function. Existing data keeps its retention and has no hold.
+
+New installs already contain these objects. The upgrade is reversible; stop hold-producing
+callers and release every outstanding hold before `down`, which refuses while any hold
+remains or row security prevents proving absence, restores the previous functions and full retention index, and removes hold support.
+Run migrations as the installation owner. The downgrade probes with row security disabled,
+so a FORCE policy that applies to this role refuses the downgrade even when the policy would
+show all rows; use the installation's authorized maintenance procedure before downgrading. Do not deploy hold-aware callers while
+the migration is incomplete.
+
+The payload prune's schema-resolution fix needs no separate migration. It resolves the
+namespace of the addressed `ash_onetime_response_payloads` parent, including an explicit
+prefix, instead of the first schema on `search_path`. The generated DEFAULT drain and monthly
+partition creation resolve that same namespace, including when no prefix is supplied.
+
+See [Idempotency](idempotency.md#keep-an-open-operations-record) for placing holds, releasing
+in the settling transaction, reference uniqueness, row security, and the guard's boundary.
+
 ## v1.9.2 — Prune never waits on `_default` (November 10, 2026)
 
 No migration, API, option or telemetry change. The partition prune now takes the `_default`
