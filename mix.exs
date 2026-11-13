@@ -33,7 +33,25 @@ defmodule AshOnetime.MixProject do
       # against it (it binds only inside the optional installer closure).
       dialyzer: [plt_add_apps: [:ecto_sql, :ex_unit, :mix, :oban, :plug, :igniter]],
       test_paths: ["test"],
-      test_ignore_filters: [&String.starts_with?(&1, "test/compile_fixtures/")]
+      test_ignore_filters: [&String.starts_with?(&1, "test/compile_fixtures/")],
+      aliases: aliases()
+    ]
+  end
+
+  # The repository's declared pre-push loop (AGENTS.md, "Build and test"). It holds the
+  # whole-tree gates that need no database; covering tests run separately on their paths.
+  def cli, do: [preferred_envs: [precommit: :test]]
+
+  defp aliases do
+    [
+      precommit: [
+        "format --check-formatted",
+        "compile --warnings-as-errors",
+        "credo --strict",
+        "spark.cheat_sheets --check --extensions AshOnetime.Resource",
+        "hex.audit",
+        "deps.audit"
+      ]
     ]
   end
 

@@ -19,20 +19,32 @@
 
 ## Workflow
 
-Make the change, run the tests that cover it, commit with named paths, and push to `main`.
-CI runs once on `main`; if it goes red, fix forward.
-
-CI runs: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix test`,
-`mix credo --strict`, `mix dialyzer`, `MIX_ENV=test mix dialyzer`, `mix deps.audit`,
-`mix hex.audit`, `mix docs --warnings-as-errors`, `mix hex.build`, the `security` job
-(osv-scanner on `mix.lock`, and `mix hex.audit`), plus the release battery in `CONTRIBUTING.md`
-on tags. The lock and `.tool-versions` hold the latest stable releases; the published dependency
-ranges stay as wide as the supported floors. Run the ones that cover your change.
+Make the change, run the tests that cover it, commit with named paths, and land it on `main`.
+CI runs once on `main`; if it goes red, fix forward. The lock and `.tool-versions` hold the
+latest stable releases; the published dependency ranges stay as wide as the supported floors.
 
 - Publishing, deploying and pushes to mirrors always need the owner's approval for that action.
 - A test that fails on every run is a defect: fix it, or quarantine it with a reason, in the
   change that finds it.
 - Update the CHANGELOG when behavior, a dependency or a contract changes; other docs only when
   a contract changes.
+
+## Build and test
+
+- **Build.** `mix compile --warnings-as-errors`, through the box route.
+- **Covering tests.** `mix test <paths>` for the changed files and their direct dependents, on
+  the box route, against a real PostgreSQL 18 test database (`DATABASE_URL`, see
+  `CONTRIBUTING.md`).
+- **Before a push.** `mix precommit`: format check, compile with warnings as errors,
+  `credo --strict`, the DSL cheat-sheet freshness check, `hex.audit` and `deps.audit`. Not
+  Dialyzer and not the full suite.
+- **Exceptions.** A release runs the release battery in `CONTRIBUTING.md` on the box.
+- **Development tooling.** None beyond the Mix project's own dev and test dependencies.
+- **Landing.** `kimosabe-land`: CI's full suite on `kci/**` before `main` moves.
+- **CI.** One `ci.yml`. `compat` runs the gate battery (format, compile, `hex.audit`,
+  `deps.audit`, the full suite, `credo --strict`, Dialyzer in dev and test, docs, `hex.build`)
+  on the Ash floor and the latest Ash; `release-checks` runs the release battery against the
+  committed lock; `otp-28` runs the suite on OTP 28; `security` scans `mix.lock` offline with
+  osv-scanner and runs `hex.audit`.
 
 Superseded instruction text lives in `docs/reference/agent-history.md`.
