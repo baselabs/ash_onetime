@@ -237,6 +237,7 @@ jobs:
     env:
       OSV_SCANNER_VERSION: "2.7.1"
       OSV_SCANNER_SHA256: "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8"
+      ADVISORY_SCAN_FIXTURE: "test/support/fixtures/advisory_scan/advisory-scan.mix.lock.fixture"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -257,12 +258,13 @@ jobs:
             echo "network is reachable inside the scan namespace" >&2
             exit 1
           fi
-          for lock in mix.lock test/support/fixtures/advisory_scan/mix.lock; do
-            name="$(echo "$lock" | tr '/.' '__')"
+          scan() {
             sudo unshare --net -- env OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY="$RUNNER_TEMP/osv-db" \
               "$RUNNER_TEMP/osv-scanner" scan source --offline --all-packages --format json \
-              --output-file "$RUNNER_TEMP/osv-$name.json" -L "$lock"
-          done
+              --output-file "$RUNNER_TEMP/$1.json" -L "mix.lock:$2"
+          }
+          scan lock mix.lock
+          scan fixture "$ADVISORY_SCAN_FIXTURE"
 
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
@@ -272,13 +274,16 @@ jobs:
       - run: mix deps.get
 
       # The scan must cover every hex and git lock entry. The fixture lock holds one of each,
-      # proving git entries are counted on both sides.
+      # proving git entries are counted on both sides. It is named <purpose>.<format>.fixture so
+      # nothing that discovers mix.lock files takes it for a dependency set; both tools read it by
+      # path with the format named.
       - name: Check the scan covered the whole lock
         run: |
-          for lock in mix.lock test/support/fixtures/advisory_scan/mix.lock; do
-            name="$(echo "$lock" | tr '/.' '__')"
+          check() {
             mix run --no-start --no-compile --no-deps-check scripts/check_advisory_scan.exs \
-              "$lock" "$RUNNER_TEMP/osv-$name.json"
-          done
+              "$2" "$RUNNER_TEMP/$1.json"
+          }
+          check lock mix.lock
+          check fixture "$ADVISORY_SCAN_FIXTURE"
 
       - run: mix hex.audit
