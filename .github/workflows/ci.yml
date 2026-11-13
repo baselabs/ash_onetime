@@ -228,8 +228,9 @@ jobs:
   # Supply-chain advisories on the committed lock, failing closed. osv-scanner (one pinned 2.x
   # release, checksum-verified) runs offline: the public Hex advisory database is downloaded
   # first, with nothing from the lock sent, and the scan then runs in a network namespace with
-  # no network. It fails on any published advisory affecting a locked version, and with no
-  # database. hex.audit fails on any retired package.
+  # no network. It fails on any published advisory affecting a locked version, with no
+  # database, or when the number of packages it reports differs from the lock's hex and git
+  # entries. hex.audit fails on any retired package.
   security:
     name: "Security"
     runs-on: ubuntu-latest
@@ -256,8 +257,12 @@ jobs:
             echo "network is reachable inside the scan namespace" >&2
             exit 1
           fi
-          sudo unshare --net -- env OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY="$RUNNER_TEMP/osv-db" \
-            "$RUNNER_TEMP/osv-scanner" scan source --offline -L mix.lock
+          for lock in mix.lock test/support/fixtures/advisory_scan/mix.lock; do
+            name="$(echo "$lock" | tr '/.' '__')"
+            sudo unshare --net -- env OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY="$RUNNER_TEMP/osv-db" \
+              "$RUNNER_TEMP/osv-scanner" scan source --offline --all-packages --format json \
+              --output-file "$RUNNER_TEMP/osv-$name.json" -L "$lock"
+          done
 
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
@@ -265,4 +270,15 @@ jobs:
           elixir-version: ${{ env.ELIXIR_VERSION }}
 
       - run: mix deps.get
+
+      # The scan must cover every hex and git lock entry. The fixture lock holds one of each,
+      # proving git entries are counted on both sides.
+      - name: Check the scan covered the whole lock
+        run: |
+          for lock in mix.lock test/support/fixtures/advisory_scan/mix.lock; do
+            name="$(echo "$lock" | tr '/.' '__')"
+            mix run --no-start --no-compile --no-deps-check scripts/check_advisory_scan.exs \
+              "$lock" "$RUNNER_TEMP/osv-$name.json"
+          done
+
       - run: mix hex.audit

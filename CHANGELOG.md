@@ -32,7 +32,8 @@ the missing shape. See [Upgrading](documentation/upgrading.md).
   the pinned toolchain to Erlang/OTP 29.1.2 and Elixir 1.20.5. Published dependency ranges are
   unchanged.
 - **Advisory scan.** CI scans `mix.lock` with osv-scanner, offline against the public Hex
-  advisory database, and fails on any advisory affecting a locked version.
+  advisory database, and fails on any advisory affecting a locked version, or when the scan
+  does not cover every `:hex` and `:git` lock entry.
 
 ## v1.9.2 — November 10, 2026
 
