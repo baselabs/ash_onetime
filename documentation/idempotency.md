@@ -101,9 +101,9 @@ change {AshOnetime.Changes.ReleaseHold,
   reference: & &1.operation_reference, resource: MyApp.ProtectedOperation}
 ```
 
-The reference comes from the action's result record. The change derives the target with
-`AshOnetime.Store.Postgres.target/2`, from the protected resource (default: the settling resource), the settling
-changeset's tenant, and its data-layer context, just as protection admission does. It accepts
+The reference comes from the action's result record. The change addresses the installation
+exactly as protection admission does: from the protected resource (default: the settling
+resource), the settling changeset's tenant, and its data-layer context. It accepts
 no separate partition string: DSL protections use the installation's default logical partition.
 The settling action must run transactionally. Update actions using the change must set
 `require_atomic? false` to run Ash's transactional action hooks. Release always runs as the caller's role and
