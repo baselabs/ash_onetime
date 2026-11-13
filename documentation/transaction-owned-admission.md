@@ -130,4 +130,4 @@ ordering with admission's commit.
 If the caller never releases, records remain forever by design. Monitor `Store.held_backlog/1`
 and the live doctor. See [Idempotency](idempotency.md#keep-an-open-operations-record) for the
 Ash-native change and the DELETE guard's administrative boundary, and
-[Upgrading](upgrading.md#unreleased--operation-holds) for existing installations.
+[Upgrading](upgrading.md#v1100--operation-holds-november-13-2026) for existing installations.

@@ -2,7 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## v1.10.0 — November 13, 2026
+
+**Upgrade action required for existing installations.** Generate and apply the operation-hold
+migration (`mix ash_onetime.gen.migrations --repo MyApp.Repo --operation-hold`, then
+`mix ecto.migrate`) before deploying 1.10.0. Until it runs, admission refuses with
+`:store_invariant` rather than proceeding unprotected; `mix ash_onetime.doctor --live` reports
+the missing shape. See [Upgrading](documentation/upgrading.md).
 
 - **Operation holds.** `Transaction.complete/3` accepts `hold: reference`; the
   `AshOnetime.Hold` callback and idempotency `hold` option place the same hold on Ash
@@ -22,6 +28,11 @@ All notable changes to this project are documented in this file.
   relation, so an empty connecting-user schema first on `search_path` cannot silently skip
   pruning an installation in `public`. The DEFAULT drain and its monthly partition creation
   use that same authoritative namespace. Explicit prefixes remain authoritative.
+- **Dependencies and toolchain.** The development lock moves to Ash 3.37.4 and Spark 2.7.10, and
+  the pinned toolchain to Erlang/OTP 29.1.2 and Elixir 1.20.5. Published dependency ranges are
+  unchanged.
+- **Advisory scan.** CI scans `mix.lock` with osv-scanner, offline against the public Hex
+  advisory database, and fails on any advisory affecting a locked version.
 
 ## v1.9.2 — November 10, 2026
 

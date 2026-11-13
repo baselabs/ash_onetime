@@ -7,17 +7,19 @@ Security-driven dependency floors follow the documented minor-release policy in
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md);
 their required dependency edits appear here too.
 
-This guide targets v1.9.2. Pin the
+This guide targets v1.10.0. Pin the
 minor whose public capabilities you use and review this page on each minor bump:
 
 ```elixir
-{:ash_onetime, "~> 1.9.0"}
+{:ash_onetime, "~> 1.10.0"}
 ```
 
-## Unreleased — Operation holds
+## v1.10.0 — Operation holds (November 13, 2026)
 
-Existing installations must generate and apply the operation-hold migration before running
-the new store code or enabling holds:
+Existing installations must generate and apply the operation-hold migration before deploying
+1.10.0. The 1.10.0 store code reads and writes the new `hold_reference` column, so on an
+installation without the migration admission refuses with `:store_invariant`; it never proceeds
+unprotected. Run the migration first, check it with the live doctor, then deploy:
 
 ```sh
 mix ash_onetime.gen.migrations --repo MyApp.Repo --operation-hold
@@ -37,13 +39,14 @@ creation cannot run inside a transaction. Run one instance of this migration per
 at a time; rerun it after a failed index build. It also replaces the delete guard and cleanup
 function. Existing data keeps its retention and has no hold.
 
-New installs already contain these objects. The upgrade is reversible; stop hold-producing
-callers and release every outstanding hold before `down`, which refuses while any hold
-remains or row security prevents proving absence, restores the previous functions and full retention index, and removes hold support.
-Run migrations as the installation owner. The downgrade probes with row security disabled,
-so a FORCE policy that applies to this role refuses the downgrade even when the policy would
-show all rows; use the installation's authorized maintenance procedure before downgrading. Do not deploy hold-aware callers while
-the migration is incomplete.
+New installs already contain these objects. Run migrations as the installation owner.
+
+The upgrade is reversible. Before `down`, return to a 1.9 release, stop hold-producing callers
+and release every outstanding hold. `down` refuses while any hold remains or while row security
+prevents it from proving that none does; otherwise it restores the previous functions and the
+full retention index and removes hold support. The downgrade probes with row security
+disabled, so a FORCE policy that applies to the migrating role refuses the downgrade even when
+the policy would show every row; use the installation's authorized maintenance procedure.
 
 The payload prune's schema-resolution fix needs no separate migration. It resolves the
 namespace of the addressed `ash_onetime_response_payloads` parent, including an explicit

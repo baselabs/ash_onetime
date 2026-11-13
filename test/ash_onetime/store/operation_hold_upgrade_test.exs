@@ -214,6 +214,42 @@ defmodule AshOnetime.Store.OperationHoldUpgradeTest do
     end
   end
 
+  test "store code on an installation without the upgrade refuses admission instead of proceeding" do
+    {schema, _version} = install_legacy!(:plain)
+
+    result =
+      try do
+        Repo.transaction(fn ->
+          AshOnetime.Transaction.idempotency(Repo,
+            operation: {__MODULE__, :unmigrated},
+            prefix: schema,
+            partition: "global",
+            scope: "scope",
+            key: "unmigrated",
+            fingerprint: :crypto.hash(:sha256, "request"),
+            retention_seconds: 86_400,
+            codec: "test"
+          )
+        end)
+      rescue
+        error -> {:raised, error}
+      end
+
+    refute match?({:ok, {:execute, _admission}}, result),
+           "an unmigrated installation must never admit: #{inspect(result)}"
+
+    assert match?({:ok, {:error, %AshOnetime.Error{code: :store_invariant}}}, result) or
+             match?({:error, _reason}, result),
+           "expected a refusal, got: #{inspect(result)}"
+
+    assert %{rows: [[0]]} =
+             SQL.query!(
+               Repo,
+               ~s|SELECT count(*) FROM "#{schema}".ash_onetime_idempotency_claims|,
+               []
+             )
+  end
+
   defp install_legacy!(claims) do
     schema = "ash_onetime_upgrade_" <> (Ecto.UUID.generate() |> String.replace("-", ""))
     version = System.unique_integer([:positive])

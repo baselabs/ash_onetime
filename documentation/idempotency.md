@@ -102,7 +102,7 @@ change {AshOnetime.Changes.ReleaseHold,
 ```
 
 The reference comes from the action's result record. The change derives the target with
-`Postgres.target/2`, from the protected resource (default: the settling resource), the settling
+`AshOnetime.Store.Postgres.target/2`, from the protected resource (default: the settling resource), the settling
 changeset's tenant, and its data-layer context, just as protection admission does. It accepts
 no separate partition string: DSL protections use the installation's default logical partition.
 The settling action must run transactionally. Update actions using the change must set

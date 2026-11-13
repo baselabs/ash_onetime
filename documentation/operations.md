@@ -64,7 +64,7 @@ It does not stop TRUNCATE, DROP, disabled triggers, or a superuser's
 `session_replication_role = replica`. No additional guards are installed for those operations.
 The payload prune retains an occupied month even when its held claim's deadline is long past.
 
-Existing installations need the [operation-hold upgrade](upgrading.md#unreleased--operation-holds).
+Existing installations need the [operation-hold upgrade](upgrading.md#v1100--operation-holds-november-13-2026).
 References are unique within the installation's logical partition; release clears every visible
 claim sharing the reference, so use a UUID per operation. See
 [Idempotency](idempotency.md#keep-an-open-operations-record) for the transaction and Ash change
