@@ -114,6 +114,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
       else
         Generator.render(Repo,
           maintenance_role: maintainer,
+          hash_partitions: context[:hash_partitions],
           prefix: if(context[:quoted_schema], do: schema, else: nil)
         )
       end
@@ -188,6 +189,129 @@ defmodule AshOnetime.Store.MaintenanceTest do
       runtime_repo: runtime_repo,
       outsider_repo: outsider_repo
     }
+  end
+
+  for grant <- [:outsider, :grant_option, :table_schema_name] do
+    @grant grant
+    @tag review_acl: true
+    test "routine ACL audit distinguishes #{@grant}", c do
+      assert scalar(
+               c.runtime_repo,
+               "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'acl'"
+             )
+
+      case @grant do
+        :outsider ->
+          sql!(
+            c.owner_repo,
+            "GRANT EXECUTE ON FUNCTION #{rel(c, "ash_onetime_cleanup_nonce")}(integer) TO #{q(c.outsider)}"
+          )
+
+        :grant_option ->
+          sql!(
+            c.owner_repo,
+            "GRANT EXECUTE ON FUNCTION #{rel(c, "ash_onetime_cleanup_nonce")}(integer) TO #{q(c.maintainer)} WITH GRANT OPTION"
+          )
+
+        :table_schema_name ->
+          sql!(
+            c.runtime_repo,
+            "CREATE FUNCTION #{q(c.schema)}.ash_onetime_cleanup_nonce(integer) RETURNS bigint LANGUAGE sql AS 'SELECT 0::bigint'"
+          )
+      end
+
+      assert scalar(
+               c.runtime_repo,
+               "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'acl'"
+             ) == (@grant == :table_schema_name)
+    end
+  end
+
+  @tag review_set_maintain: true
+  @tag review_inactive_runtime: true
+  test "inactive NOLOGIN runtime member with SET only MAINTAIN refuses maintenance", c do
+    sql!(Repo, "GRANT pg_maintain TO #{q(c.runtime)} WITH INHERIT FALSE, SET TRUE")
+    sql!(Repo, "ALTER ROLE #{q(c.runtime)} NOLOGIN")
+
+    assert {:error, %Postgrex.Error{postgres: %{pg_code: "P0001", message: message}}} =
+             SQL.query(c.owner_repo, "SELECT #{rel(c, "ash_onetime_cleanup_nonce")}(1)", [])
+
+    assert message == "untrusted_dependency: effective MAINTAIN privilege"
+  end
+
+  for holder <- [:pg_maintain, :nologin] do
+    @holder holder
+    @tag review_set_maintain: true
+    test "SET only MAINTAIN through #{@holder} refuses maintenance", c do
+      holder = if @holder == :pg_maintain, do: "pg_maintain", else: c.outsider
+
+      if @holder == :nologin do
+        sql!(Repo, "ALTER ROLE #{q(holder)} NOLOGIN")
+
+        sql!(
+          c.owner_repo,
+          "GRANT MAINTAIN ON #{rel(c, "ash_onetime_nonce_claims")} TO #{q(holder)}"
+        )
+      end
+
+      sql!(c.owner_repo, "GRANT USAGE ON SCHEMA #{q(c.schema)} TO #{q(holder)}")
+      sql!(Repo, "GRANT #{q(holder)} TO #{q(c.runtime)} WITH INHERIT FALSE, SET TRUE")
+
+      refute scalar(
+               c.runtime_repo,
+               "SELECT has_table_privilege(current_user,'#{rel(c, "ash_onetime_nonce_claims")}','MAINTAIN')"
+             )
+
+      assert scalar(c.runtime_repo, "SELECT pg_has_role(current_user,#{literal(holder)},'SET')")
+      sql!(c.runtime_repo, "SET ROLE #{q(holder)}")
+
+      try do
+        assert %Postgrex.Result{messages: []} =
+                 sql!(c.runtime_repo, "ANALYZE #{rel(c, "ash_onetime_nonce_claims")}")
+      after
+        sql!(c.runtime_repo, "RESET ROLE")
+      end
+
+      assert_refusal(
+        c,
+        "ash_onetime_cleanup_nonce",
+        "1",
+        "untrusted_dependency: effective MAINTAIN privilege"
+      )
+    end
+  end
+
+  @tag legacy_install: true
+  @tag review_install_mode: true
+  test "upgrade with missing old routines refuses an existing hostile trigger", c do
+    sql!(
+      c.owner_repo,
+      "CREATE TABLE #{rel(c, "ash_onetime_response_payloads_" <> (month_start(0) |> String.slice(0, 7) |> String.replace("-", "_")))} PARTITION OF #{rel(c, "ash_onetime_response_payloads")} FOR VALUES FROM ('#{month_start(0)}') TO ('#{month_start(1)}')"
+    )
+
+    for [signature] <-
+          SQL.query!(
+            c.owner_repo,
+            "SELECT p.oid::regprocedure::text FROM pg_proc p WHERE p.pronamespace=$1::text::regnamespace AND p.proname LIKE 'ash_onetime_%'",
+            [c.schema]
+          ).rows do
+      sql!(c.owner_repo, "DROP FUNCTION IF EXISTS #{signature} CASCADE")
+    end
+
+    sql!(
+      c.owner_repo,
+      "CREATE FUNCTION #{rel(c, "hostile_trigger")}() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN PERFORM pg_advisory_lock(19283,42); RETURN OLD; END'"
+    )
+
+    sql!(
+      c.owner_repo,
+      "CREATE TRIGGER extra BEFORE DELETE ON #{rel(c, "ash_onetime_nonce_claims")} FOR EACH ROW EXECUTE FUNCTION #{rel(c, "hostile_trigger")}()"
+    )
+
+    error = assert_raise Postgrex.Error, fn -> with_upgrade(c, fn -> :ok end) end
+
+    assert error.postgres.message ==
+             "untrusted_dependency: upgrade relation shape ash_onetime_nonce_claims"
   end
 
   @tag maintenance_functions_mutation: true
@@ -609,9 +733,26 @@ defmodule AshOnetime.Store.MaintenanceTest do
         "CREATE POLICY foreign_policy ON #{rel(c, "ash_onetime_nonce_claims")} AS #{if @restrictive, do: "RESTRICTIVE", else: "PERMISSIVE"} TO #{role} USING (true)"
       )
 
-      assert_refusal(c, "ash_onetime_cleanup_nonce", "100", "maintenance_blinded")
-      assert_refusal(c, "ash_onetime_cleanup_idempotency", "100", "maintenance_blinded")
-      assert_refusal(c, "ash_onetime_reap_idempotency", "100,86400", "maintenance_blinded")
+      assert_refusal(
+        c,
+        "ash_onetime_cleanup_nonce",
+        "100",
+        "maintenance_blinded: #{c.schema}.ash_onetime_nonce_claims.foreign_policy"
+      )
+
+      assert_refusal(
+        c,
+        "ash_onetime_cleanup_idempotency",
+        "100",
+        "maintenance_blinded: #{c.schema}.ash_onetime_nonce_claims.foreign_policy"
+      )
+
+      assert_refusal(
+        c,
+        "ash_onetime_reap_idempotency",
+        "100,86400",
+        "maintenance_blinded: #{c.schema}.ash_onetime_nonce_claims.foreign_policy"
+      )
 
       assert scalar(
                c.runtime_repo,
@@ -648,8 +789,15 @@ defmodule AshOnetime.Store.MaintenanceTest do
         )
       end
 
-      assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "maintenance_blinded")
-      assert_refusal(c, "ash_onetime_reap_idempotency", "1,86400", "maintenance_blinded")
+      reason =
+        if @defect == :missing,
+          do:
+            "maintenance_blinded: #{c.schema}.ash_onetime_nonce_claims: missing ash_onetime_maintenance",
+          else:
+            "maintenance_blinded: #{c.schema}.ash_onetime_nonce_claims.ash_onetime_maintenance"
+
+      assert_refusal(c, "ash_onetime_cleanup_nonce", "1", reason)
+      assert_refusal(c, "ash_onetime_reap_idempotency", "1,86400", reason)
 
       refute scalar(
                Repo,
@@ -670,7 +818,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "CREATE POLICY hostile_policy ON #{rel(c, "ash_onetime_nonce_claims")} AS RESTRICTIVE TO #{q(c.owner)} USING (#{rel(c, "policy_probe")}())"
     )
 
-    assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "maintenance_blinded")
+    assert_refusal(
+      c,
+      "ash_onetime_cleanup_nonce",
+      "1",
+      "maintenance_blinded: #{c.schema}.ash_onetime_nonce_claims.hostile_policy"
+    )
 
     assert scalar(
              Repo,
@@ -706,7 +859,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
            "expected untrusted_dependency; owner executed through builtin SQL dispatcher: #{observed == c.owner}"
 
     {:error, %Postgrex.Error{postgres: %{message: message}}} = result
-    assert message =~ "untrusted_dependency"
+    assert message == "untrusted_dependency: relation shape ash_onetime_maintenance_runs"
 
     assert scalar(
              Repo,
@@ -1153,7 +1306,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
       Repo.put_dynamic_repo(previous)
     end
 
-    assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
+    assert_refusal(
+      c,
+      "ash_onetime_cleanup_nonce",
+      "1",
+      "untrusted_dependency: relation shape ash_onetime_maintenance_runs"
+    )
 
     assert scalar(
              Repo,
@@ -1184,7 +1342,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
         sql!(c.owner_repo, "ALTER TABLE #{claims} DISABLE TRIGGER ash_onetime_nonce_delete_guard")
       end
 
-      assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
+      assert_refusal(
+        c,
+        "ash_onetime_cleanup_nonce",
+        "1",
+        "untrusted_dependency: relation shape ash_onetime_nonce_claims"
+      )
 
       assert scalar(
                Repo,
@@ -1213,7 +1376,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
         "SELECT #{rel(c, "ash_onetime_maintenance_reset_acl")}('#{rel(c, "unexpected_child")}'::regclass,true)"
       )
 
-      assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
+      assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency: relation set")
     end
   end
 
@@ -1231,7 +1394,13 @@ defmodule AshOnetime.Store.MaintenanceTest do
            )
 
     sql!(Repo, "GRANT pg_maintain TO #{q(c.runtime)}")
-    assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
+
+    assert_refusal(
+      c,
+      "ash_onetime_cleanup_nonce",
+      "1",
+      "untrusted_dependency: effective MAINTAIN privilege"
+    )
   end
 
   @tag revision7: true
@@ -1507,6 +1676,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
   @tag revision7: true
   @tag legacy_install: true
+  @tag normalize_attnum_mutation: true
   test "ADD COLUMN upgrade uses a same-server reference and maps attribute numbers", c do
     claims = rel(c, "ash_onetime_idempotency_claims")
     sql!(c.owner_repo, "DROP INDEX #{rel(c, "ash_onetime_idempotency_claims_cleanup_index")}")
@@ -1546,93 +1716,261 @@ defmodule AshOnetime.Store.MaintenanceTest do
         "ALTER TABLE #{rel(c, "ash_onetime_nonce_claims")} ALTER COLUMN verifier_id SET DEFAULT upper('changed')"
       )
 
-      assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
+      assert_refusal(
+        c,
+        "ash_onetime_cleanup_nonce",
+        "1",
+        "untrusted_dependency: relation shape ash_onetime_nonce_claims"
+      )
     end)
   end
 
-  @tag revision7: true
-  test "every package expression is a PostgreSQL 18 dump restore fixpoint", c do
-    dump = postgres_tool!("pg_dump")
-    restore = postgres_tool!("pg_restore")
-    {login, password} = Process.get({__MODULE__, :credential, c.owner})
-    uri = URI.parse(System.fetch_env!("DATABASE_URL"))
+  for variant <- [:default, :hash, :facts, :logical_partitions, :prefix] do
+    @variant variant
+    @tag restore_fixpoint: true
+    @tag hash_partitions: if(variant == :hash, do: 2, else: nil)
+    @tag quoted_schema: variant == :prefix
+    test "every package expression is a PostgreSQL 18 dump restore fixpoint, #{@variant}", c do
+      if @variant == :facts do
+        source = Generator.render_fact_tables(Repo, fact_tables: ["maintenance_facts"])
+        module = Module.concat(__MODULE__, "Facts#{System.unique_integer([:positive])}")
 
-    connection = [
-      "--host",
-      uri.host,
-      "--port",
-      to_string(uri.port),
-      "--username",
-      login,
-      "--dbname",
-      String.trim_leading(uri.path, "/")
-    ]
+        source =
+          String.replace(
+            source,
+            inspect(Repo) <> ".Migrations.AddAshOnetimeBoundaryFacts",
+            inspect(module)
+          )
 
-    environment = [{"PGPASSWORD", password}]
+        [{^module, _}] = Code.compile_string(source)
+        previous = Repo.put_dynamic_repo(c.owner_repo)
 
-    sql!(
-      Repo,
-      "GRANT CREATE ON DATABASE #{q(String.trim_leading(uri.path, "/"))} TO #{q(c.owner)}"
-    )
+        try do
+          assert :ok =
+                   Ecto.Migrator.up(Repo, 20_261_113_000_003, module,
+                     prefix: c.schema,
+                     log: false
+                   )
+        after
+          Repo.put_dynamic_repo(previous)
+          :code.purge(module)
+          :code.delete(module)
+        end
+      end
 
-    archive = Path.join(System.tmp_dir!(), "ao_dump_#{Ecto.UUID.generate()}.dump")
-    before = expression_catalog(c)
+      if @variant == :logical_partitions do
+        for partition <- ["partition-a", "partition-b"] do
+          sql!(
+            Repo,
+            "INSERT INTO #{rel(c, "ash_onetime_response_payloads")} VALUES (#{literal(partition)},current_date,gen_random_uuid(),'payload')"
+          )
+        end
+      end
 
-    try do
-      {output, status} =
-        System.cmd(
-          dump,
-          connection ++
-            [
-              "--schema",
-              c.schema,
-              "--schema",
-              routine_schema(c.schema),
-              "--schema-only",
-              "--format=custom",
-              "--file",
-              archive
-            ],
-          env: environment,
-          stderr_to_stdout: true
-        )
+      dump = postgres_tool!("pg_dump")
+      restore = postgres_tool!("pg_restore")
+      {login, password} = Process.get({__MODULE__, :credential, c.owner})
+      uri = URI.parse(System.fetch_env!("DATABASE_URL"))
 
-      assert status == 0, output
-      sql!(c.owner_repo, "DROP SCHEMA #{q(c.schema)} CASCADE")
-      sql!(c.owner_repo, "DROP SCHEMA #{q(routine_schema(c.schema))} CASCADE")
+      connection = [
+        "--host",
+        uri.host,
+        "--port",
+        to_string(uri.port),
+        "--username",
+        login,
+        "--dbname",
+        String.trim_leading(uri.path, "/")
+      ]
 
-      {output, status} =
-        System.cmd(
-          restore,
-          connection ++
-            ["--no-owner", "--exit-on-error", "--role", c.owner, archive],
-          env: environment,
-          stderr_to_stdout: true
-        )
+      environment = [{"PGPASSWORD", password}]
 
-      assert status == 0, output
-      assert expression_catalog(c) == before
+      sql!(
+        Repo,
+        "GRANT CREATE ON DATABASE #{q(String.trim_leading(uri.path, "/"))} TO #{q(c.owner)}"
+      )
 
-      differences =
+      archive = Path.join(System.tmp_dir!(), "ao_dump_#{Ecto.UUID.generate()}.dump")
+      before = expression_catalog(c)
+      shapes = relation_shapes(c)
+      policies = normalized_policies(c)
+      [backup_login, backup_password] = String.split(uri.userinfo, ":", parts: 2)
+      backup_connection = List.replace_at(connection, 5, URI.decode_www_form(backup_login))
+
+      try do
+        {output, status} =
+          System.cmd(
+            dump,
+            backup_connection ++
+              [
+                "--schema",
+                q(c.schema),
+                "--schema",
+                q(routine_schema(c.schema)),
+                "--format=custom",
+                "--file",
+                archive
+              ],
+            env: [{"PGPASSWORD", URI.decode_www_form(backup_password)}],
+            stderr_to_stdout: true
+          )
+
+        assert status == 0, output
+        sql!(c.owner_repo, "DROP SCHEMA #{q(c.schema)} CASCADE")
+        sql!(c.owner_repo, "DROP SCHEMA #{q(routine_schema(c.schema))} CASCADE")
+
+        {output, status} =
+          System.cmd(
+            restore,
+            connection ++
+              ["--no-owner", "--exit-on-error", "--role", c.owner, archive],
+            env: environment,
+            stderr_to_stdout: true
+          )
+
+        assert status == 0, output
+        assert expression_catalog(c) == before
+
+        assert relation_shapes(c) == shapes
+        assert normalized_policies(c) == policies
+        assert_reference_shapes(c)
+
+        assert scalar(
+                 c.runtime_repo,
+                 "SELECT #{rel(c, "ash_onetime_prune_payload_partitions")}(8,2000)"
+               )["dropped"] == 0
+
+        assert scalar(
+                 c.runtime_repo,
+                 "SELECT #{rel(c, "ash_onetime_reap_idempotency")}(100,86400)"
+               ) == 0
+
+        assert scalar(
+                 c.runtime_repo,
+                 "SELECT #{rel(c, "ash_onetime_roll_payload_partitions")}(24)"
+               ) > 0
+
+        assert_reference_shapes(c)
+
+        if @variant == :logical_partitions do
+          assert SQL.query!(
+                   Repo,
+                   "SELECT DISTINCT logical_partition FROM #{rel(c, "ash_onetime_response_payloads")} ORDER BY 1",
+                   []
+                 ).rows == [["partition-a"], ["partition-b"]]
+        end
+      after
+        File.rm!(archive)
+        refute File.exists?(archive)
+      end
+    end
+  end
+
+  @tag restore_fixpoint: true
+  @tag maintenance_shape_mutation: true
+  test "noinherit is omitted only for index backed constraints on leaf partitions", c do
+    leaf = rel(c, "ash_onetime_response_payloads_default")
+
+    constraints =
+      scalar(
+        c.owner_repo,
+        "SELECT #{rel(c, "ash_onetime_maintenance_shape")}('#{leaf}'::regclass::oid)->'constraints'"
+      )
+
+    refute Enum.find(constraints, &(&1["type"] == "p")) |> Map.has_key?("noinherit")
+
+    assert Enum.filter(constraints, &(&1["type"] in ["n", "c"]))
+           |> Enum.all?(&Map.has_key?(&1, "noinherit"))
+
+    # Trusted fixture provisioning changes exactly one real catalog field, as
+    # the executable-metadata Table 1 fixtures do; every subject is runtime.
+    for {table, type} <- [
+          {"ash_onetime_nonce_claims", "p"},
+          {"ash_onetime_nonce_claims", "u"},
+          {"ash_onetime_nonce_claims", "n"},
+          {"ash_onetime_nonce_claims", "c"},
+          {"ash_onetime_response_payloads", "p"},
+          {"ash_onetime_response_payloads", "n"},
+          {"ash_onetime_response_payloads", "c"},
+          {"ash_onetime_response_payloads_default", "n"},
+          {"ash_onetime_response_payloads_default", "c"}
+        ] do
+      [oid, original] =
         SQL.query!(
-          c.owner_repo,
-          "WITH shapes AS (SELECT #{rel(c, "ash_onetime_maintenance_shapes")}()->'ash_onetime_response_payloads_child' AS expected,#{rel(c, "ash_onetime_maintenance_shape")}('#{rel(c, "ash_onetime_response_payloads_default")}'::regclass::oid) AS actual) SELECT key,expected->key,actual->key FROM shapes,jsonb_object_keys(expected) key WHERE expected->key IS DISTINCT FROM actual->key",
-          []
+          Repo,
+          "SELECT oid,connoinherit FROM pg_constraint WHERE conrelid=$1::text::regclass AND contype=$2::\"char\" ORDER BY oid LIMIT 1",
+          [rel(c, table), type]
         ).rows
+        |> hd()
 
-      # pg_restore attaches standalone primary keys. PostgreSQL marks those
-      # NO INHERIT, unlike keys cloned by CREATE TABLE PARTITION OF. This is
-      # metadata, not an expression rewrite; exact R1 must still refuse it.
-      assert [["constraints", expected, actual]] = differences
-      expected_key = Enum.find(expected, &(&1["type"] == "p"))
-      actual_key = Enum.find(actual, &(&1["type"] == "p"))
-      assert expected_key["noinherit"] == false
-      assert actual_key == Map.put(expected_key, "noinherit", true)
-      assert expected -- [expected_key] == actual -- [actual_key]
-      assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
-      IO.puts("RESTORE_PRIMARY_KEY connoinherit=false->true; expressions unchanged; R1 refuses")
-    after
-      File.rm!(archive)
+      try do
+        SQL.query!(Repo, "UPDATE pg_constraint SET connoinherit=NOT connoinherit WHERE oid=$1", [
+          oid
+        ])
+
+        assert_refusal(
+          c,
+          "ash_onetime_cleanup_nonce",
+          "1",
+          "untrusted_dependency: relation shape #{table}"
+        )
+      after
+        SQL.query!(Repo, "UPDATE pg_constraint SET connoinherit=$2 WHERE oid=$1", [oid, original])
+      end
+
+      assert scalar(c.runtime_repo, "SELECT #{rel(c, "ash_onetime_cleanup_nonce")}(1)") == 0
+    end
+
+    assert {:error, %Postgrex.Error{postgres: %{pg_code: "42809", message: message}}} =
+             SQL.query(
+               c.owner_repo,
+               "CREATE TABLE #{rel(c, "cannot_inherit")} () INHERITS (#{leaf})",
+               []
+             )
+
+    assert message =~ "cannot inherit from partition"
+  end
+
+  defp normalized_policies(c) do
+    SQL.query!(
+      c.owner_repo,
+      "SELECT c.relname,p.polname,#{rel(c, "ash_onetime_maintenance_normalize")}(p.polqual::text,p.polrelid::oid),#{rel(c, "ash_onetime_maintenance_normalize")}(p.polwithcheck::text,p.polrelid::oid) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid WHERE c.relnamespace=$1::text::regnamespace ORDER BY c.relname,p.polname",
+      [c.schema]
+    ).rows
+  end
+
+  defp relation_shapes(c) do
+    SQL.query!(
+      c.owner_repo,
+      "SELECT relname,#{rel(c, "ash_onetime_maintenance_shape")}(oid) FROM pg_class WHERE relnamespace=$1::text::regnamespace AND relkind IN ('r','p') AND relname LIKE 'ash_onetime_%' ORDER BY relname",
+      [c.schema]
+    ).rows
+  end
+
+  defp assert_reference_shapes(c) do
+    # Use R1's same-server fresh-install reference for every root and child.
+    expected = scalar(c.owner_repo, "SELECT #{rel(c, "ash_onetime_maintenance_shapes")}()")
+
+    rows =
+      SQL.query!(
+        c.owner_repo,
+        "SELECT t.relname,p.relname,#{rel(c, "ash_onetime_maintenance_shape")}(t.oid) FROM pg_class t LEFT JOIN pg_inherits i ON i.inhrelid=t.oid LEFT JOIN pg_class p ON p.oid=i.inhparent WHERE t.relnamespace=$1::text::regnamespace AND t.relkind IN ('r','p') AND (t.relname=ANY($2) OR p.relname=ANY($2)) ORDER BY t.relname",
+        [
+          c.schema,
+          [
+            "ash_onetime_idempotency_claims",
+            "ash_onetime_nonce_claims",
+            "ash_onetime_response_payloads",
+            "ash_onetime_maintenance_runs"
+          ]
+        ]
+      ).rows
+
+    assert length(rows) > 4
+
+    for [name, parent, shape] <- rows do
+      key = if parent, do: parent <> "_child", else: name
+      assert shape == expected[key], "fresh-install reference differs for #{name}"
     end
   end
 
@@ -1649,7 +1987,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
       SQL.query!(
         c.owner_repo,
         """
-        WITH relations AS (SELECT oid,relname FROM pg_class WHERE relnamespace=$1::text::regnamespace AND relname LIKE 'ash_onetime_%'), expressions AS (
+        WITH relations AS (SELECT oid,relname FROM pg_class WHERE relnamespace=$1::text::regnamespace AND (relname LIKE 'ash_onetime_%' OR relname='maintenance_facts')), expressions AS (
           SELECT r.relname || ':default:' || a.attname AS name,d.adbin::text AS tree FROM relations r JOIN pg_attrdef d ON d.adrelid=r.oid JOIN pg_attribute a ON a.attrelid=r.oid AND a.attnum=d.adnum
           UNION ALL SELECT r.relname || ':constraint:' || x.conname,x.conbin::text FROM relations r JOIN pg_constraint x ON x.conrelid=r.oid WHERE x.conbin IS NOT NULL
           UNION ALL SELECT r.relname || ':index_expression',i.indexprs::text FROM relations r JOIN pg_index i ON i.indexrelid=r.oid WHERE i.indexprs IS NOT NULL
@@ -1739,7 +2077,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
       String.replace(definition, "BEGIN", "BEGIN -- owner changed routine", global: false)
     )
 
-    assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
+    assert_refusal(
+      c,
+      "ash_onetime_cleanup_nonce",
+      "1",
+      "untrusted_dependency: package routine digest"
+    )
   end
 
   @tag revision7: true
@@ -1779,7 +2122,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "SELECT #{rel(c, "ash_onetime_maintenance_reset_acl")}('#{rel(c, "nonmonthly")}'::regclass,true)"
     )
 
-    assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
+    assert_refusal(
+      c,
+      "ash_onetime_cleanup_nonce",
+      "1",
+      "untrusted_dependency: partition bound nonmonthly"
+    )
   end
 
   @tag revision7: true
@@ -1789,7 +2137,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "ALTER FUNCTION #{rel(c, "ash_onetime_cleanup_eligible")}(timestamptz) IMMUTABLE"
     )
 
-    assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
+    assert_refusal(
+      c,
+      "ash_onetime_cleanup_nonce",
+      "1",
+      "untrusted_dependency: package routine digest"
+    )
   end
 
   @tag revision7: true
@@ -1824,7 +2177,13 @@ defmodule AshOnetime.Store.MaintenanceTest do
            ) == 0
 
     sql!(c.owner_repo, "GRANT CREATE ON SCHEMA #{q(routine_schema)} TO #{q(c.runtime)}")
-    assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
+
+    assert_refusal(
+      c,
+      "ash_onetime_cleanup_nonce",
+      "1",
+      "untrusted_dependency: routine schema CREATE"
+    )
   end
 
   for {role, inherit} <- [
@@ -1843,7 +2202,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
         "GRANT #{q(c.owner)} TO #{q(Map.fetch!(c, @role))} WITH INHERIT #{if @inherit, do: "TRUE", else: "FALSE"}, SET #{if @inherit, do: "FALSE", else: "TRUE"}"
       )
 
-      assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
+      assert_refusal(
+        c,
+        "ash_onetime_cleanup_nonce",
+        "1",
+        "untrusted_dependency: runtime or maintenance owner membership"
+      )
     end
   end
 
@@ -1871,7 +2235,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
         sql!(c.owner_repo, modified)
       end
 
-      assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
+      assert_refusal(
+        c,
+        "ash_onetime_cleanup_nonce",
+        "1",
+        "untrusted_dependency: #{if @defect == :support, do: "routine support", else: "routine executable trees"}"
+      )
     end
   end
 
@@ -1894,7 +2263,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "ALTER PUBLICATION #{q(publication)} SET TABLE #{rel(c, "ash_onetime_nonce_claims")} WHERE (logical_partition='tenant')"
     )
 
-    assert_refusal(c, "ash_onetime_cleanup_nonce", "1", "untrusted_dependency")
+    assert_refusal(
+      c,
+      "ash_onetime_cleanup_nonce",
+      "1",
+      "untrusted_dependency: publication row filter"
+    )
   end
 
   @tag revision7: true
@@ -2169,7 +2543,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
     assert {:error, %Postgrex.Error{postgres: %{pg_code: "P0001", message: message}}} =
              SQL.query(c.runtime_repo, "SELECT #{rel(c, name)}(#{args})", [])
 
-    assert message =~ reason
+    assert message == reason
   end
 
   for {row, kind} <- [
@@ -2188,6 +2562,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
         {10, :constraint_index},
         {14, :cast},
         {15, :base_type},
+        {15, :typmod},
         {16, :domain},
         {17, :range},
         {18, :collation},
@@ -2206,17 +2581,65 @@ defmodule AshOnetime.Store.MaintenanceTest do
     @row row
     @kind kind
     @tag maintenance_shape_mutation: true
+    @tag [{String.to_atom("shape_#{kind}_mutation"), true}]
+    @tag if(kind == :default, do: [normalize_location_mutation: true], else: [])
     test "Table 1 row #{@row}: #{@kind} refuses before owner code runs", c do
+      table =
+        case @kind do
+          kind when kind in [:base_type, :domain, :range, :typmod] ->
+            "ash_onetime_maintenance_runs"
+
+          kind when kind in [:partition_expression, :foreign_table] ->
+            "ash_onetime_response_payloads"
+
+          :child_trigger ->
+            "ash_onetime_response_payloads_default"
+
+          _ ->
+            "ash_onetime_nonce_claims"
+        end
+
+      before =
+        scalar(
+          c.owner_repo,
+          "SELECT #{rel(c, "ash_onetime_maintenance_shape")}('#{rel(c, table)}'::regclass::oid)"
+        )
+
+      if @kind == :default, do: assert_normalized_locations(c)
       install_dependency(c, @kind)
 
+      if @kind in [
+           :base_type,
+           :typmod,
+           :collation,
+           :default,
+           :operator_family,
+           :access_method,
+           :index,
+           :check
+         ] do
+        after_shape =
+          scalar(
+            c.owner_repo,
+            "SELECT #{rel(c, "ash_onetime_maintenance_shape")}('#{rel(c, table)}'::regclass::oid)"
+          )
+
+        refute compared_field(before, @kind) == compared_field(after_shape, @kind)
+      end
+
       if @kind != :foreign_table do
-        assert_refusal(c, "ash_onetime_cleanup_nonce", "100", "untrusted_dependency")
+        assert_refusal(
+          c,
+          "ash_onetime_cleanup_nonce",
+          "100",
+          "untrusted_dependency: relation shape #{table}"
+        )
       end
 
       if @kind in [:trigger, :child_trigger, :constraint_trigger] do
         for {name, args} <- calls(),
             name != "ash_onetime_cleanup_nonce" and name != "ash_onetime_maintenance_status" do
-          assert_refusal(c, name, args, "untrusted_dependency")
+          assert_refusal(c, name, args, "untrusted_dependency: relation shape #{table}")
         end
 
         assert scalar(
@@ -2230,6 +2653,60 @@ defmodule AshOnetime.Store.MaintenanceTest do
                "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=19283 AND objid=42 AND granted"
              ) == 0
     end
+  end
+
+  defp assert_normalized_locations(c) do
+    table = rel(c, "ash_onetime_nonce_claims")
+
+    tree =
+      scalar(
+        c.owner_repo,
+        "SELECT adbin::text FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE d.adrelid='#{table}'::regclass AND a.attname='logical_partition'"
+      )
+
+    # PostgreSQL 17+ serializes locations as -1; vary only that field in a real catalog tree.
+    located = String.replace(tree, ":location -1", ":location 42")
+    refute located == tree
+
+    normalize = fn value ->
+      scalar(
+        c.owner_repo,
+        "SELECT #{rel(c, "ash_onetime_maintenance_normalize")}(#{literal(value)},'#{table}'::regclass::oid)"
+      )
+    end
+
+    assert normalize.(located) == normalize.(tree)
+  end
+
+  # Pin each field independently when PostgreSQL requires coupled catalog edits.
+  defp compared_field(shape, kind) do
+    {section, field} =
+      case kind do
+        :base_type -> {"columns", "type"}
+        :typmod -> {"columns", "typmod"}
+        :collation -> {"columns", "collation"}
+        :default -> {"columns", "default"}
+        :operator_family -> {"indexes", "opclasses"}
+        :access_method -> {"indexes", "am"}
+        :index -> {"indexes", "expressions"}
+        :check -> {"constraints", "expression"}
+      end
+
+    shape[section] |> Enum.map(&Map.get(&1, field)) |> Enum.sort()
+  end
+
+  defp replace_package_check(c, expression) do
+    claims = rel(c, "ash_onetime_nonce_claims")
+
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{claims} DROP CONSTRAINT ash_onetime_nonce_claims_verifier_id_check"
+    )
+
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{claims} ADD CONSTRAINT ash_onetime_nonce_claims_verifier_id_check CHECK (octet_length(verifier_id) BETWEEN 1 AND 128 AND (#{expression}))"
+    )
   end
 
   defp install_dependency(c, kind) do
@@ -2265,6 +2742,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   defp dependency_ddl(c, :child_trigger) do
+    # Payload children have no existing trigger to replace.
     trigger(c, rel(c, "ash_onetime_response_payloads_default"), false)
   end
 
@@ -2275,6 +2753,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   defp dependency_ddl(c, :rule) do
+    # The package has no rewrite rule to replace.
     claims = rel(c, "ash_onetime_nonce_claims")
     probe = rel(c, "probe")
 
@@ -2288,35 +2767,49 @@ defmodule AshOnetime.Store.MaintenanceTest do
     claims = rel(c, "ash_onetime_nonce_claims")
     probe = rel(c, "probe")
 
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD COLUMN hostile boolean DEFAULT #{probe}()")
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{claims} ALTER COLUMN logical_partition SET DEFAULT CASE WHEN #{probe}() THEN 'global' ELSE 'other' END"
+    )
   end
 
   defp dependency_ddl(c, :generated) do
     claims = rel(c, "ash_onetime_nonce_claims")
     probe = rel(c, "probe")
 
+    # PostgreSQL cannot convert an ordinary column to generated; recreate its existing name.
+    sql!(c.owner_repo, "ALTER TABLE #{claims} DROP COLUMN verifier_id CASCADE")
+
     sql!(
       c.owner_repo,
-      "ALTER TABLE #{claims} ADD COLUMN hostile boolean GENERATED ALWAYS AS (#{probe}()) STORED"
+      "ALTER TABLE #{claims} ADD COLUMN verifier_id text NOT NULL GENERATED ALWAYS AS (CASE WHEN #{probe}() THEN 'generated' ELSE 'other' END) STORED"
+    )
+
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{claims} ADD CONSTRAINT ash_onetime_nonce_claims_verifier_id_check CHECK (octet_length(verifier_id) BETWEEN 1 AND 128)"
     )
   end
 
   defp dependency_ddl(c, :check) do
-    claims = rel(c, "ash_onetime_nonce_claims")
     probe = rel(c, "probe")
 
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD CHECK (#{probe}())")
+    replace_package_check(c, "#{probe}()")
   end
 
   defp dependency_ddl(c, :index) do
     claims = rel(c, "ash_onetime_nonce_claims")
     probe = rel(c, "probe")
 
-    sql!(c.owner_repo, "CREATE INDEX hostile ON #{claims} ((#{probe}()))")
+    sql!(c.owner_repo, "DROP INDEX #{rel(c, "ash_onetime_nonce_claims_retain_until_index")}")
+    # Expression keys require indkey=0; the field proof isolates indexprs from that change.
+    sql!(
+      c.owner_repo,
+      "CREATE INDEX ash_onetime_nonce_claims_retain_until_index ON #{claims} ((CASE WHEN #{probe}() THEN retain_until ELSE retain_until END))"
+    )
   end
 
   defp dependency_ddl(c, :routine) do
-    claims = rel(c, "ash_onetime_nonce_claims")
     probe = rel(c, "probe")
 
     sql!(
@@ -2329,12 +2822,10 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "CREATE OR REPLACE FUNCTION #{probe}() RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS 'BEGIN RETURN #{rel(c, "inner_probe")}(); END'"
     )
 
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD CHECK (#{probe}())")
+    replace_package_check(c, "#{probe}()")
   end
 
   defp dependency_ddl(c, :operator) do
-    claims = rel(c, "ash_onetime_nonce_claims")
-
     sql!(
       c.runtime_repo,
       "CREATE FUNCTION #{rel(c, "comparison")}(integer,integer) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS 'BEGIN PERFORM pg_catalog.pg_advisory_lock(19283,42); RETURN true; END'"
@@ -2345,7 +2836,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "CREATE OPERATOR #{q(c.schema)}.=== (LEFTARG=integer, RIGHTARG=integer, FUNCTION=#{rel(c, "comparison")})"
     )
 
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD CHECK (1 OPERATOR(#{q(c.schema)}.===) 1)")
+    replace_package_check(c, "octet_length(verifier_id) OPERATOR(#{q(c.schema)}.===) 1")
   end
 
   defp dependency_ddl(c, :operator_family) do
@@ -2353,23 +2844,24 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     sql!(
       c.runtime_repo,
-      "CREATE FUNCTION #{rel(c, "comparison")}(integer,integer) RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN $1 < $2 THEN -1 WHEN $1 > $2 THEN 1 ELSE 0 END'"
+      "CREATE FUNCTION #{rel(c, "comparison")}(timestamptz,timestamptz) RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN $1 < $2 THEN -1 WHEN $1 > $2 THEN 1 ELSE 0 END'"
     )
 
     sql!(
       Repo,
-      "CREATE OPERATOR CLASS #{q(c.schema)}.hostile_ops FOR TYPE integer USING btree AS OPERATOR 1 < (integer,integer), OPERATOR 2 <= (integer,integer), OPERATOR 3 = (integer,integer), OPERATOR 4 >= (integer,integer), OPERATOR 5 > (integer,integer), FUNCTION 1 #{rel(c, "comparison")}(integer,integer)"
+      "CREATE OPERATOR CLASS #{q(c.schema)}.hostile_ops FOR TYPE timestamptz USING btree AS OPERATOR 1 < (timestamptz,timestamptz), OPERATOR 2 <= (timestamptz,timestamptz), OPERATOR 3 = (timestamptz,timestamptz), OPERATOR 4 >= (timestamptz,timestamptz), OPERATOR 5 > (timestamptz,timestamptz), FUNCTION 1 #{rel(c, "comparison")}(timestamptz,timestamptz)"
     )
 
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD COLUMN hostile integer")
+    sql!(c.owner_repo, "DROP INDEX #{rel(c, "ash_onetime_nonce_claims_retain_until_index")}")
 
     sql!(
       c.owner_repo,
-      "CREATE INDEX hostile ON #{claims} (hostile #{q(c.schema)}.hostile_ops)"
+      "CREATE INDEX ash_onetime_nonce_claims_retain_until_index ON #{claims} (retain_until #{q(c.schema)}.hostile_ops)"
     )
   end
 
   defp dependency_ddl(c, :foreign_key) do
+    # The package has no foreign key; exercise an incoming reference to its existing id.
     claims = rel(c, "ash_onetime_nonce_claims")
 
     sql!(
@@ -2380,19 +2872,37 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
   defp dependency_ddl(c, :constraint_index) do
     claims = rel(c, "ash_onetime_nonce_claims")
-    probe = rel(c, "probe")
 
-    sql!(c.owner_repo, "CREATE DOMAIN #{rel(c, "hostile_type")} AS text CHECK (#{probe}())")
+    sql!(
+      c.runtime_repo,
+      "CREATE FUNCTION #{rel(c, "uuid_compare")}(uuid,uuid) RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT uuid_cmp($1,$2)'"
+    )
+
+    sql!(
+      Repo,
+      "CREATE OPERATOR CLASS #{rel(c, "uuid_ops")} FOR TYPE uuid USING btree AS OPERATOR 1 < (uuid,uuid), OPERATOR 2 <= (uuid,uuid), OPERATOR 3 = (uuid,uuid), OPERATOR 4 >= (uuid,uuid), OPERATOR 5 > (uuid,uuid), FUNCTION 1 #{rel(c, "uuid_compare")}(uuid,uuid)"
+    )
+
+    sql!(c.owner_repo, "ALTER TABLE #{claims} DROP CONSTRAINT ash_onetime_nonce_claims_pkey")
 
     sql!(
       c.owner_repo,
-      "ALTER TABLE #{claims} ADD COLUMN hostile #{rel(c, "hostile_type")} UNIQUE"
+      "CREATE UNIQUE INDEX ash_onetime_nonce_claims_pkey ON #{claims} (id #{rel(c, "uuid_ops")})"
     )
+
+    # PostgreSQL forbids adopting a nondefault-opclass index as a PRIMARY KEY.
+    assert {:error, %Postgrex.Error{postgres: %{pg_code: "42809", message: message}}} =
+             SQL.query(
+               c.owner_repo,
+               "ALTER TABLE #{claims} ADD CONSTRAINT ash_onetime_nonce_claims_pkey PRIMARY KEY USING INDEX ash_onetime_nonce_claims_pkey",
+               []
+             )
+
+    assert message ==
+             "index \"ash_onetime_nonce_claims_pkey\" column number 1 does not have default sorting behavior"
   end
 
   defp dependency_ddl(c, :cast) do
-    claims = rel(c, "ash_onetime_nonce_claims")
-
     sql!(c.runtime_repo, "CREATE TYPE #{rel(c, "hostile_type")} AS ENUM ('value')")
 
     sql!(
@@ -2405,50 +2915,62 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "CREATE CAST (#{rel(c, "hostile_type")} AS boolean) WITH FUNCTION #{rel(c, "cast_probe")}(#{rel(c, "hostile_type")})"
     )
 
-    sql!(
-      c.owner_repo,
-      "ALTER TABLE #{claims} ADD CHECK ('value'::#{rel(c, "hostile_type")}::boolean)"
-    )
+    replace_package_check(c, "'value'::#{rel(c, "hostile_type")}::boolean")
   end
 
   defp dependency_ddl(c, :base_type) do
-    claims = rel(c, "ash_onetime_nonce_claims")
+    claims = rel(c, "ash_onetime_maintenance_runs")
 
+    # Preserve the built-in C input/output strictness when casting the existing nullable column.
     sql!(Repo, "CREATE TYPE #{rel(c, "hostile_type")}")
 
     sql!(
       Repo,
-      "CREATE FUNCTION #{rel(c, "type_input")}(cstring) RETURNS #{rel(c, "hostile_type")} LANGUAGE internal IMMUTABLE AS 'int4in'"
+      "CREATE FUNCTION #{rel(c, "type_input")}(cstring) RETURNS #{rel(c, "hostile_type")} LANGUAGE internal IMMUTABLE STRICT AS 'textin'"
     )
 
     sql!(
       Repo,
-      "CREATE FUNCTION #{rel(c, "type_output")}(#{rel(c, "hostile_type")}) RETURNS cstring LANGUAGE internal IMMUTABLE AS 'int4out'"
+      "CREATE FUNCTION #{rel(c, "type_output")}(#{rel(c, "hostile_type")}) RETURNS cstring LANGUAGE internal IMMUTABLE STRICT AS 'textout'"
     )
 
     sql!(
       Repo,
-      "CREATE TYPE #{rel(c, "hostile_type")} (INPUT=#{rel(c, "type_input")},OUTPUT=#{rel(c, "type_output")},INTERNALLENGTH=4,PASSEDBYVALUE,ALIGNMENT=int4)"
+      "CREATE TYPE #{rel(c, "hostile_type")} (INPUT=#{rel(c, "type_input")},OUTPUT=#{rel(c, "type_output")},INTERNALLENGTH=variable,ALIGNMENT=int4,STORAGE=extended)"
+    )
+
+    sql!(Repo, "ALTER FUNCTION #{rel(c, "type_input")}(cstring) OWNER TO #{q(c.runtime)}")
+
+    sql!(
+      Repo,
+      "ALTER FUNCTION #{rel(c, "type_output")}(#{rel(c, "hostile_type")}) OWNER TO #{q(c.runtime)}"
     )
 
     sql!(Repo, "ALTER TYPE #{rel(c, "hostile_type")} OWNER TO #{q(c.runtime)}")
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD COLUMN hostile #{rel(c, "hostile_type")}")
+
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{claims} ALTER COLUMN installed_at TYPE #{rel(c, "hostile_type")} USING NULL"
+    )
   end
 
   defp dependency_ddl(c, :domain) do
-    claims = rel(c, "ash_onetime_nonce_claims")
+    claims = rel(c, "ash_onetime_maintenance_runs")
     probe = rel(c, "probe")
 
     sql!(
       c.owner_repo,
-      "CREATE DOMAIN #{rel(c, "hostile_type")} AS integer CHECK (#{probe}())"
+      "CREATE DOMAIN #{rel(c, "hostile_type")} AS timestamptz CHECK (#{probe}())"
     )
 
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD COLUMN hostile #{rel(c, "hostile_type")}[]")
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{claims} ALTER COLUMN installed_at TYPE #{rel(c, "hostile_type")} USING installed_at::#{rel(c, "hostile_type")}"
+    )
   end
 
   defp dependency_ddl(c, :range) do
-    claims = rel(c, "ash_onetime_nonce_claims")
+    claims = rel(c, "ash_onetime_maintenance_runs")
 
     sql!(
       c.runtime_repo,
@@ -2460,7 +2982,17 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "CREATE TYPE #{rel(c, "hostile_type")} AS RANGE (SUBTYPE=integer,SUBTYPE_DIFF=#{rel(c, "range_diff")})"
     )
 
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD COLUMN hostile #{rel(c, "hostile_type")}")
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{claims} ALTER COLUMN installed_at TYPE #{rel(c, "hostile_type")} USING NULL"
+    )
+  end
+
+  defp dependency_ddl(c, :typmod) do
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{rel(c, "ash_onetime_maintenance_runs")} ALTER COLUMN installed_at TYPE timestamptz(3)"
+    )
   end
 
   defp dependency_ddl(c, :collation) do
@@ -2470,12 +3002,11 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     sql!(
       c.owner_repo,
-      "ALTER TABLE #{claims} ADD COLUMN hostile text COLLATE #{rel(c, "hostile_collation")}"
+      "ALTER TABLE #{claims} ALTER COLUMN verifier_id TYPE text COLLATE #{rel(c, "hostile_collation")}"
     )
   end
 
   defp dependency_ddl(c, :planner_support) do
-    claims = rel(c, "ash_onetime_nonce_claims")
     probe = rel(c, "probe")
 
     sql!(
@@ -2485,12 +3016,10 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     sql!(Repo, "ALTER FUNCTION #{rel(c, "planner")}(internal) OWNER TO #{q(c.runtime)}")
     sql!(Repo, "ALTER FUNCTION #{probe}() SUPPORT #{rel(c, "planner")}")
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD CHECK (#{probe}())")
+    replace_package_check(c, "#{probe}()")
   end
 
   defp dependency_ddl(c, :aggregate) do
-    claims = rel(c, "ash_onetime_nonce_claims")
-
     sql!(
       c.runtime_repo,
       "CREATE FUNCTION #{rel(c, "transition")}(integer,integer) RETURNS integer LANGUAGE plpgsql IMMUTABLE AS 'BEGIN PERFORM pg_advisory_lock(19283,42); RETURN $1+$2; END'"
@@ -2506,7 +3035,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "CREATE FUNCTION #{rel(c, "aggregate_check")}() RETURNS boolean LANGUAGE sql BEGIN ATOMIC SELECT #{rel(c, "aggregate_probe")}(1)>0; END"
     )
 
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD CHECK (#{rel(c, "aggregate_check")}())")
+    replace_package_check(c, "#{rel(c, "aggregate_check")}()")
   end
 
   defp dependency_ddl(c, :access_method) do
@@ -2525,14 +3054,19 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     sql!(
       Repo,
-      "CREATE OPERATOR CLASS #{rel(c, "am_ops")} DEFAULT FOR TYPE text USING #{q(am)} AS OPERATOR 1 < (text,text), OPERATOR 2 <= (text,text), OPERATOR 3 = (text,text), OPERATOR 4 >= (text,text), OPERATOR 5 > (text,text), FUNCTION 1 bttextcmp(text,text)"
+      "CREATE OPERATOR CLASS #{rel(c, "am_ops")} DEFAULT FOR TYPE timestamptz USING #{q(am)} AS OPERATOR 1 < (timestamptz,timestamptz), OPERATOR 2 <= (timestamptz,timestamptz), OPERATOR 3 = (timestamptz,timestamptz), OPERATOR 4 >= (timestamptz,timestamptz), OPERATOR 5 > (timestamptz,timestamptz), FUNCTION 1 timestamptz_cmp(timestamptz,timestamptz)"
     )
 
-    sql!(c.owner_repo, "CREATE INDEX hostile ON #{claims} USING #{q(am)}(verifier_id)")
+    sql!(c.owner_repo, "DROP INDEX #{rel(c, "ash_onetime_nonce_claims_retain_until_index")}")
+    # An access method requires its own opclass; assert the AM field independently too.
+    sql!(
+      c.owner_repo,
+      "CREATE INDEX ash_onetime_nonce_claims_retain_until_index ON #{claims} USING #{q(am)}(retain_until)"
+    )
   end
 
   defp dependency_ddl(c, :foreign_table) do
-    claims = rel(c, "ash_onetime_nonce_claims")
+    # PostgreSQL cannot convert a package heap to foreign; foreign partitions also require dropping the parent PK.
     probe = rel(c, "probe")
 
     fdw = "ao_fdw_" <> String.replace(c.schema, "ao_maintenance_", "")
@@ -2578,14 +3112,13 @@ defmodule AshOnetime.Store.MaintenanceTest do
       c,
       "ash_onetime_prune_payload_partitions",
       "8,2000",
-      "untrusted_dependency"
+      "untrusted_dependency: relation shape ash_onetime_response_payloads"
     )
 
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD CHECK (#{probe}())")
+    replace_package_check(c, "#{probe}()")
   end
 
   defp dependency_ddl(c, :extension_member) do
-    claims = rel(c, "ash_onetime_nonce_claims")
     probe = rel(c, "probe")
 
     sql!(Repo, "ALTER EXTENSION plpgsql ADD FUNCTION #{probe}()")
@@ -2594,10 +3127,11 @@ defmodule AshOnetime.Store.MaintenanceTest do
       SQL.query!(Repo, "ALTER EXTENSION plpgsql DROP FUNCTION #{probe}()", [])
     end)
 
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD CHECK (#{probe}())")
+    replace_package_check(c, "#{probe}()")
   end
 
   defp dependency_ddl(c, :statistics) do
+    # The package has no extended statistic to replace.
     claims = rel(c, "ash_onetime_nonce_claims")
     probe = rel(c, "probe")
 
@@ -2608,6 +3142,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   defp dependency_ddl(c, :partition_expression) do
+    # PostgreSQL cannot ALTER a partition key; a nested partition is the available hostile link.
     sql!(
       c.runtime_repo,
       "CREATE FUNCTION #{rel(c, "partition_key")}(date) RETURNS date LANGUAGE plpgsql IMMUTABLE AS 'BEGIN PERFORM pg_advisory_lock(19283,42); RETURN $1; END'"
@@ -2646,13 +3181,11 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     sql!(
       c.owner_repo,
-      "ALTER TABLE #{claims} ADD COLUMN hostile bigint DEFAULT nextval('#{rel(c, "hostile_sequence")}')"
+      "ALTER TABLE #{claims} ALTER COLUMN logical_partition SET DEFAULT nextval('#{rel(c, "hostile_sequence")}')::text"
     )
   end
 
   defp dependency_ddl(c, :language) do
-    claims = rel(c, "ash_onetime_nonce_claims")
-
     language = "ao_lang_" <> String.replace(c.schema, "ao_maintenance_", "")
 
     sql!(
@@ -2674,12 +3207,10 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "CREATE FUNCTION #{rel(c, "language_probe")}() RETURNS boolean LANGUAGE #{q(language)} AS 'BEGIN PERFORM pg_advisory_lock(19283,42); RETURN true; END'"
     )
 
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD CHECK (#{rel(c, "language_probe")}())")
+    replace_package_check(c, "#{rel(c, "language_probe")}()")
   end
 
   defp dependency_ddl(c, :text_search) do
-    claims = rel(c, "ash_onetime_nonce_claims")
-
     sql!(
       Repo,
       "CREATE FUNCTION #{rel(c, "lexize")}(internal,internal,internal,internal) RETURNS internal LANGUAGE internal AS 'dsimple_lexize'"
@@ -2710,14 +3241,13 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "ALTER TEXT SEARCH CONFIGURATION #{rel(c, "hostile_configuration")} ALTER MAPPING FOR asciiword WITH #{rel(c, "hostile_dictionary")}"
     )
 
-    sql!(
-      c.owner_repo,
-      "ALTER TABLE #{claims} ADD CHECK (to_tsvector('#{rel(c, "hostile_configuration")}'::regconfig,verifier_id) IS NOT NULL)"
+    replace_package_check(
+      c,
+      "to_tsvector('#{rel(c, "hostile_configuration")}'::regconfig,verifier_id) IS NOT NULL"
     )
   end
 
   defp dependency_ddl(c, :conversion) do
-    claims = rel(c, "ash_onetime_nonce_claims")
     probe = rel(c, "probe")
 
     definition =
@@ -2761,7 +3291,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "CREATE OR REPLACE FUNCTION #{probe}() RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS #{literal("BEGIN PERFORM pg_advisory_lock(19283,42); PERFORM set_config('search_path'," <> literal(c.schema <> ",pg_catalog") <> ",true); PERFORM convert_to('value','LATIN1'); RETURN true; END")}"
     )
 
-    sql!(c.owner_repo, "ALTER TABLE #{claims} ADD CHECK (#{probe}())")
+    replace_package_check(c, "#{probe}()")
   end
 
   @tag collision: true
@@ -2812,11 +3342,19 @@ defmodule AshOnetime.Store.MaintenanceTest do
       "CREATE FUNCTION #{rel(c, "hostile_trigger")}() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN PERFORM pg_catalog.pg_advisory_lock(19283,42); RETURN OLD; END'"
     )
 
+    name =
+      if table == rel(c, "ash_onetime_nonce_claims") do
+        sql!(c.owner_repo, "DROP TRIGGER ash_onetime_nonce_delete_guard ON #{table}")
+        "ash_onetime_nonce_delete_guard"
+      else
+        "hostile"
+      end
+
     ddl =
       if constraint?,
         do:
-          "CREATE CONSTRAINT TRIGGER hostile AFTER DELETE ON #{table} DEFERRABLE INITIALLY DEFERRED",
-        else: "CREATE TRIGGER hostile BEFORE DELETE ON #{table}"
+          "CREATE CONSTRAINT TRIGGER #{name} AFTER DELETE ON #{table} DEFERRABLE INITIALLY DEFERRED",
+        else: "CREATE TRIGGER #{name} BEFORE DELETE ON #{table}"
 
     sql!(c.owner_repo, ddl <> " FOR EACH ROW EXECUTE FUNCTION #{rel(c, "hostile_trigger")}()")
   end

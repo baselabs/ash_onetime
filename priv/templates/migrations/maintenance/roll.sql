@@ -9,7 +9,6 @@ DECLARE
   child_name text;
   child_oid oid;
   create_child text;
-  primary_constraint name;
   created integer := 0;
   months date[] := '{}';
   previous_setting text := current_setting('ash_onetime.maintenance',true);
@@ -81,11 +80,6 @@ BEGIN
       child_oid := to_regclass(format('%I.%I',@schema_name@,child_name));
       PERFORM @routines@.ash_onetime_maintenance_reset_acl(child_oid::oid,true::boolean);
       IF has_default_rows THEN
-        -- LIKE copies a standalone primary constraint with connoinherit=true.
-        -- Let ATTACH create the parent's native partition constraint instead,
-        -- so recovered and forward children have the very same catalog shape.
-        SELECT conname INTO STRICT primary_constraint FROM pg_constraint WHERE conrelid=child_oid AND contype='p';
-        EXECUTE format('ALTER TABLE %I.%I DROP CONSTRAINT %I',@schema_name@,child_name,primary_constraint);
         EXECUTE format('WITH moved AS (DELETE FROM %s WHERE partition_date >= $1 AND partition_date < $2 RETURNING *) INSERT INTO %I.%I SELECT * FROM moved',
           default_oid::regclass,@schema_name@,child_name) USING month_date,until_date;
         EXECUTE format('ALTER TABLE %I.ash_onetime_response_payloads ATTACH PARTITION %I.%I FOR VALUES FROM (%L) TO (%L)',@schema_name@,@schema_name@,child_name,month_date,until_date);

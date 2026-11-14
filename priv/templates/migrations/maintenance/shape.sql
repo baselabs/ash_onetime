@@ -12,13 +12,18 @@ BEGIN
       WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped),
     'constraints',(SELECT coalesce(jsonb_agg(value ORDER BY value::text),'[]') FROM (
       SELECT jsonb_build_object('type',x.contype,'deferrable',x.condeferrable,'deferred',x.condeferred,
-        'validated',x.convalidated,'enforced',x.conenforced,'noinherit',x.connoinherit,
+        'validated',x.convalidated,'enforced',x.conenforced,
         'keys',(SELECT jsonb_agg(a.attname ORDER BY k.ordinality) FROM unnest(x.conkey) WITH ORDINALITY k(num,ordinality)
           JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.num),
         'expression',@routines@.ash_onetime_maintenance_normalize(x.conbin::text,relation_oid::oid),
         'foreign_relation',x.confrelid,'operators',x.conexclop,
         'equality',jsonb_build_array(x.conpfeqop,x.conppeqop,x.conffeqop),
-        'backed',x.conindid<>0) AS value FROM pg_constraint x WHERE x.conrelid=c.oid
+        'backed',x.conindid<>0)
+        -- PostgreSQL forbids inheritance from a partition; a leaf cannot have
+        -- descendants, so NO INHERIT cannot affect its index-backed constraints.
+        || CASE WHEN x.contype IN ('p','u','x') AND c.relkind='r' AND c.relispartition
+          THEN '{}'::jsonb ELSE jsonb_build_object('noinherit',x.connoinherit) END
+        AS value FROM pg_constraint x WHERE x.conrelid=c.oid
     ) constraints),
     'indexes',(SELECT coalesce(jsonb_agg(value ORDER BY value::text),'[]') FROM (
       SELECT jsonb_build_object('am',ic.relam,'kind',ic.relkind,'owner',ic.relowner,

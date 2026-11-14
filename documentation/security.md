@@ -97,11 +97,21 @@ TRUNCATE, DROP, or a superuser's `session_replication_role = replica`. See
 
 Maintenance checks exact package relation shapes, including whole trigger rows, relation
 flags, defaults, generated expressions, constraints, indexes, partition keys and bounds.
+The shape omits only `pg_constraint.connoinherit` for PRIMARY KEY, UNIQUE and EXCLUDE
+constraints (`contype IN ('p','u','x')`) on leaf partitions (`relkind = 'r'` and
+`relispartition = true`). [PostgreSQL forbids inheritance from a partition](https://www.postgresql.org/docs/18/ddl-partitioning.html#DDL-PARTITIONING-DECLARATIVE-LIMITATIONS),
+and the pinned relation kind and exact relation set exclude subpartitions, so that flag
+cannot affect execution or enforcement there. This permits stock logical restores and
+LIKE-created recovery children whose matching indexes ATTACH adopts. The flag remains
+compared on roots, partitioned parents, non-partition relations, and every other constraint
+type, including NOT NULL, CHECK and foreign keys.
 Only the package policy may apply to the owner. Each step takes recursive SHARE UPDATE
 EXCLUSIVE locks on every root before checking the catalogs and retains them through work
 and its success record. Package routines require exact identity and a `prosrc` digest;
 being built-in or owned by a superuser does not grant a routine blanket trust. Columns and
-expressions must match the package's own DDL. Unexpected shapes refuse maintenance with
+expressions must match the package's own DDL. Only the migration that just created the
+package tables captures their shapes. Every upgrade builds a fresh DDL reference, even
+if the old routines have been dropped. Unexpected shapes refuse maintenance with
 `:untrusted_dependency`; status and the live doctor report the refusal.
 
 The PostgreSQL server and the migrator are trusted. Superuser event triggers, preloaded
@@ -109,6 +119,8 @@ hooks, and backend libraries execute outside a relation closure. Autovacuum ANAL
 as the table owner outside maintenance steps. The package cannot stop the server from
 executing objects an owner or superuser installed. Install revokes runtime MAINTAIN and
 steps audit effective MAINTAIN with `has_table_privilege`, including `pg_maintain`.
+The audit also refuses SET-only paths from the runtime, maintenance or current role, or
+any LOGIN role, to a role holding MAINTAIN on a package relation.
 The CREATE and MAINTAIN audits exclude superusers (the trusted server) and roles that
 inherit the owner's privileges (owner-equivalent). Runtime and maintenance roles must hold
 no membership in the owner, whether through INHERIT or SET; every step checks that boundary.
@@ -121,6 +133,9 @@ the migrator must coordinate function changes with maintenance.
 Package routines live in a dedicated schema owned by the table owner, with no public CREATE.
 Every step audits effective CREATE with `has_schema_privilege`. Runtime retains CREATE only
 in the table schema, so it cannot add a defaulted overload beside a package routine.
+The EXECUTE ACL audit checks that dedicated routine schema. Only the owner and the
+configured maintenance role may execute package routines, and the maintenance role must
+not hold grant options. Same-named functions in the table schema do not enter this audit.
 All package calls are schema-qualified and explicitly typed. The routine manifest checks the
 whole executable `pg_proc` row, normalized argument-default and SQL-body trees, a zero
 `prosupport`, and the source digest.

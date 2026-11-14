@@ -180,7 +180,7 @@ defmodule <%= inspect(module) %> do
   end
 
   defp create_cleanup_functions do
-    install_maintenance()
+    install_maintenance(:fresh)
   end
 
 

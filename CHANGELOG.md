@@ -27,6 +27,9 @@ All notable changes to this project are documented in this file.
   reference-signer interoperability, purpose/algorithm binding and signature tampering.
 
 
+- Maintenance audits EXECUTE in its dedicated routine schema and refuses SET-only
+  access to MAINTAIN holders. Upgrades always compare existing tables against a fresh
+  reference, including when old package routines have been dropped.
 - Maintenance moves into per-schema owner-owned functions with fixed search paths,
   bounded arguments, READ COMMITTED checks, owner-scoped policies, catalog checks,
   ACL resets, and transactional step records. PostgreSQL privilege refusals surface as
@@ -40,6 +43,9 @@ All notable changes to this project are documented in this file.
   definition digest. Recursive locks precede checks; effective MAINTAIN is refused.
   Routines use an owner-owned schema with an effective CREATE audit and no runtime owner
   membership. Executable routine metadata and publication row filters are checked too.
+- Maintenance accepts stock PostgreSQL logical restores by excluding only the inert
+  `connoinherit` flag on leaf-partition PRIMARY KEY, UNIQUE and EXCLUDE constraints from
+  exact shapes. DEFAULT recovery retains the LIKE-copied primary key for ATTACH to adopt.
 - Maintenance Store calls arm a configurable caller-side statement deadline (60 seconds by
   default). SQLSTATE 57014 returns transient `:maintenance_timeout` and rolls back the step.
   Store maintenance refuses caller-owned transactions before SQL with `:in_transaction`.

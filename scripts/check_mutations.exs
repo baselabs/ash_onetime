@@ -59,6 +59,174 @@ defmodule AshOnetime.MutationCheck do
       test_name: "generic completion rolls back relationship state injected by a caller hook",
       assertion: "assert {:error, error} = Ash.run_action(replay)"
     },
+    "maintenance-runtime-maintain" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "OR r.oid IN (SELECT oid FROM scheduled)",
+      mutated: "OR false",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "review_inactive_runtime",
+      test_name: "inactive NOLOGIN runtime member with SET only MAINTAIN refuses maintenance",
+      assertion: "SQL.query(c.owner_repo"
+    },
+    "maintenance-routine-acl" => %{
+      path: "priv/templates/migrations/maintenance/acl.sql",
+      original: "nspname=@routine_schema_name@",
+      mutated: "nspname=@schema_name@",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "review_acl",
+      test_name: "routine ACL audit distinguishes outsider",
+      assertion: "@grant == :table_schema_name",
+      required_failures:
+        for grant <- [:outsider, :grant_option, :table_schema_name] do
+          {"routine ACL audit distinguishes #{grant}", "@grant == :table_schema_name"}
+        end
+    },
+    "maintenance-set-maintain" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "AND pg_has_role(r.oid,holder.oid,'SET')",
+      mutated: "AND false",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "review_set_maintain",
+      test_name: "SET only MAINTAIN through pg_maintain refuses maintenance",
+      assertion: "assert_refusal",
+      required_failures:
+        Enum.map([:pg_maintain, :nologin], fn holder ->
+          {"SET only MAINTAIN through #{holder} refuses maintenance", "assert_refusal"}
+        end) ++
+          [
+            {"inactive NOLOGIN runtime member with SET only MAINTAIN refuses maintenance",
+             "SQL.query(c.owner_repo"}
+          ]
+    },
+    "maintenance-upgrade-reference" => %{
+      path: "priv/templates/migrations/maintenance_helpers.exs",
+      original: ~S|IF #{mode == :fresh} THEN|,
+      mutated: "IF jsonb_array_length(old_functions)=0 THEN",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "review_install_mode",
+      test_name: "upgrade with missing old routines refuses an existing hostile trigger",
+      assertion: "assert_raise Postgrex.Error"
+    },
+    "maintenance-shape-type" => %{
+      path: "priv/templates/migrations/maintenance/shape.sql",
+      original: "'type',a.atttypid",
+      mutated: "'type',NULL",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shape_base_type_mutation",
+      test_name: "Table 1 row 15: base_type refuses before owner code runs",
+      assertion: "compared_field(before, @kind)"
+    },
+    "maintenance-shape-typmod" => %{
+      path: "priv/templates/migrations/maintenance/shape.sql",
+      original: "'typmod',a.atttypmod",
+      mutated: "'typmod',NULL",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shape_typmod_mutation",
+      test_name: "Table 1 row 15: typmod refuses before owner code runs",
+      assertion: "compared_field(before, @kind)"
+    },
+    "maintenance-shape-collation" => %{
+      path: "priv/templates/migrations/maintenance/shape.sql",
+      original: "'collation',a.attcollation",
+      mutated: "'collation',NULL",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shape_collation_mutation",
+      test_name: "Table 1 row 18: collation refuses before owner code runs",
+      assertion: "compared_field(before, @kind)"
+    },
+    "maintenance-shape-default" => %{
+      path: "priv/templates/migrations/maintenance/shape.sql",
+      original:
+        "'default',@routines@.ash_onetime_maintenance_normalize(d.adbin::text,relation_oid::oid)",
+      mutated: "'default',NULL",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shape_default_mutation",
+      test_name: "Table 1 row 6: default refuses before owner code runs",
+      assertion: "compared_field(before, @kind)"
+    },
+    "maintenance-shape-opclass" => %{
+      path: "priv/templates/migrations/maintenance/shape.sql",
+      original: "'opclasses',i.indclass::text",
+      mutated: "'opclasses',NULL",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shape_operator_family_mutation",
+      test_name: "Table 1 row 13: operator_family refuses before owner code runs",
+      assertion: "compared_field(before, @kind)"
+    },
+    "maintenance-shape-index-am" => %{
+      path: "priv/templates/migrations/maintenance/shape.sql",
+      original: "'am',ic.relam",
+      mutated: "'am',NULL",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shape_access_method_mutation",
+      test_name: "Table 1 row 22: access_method refuses before owner code runs",
+      assertion: "compared_field(before, @kind)"
+    },
+    "maintenance-shape-index-expressions" => %{
+      path: "priv/templates/migrations/maintenance/shape.sql",
+      original:
+        "'expressions',@routines@.ash_onetime_maintenance_normalize(i.indexprs::text,relation_oid::oid)",
+      mutated: "'expressions',NULL",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shape_index_mutation",
+      test_name: "Table 1 row 11: index refuses before owner code runs",
+      assertion: "compared_field(before, @kind)"
+    },
+    "maintenance-shape-constraint-expression" => %{
+      path: "priv/templates/migrations/maintenance/shape.sql",
+      original:
+        "'expression',@routines@.ash_onetime_maintenance_normalize(x.conbin::text,relation_oid::oid)",
+      mutated: "'expression',NULL",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shape_check_mutation",
+      test_name: "Table 1 row 8: check refuses before owner code runs",
+      assertion: "compared_field(before, @kind)"
+    },
+    "maintenance-normalize-location" => %{
+      path: "priv/templates/migrations/maintenance/normalize.sql",
+      original: "regexp_replace(tree, ':location [-0-9]+', ':location -1', 'g')",
+      mutated: "tree",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "normalize_location_mutation",
+      test_name: "Table 1 row 6: default refuses before owner code runs",
+      assertion: "assert normalize.(located) == normalize.(tree)"
+    },
+    "maintenance-normalize-oid" => %{
+      path: "priv/templates/migrations/maintenance/normalize.sql",
+      original:
+        "result := regexp_replace(result, '(:[a-z]+) ' || object_row.oid || '( |})', '\\1 ' || object_row.identity || '\\2','g');",
+      mutated: "result := result;",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "restore_fixpoint",
+      test_name: "every package expression is a PostgreSQL 18 dump restore fixpoint, default",
+      assertion: "assert normalized_policies(c) == policies"
+    },
+    "maintenance-normalize-attnum" => %{
+      path: "priv/templates/migrations/maintenance/normalize.sql",
+      original:
+        "    result := regexp_replace(result, ':(varattno|varattnosyn) ' || column_row.attnum || '( |})',\n      ':\\1 ' || quote_ident(column_row.attname) || '\\2', 'g');",
+      mutated: "    result := result;",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "normalize_attnum_mutation",
+      test_name: "ADD COLUMN upgrade uses a same-server reference and maps attribute numbers",
+      assertion: "untrusted_dependency: upgrade relation shape"
+    },
+    "maintenance-restore-fixpoint" => %{
+      path: "priv/templates/migrations/maintenance/shape.sql",
+      original: "x.contype IN ('p','u','x') AND c.relkind='r' AND c.relispartition",
+      mutated: "false",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "restore_fixpoint",
+      test_name: "every package expression is a PostgreSQL 18 dump restore fixpoint, default",
+      assertion: "assert relation_shapes(c) == shapes",
+      required_failures:
+        for variant <- [:default, :hash, :facts, :logical_partitions, :prefix] do
+          {"every package expression is a PostgreSQL 18 dump restore fixpoint, #{variant}",
+           "assert relation_shapes(c) == shapes"}
+        end,
+      red_summary: "Result: 0/6 passed",
+      green_summary: "Result: 6 passed"
+    },
     "maintenance-routine-schema" => %{
       path: "priv/templates/migrations/maintenance/trust.sql",
       original: "AND has_schema_privilege(r.oid,@routine_schema_name@,'CREATE')",
@@ -113,7 +281,9 @@ defmodule AshOnetime.MutationCheck do
       test: ~S|test/ash_onetime/store/maintenance_test.exs|,
       tag: ~S|maintenance_shape_mutation|,
       test_name: ~S|a builtin array input cannot dispatch a runtime domain check|,
-      assertion: ~S|assert_refusal|
+      assertion: ~S|assert_refusal|,
+      red_summary: "Result: 0/38 passed",
+      green_summary: "Result: 38 passed"
     },
     "maintenance-check-before-lock" => %{
       path: ~S|priv/templates/migrations/maintenance/cleanup_nonce.sql|,
@@ -147,8 +317,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "maintenance-maintain" => %{
       path: ~S|priv/templates/migrations/maintenance/trust.sql|,
-      original: ~S|AND has_table_privilege(r.oid,t::oid,'MAINTAIN')|,
-      mutated: ~S|AND false|,
+      original: ~S|RAISE EXCEPTION 'untrusted_dependency: effective MAINTAIN privilege';|,
+      mutated: ~S|NULL;|,
       test: ~S|test/ash_onetime/store/maintenance_test.exs|,
       tag: ~S|maintenance_maintain_mutation|,
       test_name:

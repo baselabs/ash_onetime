@@ -502,11 +502,6 @@ CREATE under the trusted-owner/server boundary described in [Security](security.
 Publish package tables without row filters. A non-NULL publication row filter refuses the
 step with `:untrusted_dependency`; publication membership without a filter is supported.
 
-PostgreSQL 18 `pg_dump`/`pg_restore` preserves package expressions but recreates partition
-primary keys with different inheritance metadata (`connoinherit`). The exact relation check
-refuses those restored children with `:untrusted_dependency`. A restore procedure must
-preserve the package's partition DDL shape; do not bypass the trust check to resume maintenance.
-
 Store maintenance calls each run in a transaction with a separate
 `SET LOCAL statement_timeout` statement before the function call. Configure
 `config :ash_onetime, :maintenance_statement_timeout_ms, 60_000` (1–2,147,483,647 ms).

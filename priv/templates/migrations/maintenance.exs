@@ -4,7 +4,7 @@ defmodule <%= inspect(module) %> do
   @install_prefix <%= inspect(install_prefix) %>
   <%= EEx.eval_file(Path.join(__DIR__, "maintenance_helpers.exs"), binding()) %>
 
-  def up, do: install_maintenance()
+  def up, do: install_maintenance(:upgrade)
 
   def down do
     execute("DO " <> maintenance_literal("""

@@ -18,7 +18,7 @@ BEGIN
            OR a.privilege_type='REFERENCES')
     UNION ALL
     SELECT 1 FROM pg_proc p CROSS JOIN LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
-    WHERE p.pronamespace=(SELECT oid FROM pg_namespace WHERE nspname=@schema_name@)
+    WHERE p.pronamespace=(SELECT oid FROM pg_namespace WHERE nspname=@routine_schema_name@)
       AND EXISTS (SELECT 1 FROM @schema@.ash_onetime_maintenance_runs r,
         LATERAL jsonb_array_elements(r.last_counts->'routines') m WHERE r.step='install'
           AND m->>'name'=p.proname AND m->>'arguments'=p.proargtypes::text)

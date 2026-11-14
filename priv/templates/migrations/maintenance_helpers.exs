@@ -46,7 +46,7 @@ end) %>
 @maintenance_functions <%= inspect(functions, limit: :infinity, printable_limit: :infinity) %>
 @maintenance_role <%= inspect(maintenance_role) %>
 
-defp install_maintenance do
+defp install_maintenance(mode) when mode in [:fresh, :upgrade] do
   flush()
   execute("DO " <> maintenance_literal("""
   DECLARE
@@ -272,7 +272,7 @@ defp install_maintenance do
     END IF;
     -- Fresh objects are captured in the creating transaction. Upgrades use
     -- the package DDL reference, not the existing consumer's expressions.
-    IF jsonb_array_length(old_functions)=0 THEN
+    IF #{mode == :fresh} THEN
       manifest := #{rq("ash_onetime_maintenance_capture")}();
     ELSE
       manifest := #{rq("ash_onetime_maintenance_reference")}(false::boolean);
