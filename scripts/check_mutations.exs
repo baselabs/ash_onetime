@@ -1077,7 +1077,9 @@ defmodule AshOnetime.MutationCheck do
       tag: "rls_partition_kept_mutation",
       test_name:
         "tenant-session cleanup under FORCE RLS drops the empty partition, keeps the occupied one, and still deletes claims",
-      assertion: "assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} = result"
+      # Keeping the occupied child without raising skips the subtransaction rollback that
+      # restores FORCE; the counts are unchanged, so only the FORCE flag can see it.
+      assertion: "assert force_flagged?(prefix, partition)"
     },
     "rls-child-policy-copy" => %{
       path: "priv/templates/migrations/maintenance/copy_policy.sql",
@@ -1173,7 +1175,9 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_error_to_kept_mutation",
       test_name: "an event trigger blocking ALTER TABLE keeps partitions and fails nothing",
-      assertion: "assert {:ok, %{payload_partitions: 0, payload_partitions_kept: 2}} ="
+      # Re-raising escapes the prune before its result is matched, so the mutant's
+      # signature is the event trigger's error surfacing from the prune call.
+      assertion: "(raise_exception) DDL blocked"
     },
     "payload-partition-count" => %{
       path: "priv/templates/migrations/maintenance/prune.sql",
@@ -1232,7 +1236,7 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_budget_mutation",
       test_name: "the budget spans acquisitions: a second holder gets only what remains",
-      assertion: "assert elapsed < 3700"
+      assertion: "assert finished_at - waiting_started < 3700"
     },
     "rls-prune-single-pruner" => %{
       path: "priv/templates/migrations/maintenance/prune.sql",
@@ -2371,8 +2375,19 @@ defmodule AshOnetime.MutationCheck do
 
     case validate(names) do
       :ok ->
-        Enum.each(names, &run_mutation!(&1, Map.fetch!(@mutations, &1)))
-        IO.puts("mutation checks passed: #{Enum.join(names, ", ")}")
+        case Enum.flat_map(names, &run_collecting_failure/1) do
+          [] ->
+            IO.puts("mutation checks passed: #{Enum.join(names, ", ")}")
+
+          failures ->
+            IO.puts(:stderr, "mutation checks failed (#{length(failures)}):")
+
+            Enum.each(failures, fn {name, message} ->
+              IO.puts(:stderr, "  #{name}: #{message}")
+            end)
+
+            System.halt(1)
+        end
 
       {:error, unknown} ->
         IO.puts(:stderr, "unknown mutation checks: #{Enum.join(unknown, ", ")}")
@@ -2382,6 +2397,28 @@ defmodule AshOnetime.MutationCheck do
     exception ->
       IO.puts(:stderr, Exception.message(exception))
       System.halt(1)
+  end
+
+  # One failing mutation must not hide the next: every mutation runs and every failure is
+  # reported. Continuing is safe only on exact source bytes, so a mutation that leaves its
+  # file changed stops the battery at once.
+  defp run_collecting_failure(name) do
+    mutation = Map.fetch!(@mutations, name)
+    original_source = File.read!(mutation.path)
+
+    try do
+      run_mutation!(name, mutation)
+      []
+    rescue
+      exception ->
+        unless File.read!(mutation.path) == original_source do
+          reraise exception, __STACKTRACE__
+        end
+
+        message = Exception.message(exception)
+        IO.puts(:stderr, "mutation #{name}: FAILED: #{message}")
+        [{name, message}]
+    end
   end
 
   defp run_mutation!(name, mutation) do
@@ -2414,6 +2451,11 @@ defmodule AshOnetime.MutationCheck do
     IO.puts(red_output)
 
     if red_status == 0 do
+      # A run that executed nothing (its tier skipped or excluded) proves nothing either way.
+      unless Regex.match?(~r/Result: [1-9][0-9]* passed/, red_output) do
+        raise "mutation #{name} ran no owned test: it was skipped or excluded on this substrate"
+      end
+
       raise "mutation #{name} survived its owned test"
     end
 
