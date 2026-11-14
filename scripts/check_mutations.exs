@@ -83,8 +83,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "maintenance-set-maintain" => %{
       path: "priv/templates/migrations/maintenance/trust.sql",
-      original: "AND pg_has_role(r.oid,holder.oid,'SET')",
-      mutated: "AND false",
+      original: "OR pg_has_role(r.oid,holder.oid,'SET')",
+      mutated: "OR false",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "review_set_maintain",
       test_name: "SET only MAINTAIN through pg_maintain refuses maintenance",

@@ -124,18 +124,22 @@ BEGIN
   policy_error := @routines@.ash_onetime_maintenance_policy_error();
   IF policy_error IS NOT NULL THEN RAISE EXCEPTION 'maintenance_blinded: %',policy_error; END IF;
   -- R3a: inherited privileges and SET-reachable MAINTAIN holders. Owners are
-  -- trusted; every other role that can maintain a relation is refused.
+  -- trusted; every other role that can maintain a relation is refused. Holders
+  -- are found once, so the cost is roles x relations plus candidates x holders,
+  -- and holders is empty on a trusted install.
   IF EXISTS (WITH RECURSIVE scheduled(oid) AS (
     SELECT @maintenance@::oid WHERE @maintenance@<>@owner@
     UNION SELECT m.member FROM scheduled s JOIN pg_auth_members m ON m.roleid=s.oid WHERE m.member<>@owner@
-  ) SELECT 1 FROM pg_roles r CROSS JOIN LATERAL @routines@.ash_onetime_maintenance_relations() t
+  ), relations AS MATERIALIZED (
+    SELECT t::oid AS oid FROM @routines@.ash_onetime_maintenance_relations() t
+  ), holders AS MATERIALIZED (
+    SELECT holder.oid FROM pg_roles holder WHERE NOT holder.rolsuper AND holder.oid<>@owner@
+      AND NOT pg_has_role(holder.oid,@owner@,'USAGE')
+      AND EXISTS (SELECT 1 FROM relations t WHERE has_table_privilege(holder.oid,t.oid,'MAINTAIN'))
+  ) SELECT 1 FROM pg_roles r JOIN holders holder
+      ON (holder.oid=r.oid OR pg_has_role(r.oid,holder.oid,'SET'))
     WHERE (r.rolcanlogin OR r.oid IN (SELECT oid FROM scheduled)
-      OR r.rolname=current_setting('role') OR r.rolname=session_user) AND NOT r.rolsuper AND r.oid<>@owner@ AND NOT pg_has_role(r.oid,@owner@,'USAGE')
-      AND (has_table_privilege(r.oid,t::oid,'MAINTAIN') OR EXISTS (
-        SELECT 1 FROM pg_roles holder WHERE NOT holder.rolsuper AND holder.oid<>@owner@
-          AND NOT pg_has_role(holder.oid,@owner@,'USAGE')
-          AND pg_has_role(r.oid,holder.oid,'SET')
-          AND has_table_privilege(holder.oid,t::oid,'MAINTAIN')))) THEN
+      OR r.rolname=current_setting('role') OR r.rolname=session_user) AND NOT r.rolsuper AND r.oid<>@owner@ AND NOT pg_has_role(r.oid,@owner@,'USAGE')) THEN
     RAISE EXCEPTION 'untrusted_dependency: effective MAINTAIN privilege';
   END IF;
 

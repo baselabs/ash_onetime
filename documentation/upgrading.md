@@ -606,6 +606,11 @@ and altered children refuse rather than being adopted. No trust field is relaxed
 conversion. Upgraded databases support stock PostgreSQL 18 dump/restore followed by prune,
 reap and roll, with the same exact reference comparison.
 
+The conversion holds an ACCESS EXCLUSIVE lock on each converted table and all its
+partitions while it re-adds the CHECKs, which scans every row, and rebuilds the primary key
+index. Its duration grows with the claim and payload rows, and requests that touch those
+tables wait for it. Run this migration in a window sized to those tables.
+
 The generator requires the 1.10.0 operation-hold migration to be present. Stop old maintenance
 jobs first: their prefix-hash advisory lock does not coordinate with the new OID lock. Scope
 all consumer policies on package tables to runtime roles before applying the migration;
