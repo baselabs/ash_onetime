@@ -576,6 +576,36 @@ mix ash_onetime.gen.migrations --repo MyApp.Repo --prefix store --maintenance --
 mix ecto.migrate
 ```
 
+Existing installations must first apply the migrations their install predates, in order:
+
+- v0.1 installs: generate and apply the shipped `ash_onetime.gen.roll_forward`
+  migration using a 1.x release. It adds the response-partition index. Keep that
+  migration; the generator is removed in 2.0, so run it before updating the dependency.
+- Installs before v1.1: apply `ash_onetime.gen.logical_partitions` to backfill `global`
+  and replace the claim collision keys.
+- Installs before v1.10: apply `ash_onetime.gen.migrations --operation-hold`.
+
+Fresh v1.10 installs already contain the operation-hold schema. If they have no separate
+operation-hold migration, generate and apply `--operation-hold` once (it is idempotent)
+before generating `--maintenance`, whose file-level prerequisite checks for that migration.
+These prerequisites apply to plain and hash claims, every supported hash partition count,
+and each install schema. `--tenants` selects the tenant migration directory; run the chain
+for every schema through the application's ordinary migration runner. Fact-table migrations
+are independent and retain their data, identity sequences, indexes and append-only guards.
+
+The maintenance upgrade recognizes the exact surviving primary keys from the historical
+logical-partition upgrade: `(operation_hash, id)` on hash claims and
+`(partition_date, claim_id)` on payloads. It compares every root and child against fresh
+same-server package references before altering any relation. Only validated historical keys
+are rebuilt to include `logical_partition`; validated historical CHECK expressions are
+recreated in their restore-stable form using their actual catalog names. This preserves
+claim and payload data, including rows backfilled by ADD COLUMN, and makes the upgraded
+schema equal to a fresh install. Column order and generated constraint/index names are
+not schema semantics. Other changes, missing constraints, duplicate replacement CHECKs,
+and altered children refuse rather than being adopted. No trust field is relaxed by this
+conversion. Upgraded databases support stock PostgreSQL 18 dump/restore followed by prune,
+reap and roll, with the same exact reference comparison.
+
 The generator requires the 1.10.0 operation-hold migration to be present. Stop old maintenance
 jobs first: their prefix-hash advisory lock does not coordinate with the new OID lock. Scope
 all consumer policies on package tables to runtime roles before applying the migration;

@@ -1,0 +1,140 @@
+{
+  "initial/install.exs.eex": {
+    "ref": "v0.1.0",
+    "source": "priv/templates/migrations/install.exs",
+    "sha256": "39548c58f4663cdd53ff4ef05a62987870be096096699ff87b8cf028b17b8534",
+    "blob": "cb7406df2cde61a6649b46739d3a9b8b47ce3f18"
+  },
+  "initial/hash_partitioned.exs.eex": {
+    "ref": "v0.1.0",
+    "source": "priv/templates/migrations/hash_partitioned.exs",
+    "sha256": "1c019da1dbc2fa96a22d137f0ea1669a1e60602091fe521385747eee10e77ad9",
+    "blob": "59973f258d91c314adb8ca13d683178d157450d0"
+  },
+  "initial/generator.ex.eex": {
+    "ref": "v0.1.0",
+    "source": "lib/mix/tasks/ash_onetime.gen.migrations.ex",
+    "sha256": "c451fb0ca38b54e76852af3f1a1fb086a9a722b18a8bfa28c3c2f1201c21c46c",
+    "blob": "b925aad9bfeb6b176f1ea79701de61ef9bff496a"
+  },
+  "response_index/install.exs.eex": {
+    "ref": "v0.2.0",
+    "source": "priv/templates/migrations/install.exs",
+    "sha256": "aeb03062482950a93673820d5c3ac76e0febf86c61df121c2bb399e26f319bc8",
+    "blob": "f1678a3ce105a6a35f043d0f73de7c10aa17b8a2"
+  },
+  "response_index/hash_partitioned.exs.eex": {
+    "ref": "v0.2.0",
+    "source": "priv/templates/migrations/hash_partitioned.exs",
+    "sha256": "1c019da1dbc2fa96a22d137f0ea1669a1e60602091fe521385747eee10e77ad9",
+    "blob": "59973f258d91c314adb8ca13d683178d157450d0"
+  },
+  "response_index/roll_forward.exs.eex": {
+    "ref": "v0.2.0",
+    "source": "priv/templates/migrations/roll_forward.exs",
+    "sha256": "2faa700d73c50c96bd0afb01f6be4b82c96d717783e995759465bc3487c44b85",
+    "blob": "4980fb714415036146d1b61d80dbcf0a5da5fe8d"
+  },
+  "response_index/generator.ex.eex": {
+    "ref": "v0.2.0",
+    "source": "lib/mix/tasks/ash_onetime.gen.migrations.ex",
+    "sha256": "06ea9743892bb80630424b5dfc24b54ea394a59074791122a341572436bb658e",
+    "blob": "a49df66fbd5726c1b26b7f1af4c858ed3d6707a2"
+  },
+  "scoped_response_lookup/install.exs.eex": {
+    "ref": "v0.6.0",
+    "source": "priv/templates/migrations/install.exs",
+    "sha256": "0bc0c10ede764e4d61a097b09c6e0f823121d731dbae8e553909e5e752a98962",
+    "blob": "f6c20aecc8dbbd7e7732580f78b9f0daffc77a19"
+  },
+  "scoped_response_lookup/hash_partitioned.exs.eex": {
+    "ref": "v0.6.0",
+    "source": "priv/templates/migrations/hash_partitioned.exs",
+    "sha256": "1c019da1dbc2fa96a22d137f0ea1669a1e60602091fe521385747eee10e77ad9",
+    "blob": "59973f258d91c314adb8ca13d683178d157450d0"
+  },
+  "scoped_response_lookup/roll_forward.exs.eex": {
+    "ref": "v0.6.0",
+    "source": "priv/templates/migrations/roll_forward.exs",
+    "sha256": "d913e0b7e5a87167fc937150c9fde81180c06556bfc0ad7b1d3eb2568f4b6ddb",
+    "blob": "40d176964951dc3d1d06a6995c7781bfe0234dfb"
+  },
+  "scoped_response_lookup/generator.ex.eex": {
+    "ref": "v0.6.0",
+    "source": "lib/mix/tasks/ash_onetime.gen.migrations.ex",
+    "sha256": "06ea9743892bb80630424b5dfc24b54ea394a59074791122a341572436bb658e",
+    "blob": "a49df66fbd5726c1b26b7f1af4c858ed3d6707a2"
+  },
+  "logical_partition/install.exs.eex": {
+    "ref": "v1.1.0",
+    "source": "priv/templates/migrations/install.exs",
+    "sha256": "7df2e29263428683e6f7ba0369cab3be105611aa3200bb88ec64833575580d46",
+    "blob": "64147df741a0666ea3187b228dbde1a88ce53642"
+  },
+  "logical_partition/hash_partitioned.exs.eex": {
+    "ref": "v1.1.0",
+    "source": "priv/templates/migrations/hash_partitioned.exs",
+    "sha256": "1c019da1dbc2fa96a22d137f0ea1669a1e60602091fe521385747eee10e77ad9",
+    "blob": "59973f258d91c314adb8ca13d683178d157450d0"
+  },
+  "logical_partition/logical_partitions.exs.eex": {
+    "ref": "v1.1.0",
+    "source": "priv/templates/migrations/logical_partitions.exs",
+    "sha256": "873bc0b3349210e1f522aeb4d016aa25038959a3c27f48039f4e4e377d2f8873",
+    "blob": "3dd90968dfb28fbeae2883fbe650aa743a9530e8"
+  },
+  "logical_partition/generator.ex.eex": {
+    "ref": "v1.1.0",
+    "source": "lib/mix/tasks/ash_onetime.gen.migrations.ex",
+    "sha256": "672abaf74d79df81ce2833c917291e39076c5adb57052d3dfa7fc1cb591b4c31",
+    "blob": "7fd09328333f4950ea8203193a2fdae463188972"
+  },
+  "fact_tables/fact_tables.exs.eex": {
+    "ref": "v1.8.0",
+    "source": "priv/templates/migrations/fact_tables.exs",
+    "sha256": "c2b16341c1a2ac17a97eafa4894ae8ac97f13a060c13c09caffca60861ab7bb2",
+    "blob": "1231ab30bbc215416cc9f18d85f8edfe447a411c"
+  },
+  "fact_tables/generator.ex.eex": {
+    "ref": "v1.8.0",
+    "source": "lib/mix/tasks/ash_onetime.gen.migrations.ex",
+    "sha256": "6dc8ab9f75bef332fecdb40a29488c80cc9d9c5fcf0b7757f8751a684a7198a9",
+    "blob": "d64169c6e59a4b44c80aaa48edca4fb61a6bc4dd"
+  },
+  "fact_generator/fact_tables.exs.eex": {
+    "ref": "v1.9.0",
+    "source": "priv/templates/migrations/fact_tables.exs",
+    "sha256": "c2b16341c1a2ac17a97eafa4894ae8ac97f13a060c13c09caffca60861ab7bb2",
+    "blob": "1231ab30bbc215416cc9f18d85f8edfe447a411c"
+  },
+  "fact_generator/generator.ex.eex": {
+    "ref": "v1.9.0",
+    "source": "lib/mix/tasks/ash_onetime.gen.migrations.ex",
+    "sha256": "4c3c39a2caf042e17b24a72707c377b4a028e319416fddbb7feeeae5b35fab94",
+    "blob": "9f7b1be60742a4e6e687fdc344e2d2e0efd5640c"
+  },
+  "operation_hold/install.exs.eex": {
+    "ref": "b07fbf66b7b41dd097ab155e75a33efcf292f3f9",
+    "source": "priv/templates/migrations/install.exs",
+    "sha256": "d85963f6f81f1c978a1e06427a7d8a657a2af8c116a78981f1c29681ec8a2ef4",
+    "blob": "eecff782c802ad3538a535935d440ee61e4a1d78"
+  },
+  "operation_hold/hash_partitioned.exs.eex": {
+    "ref": "b07fbf66b7b41dd097ab155e75a33efcf292f3f9",
+    "source": "priv/templates/migrations/hash_partitioned.exs",
+    "sha256": "1c019da1dbc2fa96a22d137f0ea1669a1e60602091fe521385747eee10e77ad9",
+    "blob": "59973f258d91c314adb8ca13d683178d157450d0"
+  },
+  "operation_hold/operation_hold.exs.eex": {
+    "ref": "b07fbf66b7b41dd097ab155e75a33efcf292f3f9",
+    "source": "priv/templates/migrations/operation_hold.exs",
+    "sha256": "4d40473d0404328b63d567af3923569d8a2330d361d253c8d6d072a43cf85e08",
+    "blob": "59ad64340c867813b3f2ab62930e197f0bbf5bb2"
+  },
+  "operation_hold/generator.ex.eex": {
+    "ref": "b07fbf66b7b41dd097ab155e75a33efcf292f3f9",
+    "source": "lib/mix/tasks/ash_onetime.gen.migrations.ex",
+    "sha256": "74dc9d7dd834ecfbf485cdbdb59272e1eb849f6f39dacf20c16d1feb88d8f6d7",
+    "blob": "355b23791b2f4297b2e7057268e3778208e4a9d3"
+  }
+}

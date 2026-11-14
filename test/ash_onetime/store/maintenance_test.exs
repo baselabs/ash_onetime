@@ -4,18 +4,34 @@ defmodule AshOnetime.Store.MaintenanceTest do
   alias AshOnetime.Store.Postgres
   alias AshOnetime.Store.Result
   alias AshOnetime.Test.Repo
+  alias AshOnetime.Test.ShippedMigrations
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: Generator
 
   setup context do
     Sandbox.mode(Repo, :auto)
+
+    if context[:shipped_release] do
+      # A full high-modulus upgrade and restore can outlive the Sandbox default.
+      # Keep fixture DDL committed and scope the longer ownership to this case.
+      :ok = Sandbox.checkout(Repo, sandbox: false, ownership_timeout: 900_000)
+    end
+
     suffix = Ecto.UUID.generate() |> String.replace("-", "")
 
     schema =
-      if context[:quoted_schema], do: "ao_'\"$copy$#{suffix}", else: "ao_maintenance_#{suffix}"
+      cond do
+        context[:quoted_schema] && context[:legacy_install] -> "ao_'$copy$#{suffix}"
+        context[:quoted_schema] -> "ao_'\"$copy$#{suffix}"
+        true -> "ao_maintenance_#{suffix}"
+      end
 
-    migration_schema = if context[:quoted_schema], do: "ao_ledger_#{suffix}", else: schema
+    migration_schema =
+      if context[:quoted_schema] && !context[:legacy_install],
+        do: "ao_ledger_#{suffix}",
+        else: schema
+
     owner = "ao_owner_#{suffix}"
     runtime = "ao_runtime_#{suffix}"
     maintainer = "ao_maintainer_#{suffix}"
@@ -44,6 +60,10 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
       assert SQL.query!(Repo, "SELECT nspname FROM pg_namespace WHERE nspname = $1", [schema]).rows ==
                []
+
+      assert SQL.query!(Repo, "SELECT nspname FROM pg_namespace WHERE nspname=$1", [
+               routine_schema(schema)
+             ]).rows == []
 
       Sandbox.mode(Repo, :manual)
     end)
@@ -101,15 +121,11 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     source =
       if context[:legacy_install] do
-        EEx.eval_file("test/support/fixtures/maintenance_install.exs.eex",
-          module: AshOnetime.Test.Repo.Migrations.InstallAshOnetime,
-          hash_partitions: nil,
-          response_partitions: [],
-          collision_constraint:
-            "UNIQUE (logical_partition, operation_hash, scope_hash, key_hash)",
-          cleanup_comparator: ">",
-          cleanup_delete_predicate:
-            "claims.logical_partition=candidates.logical_partition AND claims.operation_hash=candidates.operation_hash AND claims.id=candidates.id"
+        release = context[:shipped_release] || "v1.10.0"
+
+        ShippedMigrations.render(release, :render, Repo,
+          hash_partitions: context[:hash_partitions],
+          partition_start: context[:partition_start] || ~D[2000-01-01]
         )
       else
         Generator.render(Repo,
@@ -138,6 +154,52 @@ defmodule AshOnetime.Store.MaintenanceTest do
     try do
       :ok =
         Ecto.Migrator.up(Repo, 20_261_113_000_001, module, prefix: migration_schema, log: false)
+
+      if context[:shipped_release] do
+        seed_shipped_payload!(owner_repo, schema)
+
+        if context[:shipped_release] == "v0.1.0" do
+          migrate_source!(
+            owner_repo,
+            schema,
+            ShippedMigrations.render("v0.6.0", :render_roll_forward, Repo,
+              partition_start: ~D[2000-01-01],
+              months: 1
+            )
+          )
+        end
+
+        if context[:shipped_release] in ["v0.1.0", "v0.2.0", "v0.6.0"] do
+          migrate_source!(
+            owner_repo,
+            schema,
+            ShippedMigrations.render("v1.1.0", :render_logical_partition_upgrade, Repo, [])
+          )
+        end
+
+        unless context[:shipped_release] == "v1.10.0" do
+          migrate_source!(
+            owner_repo,
+            schema,
+            ShippedMigrations.render("v1.10.0", :render_operation_hold_upgrade, Repo, [])
+          )
+        end
+      end
+
+      if context[:shipped_release] in ["v1.1.0", "v1.10.0"] do
+        migrate_source!(
+          owner_repo,
+          schema,
+          ShippedMigrations.render("v1.8.0", :render_fact_tables, Repo,
+            fact_tables: ["maintenance_facts", "additional_facts"]
+          )
+        )
+
+        sql!(
+          owner_repo,
+          "INSERT INTO #{q(schema)}.maintenance_facts (tenant,type,tags) VALUES ('partition-a','retained',ARRAY['fact'])"
+        )
+      end
 
       for table <- [
             "ash_onetime_idempotency_claims",
@@ -1725,6 +1787,191 @@ defmodule AshOnetime.Store.MaintenanceTest do
     end)
   end
 
+  test "historical migration fixtures retain their exact shipped source bytes" do
+    directory = "test/support/fixtures/shipped"
+    sources = directory |> Path.join("sources.json") |> File.read!() |> Jason.decode!()
+
+    for {path, metadata} <- sources do
+      assert :crypto.hash(:sha256, File.read!(Path.join(directory, path)))
+             |> Base.encode16(case: :lower) == metadata["sha256"],
+             path
+    end
+  end
+
+  # Shapes collapse across releases whose only changes are replaced invoker
+  # bodies. Exercise those sources too, plus every supported hash modulus.
+  for {release, count} <-
+        for(
+          release <- ["v0.1.0", "v0.2.0", "v0.6.0", "v1.1.0", "v1.10.0"],
+          count <- [nil, 2, 64],
+          do: {release, count}
+        ) ++
+          for(count <- [4, 8, 16, 32], do: {"v1.1.0", count}) do
+    if release == "v0.1.0" and count == 2 do
+      @tag shipped_primary_mutation: true
+    end
+
+    @tag timeout: 300_000
+    @tag shipped_upgrade: true
+    @tag legacy_install: true
+    @tag shipped_release: release
+    @tag hash_partitions: count
+    @tag partition_start: ~D[2000-01-01]
+    test "shipped schema upgrades and restores: #{release}, claims #{count || :plain}", c do
+      assert scalar(
+               c.runtime_repo,
+               "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname=current_user"
+             ) == false
+
+      assert_shipped_payload(c)
+      before = shipped_data(c)
+
+      with_upgrade(c, fn ->
+        assert_reference_shapes(c)
+        assert_shipped_payload(c)
+        assert shipped_data(c) == before
+
+        restore_fixpoint(c, fn ->
+          assert_shipped_payload(c)
+          assert shipped_data(c) == before
+        end)
+      end)
+    end
+  end
+
+  @tag shipped_upgrade: true
+  @tag legacy_install: true
+  @tag shipped_release: "v1.10.0"
+  @tag quoted_schema: true
+  @tag hash_partitions: 4
+  test "shipped schema upgrades and restores in a quoted tenant schema", c do
+    before = shipped_data(c)
+
+    with_upgrade(c, fn ->
+      assert_reference_shapes(c)
+
+      restore_fixpoint(c, fn ->
+        assert_shipped_payload(c)
+        assert shipped_data(c) == before
+      end)
+    end)
+  end
+
+  @tag shipped_check_names: true
+  @tag legacy_install: true
+  @tag shipped_release: "v0.6.0"
+  @tag hash_partitions: 2
+  test "historical upgrade replaces validated CHECKs by their actual catalog names", c do
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{rel(c, "ash_onetime_idempotency_claims")} RENAME CONSTRAINT ash_onetime_idempotency_claims_check2 TO renamed_response_check"
+    )
+
+    with_upgrade(c, fn ->
+      assert_reference_shapes(c)
+      assert_shipped_payload(c)
+    end)
+  end
+
+  for defect <- [
+        :check,
+        :missing_check,
+        :duplicate_check,
+        :extra_duplicate_check,
+        :child_check,
+        :default,
+        :index,
+        :primary_key,
+        :trigger
+      ] do
+    @defect defect
+    @tag shipped_upgrade_tamper: true
+    @tag legacy_install: true
+    @tag shipped_release: "v0.6.0"
+    @tag hash_partitions: 2
+    test "historical upgrade refuses changed #{@defect} without adopting it", c do
+      table = rel(c, "ash_onetime_response_payloads")
+
+      case @defect do
+        :check ->
+          sql!(
+            c.owner_repo,
+            "ALTER TABLE #{table} ADD CHECK (octet_length(encoded_response) > 0)"
+          )
+
+        :missing_check ->
+          sql!(
+            c.owner_repo,
+            "ALTER TABLE #{table} DROP CONSTRAINT ash_onetime_response_payloads_encoded_response_check"
+          )
+
+        :duplicate_check ->
+          sql!(
+            c.owner_repo,
+            "ALTER TABLE #{table} DROP CONSTRAINT ash_onetime_response_payloads_encoded_response_check"
+          )
+
+          sql!(
+            c.owner_repo,
+            "ALTER TABLE #{table} ADD CHECK (octet_length(logical_partition) BETWEEN 1 AND 255)"
+          )
+
+        :extra_duplicate_check ->
+          sql!(
+            c.owner_repo,
+            "ALTER TABLE #{table} ADD CHECK (octet_length(logical_partition) BETWEEN 1 AND 255)"
+          )
+
+        :child_check ->
+          sql!(
+            c.owner_repo,
+            "ALTER TABLE #{rel(c, "ash_onetime_response_payloads_default")} ADD CHECK (octet_length(encoded_response) > 0)"
+          )
+
+        :default ->
+          sql!(
+            c.owner_repo,
+            "ALTER TABLE #{table} ALTER COLUMN logical_partition SET DEFAULT 'changed'"
+          )
+
+        :index ->
+          sql!(c.owner_repo, "CREATE INDEX extra_index ON #{table} (claim_id)")
+
+        :primary_key ->
+          sql!(
+            c.owner_repo,
+            "ALTER TABLE #{table} DROP CONSTRAINT ash_onetime_response_payloads_pkey"
+          )
+
+          sql!(
+            c.owner_repo,
+            "ALTER TABLE #{table} ADD PRIMARY KEY (partition_date,claim_id,encoded_response)"
+          )
+
+        :trigger ->
+          sql!(
+            c.owner_repo,
+            "CREATE FUNCTION #{q(c.schema)}.unexpected() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN OLD; END'"
+          )
+
+          sql!(
+            c.owner_repo,
+            "CREATE TRIGGER unexpected BEFORE DELETE ON #{table} FOR EACH ROW EXECUTE FUNCTION #{q(c.schema)}.unexpected()"
+          )
+      end
+
+      error = assert_raise Postgrex.Error, fn -> with_upgrade(c, fn -> :ok end) end
+      assert error.postgres.message =~ "untrusted_dependency: upgrade relation shape"
+
+      assert scalar(
+               c.owner_repo,
+               "SELECT to_regnamespace(#{literal(routine_schema(c.schema))}) IS NULL"
+             )
+
+      assert_shipped_payload(c)
+    end
+  end
+
   for variant <- [:default, :hash, :facts, :logical_partitions, :prefix] do
     @variant variant
     @tag restore_fixpoint: true
@@ -1767,91 +2014,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
         end
       end
 
-      dump = postgres_tool!("pg_dump")
-      restore = postgres_tool!("pg_restore")
-      {login, password} = Process.get({__MODULE__, :credential, c.owner})
-      uri = URI.parse(System.fetch_env!("DATABASE_URL"))
-
-      connection = [
-        "--host",
-        uri.host,
-        "--port",
-        to_string(uri.port),
-        "--username",
-        login,
-        "--dbname",
-        String.trim_leading(uri.path, "/")
-      ]
-
-      environment = [{"PGPASSWORD", password}]
-
-      sql!(
-        Repo,
-        "GRANT CREATE ON DATABASE #{q(String.trim_leading(uri.path, "/"))} TO #{q(c.owner)}"
-      )
-
-      archive = Path.join(System.tmp_dir!(), "ao_dump_#{Ecto.UUID.generate()}.dump")
-      before = expression_catalog(c)
-      shapes = relation_shapes(c)
-      policies = normalized_policies(c)
-      [backup_login, backup_password] = String.split(uri.userinfo, ":", parts: 2)
-      backup_connection = List.replace_at(connection, 5, URI.decode_www_form(backup_login))
-
-      try do
-        {output, status} =
-          System.cmd(
-            dump,
-            backup_connection ++
-              [
-                "--schema",
-                q(c.schema),
-                "--schema",
-                q(routine_schema(c.schema)),
-                "--format=custom",
-                "--file",
-                archive
-              ],
-            env: [{"PGPASSWORD", URI.decode_www_form(backup_password)}],
-            stderr_to_stdout: true
-          )
-
-        assert status == 0, output
-        sql!(c.owner_repo, "DROP SCHEMA #{q(c.schema)} CASCADE")
-        sql!(c.owner_repo, "DROP SCHEMA #{q(routine_schema(c.schema))} CASCADE")
-
-        {output, status} =
-          System.cmd(
-            restore,
-            connection ++
-              ["--no-owner", "--exit-on-error", "--role", c.owner, archive],
-            env: environment,
-            stderr_to_stdout: true
-          )
-
-        assert status == 0, output
-        assert expression_catalog(c) == before
-
-        assert relation_shapes(c) == shapes
-        assert normalized_policies(c) == policies
-        assert_reference_shapes(c)
-
-        assert scalar(
-                 c.runtime_repo,
-                 "SELECT #{rel(c, "ash_onetime_prune_payload_partitions")}(8,2000)"
-               )["dropped"] == 0
-
-        assert scalar(
-                 c.runtime_repo,
-                 "SELECT #{rel(c, "ash_onetime_reap_idempotency")}(100,86400)"
-               ) == 0
-
-        assert scalar(
-                 c.runtime_repo,
-                 "SELECT #{rel(c, "ash_onetime_roll_payload_partitions")}(24)"
-               ) > 0
-
-        assert_reference_shapes(c)
-
+      restore_fixpoint(c, fn ->
         if @variant == :logical_partitions do
           assert SQL.query!(
                    Repo,
@@ -1859,10 +2022,102 @@ defmodule AshOnetime.Store.MaintenanceTest do
                    []
                  ).rows == [["partition-a"], ["partition-b"]]
         end
-      after
-        File.rm!(archive)
-        refute File.exists?(archive)
-      end
+      end)
+    end
+  end
+
+  defp restore_fixpoint(c, check) do
+    dump = postgres_tool!("pg_dump")
+    restore = postgres_tool!("pg_restore")
+    {login, password} = Process.get({__MODULE__, :credential, c.owner})
+    uri = URI.parse(System.fetch_env!("DATABASE_URL"))
+
+    connection = [
+      "--host",
+      uri.host,
+      "--port",
+      to_string(uri.port),
+      "--username",
+      login,
+      "--dbname",
+      String.trim_leading(uri.path, "/")
+    ]
+
+    environment = [{"PGPASSWORD", password}]
+
+    sql!(
+      Repo,
+      "GRANT CREATE ON DATABASE #{q(String.trim_leading(uri.path, "/"))} TO #{q(c.owner)}"
+    )
+
+    archive = Path.join(System.tmp_dir!(), "ao_dump_#{Ecto.UUID.generate()}.dump")
+    before = expression_catalog(c)
+    shapes = relation_shapes(c)
+    policies = normalized_policies(c)
+    [backup_login, backup_password] = String.split(uri.userinfo, ":", parts: 2)
+    backup_connection = List.replace_at(connection, 5, URI.decode_www_form(backup_login))
+
+    try do
+      {output, status} =
+        System.cmd(
+          dump,
+          backup_connection ++
+            [
+              "--schema",
+              q(c.schema),
+              "--schema",
+              q(routine_schema(c.schema)),
+              "--format=custom",
+              "--file",
+              archive
+            ],
+          env: [{"PGPASSWORD", URI.decode_www_form(backup_password)}],
+          stderr_to_stdout: true
+        )
+
+      assert status == 0, output
+      sql!(c.owner_repo, "DROP SCHEMA #{q(c.schema)} CASCADE")
+      sql!(c.owner_repo, "DROP SCHEMA #{q(routine_schema(c.schema))} CASCADE")
+
+      {output, status} =
+        System.cmd(
+          restore,
+          connection ++
+            ["--no-owner", "--exit-on-error", "--role", c.owner, archive],
+          env: environment,
+          stderr_to_stdout: true
+        )
+
+      assert status == 0, output
+      assert expression_catalog(c) == before
+
+      assert relation_shapes(c) == shapes
+      assert normalized_policies(c) == policies
+      assert_reference_shapes(c)
+
+      prune =
+        scalar(c.runtime_repo, "SELECT #{rel(c, "ash_onetime_prune_payload_partitions")}(8,2000)")
+
+      assert prune["dropped"] in 0..8
+      refute prune["blocked"]
+      assert_reference_shapes(c)
+
+      assert scalar(
+               c.runtime_repo,
+               "SELECT #{rel(c, "ash_onetime_reap_idempotency")}(100,86400)"
+             ) == 0
+
+      assert scalar(
+               c.runtime_repo,
+               "SELECT #{rel(c, "ash_onetime_roll_payload_partitions")}(24)"
+             ) > 0
+
+      assert_reference_shapes(c)
+
+      check.()
+    after
+      File.rm!(archive)
+      refute File.exists?(archive)
     end
   end
 
@@ -1931,6 +2186,92 @@ defmodule AshOnetime.Store.MaintenanceTest do
     assert message =~ "cannot inherit from partition"
   end
 
+  defp migrate_source!(owner_repo, schema, source) do
+    module = Module.concat(__MODULE__, "Shipped#{System.unique_integer([:positive])}")
+
+    source =
+      Regex.replace(~r/defmodule \S+ do/, source, "defmodule #{inspect(module)} do",
+        global: false
+      )
+
+    Code.compile_string(source)
+    previous = Repo.put_dynamic_repo(owner_repo)
+
+    try do
+      assert :ok =
+               Ecto.Migrator.up(
+                 Repo,
+                 20_261_113_000_001 + System.unique_integer([:positive, :monotonic]),
+                 module,
+                 prefix: schema,
+                 log: false
+               )
+    after
+      Repo.put_dynamic_repo(previous)
+      :code.purge(module)
+      :code.delete(module)
+    end
+  end
+
+  defp seed_shipped_payload!(repo, schema) do
+    payload = q(schema) <> ".ash_onetime_response_payloads"
+    claims = q(schema) <> ".ash_onetime_idempotency_claims"
+    # Named columns work both before and after logical_partition was shipped.
+    sql!(
+      repo,
+      "INSERT INTO #{claims} (id,operation_hash,scope_hash,key_hash,fingerprint,state,response_partition,response_codec,response_digest,admitted_at,retain_until,inserted_at) VALUES ('00000000-0000-0000-0000-000000000001',sha256('op'::bytea),sha256('scope'::bytea),sha256('key'::bytea),sha256('fingerprint'::bytea),'complete','2000-01-01','fixture',sha256('payload'::bytea),now(),now()+interval '10 years',now())"
+    )
+
+    sql!(
+      repo,
+      "INSERT INTO #{payload} (partition_date,claim_id,encoded_response) VALUES ('2000-01-01','00000000-0000-0000-0000-000000000001','payload')"
+    )
+
+    sql!(
+      repo,
+      "INSERT INTO #{claims} (id,operation_hash,scope_hash,key_hash,fingerprint,state,response_partition,response_codec,response_digest,admitted_at,retain_until,inserted_at) VALUES ('00000000-0000-0000-0000-000000000002',sha256('op'::bytea),sha256('scope'::bytea),sha256('second-key'::bytea),sha256('second-fingerprint'::bytea),'complete',current_date,'fixture',sha256('default-payload'::bytea),now(),now()+interval '10 years',now())"
+    )
+
+    # A second payload in DEFAULT must survive roll's drain into a new month.
+    sql!(
+      repo,
+      "INSERT INTO #{payload} (partition_date,claim_id,encoded_response) VALUES (current_date,'00000000-0000-0000-0000-000000000002','default-payload')"
+    )
+  end
+
+  defp shipped_data(c) do
+    for table <- [
+          "ash_onetime_idempotency_claims",
+          "ash_onetime_nonce_claims",
+          "ash_onetime_response_payloads"
+        ] do
+      SQL.query!(
+        Repo,
+        "SELECT to_jsonb(t) FROM #{rel(c, table)} t ORDER BY to_jsonb(t)::text",
+        []
+      ).rows
+    end
+  end
+
+  defp assert_shipped_payload(c) do
+    assert SQL.query!(
+             Repo,
+             "SELECT logical_partition,claim_id::text,encoded_response FROM #{rel(c, "ash_onetime_response_payloads")} ORDER BY claim_id",
+             []
+           ).rows == [
+             ["global", "00000000-0000-0000-0000-000000000001", "payload"],
+             ["global", "00000000-0000-0000-0000-000000000002", "default-payload"]
+           ]
+
+    if scalar(
+         Repo,
+         "SELECT to_regclass(#{literal(q(c.schema) <> ".maintenance_facts")}) IS NOT NULL"
+       ) do
+      assert SQL.query!(Repo, "SELECT tenant,type,tags FROM #{q(c.schema)}.maintenance_facts", []).rows ==
+               [["partition-a", "retained", ["fact"]]]
+    end
+  end
+
   defp normalized_policies(c) do
     SQL.query!(
       c.owner_repo,
@@ -1965,6 +2306,11 @@ defmodule AshOnetime.Store.MaintenanceTest do
           ]
         ]
       ).rows
+
+    assert scalar(
+             c.owner_repo,
+             "SELECT count(*) FROM pg_class WHERE relnamespace=#{literal(c.schema)}::regnamespace AND relname LIKE 'aor_%'"
+           ) == 0
 
     assert length(rows) > 4
 
@@ -2032,7 +2378,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
     previous = Repo.put_dynamic_repo(c.owner_repo)
 
     try do
-      :ok = Ecto.Migrator.up(Repo, 20_261_113_000_002, module, prefix: c.schema, log: false)
+      :ok = Ecto.Migrator.up(Repo, 20_261_114_000_002, module, prefix: c.schema, log: false)
       callback.()
     after
       Repo.put_dynamic_repo(previous)
@@ -3420,6 +3766,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
         url: url,
         pool: DBConnection.ConnectionPool,
         pool_size: pool_size,
+        timeout: 180_000,
         after_connect: fn conn -> Postgrex.query!(conn, "SET ROLE #{q(role)}", []) end
       )
 

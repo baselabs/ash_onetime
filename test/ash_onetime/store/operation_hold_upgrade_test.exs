@@ -2,6 +2,7 @@ defmodule AshOnetime.Store.OperationHoldUpgradeTest do
   use ExUnit.Case, async: false
 
   alias AshOnetime.Test.Repo
+  alias AshOnetime.Test.ShippedMigrations
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: Generator
@@ -263,15 +264,11 @@ defmodule AshOnetime.Store.OperationHoldUpgradeTest do
     end)
 
     source =
-      EEx.eval_file("test/support/fixtures/idempotency_install.exs.eex",
-        module: module,
-        collision_constraint: "UNIQUE (logical_partition, operation_hash, scope_hash, key_hash)",
-        cleanup_comparator: ">",
-        cleanup_delete_predicate:
-          "claims.logical_partition = candidates.logical_partition AND claims.operation_hash = candidates.operation_hash AND claims.id = candidates.id",
+      ShippedMigrations.render("v1.1.0", :render, Repo,
         hash_partitions: if(claims == :hash, do: 4),
-        response_partitions: []
+        partition_start: ~D[2000-01-01]
       )
+      |> String.replace(inspect(Repo) <> ".Migrations.InstallAshOnetime", inspect(module))
 
     Code.compile_string(source)
     assert :ok = Ecto.Migrator.up(Repo, version, module, prefix: schema, log: false)

@@ -105,6 +105,13 @@ cannot affect execution or enforcement there. This permits stock logical restore
 LIKE-created recovery children whose matching indexes ATTACH adopts. The flag remains
 compared on roots, partitioned parents, non-partition relations, and every other constraint
 type, including NOT NULL, CHECK and foreign keys.
+Historical upgrades do not widen that comparison. Before conversion, the installer checks
+every root and child against same-server references built from package DDL, including the
+primary keys left by the shipped logical-partition migration. It recreates only validated
+historical CHECKs and primary keys, then requires the fresh shape. Names and physical
+attribute positions were already excluded from shape identity; the conversion adds no
+new excluded field. A missing or substituted constraint, extra index, changed default or
+trigger, or independently altered child is refused before any recursive conversion.
 Only the package policy may apply to the owner. Each step takes recursive SHARE UPDATE
 EXCLUSIVE locks on every root before checking the catalogs and retains them through work
 and its success record. Package routines require exact identity and a `prosrc` digest;

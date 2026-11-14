@@ -98,6 +98,56 @@ defmodule AshOnetime.MutationCheck do
              "SQL.query(c.owner_repo"}
           ]
     },
+    "maintenance-upgrade-validation" => %{
+      path: "priv/templates/migrations/maintenance_helpers.exs",
+      original:
+        "RAISE EXCEPTION 'untrusted_dependency: upgrade relation shape %',target.relname;",
+      mutated: "NULL; -- bypass historical validation",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shipped_upgrade_tamper",
+      test_name: "historical upgrade refuses changed check without adopting it",
+      assertion: "assert_raise Postgrex.Error"
+    },
+    "maintenance-upgrade-constraint-count" => %{
+      path: "priv/templates/migrations/maintenance_helpers.exs",
+      original:
+        "          OR jsonb_array_length(actual_shape->'constraints')<>jsonb_array_length(expected_shape->'constraints')\n",
+      mutated: "",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shipped_upgrade_tamper",
+      test_name: "historical upgrade refuses changed extra_duplicate_check without adopting it",
+      assertion: "assert_raise Postgrex.Error"
+    },
+    "maintenance-upgrade-constraint-coverage" => %{
+      path: "priv/templates/migrations/maintenance_helpers.exs",
+      original:
+        "          OR EXISTS (SELECT 1 FROM jsonb_array_elements(expected_shape->'constraints') e\n            WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(actual_shape->'constraints') x\n              WHERE x=e OR ((historical_shape->'constraints') @> jsonb_build_array(x)\n                AND (x-'expression'=e-'expression' OR (x->>'type'='p' AND e->>'type'='p')))))",
+      mutated: "",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shipped_upgrade_tamper",
+      test_name: "historical upgrade refuses changed duplicate_check without adopting it",
+      assertion: "assert_raise Postgrex.Error"
+    },
+    "maintenance-logical-primary" => %{
+      path: "priv/templates/migrations/maintenance_helpers.exs",
+      original: "IF historical_key THEN",
+      mutated: "IF false THEN",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shipped_primary_mutation",
+      test_name: "shipped schema upgrades and restores: v0.1.0, claims 2",
+      assertion: "untrusted_dependency: relation shape"
+    },
+    "maintenance-upgrade-check-names" => %{
+      path: "priv/templates/migrations/maintenance_helpers.exs",
+      original:
+        "FOR check_ddl IN SELECT conname AS name FROM pg_constraint WHERE conrelid=target.oid AND contype='c' LOOP",
+      mutated:
+        "FOR check_ddl IN SELECT key AS name FROM jsonb_each_text(manifest->(target.relname || '_check_ddl')) LOOP",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "shipped_check_names",
+      test_name: "historical upgrade replaces validated CHECKs by their actual catalog names",
+      assertion: "does not exist"
+    },
     "maintenance-upgrade-reference" => %{
       path: "priv/templates/migrations/maintenance_helpers.exs",
       original: ~S|IF #{mode == :fresh} THEN|,
@@ -2150,6 +2200,16 @@ defmodule AshOnetime.MutationCheck do
   # that once orphaned the ARCH mutations. The named subsets below stay for fast, focused local runs.
   @groups %{
     "all" => Map.keys(@mutations),
+    "shipped-maintenance" => [
+      "maintenance-upgrade-validation",
+      "maintenance-upgrade-constraint-count",
+      "maintenance-upgrade-constraint-coverage",
+      "maintenance-logical-primary",
+      "maintenance-upgrade-check-names",
+      "maintenance-upgrade-reference",
+      "maintenance-normalize-attnum",
+      "maintenance-restore-fixpoint"
+    ],
     "replay-relationships" => [
       "replay-callback-error-rollback",
       "replay-relationship-clearing",

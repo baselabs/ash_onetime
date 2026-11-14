@@ -78,6 +78,11 @@ defp install_maintenance(mode) when mode in [:fresh, :upgrade] do
     manifest jsonb;
     legacy_shapes jsonb;
     actual_shape jsonb;
+    expected_shape jsonb;
+    historical_shape jsonb;
+    shape_key text;
+    historical_key boolean;
+    primary_constraint text;
     check_ddl record;
     policy_error text;
     expected_policy text;
@@ -277,20 +282,54 @@ defp install_maintenance(mode) when mode in [:fresh, :upgrade] do
     ELSE
       manifest := #{rq("ash_onetime_maintenance_reference")}(false::boolean);
       legacy_shapes := #{rq("ash_onetime_maintenance_reference")}(true::boolean);
-      FOR target IN SELECT c.oid,c.relname FROM pg_class c WHERE c.relnamespace=schema_oid
-        AND c.relname IN ('ash_onetime_idempotency_claims','ash_onetime_nonce_claims') LOOP
+      -- Lock the whole relation tree before reading or converting any shape.
+      PERFORM #{rq("ash_onetime_maintenance_lock")}(true::boolean,5000::integer);
+      -- Validate every root and child first. No consumer expression is adopted,
+      -- and no child alteration can be hidden by a parent's recursive ALTER.
+      FOR target IN SELECT c.oid,c.relname,p.relname AS parent_name
+        FROM #{rq("ash_onetime_maintenance_relations")}() r JOIN pg_class c ON c.oid=r
+        LEFT JOIN pg_inherits i ON i.inhrelid=c.oid LEFT JOIN pg_class p ON p.oid=i.inhparent
+      LOOP
+        shape_key := coalesce(target.parent_name,target.relname) || CASE WHEN target.parent_name IS NULL THEN '' ELSE '_child' END;
+        expected_shape := manifest->shape_key;
+        historical_shape := legacy_shapes->shape_key;
         actual_shape := #{rq("ash_onetime_maintenance_shape")}(target.oid::oid);
-        IF actual_shape IS DISTINCT FROM manifest->target.relname THEN
-          IF actual_shape-'constraints' IS DISTINCT FROM (manifest->target.relname)-'constraints'
-            OR EXISTS (SELECT 1 FROM jsonb_array_elements(actual_shape->'constraints') x
-              WHERE NOT (manifest->target.relname->'constraints') @> jsonb_build_array(x)
-                AND NOT (legacy_shapes->target.relname->'constraints') @> jsonb_build_array(x)) THEN
-            RAISE EXCEPTION 'untrusted_dependency: upgrade relation shape %',target.relname;
-          END IF;
+        IF actual_shape-'constraints' IS DISTINCT FROM expected_shape-'constraints' THEN
+          historical_shape := legacy_shapes->(coalesce(target.parent_name,target.relname) || '_logical_upgrade' || CASE WHEN target.parent_name IS NULL THEN '' ELSE '_child' END);
+        END IF;
+        IF expected_shape IS NULL OR historical_shape IS NULL
+          OR (actual_shape-'constraints' IS DISTINCT FROM expected_shape-'constraints'
+            AND actual_shape-'constraints' IS DISTINCT FROM historical_shape-'constraints')
+          OR jsonb_array_length(actual_shape->'constraints')<>jsonb_array_length(expected_shape->'constraints')
+          OR EXISTS (SELECT 1 FROM jsonb_array_elements(actual_shape->'constraints') x
+            WHERE NOT (expected_shape->'constraints') @> jsonb_build_array(x)
+              AND NOT (historical_shape->'constraints') @> jsonb_build_array(x))
+          OR EXISTS (SELECT 1 FROM jsonb_array_elements(expected_shape->'constraints') e
+            WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(actual_shape->'constraints') x
+              WHERE x=e OR ((historical_shape->'constraints') @> jsonb_build_array(x)
+                AND (x-'expression'=e-'expression' OR (x->>'type'='p' AND e->>'type'='p'))))) THEN
+          RAISE EXCEPTION 'untrusted_dependency: upgrade relation shape %',target.relname;
+        END IF;
+      END LOOP;
+      FOR target IN SELECT c.oid,c.relname FROM pg_class c WHERE c.relnamespace=schema_oid
+        AND c.relname IN ('ash_onetime_idempotency_claims','ash_onetime_nonce_claims','ash_onetime_response_payloads') LOOP
+        actual_shape := #{rq("ash_onetime_maintenance_shape")}(target.oid::oid);
+        expected_shape := manifest->target.relname;
+        historical_key := actual_shape->'indexes' IS DISTINCT FROM expected_shape->'indexes';
+        IF actual_shape IS DISTINCT FROM expected_shape THEN
+          -- Names were never trust evidence. ADD COLUMN assigned different CHECK
+          -- names in shipped migrations; drop the validated actual names only.
+          FOR check_ddl IN SELECT conname AS name FROM pg_constraint WHERE conrelid=target.oid AND contype='c' LOOP
+            EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I',target.oid::regclass,check_ddl.name);
+          END LOOP;
           FOR check_ddl IN SELECT key,value FROM jsonb_each_text(manifest->(target.relname || '_check_ddl')) LOOP
-            EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I',target.oid::regclass,check_ddl.key);
             EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I %s',target.oid::regclass,check_ddl.key,check_ddl.value);
           END LOOP;
+          IF historical_key THEN
+            SELECT conname INTO STRICT primary_constraint FROM pg_constraint WHERE conrelid=target.oid AND contype='p';
+            EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I',target.oid::regclass,primary_constraint);
+            EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I %s',target.oid::regclass,primary_constraint,manifest->>(target.relname || '_primary_ddl'));
+          END IF;
         END IF;
       END LOOP;
     END IF;

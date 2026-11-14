@@ -2,6 +2,7 @@ defmodule AshOnetime.Store.LogicalPartitionUpgradeTest do
   use ExUnit.Case, async: false
 
   alias AshOnetime.Test.Repo
+  alias AshOnetime.Test.ShippedMigrations
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: GenerateMigrations
@@ -30,14 +31,13 @@ defmodule AshOnetime.Store.LogicalPartitionUpgradeTest do
       )
 
     [{^module, _bytecode}] = Code.compile_string(source)
-    version = System.unique_integer([:positive])
-
     Sandbox.mode(Repo, :auto)
 
     try do
       SQL.query!(Repo, ~s(CREATE SCHEMA "#{schema}"), [])
       create_legacy_tables!(schema)
       seed_legacy_rows!(schema)
+      version = System.unique_integer([:positive, :monotonic])
 
       assert :ok = Ecto.Migrator.up(Repo, version, module, prefix: schema, log: false)
 
@@ -75,39 +75,24 @@ defmodule AshOnetime.Store.LogicalPartitionUpgradeTest do
   end
 
   defp create_legacy_tables!(schema) do
-    [
-      """
-      CREATE TABLE #{relation(schema, "ash_onetime_idempotency_claims")} (
-        id uuid PRIMARY KEY,
-        operation_hash bytea NOT NULL,
-        scope_hash bytea NOT NULL,
-        key_hash bytea NOT NULL,
-        UNIQUE(operation_hash, scope_hash, key_hash)
-      )
-      """,
-      """
-      CREATE TABLE #{relation(schema, "ash_onetime_nonce_claims")} (
-        id uuid PRIMARY KEY,
-        operation_hash bytea NOT NULL,
-        scope_hash bytea NOT NULL,
-        key_hash bytea NOT NULL,
-        UNIQUE(operation_hash, scope_hash, key_hash)
-      )
-      """,
-      """
-      CREATE TABLE #{relation(schema, "ash_onetime_response_payloads")} (
-        partition_date date NOT NULL,
-        claim_id uuid NOT NULL,
-        encoded_response bytea NOT NULL,
-        PRIMARY KEY(partition_date, claim_id)
-      ) PARTITION BY RANGE(partition_date)
-      """,
-      """
-      CREATE TABLE #{relation(schema, "ash_onetime_response_payloads_default")}
-        PARTITION OF #{relation(schema, "ash_onetime_response_payloads")} DEFAULT
-      """
-    ]
-    |> Enum.each(&SQL.query!(Repo, &1, []))
+    module = Module.concat(__MODULE__, "Install#{System.unique_integer([:positive])}")
+    source = ShippedMigrations.render("v0.6.0", :render, Repo, partition_start: ~D[2000-01-01])
+
+    source =
+      String.replace(source, inspect(Repo) <> ".Migrations.InstallAshOnetime", inspect(module))
+
+    Code.compile_string(source)
+
+    try do
+      assert :ok =
+               Ecto.Migrator.up(Repo, System.unique_integer([:positive, :monotonic]), module,
+                 prefix: schema,
+                 log: false
+               )
+    after
+      :code.purge(module)
+      :code.delete(module)
+    end
   end
 
   defp seed_legacy_rows!(schema) do
@@ -116,13 +101,13 @@ defmodule AshOnetime.Store.LogicalPartitionUpgradeTest do
 
     SQL.query!(
       Repo,
-      "INSERT INTO #{relation(schema, "ash_onetime_idempotency_claims")}(id,operation_hash,scope_hash,key_hash) VALUES($1::uuid,$2,$3,$4)",
+      "INSERT INTO #{relation(schema, "ash_onetime_idempotency_claims")}(id,operation_hash,scope_hash,key_hash,fingerprint,state,response_partition,response_codec,response_digest,admitted_at,retain_until,inserted_at) VALUES($1::uuid,$2,$3,$4,$2,'complete',current_date,'fixture',$2,now()-interval '2 days',now()-interval '1 day',now()-interval '2 days')",
       [Ecto.UUID.dump!(idempotency_id) | locator]
     )
 
     SQL.query!(
       Repo,
-      "INSERT INTO #{relation(schema, "ash_onetime_nonce_claims")}(id,operation_hash,scope_hash,key_hash) VALUES($1::uuid,$2,$3,$4)",
+      "INSERT INTO #{relation(schema, "ash_onetime_nonce_claims")}(id,operation_hash,scope_hash,key_hash,issued_at,verifier_id,admitted_at,retain_until,inserted_at) VALUES($1::uuid,$2,$3,$4,now(),'fixture',now(),now()+interval '1 day',now())",
       [Ecto.UUID.dump!(Ecto.UUID.generate()) | locator]
     )
 
@@ -136,8 +121,14 @@ defmodule AshOnetime.Store.LogicalPartitionUpgradeTest do
   defp insert_partitioned_collision!(schema) do
     SQL.query!(
       Repo,
-      "INSERT INTO #{relation(schema, "ash_onetime_idempotency_claims")}(id,logical_partition,operation_hash,scope_hash,key_hash) SELECT $1::uuid,'tenant-a',operation_hash,scope_hash,key_hash FROM #{relation(schema, "ash_onetime_idempotency_claims")} WHERE logical_partition='global'",
+      "INSERT INTO #{relation(schema, "ash_onetime_idempotency_claims")}(id,logical_partition,operation_hash,scope_hash,key_hash,fingerprint,state,response_partition,response_codec,response_digest,admitted_at,retain_until,inserted_at) SELECT $1::uuid,'tenant-a',operation_hash,scope_hash,key_hash,fingerprint,state,response_partition,response_codec,response_digest,admitted_at,retain_until,inserted_at FROM #{relation(schema, "ash_onetime_idempotency_claims")} WHERE logical_partition='global'",
       [Ecto.UUID.dump!(Ecto.UUID.generate())]
+    )
+
+    SQL.query!(
+      Repo,
+      "INSERT INTO #{relation(schema, "ash_onetime_response_payloads")} (logical_partition,partition_date,claim_id,encoded_response) SELECT logical_partition,response_partition,id,'response' FROM #{relation(schema, "ash_onetime_idempotency_claims")} WHERE logical_partition='tenant-a'",
+      []
     )
   end
 
