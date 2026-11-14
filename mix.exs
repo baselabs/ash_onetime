@@ -58,7 +58,7 @@ defmodule AshOnetime.MixProject do
   end
 
   def application do
-    [extra_applications: [:crypto, :logger]]
+    [mod: {AshOnetime.Application, []}, extra_applications: [:crypto, :logger]]
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
@@ -194,6 +194,7 @@ defmodule AshOnetime.MixProject do
         "documentation/dsl.md",
         "documentation/idempotency.md",
         "documentation/one-time-nonces.md",
+        "documentation/tokens.md",
         "documentation/external-effects.md",
         "documentation/context-boundary.md",
         "documentation/replay.md",

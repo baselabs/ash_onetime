@@ -5,8 +5,8 @@ defmodule AshOnetime.TokenTest do
   alias AshOnetime.Canonical
   alias AshOnetime.Canonical.Decoder
   alias AshOnetime.Error
+  alias AshOnetime.KeyCustody.Local
   alias AshOnetime.Test.Clock
-  alias AshOnetime.Test.KeyResolver
   alias AshOnetime.Token
 
   @issued_at ~U[2026-08-04 12:00:00.000000Z]
@@ -21,12 +21,21 @@ defmodule AshOnetime.TokenTest do
     on_exit(&Clock.reset/0)
   end
 
+  test "an existing-format token signed before custody still verifies" do
+    # Captured from main 7f9d976 before the custody implementation.
+    wire =
+      "ash_onetime.BgAAAPgAAAACAwAAAARib2R5BgAAALMAAAAGAwAAAANrZXkDAAAACW5vbmNlLTEyMwMAAAAGa2V5X2lkAwAAAAlobWFjLW1haW4DAAAACWFsZ29yaXRobQMAAAALaG1hYy1zaGEyNTYDAAAACWlzc3VlZF9hdAIAAAAQMTc4NTg0NDgwMDAwMDAwMAMAAAAJbmFtZXNwYWNlAwAAAAhwYXltZW50cwMAAAAKZXhwaXJlc19hdAIAAAAQMTc4NTg0NDg2MDAwMDAwMAMAAAAJc2lnbmF0dXJlAwAAACBzSywzNOIyqSCDpHjjfl1f95XlbMk0hB8fV0dMMUSDkg"
+
+    {:ok, expected} = mint_hmac()
+    assert {:ok, ^expected} = Token.verify(wire, Local, verify_options())
+  end
+
   test "mints, signs, and verifies an exact canonical base64url envelope" do
     assert {:ok, token} = mint_hmac()
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+    assert {:ok, encoded} = Token.sign(token, Local, custody_context())
     assert String.starts_with?(encoded, "ash_onetime.")
     assert byte_size(encoded) <= 8_192
-    assert {:ok, ^token} = Token.verify(encoded, KeyResolver, verify_options())
+    assert {:ok, ^token} = Token.verify(encoded, Local, verify_options())
 
     raw = decode_wire!(encoded)
     assert "ash_onetime." <> Base.url_encode64(raw, padding: false) == encoded
@@ -44,8 +53,8 @@ defmodule AshOnetime.TokenTest do
   @tag :signature_mutation
   test "signature binds the exact canonical body bytes" do
     assert {:ok, token} = mint_hmac()
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
-    assert {:ok, ^token} = Token.verify(encoded, KeyResolver, verify_options())
+    assert {:ok, encoded} = Token.sign(token, Local, custody_context())
+    assert {:ok, ^token} = Token.verify(encoded, Local, verify_options())
   end
 
   property "mint -> sign -> verify round-trips for both algorithms over generated fields" do
@@ -72,12 +81,12 @@ defmodule AshOnetime.TokenTest do
       # freeze evaluation to issuance so the acceptance window always admits the fresh token
       Clock.freeze(issued_at)
 
-      assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+      assert {:ok, encoded} = Token.sign(token, Local, custody_context())
 
       assert {:ok, ^token} =
                Token.verify(
                  encoded,
-                 KeyResolver,
+                 Local,
                  verify_options(algorithm: algorithm, namespace: namespace)
                )
     end
@@ -85,7 +94,7 @@ defmodule AshOnetime.TokenTest do
 
   property "any single-byte tamper of a valid signed token fails closed" do
     assert {:ok, token} = mint_hmac()
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+    assert {:ok, encoded} = Token.sign(token, Local, custody_context())
     raw = decode_wire!(encoded)
 
     check all(
@@ -98,65 +107,65 @@ defmodule AshOnetime.TokenTest do
       tampered = mutate_byte(raw, index, xor)
 
       assert {:error, %Error{}} =
-               Token.verify(wire(tampered), KeyResolver, verify_options())
+               Token.verify(wire(tampered), Local, verify_options())
     end
   end
 
   test "verification requires and binds the expected algorithm and namespace" do
     assert {:ok, token} = mint_hmac()
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+    assert {:ok, encoded} = Token.sign(token, Local, custody_context())
 
     assert {:error, %Error{code: :missing_option, details: %{option: :algorithm}}} =
-             Token.verify(encoded, KeyResolver, Keyword.delete(verify_options(), :algorithm))
+             Token.verify(encoded, Local, Keyword.delete(verify_options(), :algorithm))
 
     assert {:error, %Error{code: :algorithm_mismatch}} =
              Token.verify(
                encoded,
-               KeyResolver,
+               Local,
                Keyword.put(verify_options(), :algorithm, :ed25519)
              )
 
     assert {:error, %Error{code: :missing_option, details: %{option: :namespace}}} =
-             Token.verify(encoded, KeyResolver, Keyword.delete(verify_options(), :namespace))
+             Token.verify(encoded, Local, Keyword.delete(verify_options(), :namespace))
 
     assert {:error, %Error{code: :namespace_mismatch}} =
              Token.verify(
                encoded,
-               KeyResolver,
+               Local,
                Keyword.put(verify_options(), :namespace, "other")
              )
   end
 
   test "issuance and expiry are checked at exact verification boundaries" do
     assert {:ok, token} = mint_hmac()
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+    assert {:ok, encoded} = Token.sign(token, Local, custody_context())
 
     oldest_evaluation = DateTime.add(@issued_at, 65, :second)
     Clock.freeze(oldest_evaluation)
 
     assert {:ok, ^token} =
-             Token.verify(encoded, KeyResolver, verify_options())
+             Token.verify(encoded, Local, verify_options())
 
     Clock.freeze(DateTime.add(oldest_evaluation, 1, :microsecond))
 
     assert {:error, %Error{code: :invalid_window}} =
-             Token.verify(encoded, KeyResolver, verify_options())
+             Token.verify(encoded, Local, verify_options())
 
     expiry_edge = DateTime.add(@expires_at, 5, :second)
     Clock.freeze(expiry_edge)
 
     assert {:ok, ^token} =
-             Token.verify(encoded, KeyResolver, verify_options(max_age: 120))
+             Token.verify(encoded, Local, verify_options(max_age: 120))
 
     Clock.freeze(DateTime.add(expiry_edge, 1, :microsecond))
 
     assert {:error, %Error{code: :invalid_window}} =
-             Token.verify(encoded, KeyResolver, verify_options(max_age: 120))
+             Token.verify(encoded, Local, verify_options(max_age: 120))
   end
 
   test "meaningful signature and signed-body byte tampering fail closed" do
     assert {:ok, token} = mint_hmac()
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+    assert {:ok, encoded} = Token.sign(token, Local, custody_context())
     assert {:ok, envelope} = Decoder.decode(decode_wire!(encoded))
 
     tampered_signature = flip_first_byte(envelope["signature"])
@@ -166,18 +175,18 @@ defmodule AshOnetime.TokenTest do
              Canonical.encode(%{envelope | "signature" => tampered_signature})
 
     assert {:error, %Error{code: :invalid_signature}} =
-             Token.verify(wire(signature_wire), KeyResolver, verify_options())
+             Token.verify(wire(signature_wire), Local, verify_options())
 
     tampered_body = put_in(envelope, ["body", "key"], "different-key")
     assert {:ok, body_wire} = Canonical.encode(tampered_body)
 
     assert {:error, %Error{code: :invalid_signature}} =
-             Token.verify(wire(body_wire), KeyResolver, verify_options())
+             Token.verify(wire(body_wire), Local, verify_options())
   end
 
   test "wrong algorithm, key ID, and verification key fail closed" do
     assert {:ok, token} = mint_hmac()
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+    assert {:ok, encoded} = Token.sign(token, Local, custody_context())
     assert {:ok, envelope} = Decoder.decode(decode_wire!(encoded))
 
     substituted = put_in(envelope, ["body", "algorithm"], "ed25519")
@@ -185,45 +194,45 @@ defmodule AshOnetime.TokenTest do
 
     substitution_context =
       put_in(
-        resolver_context(),
-        [:keys, {:verify, "hmac-main", :ed25519}],
+        custody_context(),
+        [:keys, {:verify, "hmac-main"}],
         public(@public_key)
       )
 
     assert {:error, %Error{code: :invalid_signature}} =
              Token.verify(
                wire(substituted_wire),
-               KeyResolver,
+               Local,
                verify_options(
                  algorithm: :ed25519,
-                 resolver_context: substitution_context
+                 custody_context: substitution_context
                )
              )
 
     wrong_id = put_in(envelope, ["body", "key_id"], "missing")
     assert {:ok, wrong_id_wire} = Canonical.encode(wrong_id)
 
-    assert {:error, %Error{code: :key_not_found}} =
-             Token.verify(wire(wrong_id_wire), KeyResolver, verify_options())
+    assert {:error, %Error{code: :key_unusable}} =
+             Token.verify(wire(wrong_id_wire), Local, verify_options())
 
     wrong_context =
       put_in(
-        resolver_context(),
-        [:keys, {:verify, "hmac-main", :hmac_sha256}],
+        custody_context(),
+        [:keys, {:verify, "hmac-main"}],
         same_service(:binary.copy(<<0x11>>, 32))
       )
 
     assert {:error, %Error{code: :invalid_signature}} =
              Token.verify(
                encoded,
-               KeyResolver,
-               Keyword.put(verify_options(), :resolver_context, wrong_context)
+               Local,
+               Keyword.put(verify_options(), :custody_context, wrong_context)
              )
   end
 
   test "noncanonical base64url, map order, duplicate fields, and inexact fields reject" do
     assert {:ok, token} = mint_hmac()
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+    assert {:ok, encoded} = Token.sign(token, Local, custody_context())
     raw = decode_wire!(encoded)
     assert {:ok, envelope} = Decoder.decode(raw)
     assert {:ok, encoded_body} = Canonical.encode(envelope["body"])
@@ -234,13 +243,13 @@ defmodule AshOnetime.TokenTest do
     padded_candidate = "ash_onetime." <> Base.url_encode64(raw, padding: true)
     padded = if padded_candidate == encoded, do: encoded <> "=", else: padded_candidate
 
-    assert {:error, %Error{code: code}} = Token.verify(padded, KeyResolver, verify_options())
+    assert {:error, %Error{code: code}} = Token.verify(padded, Local, verify_options())
     assert code in [:invalid_token, :noncanonical_envelope]
 
     noncanonical = raw_map([{signature_key, encoded_signature}, {body_key, encoded_body}])
 
     assert {:error, %Error{code: :noncanonical_envelope}} =
-             Token.verify(wire(noncanonical), KeyResolver, verify_options())
+             Token.verify(wire(noncanonical), Local, verify_options())
 
     duplicate =
       raw_map([
@@ -250,36 +259,36 @@ defmodule AshOnetime.TokenTest do
       ])
 
     assert {:error, %Error{code: :duplicate_field}} =
-             Token.verify(wire(duplicate), KeyResolver, verify_options())
+             Token.verify(wire(duplicate), Local, verify_options())
 
     assert {:ok, extra_field} = Canonical.encode(Map.put(envelope, "extra", nil))
 
     assert {:error, %Error{code: :malformed_token}} =
-             Token.verify(wire(extra_field), KeyResolver, verify_options())
+             Token.verify(wire(extra_field), Local, verify_options())
   end
 
-  test "HMAC resolver material must itself prove same-service trust" do
+  test "HMAC Local material must itself prove same-service trust" do
     assert {:ok, token} = mint_hmac()
 
     for material <- [@hmac_key, %{key: @hmac_key}, %{key: @hmac_key, trust: :external}] do
       sign_context =
-        put_in(resolver_context(), [:keys, {:sign, "hmac-main", :hmac_sha256}], material)
+        put_in(custody_context(), [:keys, {:sign, "hmac-main"}], material)
 
-      assert {:error, %Error{code: :invalid_trust_boundary}} =
-               Token.sign(token, KeyResolver, sign_context)
+      assert {:error, %Error{code: :key_unusable}} =
+               Token.sign(token, Local, sign_context)
     end
 
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+    assert {:ok, encoded} = Token.sign(token, Local, custody_context())
 
     for material <- [@hmac_key, %{key: @hmac_key}, %{key: @hmac_key, trust: :external}] do
       verify_context =
-        put_in(resolver_context(), [:keys, {:verify, "hmac-main", :hmac_sha256}], material)
+        put_in(custody_context(), [:keys, {:verify, "hmac-main"}], material)
 
-      assert {:error, %Error{code: :invalid_trust_boundary}} =
+      assert {:error, %Error{code: :key_unusable}} =
                Token.verify(
                  encoded,
-                 KeyResolver,
-                 Keyword.put(verify_options(), :resolver_context, verify_context)
+                 Local,
+                 Keyword.put(verify_options(), :custody_context, verify_context)
                )
     end
   end
@@ -295,28 +304,30 @@ defmodule AshOnetime.TokenTest do
              )
 
     signing_context = %{
-      keys: %{{:sign, "ed-current", :ed25519} => private(@private_key)}
+      material: AshOnetime.Test.KeyMaterial,
+      keys: %{{:sign, "ed-current"} => private(@private_key)}
     }
 
     verification_context = %{
-      keys: %{{:verify, "ed-current", :ed25519} => public(@public_key)}
+      material: AshOnetime.Test.KeyMaterial,
+      keys: %{{:verify, "ed-current"} => public(@public_key)}
     }
 
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, signing_context)
+    assert {:ok, encoded} = Token.sign(token, Local, signing_context)
 
     assert {:ok, ^token} =
              Token.verify(
                encoded,
-               KeyResolver,
+               Local,
                verify_options(
                  algorithm: :ed25519,
                  namespace: "redemption",
-                 resolver_context: verification_context
+                 custody_context: verification_context
                )
              )
 
-    refute Map.has_key?(verification_context.keys, {:sign, "ed-current", :ed25519})
-    refute verification_context.keys[{:verify, "ed-current", :ed25519}] == private(@private_key)
+    refute Map.has_key?(verification_context.keys, {:sign, "ed-current"})
+    refute verification_context.keys[{:verify, "ed-current"}] == private(@private_key)
   end
 
   test "sign validates hand-built structs with the same field rules as mint" do
@@ -339,7 +350,7 @@ defmodule AshOnetime.TokenTest do
     ]
 
     for {token, code} <- invalid do
-      assert {:error, %Error{code: ^code}} = Token.sign(token, KeyResolver, resolver_context())
+      assert {:error, %Error{code: ^code}} = Token.sign(token, Local, custody_context())
     end
   end
 
@@ -361,7 +372,7 @@ defmodule AshOnetime.TokenTest do
              )
 
     assert {:error, %Error{code: :token_too_large}} =
-             Token.verify(:binary.copy(<<0>>, 8_193), KeyResolver, verify_options())
+             Token.verify(:binary.copy(<<0>>, 8_193), Local, verify_options())
   end
 
   @tag :token_identifier_bound_mutation
@@ -403,14 +414,14 @@ defmodule AshOnetime.TokenTest do
     encoded = forge_token(%{"key_id" => :binary.copy("A", 129)})
 
     assert {:error, %Error{code: :invalid_key_id}} =
-             Token.verify(encoded, KeyResolver, verify_options())
+             Token.verify(encoded, Local, verify_options())
   end
 
   test "verify re-validates the decoded body's key bound before the signature" do
     encoded = forge_token(%{"key" => :binary.copy(<<0>>, 1_025)})
 
     assert {:error, %Error{code: :key_too_large}} =
-             Token.verify(encoded, KeyResolver, verify_options())
+             Token.verify(encoded, Local, verify_options())
   end
 
   test "malformed DateTime structs fail closed across mint, sign, and verify" do
@@ -427,38 +438,38 @@ defmodule AshOnetime.TokenTest do
     assert {:ok, token} = mint_hmac()
 
     assert {:error, %Error{code: :invalid_issued_at}} =
-             Token.sign(%{token | issued_at: malformed}, KeyResolver, resolver_context())
+             Token.sign(%{token | issued_at: malformed}, Local, custody_context())
 
     assert {:error, %Error{code: :invalid_expires_at}} =
-             Token.sign(%{token | expires_at: malformed}, KeyResolver, resolver_context())
+             Token.sign(%{token | expires_at: malformed}, Local, custody_context())
 
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+    assert {:ok, encoded} = Token.sign(token, Local, custody_context())
     Clock.freeze(malformed)
 
     assert {:error, %Error{code: :invalid_evaluated_at}} =
-             Token.verify(encoded, KeyResolver, verify_options())
+             Token.verify(encoded, Local, verify_options())
   end
 
   test "verification duration magnitudes fail closed before DateTime arithmetic" do
     assert {:ok, token} = mint_hmac()
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+    assert {:ok, encoded} = Token.sign(token, Local, custody_context())
     excess = 2_147_483_648
 
     assert {:error, %Error{code: :invalid_window}} =
-             Token.verify(encoded, KeyResolver, verify_options(max_age: excess, skew: 0))
+             Token.verify(encoded, Local, verify_options(max_age: excess, skew: 0))
 
     assert {:error, %Error{code: :invalid_window}} =
-             Token.verify(encoded, KeyResolver, verify_options(max_age: 0, skew: excess))
+             Token.verify(encoded, Local, verify_options(max_age: 0, skew: excess))
   end
 
   test "verification rejects a caller-supplied evaluation instant" do
     assert {:ok, token} = mint_hmac()
-    assert {:ok, encoded} = Token.sign(token, KeyResolver, resolver_context())
+    assert {:ok, encoded} = Token.sign(token, Local, custody_context())
 
     assert {:error, %Error{code: :invalid_options}} =
              Token.verify(
                encoded,
-               KeyResolver,
+               Local,
                verify_options(evaluated_at: @issued_at)
              )
   end
@@ -470,9 +481,9 @@ defmodule AshOnetime.TokenTest do
       def now, do: ~U[2000-01-01 00:00:00.000000Z]
     end
 
-    defmodule ReviewResolver do
-      def resolve(_purpose, "review-key", :hmac_sha256, key),
-        do: {:ok, %{key: key, trust: :same_service}}
+    defmodule ReviewMaterial do
+      def fetch(_purpose, "review-key", %{key: key}),
+        do: {:ok, %{algorithm: :hmac_sha256, key: key, kind: :secret, trust: :same_service}}
     end
 
     issued_at = ~U[2000-01-01 00:00:00.000000Z]
@@ -487,15 +498,15 @@ defmodule AshOnetime.TokenTest do
         expires_at: DateTime.add(issued_at, 60, :second)
       )
 
-    {:ok, encoded} = AshOnetime.Token.sign(token, ReviewResolver, secret)
+    {:ok, encoded} = AshOnetime.Token.sign(token, AshOnetime.KeyCustody.Local, %{material: ReviewMaterial, key: secret})
 
     result =
-      AshOnetime.Token.verify(encoded, ReviewResolver,
+      AshOnetime.Token.verify(encoded, AshOnetime.KeyCustody.Local,
         algorithm: :hmac_sha256,
         namespace: "review",
         max_age: 60,
         clock: ReviewClock,
-        resolver_context: secret
+        custody_context: %{material: ReviewMaterial, key: secret}
       )
 
     IO.inspect(result, limit: :infinity)
@@ -517,7 +528,7 @@ defmodule AshOnetime.TokenTest do
 
     {output, status} =
       try do
-        System.cmd("mix", ["run", "--no-start", "--no-deps-check", "-e", script],
+        System.cmd("mix", ["run", "--no-deps-check", "-e", script],
           env: [{"MIX_BUILD_PATH", build_path}, {"MIX_ENV", "dev"}],
           stderr_to_stdout: true
         )
@@ -545,7 +556,7 @@ defmodule AshOnetime.TokenTest do
     assert {:ok, envelope} = Canonical.encode(%{"body" => body, "signature" => @hmac_key})
 
     assert {:error, %Error{code: :invalid_expires_at}} =
-             Token.verify(wire(envelope), KeyResolver, verify_options())
+             Token.verify(wire(envelope), Local, verify_options())
   end
 
   test "mint uses the configured trusted clock" do
@@ -578,26 +589,29 @@ defmodule AshOnetime.TokenTest do
         max_age: 60,
         skew: 5,
         clock: Clock,
-        resolver_context: resolver_context()
+        custody_context: custody_context()
       ],
       overrides
     )
   end
 
-  defp resolver_context do
+  defp custody_context do
     %{
+      material: AshOnetime.Test.KeyMaterial,
       keys: %{
-        {:sign, "hmac-main", :hmac_sha256} => same_service(@hmac_key),
-        {:verify, "hmac-main", :hmac_sha256} => same_service(@hmac_key),
-        {:sign, "ed-current", :ed25519} => private(@private_key),
-        {:verify, "ed-current", :ed25519} => public(@public_key)
+        {:sign, "hmac-main"} => same_service(@hmac_key),
+        {:verify, "hmac-main"} => same_service(@hmac_key),
+        {:sign, "ed-current"} => private(@private_key),
+        {:verify, "ed-current"} => public(@public_key)
       }
     }
   end
 
-  defp same_service(key), do: %{key: key, trust: :same_service}
-  defp private(key), do: %{key: key, kind: :private}
-  defp public(key), do: %{key: key, kind: :public}
+  defp same_service(key),
+    do: %{algorithm: :hmac_sha256, key: key, kind: :secret, trust: :same_service}
+
+  defp private(key), do: %{algorithm: :ed25519, key: key, kind: :private, trust: :separated}
+  defp public(key), do: %{algorithm: :ed25519, key: key, kind: :public, trust: :separated}
 
   defp link_dependency_builds!(source_build_path, target_build_path) do
     target_lib_path = Path.join(target_build_path, "lib")

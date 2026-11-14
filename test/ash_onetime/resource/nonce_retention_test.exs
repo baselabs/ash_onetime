@@ -27,12 +27,12 @@ defmodule AshOnetime.Resource.NonceRetentionTest do
 
     def verify(proof, _context) do
       with {:ok, token} <-
-             Token.verify(proof, AshOnetime.Test.KeyResolver,
+             Token.verify(proof, AshOnetime.KeyCustody.Local,
                algorithm: :hmac_sha256,
                namespace: "retention",
                max_age: 10_000,
                clock: SharedClock,
-               resolver_context: :persistent_term.get(__MODULE__)
+               custody_context: :persistent_term.get(__MODULE__)
              ) do
         Verified.new(key: token.key, issued_at: token.issued_at, verifier_id: "signed-retention")
       end
@@ -55,12 +55,19 @@ defmodule AshOnetime.Resource.NonceRetentionTest do
       Repo.put_dynamic_repo(repo)
       issued = Clock.now()
       SharedClock.freeze(issued)
-      material = %{key: :crypto.strong_rand_bytes(32), trust: :same_service}
+
+      material = %{
+        algorithm: :hmac_sha256,
+        kind: :secret,
+        key: :crypto.strong_rand_bytes(32),
+        trust: :same_service
+      }
 
       keys = %{
+        material: AshOnetime.Test.KeyMaterial,
         keys: %{
-          {:sign, "retention", :hmac_sha256} => material,
-          {:verify, "retention", :hmac_sha256} => material
+          {:sign, "retention"} => material,
+          {:verify, "retention"} => material
         }
       }
 
@@ -94,7 +101,7 @@ defmodule AshOnetime.Resource.NonceRetentionTest do
             issued_at: issued
           )
 
-        {:ok, proof} = Token.sign(token, AshOnetime.Test.KeyResolver, keys)
+        {:ok, proof} = Token.sign(token, AshOnetime.KeyCustody.Local, keys)
 
         subject =
           resource

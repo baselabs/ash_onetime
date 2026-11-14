@@ -76,7 +76,7 @@ defmodule AshOnetime.PhoenixDocumentationTest do
 
     leaf =
       Error.new(
-        :key_resolution_failed,
+        :key_unusable,
         "provider returned a classified reason",
         %{reason: "classified-provider-reason"}
       )
@@ -91,7 +91,7 @@ defmodule AshOnetime.PhoenixDocumentationTest do
 
     assert response == %{
              status: :unprocessable_entity,
-             body: %{errors: %{code: "key_resolution_failed"}}
+             body: %{errors: %{code: "key_unusable"}}
            }
 
     rendered = inspect(response)

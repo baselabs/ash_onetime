@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased — 2.0.0
+
+- **Key custody.** Token signing and verification take `AshOnetime.KeyCustody` and
+  `custody_context:`. `KeyCustody.Local` accepts algorithm-tagged, purpose-specific
+  material. External holders can retain signing keys without exporting them. The old
+  material-resolution token API is removed; existing token bytes still verify.
+- **Callback containment.** The OTP application supervises unlinked, monitored custody,
+  verifier and minter workers with a configurable 5,000 ms default and 30,000 ms ceiling.
+  Deadlines kill and flush workers. Closed custody errors and allowlisted verification
+  errors keep their distinctions with fixed messages and empty details; malformed results
+  and failed workers report contract violations. Effect callbacks keep their transaction.
+- **Custody conformance.** A portable suite checks RFC 4231/RFC 8032 known answers,
+  reference-signer interoperability, purpose/algorithm binding and signature tampering.
+
 ## v1.10.0 — November 13, 2026
 
 **Upgrade action required for existing installations.** Generate and apply the operation-hold

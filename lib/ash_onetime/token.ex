@@ -16,12 +16,11 @@ defmodule AshOnetime.Token do
   recorded as ADR-0008 in the repository's `docs/adr/` directory.
   """
 
+  alias AshOnetime.Callback
   alias AshOnetime.Canonical
   alias AshOnetime.Canonical.Decoder
   alias AshOnetime.Clock
   alias AshOnetime.Error
-  alias AshOnetime.Signer.Ed25519
-  alias AshOnetime.Signer.HMAC
   alias AshOnetime.Window
 
   @enforce_keys [:algorithm, :key_id, :namespace, :key, :issued_at]
@@ -63,7 +62,7 @@ defmodule AshOnetime.Token do
   Mints a token struct from a key and a keyword of binding options.
 
   The options carry the security-relevant fields the signed body will bind: `:algorithm`
-  (`:hmac_sha256` or `:ed25519`), `:key_id` (the resolver-scoped key identifier, ≤128 bytes),
+  (`:hmac_sha256` or `:ed25519`), `:key_id` (the custody-scoped key identifier, ≤128 bytes),
   `:namespace` (the caller-supplied namespace, ≤128 bytes), `:issued_at` (a `DateTime`,
   defaulting to `Clock.now/0`), and optional `:expires_at` (a `DateTime` strictly after
   `issued_at`). Every field is validated before the struct is built; an invalid option or a
@@ -97,23 +96,19 @@ defmodule AshOnetime.Token do
     do: {:error, Error.new(:invalid_key, "token key must be bytes")}
 
   @doc """
-  Signs a minted token into a self-identifying wire string under the resolved key material.
+  Signs a minted token through an `AshOnetime.KeyCustody` module.
 
-  `resolver` is a module implementing the key-resolution callback (`resolve/4` for `:sign`),
-  invoked as `resolver.resolve(:sign, token, resolver_context)` to obtain the signing
-  material. The body is canonical-encoded, signed by the token's algorithm (`HMAC` or
-  `Ed25519`), and wrapped in a base64url envelope prefixed `ash_onetime.`. The signature
-  binds exactly the canonical body bytes — the algorithm, key identifier, namespace, key,
-  issuance instant, and expiry.
+  `custody_context` is trusted holder configuration, passed unchanged to custody.
+  Custody signs exactly the canonical body bytes in a supervised, unlinked worker.
+  Its signature must be 32 bytes for HMAC-SHA256 or 64 bytes for pure Ed25519.
+  The canonical envelope and `ash_onetime.` prefix are unchanged (ADR-0008).
   """
   @spec sign(t(), module(), term()) :: result(binary())
-  def sign(%__MODULE__{} = token, resolver, resolver_context) when is_atom(resolver) do
+  def sign(%__MODULE__{} = token, custody, custody_context) when is_atom(custody) do
     with :ok <- validate_token(token),
          {:ok, body} <- token_body(token),
          {:ok, body_bytes} <- Canonical.encode(body),
-         signing_bytes = body_bytes,
-         {:ok, material} <- resolve(resolver, :sign, token, resolver_context),
-         {:ok, signature} <- signer(token.algorithm).sign(signing_bytes, material),
+         {:ok, signature} <- custody_sign(custody, token, body_bytes, custody_context),
          {:ok, envelope} <- Canonical.encode(%{"body" => body, "signature" => signature}),
          encoded = @prefix <> Base.url_encode64(envelope, padding: false),
          :ok <- check_token_size(encoded) do
@@ -121,37 +116,40 @@ defmodule AshOnetime.Token do
     end
   end
 
-  def sign(_token, _resolver, _resolver_context),
+  def sign(_token, _custody, _custody_context),
     do: {:error, Error.new(:invalid_token, "token struct is invalid")}
 
   @doc """
-  Verifies a wire token against expected algorithm and namespace, returning the bound token.
+  Verifies a token through custody against externally supplied expectations.
 
-  `options` MUST supply `:algorithm`, `:namespace`, and `:max_age` from outside the token
-  (`:algorithm` and `:namespace` are replay-binding expectations, not token-supplied facts),
-  and MAY supply `:skew` (acceptance-window clock skew, default 0) and `:resolver_context`. The body is re-derived, the expected algorithm and
-  namespace are bound against the token's, the window is validated, and the signature is
-  verified under the resolved key material (`resolver.resolve(:verify, token, context)`).
-  Every field of the decoded body is re-validated before the signature check, so a tampered
-  body cannot reach verification. Returns `{:ok, token}` or `{:error, %AshOnetime.Error{}}`.
+  Options must supply `:algorithm`, `:namespace` and `:max_age`, and may supply
+  `:skew` (default 0) and `:custody_context`. Body validation, expectation binding,
+  window validation and exact signature length checks happen before custody runs.
+  Only custody's exact `:ok` accepts the signature. Custody failures have fixed
+  package messages and empty details; holder diagnostics never escape.
   """
   @spec verify(binary(), module(), keyword()) :: result(t())
-  def verify(encoded, resolver, options)
-      when is_binary(encoded) and is_atom(resolver) and is_list(options) do
+  def verify(encoded, custody, options)
+      when is_binary(encoded) and is_atom(custody) and is_list(options) do
     with :ok <- check_token_size(encoded),
          true <- Keyword.keyword?(options),
          {:ok, expected_algorithm} <- fetch_algorithm(options),
-         {:ok, expected_namespace} <-
-           fetch_identifier(options, :namespace, :invalid_namespace),
+         {:ok, expected_namespace} <- fetch_identifier(options, :namespace, :invalid_namespace),
          {:ok, raw} <- decode_wire(encoded),
          {:ok, body, signature} <- decode_envelope(raw),
          {:ok, token} <- token_from_body(body),
          :ok <- bind_expected(token, expected_algorithm, expected_namespace),
          :ok <- validate_window(token, options),
+         :ok <- signature_length(token.algorithm, signature, :invalid_signature),
          {:ok, body_bytes} <- Canonical.encode(body),
-         {:ok, material} <-
-           resolve(resolver, :verify, token, Keyword.get(options, :resolver_context)),
-         :ok <- signer(token.algorithm).verify(body_bytes, signature, material) do
+         :ok <-
+           custody_verify(
+             custody,
+             token,
+             body_bytes,
+             signature,
+             Keyword.get(options, :custody_context)
+           ) do
       {:ok, token}
     else
       false ->
@@ -162,13 +160,13 @@ defmodule AshOnetime.Token do
     end
   end
 
-  def verify(encoded, _resolver, _options) when is_binary(encoded) do
+  def verify(encoded, _custody, _options) when is_binary(encoded) do
     with :ok <- check_token_size(encoded) do
       {:error, Error.new(:invalid_options, "verification arguments are invalid")}
     end
   end
 
-  def verify(_encoded, _resolver, _options),
+  def verify(_encoded, _custody, _options),
     do: {:error, Error.new(:invalid_token, "token must be bytes")}
 
   defp validate_token(%__MODULE__{} = token) do
@@ -363,9 +361,6 @@ defmodule AshOnetime.Token do
   defp decode_algorithm(_algorithm),
     do: {:error, Error.new(:unsupported_algorithm, "token algorithm is unsupported")}
 
-  defp signer(:hmac_sha256), do: HMAC
-  defp signer(:ed25519), do: Ed25519
-
   defp fetch_identifier(options, name, error_code) do
     case Keyword.fetch(options, name) do
       {:ok, value} ->
@@ -475,27 +470,70 @@ defmodule AshOnetime.Token do
     end
   end
 
-  defp resolve(resolver, purpose, token, context) do
-    case resolver.resolve(purpose, token.key_id, token.algorithm, context) do
-      {:ok, material} ->
-        {:ok, material}
+  defp custody_sign(custody, token, bytes, context) do
+    case custody_call(custody, :sign, token.algorithm, [
+           token.algorithm,
+           token.key_id,
+           bytes,
+           context
+         ]) do
+      {:ok, {:ok, signature}} ->
+        with :ok <- signature_length(token.algorithm, signature, :custody_contract_violation),
+             do: {:ok, signature}
 
-      {:error, %Error{} = error} ->
-        {:error, error}
-
-      {:error, :key_not_found} ->
-        {:error, Error.new(:key_not_found, "token key was not found")}
-
-      {:error, reason} ->
-        {:error, Error.new(:key_resolution_failed, "key resolution failed", %{reason: reason})}
-
-      _other ->
-        {:error, Error.new(:key_resolution_failed, "key resolver returned an invalid result")}
+      result ->
+        custody_error(result, :sign)
     end
-  rescue
-    _exception -> {:error, Error.new(:key_resolution_failed, "key resolution failed")}
-  catch
-    _kind, _reason -> {:error, Error.new(:key_resolution_failed, "key resolution failed")}
+  end
+
+  defp custody_verify(custody, token, bytes, signature, context) do
+    case custody_call(custody, :verify, token.algorithm, [
+           token.algorithm,
+           token.key_id,
+           bytes,
+           signature,
+           context
+         ]) do
+      {:ok, :ok} -> :ok
+      result -> custody_error(result, :verify)
+    end
+  end
+
+  defp custody_call(custody, purpose, algorithm, arguments) do
+    Callback.run(fn ->
+      algorithms = custody.algorithms()
+
+      cond do
+        not is_list(algorithms) -> :invalid_contract
+        algorithm in algorithms -> apply(custody, purpose, arguments)
+        true -> {:error, :key_unusable}
+      end
+    end)
+  end
+
+  defp custody_error({:ok, {:error, :invalid_signature}}, :verify),
+    do: {:error, Callback.error(:invalid_signature)}
+
+  defp custody_error({:ok, {:error, :key_unusable}}, _),
+    do: {:error, Callback.error(:key_unusable)}
+
+  defp custody_error({:ok, {:error, :unavailable}}, _),
+    do: {:error, Callback.error(:custody_unavailable)}
+
+  defp custody_error({:ok, {:error, :timeout}}, _),
+    do: {:error, Callback.error(:custody_timeout)}
+
+  defp custody_error({:error, :deadline}, _),
+    do: {:error, Callback.error(:custody_timeout)}
+
+  defp custody_error(_, _), do: {:error, Callback.error(:custody_contract_violation)}
+
+  defp signature_length(algorithm, signature, code) do
+    size = if algorithm == :hmac_sha256, do: 32, else: 64
+
+    if is_binary(signature) and byte_size(signature) == size,
+      do: :ok,
+      else: {:error, Callback.error(code)}
   end
 
   defp exact_fields?(map, fields), do: map |> Map.keys() |> Enum.sort() |> Kernel.==(fields)

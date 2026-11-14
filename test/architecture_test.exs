@@ -5,6 +5,8 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime,
     AshOnetime.Admission,
     AshOnetime.Admission.State,
+    AshOnetime.Application,
+    AshOnetime.Callback,
     AshOnetime.Boundary,
     AshOnetime.Boundary.Change,
     AshOnetime.Boundary.Query,
@@ -28,7 +30,10 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Fingerprint,
     AshOnetime.GenericAction,
     AshOnetime.Hold,
-    AshOnetime.KeyResolver,
+    AshOnetime.KeyCustody,
+    AshOnetime.KeyCustody.Conformance,
+    AshOnetime.KeyCustody.Local,
+    AshOnetime.KeyCustody.Local.Material,
     AshOnetime.KeySource,
     AshOnetime.Oban.CleanupWorker,
     AshOnetime.Oban.PartitionWorker,
@@ -97,7 +102,10 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.ExternalEffect,
     AshOnetime.Fingerprint,
     AshOnetime.Hold,
-    AshOnetime.KeyResolver,
+    AshOnetime.KeyCustody,
+    AshOnetime.KeyCustody.Conformance,
+    AshOnetime.KeyCustody.Local,
+    AshOnetime.KeyCustody.Local.Material,
     AshOnetime.KeySource,
     AshOnetime.Oban.CleanupWorker,
     AshOnetime.Oban.PartitionWorker,
@@ -227,7 +235,10 @@ defmodule AshOnetime.ArchitectureTest do
     ],
     AshOnetime.ExternalEffect => [operation_key: 1, put_result: 3, result: 1],
     AshOnetime.Fingerprint => [compute: 1, compute: 2],
-    AshOnetime.KeyResolver => [],
+    AshOnetime.KeyCustody => [],
+    AshOnetime.KeyCustody.Conformance => [materials: 0, run: 2],
+    AshOnetime.KeyCustody.Local => [algorithms: 0, sign: 4, verify: 5],
+    AshOnetime.KeyCustody.Local.Material => [],
     AshOnetime.KeySource => [normalize: 1, references: 1],
     AshOnetime.Oban.CleanupWorker => [backoff: 1, perform: 1],
     AshOnetime.Oban.PartitionWorker => [backoff: 1, perform: 1],
@@ -447,8 +458,12 @@ defmodule AshOnetime.ArchitectureTest do
              "usage-rules.md"
            ]
 
-    assert AshOnetime.MixProject.application() == [extra_applications: [:crypto, :logger]]
-    assert Application.spec(:ash_onetime, :mod) in [nil, []]
+    assert AshOnetime.MixProject.application() == [
+             mod: {AshOnetime.Application, []},
+             extra_applications: [:crypto, :logger]
+           ]
+
+    assert Application.spec(:ash_onetime, :mod) == {AshOnetime.Application, []}
   end
 
   test "documented public exports are exact" do

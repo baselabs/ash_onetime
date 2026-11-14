@@ -2,7 +2,7 @@ defmodule AshOnetime.Admission do
   @moduledoc false
 
   alias Ash.Resource.Info, as: ResourceInfo
-  alias AshOnetime.{Cache, Error, Fingerprint, Response, Telemetry, Verified}
+  alias AshOnetime.{Cache, Callback, Error, Fingerprint, Response, Telemetry, Verified}
   alias AshOnetime.Store.{Claim, Postgres, Result}
 
   @private_state :ash_onetime_admission
@@ -491,7 +491,7 @@ defmodule AshOnetime.Admission do
   defp key_hash(subject, key, limits, strategy) when is_list(key) do
     max_key_bytes = Keyword.get(limits || [], :max_key_bytes, 4_096)
     max_token_bytes = Keyword.get(limits || [], :max_token_bytes, 65_536)
-    timeout = Keyword.get(limits || [], :verifier_timeout_ms, 30_000)
+    timeout = Keyword.get(limits || [], :verifier_timeout_ms)
 
     with {:ok, resolved} <-
            map_ordered(key, fn source ->
@@ -552,7 +552,7 @@ defmodule AshOnetime.Admission do
              [token, bounded_callback_context(subject)],
              timeout
            ),
-         :ok <- valid_verified(verified, max_key) do
+         :ok <- verified_result(verified, max_key) do
       emit_verification(subject, strategy, started, :verified)
 
       {:ok,
@@ -562,9 +562,13 @@ defmodule AshOnetime.Admission do
         emit_verification(subject, strategy, started, :timeout)
         {:error, Error.new(:verification_timeout, "verification timed out")}
 
+      {:error, %Error{} = error} ->
+        emit_verification(subject, strategy, started, :rejected)
+        {:error, error}
+
       _other ->
         emit_verification(subject, strategy, started, :rejected)
-        {:error, Error.new(:verification_failed, "verification failed")}
+        {:error, Callback.error(:verification_failed)}
     end
   end
 
@@ -580,7 +584,7 @@ defmodule AshOnetime.Admission do
 
     with {:ok, %Verified{} = verified} <-
            timed_callback(module, :mint, [bounded_callback_context(subject)], timeout),
-         :ok <- valid_verified(verified, max_key) do
+         :ok <- verified_result(verified, max_key) do
       emit_verification(subject, strategy, started, :verified)
       {:ok, {%{source: :minted, module: inspect(module), value: verified.key}, verified}}
     else
@@ -588,9 +592,13 @@ defmodule AshOnetime.Admission do
         emit_verification(subject, strategy, started, :timeout)
         {:error, Error.new(:verification_timeout, "verification timed out")}
 
+      {:error, %Error{} = error} ->
+        emit_verification(subject, strategy, started, :rejected)
+        {:error, error}
+
       _other ->
         emit_verification(subject, strategy, started, :rejected)
-        {:error, Error.new(:verification_failed, "verification failed")}
+        {:error, Callback.error(:verifier_contract_violation)}
     end
   end
 
@@ -1195,9 +1203,14 @@ defmodule AshOnetime.Admission do
 
   defp valid_verified(%Verified{} = verified, max_key) do
     with :ok <- bounded_binary(verified.key, max_key),
-         %DateTime{} <- verified.issued_at,
-         true <- is_nil(verified.expires_at) or match?(%DateTime{}, verified.expires_at),
-         :ok <- bounded_binary(verified.verifier_id, 128) do
+         :ok <- bounded_binary(verified.verifier_id, 128),
+         {:ok, _valid} <-
+           Verified.new(
+             key: verified.key,
+             issued_at: verified.issued_at,
+             expires_at: verified.expires_at,
+             verifier_id: verified.verifier_id
+           ) do
       :ok
     else
       _other -> :error
@@ -1223,12 +1236,39 @@ defmodule AshOnetime.Admission do
     end
   end
 
-  defp timed_callback(module, function, arguments, timeout) do
-    task = Task.async(fn -> safe_callback(module, function, arguments) end)
+  @verification_codes [
+    :invalid_signature,
+    :key_unusable,
+    :custody_unavailable,
+    :custody_timeout,
+    :outside_window,
+    :algorithm_mismatch,
+    :namespace_mismatch
+  ]
 
-    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
-      {:ok, result} -> result
-      nil -> {:error, :timeout}
+  defp timed_callback(module, function, arguments, timeout) do
+    case Callback.run(fn -> apply(module, function, arguments) end, timeout) do
+      {:ok, {:ok, %Verified{} = verified}} ->
+        {:ok, verified}
+
+      {:ok, {:error, %Error{code: code}}} when code in @verification_codes ->
+        {:error, Callback.error(code)}
+
+      {:ok, {:error, _reason}} ->
+        {:error, Callback.error(:verification_failed)}
+
+      {:error, :deadline} ->
+        {:error, :timeout}
+
+      _ ->
+        {:error, Callback.error(:verifier_contract_violation)}
+    end
+  end
+
+  defp verified_result(verified, max_key) do
+    case valid_verified(verified, max_key) do
+      :ok -> :ok
+      :error -> {:error, Callback.error(:verifier_contract_violation)}
     end
   end
 

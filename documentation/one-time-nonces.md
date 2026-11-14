@@ -146,7 +146,23 @@ default-off, so existing nonce consumers are unchanged.
 requires explicit same-service trust. Ed25519 uses private signing material and public
 verification material for separated trust. Verification requires the expected algorithm and
 namespace outside the token, rejects noncanonical bytes, and performs meaningful signature
-comparison. Provider-specific signature formats belong in a verifier callback.
+comparison. `Token.sign/3` and `Token.verify/3` take an `AshOnetime.KeyCustody` module;
+verification passes `custody_context:` to that module. See [Tokens and key custody](tokens.md)
+for Local material configuration and external holders. Provider-specific signature formats
+belong in a verifier callback.
+
+Custody, verifiers and minters run in supervised, unlinked workers, outside the caller's
+process and transaction. The application default `callback_timeout_ms` is 5,000 ms, capped
+at 30,000 ms; a protection can set `limits: [verifier_timeout_ms: n]`. A timeout kills the
+worker and fails closed. Callbacks must obtain trusted configuration independently of the
+caller's process dictionary. Effect callbacks retain their separate ADR-0011 contract.
+
+A verifier wrapping `Token.verify/3` can return its error directly. The package preserves
+`:invalid_signature`, `:key_unusable`, `:custody_unavailable`, `:custody_timeout`,
+`:outside_window`, `:algorithm_mismatch` and `:namespace_mismatch`, rebuilding fixed messages
+with empty details. Other explicit errors become `:verification_failed`; malformed facts,
+raises, exits and killed workers become `:verifier_contract_violation` for both verifiers
+and minters. A worker deadline becomes `:verification_timeout`.
 
 Misuse: idempotency is not replay defense. Serving a stored success for a replayed signed
 request accepts the replay. Declare `:one_time_nonce` when reuse must be rejected.

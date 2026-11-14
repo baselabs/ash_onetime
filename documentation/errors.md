@@ -56,12 +56,13 @@ through the authoritative store — not only the codes raised on the happy admis
 | `:key_reused_with_different_request` | 409/422 | An idempotency key was reused with a different request fingerprint. |
 | `:request_in_progress` | 409 / 425 | A `processing` claim is still in flight for this key — including, on external-effect actions, a same-key retry refused by the pre-peer claim lock within its configured wait (ADR-0010). |
 | `:verification_failed` | 401 | A trusted verifier rejected the token. |
-| `:verification_timeout` | 503 | A trusted verifier timed out (retryable). |
+| `:verification_timeout` | 503 | A verifier or minter exceeded its deadline; fail closed and retry only while the proof remains admissible. |
 | `:fingerprint_too_large` | 422 | The request fingerprint exceeded its byte limit. |
 | `:fingerprint_unavailable` | 422 | The request fingerprint could not be computed. |
 | `:key_too_large` | 422 | A key component exceeded its byte limit. |
 | `:key_unavailable` | 422 | A key component could not be resolved. |
-| `:key_resolution_failed` | 422 | The key resolver callback failed. |
+| `:key_unusable` | 422 | Custody refused the key identifier, algorithm, purpose, role or trust binding. |
+| `:outside_window` | 422 | A well-formed proof is outside its acceptance window. |
 | `:key_not_found` | 404 | A referenced key was not found. |
 | `:scope_unavailable` | 422 | A scope component could not be resolved. |
 | `:invalid_key` | 422 | A key is structurally invalid. |
@@ -109,6 +110,10 @@ mis-categorize them; the per-code HTTP below overrides the `:invalid` class.
 
 | Code | HTTP | Meaning |
 |---|---|---|
+| `:custody_unavailable` | **503** | The key holder is unavailable; verification fails closed. |
+| `:custody_timeout` | **503** | Custody exceeded its deadline; fail closed and retry only while the proof remains admissible. |
+| `:custody_contract_violation` | **500** | Custody raised, exited, was killed or returned a result outside its contract. |
+| `:verifier_contract_violation` | **500** | A verifier or minter raised, exited, was killed or returned malformed facts. |
 | `:store_invariant` | **500** | The authoritative store returned a result that violated an internal invariant (integrity fault, not client input). |
 | `:outcome_unknown` | **503** | External recovery was ambiguous; the effect's outcome could not be determined (retryable). |
 | `:invalid_evaluated_at` | **500** | The trusted evaluation clock returned an invalid time. |
@@ -160,9 +165,9 @@ renderable-to-callers.) Never put key material, tokens, payloads, signatures, or
 
 The library's own call sites populate `details` only with non-secret context — field or
 option names (atoms) and numeric byte limits (e.g. `%{field: :key_id, maximum: 128}`).
-**One path carries application-supplied data:** when an application's key resolver returns
-`{:error, reason}`, `ash_onetime` wraps it as
-`Error.new(:key_resolution_failed, ..., %{reason: reason})` (`lib/ash_onetime/token.ex`). A
-resolver that returns key material in its error reason would leak it through the rendered
-error. Keep resolver error reasons secret-free — return an atom or a generic message, not
-the key. (Audited at this release; re-audit any future call site that adds `details`.)
+Custody errors and allowlisted verifier/minter errors are rebuilt with fixed package
+messages and empty details. Callback text, exception reasons and arbitrary returned terms
+never become caller-visible diagnostics. Other explicit verifier/minter errors become
+`:verification_failed`. Custody's closed error atoms map to `:invalid_signature`,
+`:key_unusable`, `:custody_unavailable` or `:custody_timeout`; malformed returns and worker
+failures become `:custody_contract_violation`.

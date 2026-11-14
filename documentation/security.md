@@ -20,9 +20,21 @@ an unrecoverable external API into a transactional peer.
 
 Canonical encoding is bounded, type-tagged, length-framed, and deterministic. Token
 verification binds exact canonical body bytes, expected namespace, algorithm, key identifier,
-issuance, and expiry. HMAC key material must declare same-service trust. Ed25519 separates
-private signing and public verification roles. Key resolution is purpose-specific; secrets
-must remain in the consumer's secret store and must not be logged or committed.
+issuance, and expiry. HMAC-SHA256 requires same-service trust: anyone holding its verification secret also holds
+signing power. HMAC verification happens at the holder with constant-time comparison.
+Ed25519 separates private signers from public verifiers and uses pure RFC 8032 Ed25519,
+not Ed25519ctx or Ed25519ph. Both algorithms operate over exactly the canonical body bytes.
+
+`AshOnetime.KeyCustody` keeps signing and verification permission separate and binds each
+key identifier to an authoritative algorithm and purpose. `KeyCustody.Local` fetches
+purpose-specific, algorithm-tagged material and uses the package's reference signers;
+external custody can keep secrets in another process or service. Custody is trusted
+cryptographic code: the package checks exact signature lengths, normalizes failures and
+bounds execution, but cannot detect a custody that falsely returns `:ok`. The conformance
+suite checks known answers, cross-verification and rejection cases; it cannot prove a
+constant-time comparison at an external holder. That is the implementer's obligation.
+Secrets must remain in the consumer's secret store and must not be logged or committed.
+See [Tokens and key custody](tokens.md).
 
 ## Named misuses
 

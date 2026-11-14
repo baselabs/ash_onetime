@@ -910,7 +910,7 @@ defmodule AshOnetime.Resource.Transformer do
         )
 
       true ->
-        {:ok, Keyword.merge(@limit_ceilings, limits)}
+        {:ok, Keyword.merge(Keyword.delete(@limit_ceilings, :verifier_timeout_ms), limits)}
     end
   end
 
