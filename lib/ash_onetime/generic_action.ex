@@ -82,9 +82,9 @@ defmodule AshOnetime.GenericAction do
   defp complete_delivery({:error, _error} = error, _input), do: error
 
   defp complete_delivery(completed, input) do
-    with {:ok, %{delivery_source: source}} when not is_nil(source) <-
+    with {:ok, %{delivery_source: source} = state} when not is_nil(source) <-
            AshOnetime.Admission.state(input),
-         :ok <- AshOnetime.Delivery.complete_current(input, source) do
+         :ok <- AshOnetime.Delivery.complete_current(input, state) do
       completed
     else
       _other -> {:error, AshOnetime.Delivery.lost()}

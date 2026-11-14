@@ -20,6 +20,7 @@ defmodule AshOnetime.Delivery do
   alias AshOnetime.Delivery.Envelope
   alias AshOnetime.Error
   alias AshOnetime.Resource.Info
+  alias AshOnetime.Store
 
   defstruct [:outcome, values: %{}]
 
@@ -101,21 +102,22 @@ defmodule AshOnetime.Delivery do
     with {:ok, delivery} <- open.(), do: {:ok, result, notifications, delivery}
   end
 
+  # An executed value opens only when the store holds the committed completion of the
+  # exact claim that produced it, read here, after Ash returned and outside any
+  # transaction. A rollback that a later hook turned into success leaves no completion.
   defp open(key, ref, secret, public, protection, resource, action) do
     case Process.get(key) do
-      {:done, inv, :executed, envelope} when is_binary(envelope) ->
-        names = protection.executing_only
-        context = Envelope.context(ref, inv, resource, action)
-
-        case Envelope.open(envelope, secret, public, length(names), context) do
-          {:ok, values} ->
-            {:ok, %__MODULE__{outcome: :executed, values: Map.new(Enum.zip(names, values))}}
-
-          {:error, _reason} ->
-            lost_class()
+      {:done, inv, :executed, envelope, {target, claim}} when is_binary(envelope) ->
+        with :complete <- Store.committed_completion(target, claim),
+             names = protection.executing_only,
+             context = Envelope.context(ref, inv, resource, action),
+             {:ok, values} <- Envelope.open(envelope, secret, public, length(names), context) do
+          {:ok, %__MODULE__{outcome: :executed, values: Map.new(Enum.zip(names, values))}}
+        else
+          _other -> lost_class()
         end
 
-      {:done, _inv, outcome, nil} when outcome in [:replayed, :recovered] ->
+      {:done, _inv, outcome, nil, nil} when outcome in [:replayed, :recovered] ->
         {:ok, %__MODULE__{outcome: outcome, values: %{}}}
 
       _other ->
@@ -145,10 +147,12 @@ defmodule AshOnetime.Delivery do
   defp subject_type?(%Ash.ActionInput{}, type), do: type == :action
   defp subject_type?(_subject, _type), do: false
 
-  # Route refusals before arming (§2.7.4): the conditions under which the package's entry
+  # Route refusals before arming (§2.7.4): an open transaction, which could roll back
+  # after the value was returned, and the conditions under which the package's entry
   # would not run, or would run in another process.
   defp route(subject, opts) do
     cond do
+      Ash.DataLayer.in_transaction?(subject.resource) -> {:error, in_transaction()}
       bulk?(subject) -> {:error, refused()}
       not built_for_action?(subject) -> {:error, refused()}
       task_route?(subject, opts) -> {:error, refused()}
@@ -168,7 +172,8 @@ defmodule AshOnetime.Delivery do
   defp built_for_action?(%Ash.ActionInput{}), do: true
 
   # Ash takes its Task route exactly when all five hold (changeset.ex:4782-4796, :4864-4869;
-  # process_helpers.ex:66-74). Generic actions never take it.
+  # process_helpers.ex:66-74): the four below, and no open transaction, which always holds
+  # here because an open transaction is refused first. Generic actions never take it.
   defp task_route?(%Ash.Changeset{} = changeset, opts) do
     resource = changeset.resource
     timeout = opts[:timeout] || changeset.timeout
@@ -176,8 +181,7 @@ defmodule AshOnetime.Delivery do
     not (changeset.action.transaction? and Ash.DataLayer.data_layer_can?(resource, :transact)) and
       not is_nil(timeout) and timeout != :infinity and
       !Application.get_env(:ash, :disable_async?) and
-      Ash.DataLayer.data_layer_can?(resource, :async_engine) and
-      not Ash.DataLayer.in_transaction?(resource)
+      Ash.DataLayer.data_layer_can?(resource, :async_engine)
   end
 
   defp task_route?(_subject, _opts), do: false
@@ -303,41 +307,46 @@ defmodule AshOnetime.Delivery do
   end
 
   @doc false
-  # Complete (§2.7.3, step 4) for the CRUD entry, which holds its own handle.
-  @spec complete(map(), outcome()) :: :ok | {:error, Error.t()}
-  def complete(%{key: key, inv: inv}, outcome), do: complete_entry(key, inv, outcome)
+  # Complete (§2.7.3, step 4) for the CRUD entry, which holds its own handle. `state` is
+  # admission's state: its `delivery_source` is the outcome, and an executed completion
+  # keeps the store target and the exact claim for the committed read-back.
+  @spec complete(map(), map()) :: :ok | {:error, Error.t()}
+  def complete(%{key: key, inv: inv}, state), do: complete_entry(key, inv, state)
 
   @doc false
   # Complete for the generic after-action, which reads `inv` from the entry.
-  @spec complete_current(Ash.ActionInput.t(), outcome()) :: :ok | {:error, Error.t()}
-  def complete_current(subject, outcome) do
+  @spec complete_current(Ash.ActionInput.t(), map()) :: :ok | {:error, Error.t()}
+  def complete_current(subject, state) do
     with {:ok, ref} <- reference(subject),
          key = key(ref),
-         {state, inv, _value} when state in [:claimed, :sealed] <- Process.get(key) do
-      complete_entry(key, inv, outcome)
+         {entry, inv, _value} when entry in [:claimed, :sealed] <- Process.get(key) do
+      complete_entry(key, inv, state)
     else
       _other -> {:error, lost()}
     end
   end
 
-  defp complete_entry(key, inv, outcome) do
-    case {Process.get(key), outcome} do
-      {{:sealed, ^inv, envelope}, :executed} ->
-        Process.put(key, {:done, inv, :executed, envelope})
+  defp complete_entry(key, inv, %{delivery_source: outcome} = state) do
+    case {Process.get(key), outcome, state} do
+      {{:sealed, ^inv, envelope}, :executed, %{target: target, claim: %{id: id} = claim}}
+      when not is_nil(target) and is_binary(id) ->
+        Process.put(key, {:done, inv, :executed, envelope, {target, claim}})
         :ok
 
-      {{:sealed, ^inv, _envelope}, :replayed} ->
-        Process.put(key, {:done, inv, :replayed, nil})
+      {{:sealed, ^inv, _envelope}, :replayed, _state} ->
+        Process.put(key, {:done, inv, :replayed, nil, nil})
         :ok
 
-      {{:claimed, ^inv, _public}, outcome} when outcome in [:replayed, :recovered] ->
-        Process.put(key, {:done, inv, outcome, nil})
+      {{:claimed, ^inv, _public}, outcome, _state} when outcome in [:replayed, :recovered] ->
+        Process.put(key, {:done, inv, outcome, nil, nil})
         :ok
 
       _other ->
         {:error, lost()}
     end
   end
+
+  defp complete_entry(_key, _inv, _state), do: {:error, lost()}
 
   @doc false
   def lost, do: Error.new(:executing_only_lost, "executing-only values were lost")
@@ -348,6 +357,13 @@ defmodule AshOnetime.Delivery do
 
   defp refused,
     do: Error.new(:executing_only_refused, "executing-only delivery was refused")
+
+  defp in_transaction,
+    do:
+      Error.new(
+        :executing_only_in_transaction,
+        "executing-only delivery cannot run inside an open transaction"
+      )
 
   defp requires_call,
     do:

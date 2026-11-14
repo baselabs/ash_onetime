@@ -327,6 +327,45 @@ defmodule AshOnetime.Store.Postgres do
   def load(_target, _claim),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
+  # The committed completion of one exact claim, read outside any transaction so only
+  # committed rows are visible: `:complete` when the claim row with this id is complete,
+  # `:absent` otherwise (rolled back, still processing, or another generation's row).
+  @spec committed_completion(Target.t(), Claim.t()) :: :complete | :absent | Result.t()
+  def committed_completion(%Target{} = target, %Claim{strategy: :idempotency, id: id} = claim)
+      when is_binary(id) do
+    with_checkout(target, fn ->
+      if target.repo_module.in_transaction?() do
+        Result.failure(:in_transaction, :not_started, :open)
+      else
+        select_committed_state(target, claim)
+      end
+    end)
+  end
+
+  def committed_completion(_target, _claim),
+    do: Result.failure(:invalid_request, :not_started, :not_applicable)
+
+  defp select_committed_state(target, claim) do
+    {logical_partition, operation_hash, scope_hash, key_hash} = logical_key(claim)
+
+    sql = """
+    SELECT state
+    FROM #{relation(target, "ash_onetime_idempotency_claims")}
+    WHERE #{@logical_key_predicate} AND id = $5::uuid
+    """
+
+    case dispatched_query(
+           target,
+           sql,
+           [logical_partition, operation_hash, scope_hash, key_hash, dump_uuid(claim.id)]
+         ) do
+      {:ok, %{num_rows: 1, rows: [["complete"]]}} -> :complete
+      {:ok, %{num_rows: count}} when count in [0, 1] -> :absent
+      {:ok, _result} -> Result.failure(:store_invariant, :sent, :not_applicable)
+      {:error, %Result{} = result} -> result
+    end
+  end
+
   @max_partition_drops 128
 
   @spec cleanup(Target.t(), pos_integer(), non_neg_integer()) ::

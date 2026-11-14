@@ -34,6 +34,8 @@ defmodule AshOnetime.Delivery.RecoveredRollbackTest do
         |> AshOnetime.deliver()
 
       refute Process.get(:fail_after_completion)
+      assert error_code(first) == :executing_only_lost
+      assert claim_count(prefix) == 0
 
       retry = AshOnetime.deliver(build.())
       assert %Delivery{outcome: :executed} = elem(retry, tuple_size(retry) - 1)
@@ -66,8 +68,9 @@ defmodule AshOnetime.Delivery.RecoveredRollbackTest do
       outer = AshOnetime.deliver(subject)
       nested = Process.delete(:nested_result)
 
-      refute is_nil(nested)
       refute Process.get(:fail_after_completion)
+      assert error_code(nested) == :executing_only_lost
+      assert %Delivery{outcome: :executed} = elem(outer, tuple_size(outer) - 1)
 
       assert_at_most_one_value([nested, outer])
     end

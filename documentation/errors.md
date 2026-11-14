@@ -102,6 +102,7 @@ through the authoritative store — not only the codes raised on the happy admis
 | `:response_contract_mismatch` | 422 | The persisted response contract does not match. |
 | `:external_effect_unavailable` | 422 | An external effect is unavailable. |
 | `:external_recovery_unavailable` | 422 | External recovery is unavailable. |
+| `:executing_only_in_transaction` | 422 | `AshOnetime.deliver/2` was called inside an open transaction, which could roll back after the value was returned. Nothing ran; call it outside any transaction. |
 | `:executing_only_refused` | 422 | `AshOnetime.deliver/2` refused the call before anything ran: a bulk subject, a subject not built for its action, a call Ash would run in another process, or an entry that is not this call's. No value exists. |
 | `:executing_only_requires_call` | 422 | An action that declares `executing_only` values was run without `AshOnetime.deliver/2`. Nothing ran. |
 
@@ -133,7 +134,7 @@ mis-categorize them; the per-code HTTP below overrides the `:invalid` class.
 | `:admission_unavailable` | **503** | Admission is unavailable (fail-closed; retryable). |
 | `:telemetry_invalid` | **500** | A telemetry event was invalid (internal). |
 | `:executing_only_invalid` | **500** | The producer raised, threw, exited or returned values outside its contract; the action rolled back and no value exists. |
-| `:executing_only_lost` | **500** | The executing-only values cannot be delivered to this caller. If the effect committed, the value is lost for good: revoke what it granted and reissue under a new key. |
+| `:executing_only_lost` | **500** | The executing-only values cannot be delivered to this caller. If the store holds no committed completion for this call's claim (the action rolled back, even if a later hook reported success), the effect did not happen and a retry under the same key executes once. If the effect committed, the value is lost for good: revoke what it granted and reissue under a new key. |
 
 ### Store-fault and transport codes (5xx — override the class default)
 

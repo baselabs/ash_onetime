@@ -84,6 +84,14 @@ defmodule AshOnetime.Test.DeliveryCase do
     end
   end
 
+  @doc "The number of idempotency claims in the installation `prefix`."
+  def claim_count(prefix) do
+    %{rows: [[count]]} =
+      SQL.query!(Repo, ~s[SELECT count(*) FROM "#{prefix}"."ash_onetime_idempotency_claims"], [])
+
+    count
+  end
+
   @doc "The error code carried by a `deliver/2` error, or `nil`."
   def error_code({:error, error}), do: AshOnetime.Error.code(error)
   def error_code(_other), do: nil

@@ -76,9 +76,9 @@ defmodule AshOnetime.Change do
   end
 
   defp complete_delivery({:ok, _result, final_changeset, _instructions} = completed, handle) do
-    with {:ok, %{delivery_source: source}} when not is_nil(source) <-
+    with {:ok, %{delivery_source: source} = state} when not is_nil(source) <-
            AshOnetime.Admission.state(final_changeset),
-         :ok <- AshOnetime.Delivery.complete(handle, source) do
+         :ok <- AshOnetime.Delivery.complete(handle, state) do
       completed
     else
       _other -> Ash.DataLayer.rollback(final_changeset.resource, AshOnetime.Delivery.lost())

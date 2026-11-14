@@ -33,7 +33,9 @@ defmodule AshOnetime.Delivery.TransactionRollbackTest do
           Ash.DataLayer.rollback(Resource, {:caller_rolled_back, result})
         end)
 
-      assert {:error, {:caller_rolled_back, _result}} = first
+      assert {:error, {:caller_rolled_back, refused}} = first
+      assert error_code(refused) == :executing_only_in_transaction
+      assert claim_count(prefix) == 0
 
       retry = AshOnetime.deliver(build.())
       assert %Delivery{outcome: :executed} = elem(retry, tuple_size(retry) - 1)
@@ -57,7 +59,8 @@ defmodule AshOnetime.Delivery.TransactionRollbackTest do
       nested = Process.delete({NestedDeliverCheck, :result})
 
       assert {:error, _error} = outer
-      refute is_nil(nested)
+      assert error_code(nested) == :executing_only_in_transaction
+      assert claim_count(prefix) == 0
 
       retry = AshOnetime.deliver(build.())
       assert %Delivery{outcome: :executed} = elem(retry, tuple_size(retry) - 1)

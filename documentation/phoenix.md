@@ -101,6 +101,7 @@ defmodule MyAppWeb.OnetimeErrors do
     response_contract_mismatch: :unprocessable_entity,
     external_effect_unavailable: :unprocessable_entity,
     external_recovery_unavailable: :unprocessable_entity,
+    executing_only_in_transaction: :unprocessable_entity,
     executing_only_refused: :unprocessable_entity,
     executing_only_requires_call: :unprocessable_entity
   }
