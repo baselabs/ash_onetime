@@ -20,7 +20,7 @@ defmodule AshOnetime.Test.DeliveryCase do
       CREATE TABLE IF NOT EXISTS "#{prefix}"."ash_onetime_delivery_examples" (
         id uuid PRIMARY KEY,
         amount bigint NOT NULL,
-        retired_at timestamptz
+        retired boolean NOT NULL DEFAULT false
       )
       """,
       []

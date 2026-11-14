@@ -85,7 +85,7 @@ defmodule AshOnetime.Test.DeliveryExamples.Resource do
   attributes do
     uuid_primary_key :id
     attribute :amount, :integer, public?: true, allow_nil?: false
-    attribute :retired_at, :utc_datetime_usec, public?: true
+    attribute :retired, :boolean, public?: true, allow_nil?: false, default: false
   end
 
   actions do
@@ -123,7 +123,7 @@ defmodule AshOnetime.Test.DeliveryExamples.Resource do
       require_atomic? false
       argument :request_key, :string, allow_nil?: false
       argument :note, :string, default: "example"
-      change set_attribute(:retired_at, &DateTime.utc_now/0)
+      change set_attribute(:retired, true)
     end
 
     action :mint, :integer do
