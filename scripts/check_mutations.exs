@@ -438,8 +438,7 @@ defmodule AshOnetime.MutationCheck do
     },
     "signature" => %{
       path: "lib/ash_onetime/token.ex",
-      original:
-        "{:ok, signature} <- custody_sign(custody, token, body_bytes, custody_context),",
+      original: "{:ok, signature} <- custody_sign(custody, token, body_bytes, custody_context),",
       mutated:
         "{:ok, signature} <- custody_sign(custody, token, (case body_bytes do <<first, rest::binary>> -> <<Bitwise.bxor(first, 1), rest::binary>> end), custody_context),",
       test: "test/ash_onetime/token_test.exs",
