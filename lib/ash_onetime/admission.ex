@@ -36,7 +36,8 @@ defmodule AshOnetime.Admission do
       :contract,
       :hold,
       :cache,
-      :replayed
+      :replayed,
+      :delivery_source
     ]
 
     @type t :: %__MODULE__{
@@ -50,7 +51,8 @@ defmodule AshOnetime.Admission do
             contract: AshOnetime.Response.Contract.t() | nil,
             hold: module() | nil,
             cache: AshOnetime.Cache.Config.t() | nil,
-            replayed: term()
+            replayed: term(),
+            delivery_source: :executed | :replayed | :recovered | nil
           }
   end
 
@@ -186,10 +188,10 @@ defmodule AshOnetime.Admission do
   # callback surface, which is resource/action only — see bounded_callback_context/1).
 
   @doc false
-  def dispatch_reservation(subject, protection, trusted) do
+  def dispatch_reservation(subject, protection, trusted, delivery) do
     cond do
       protection.external_effect ->
-        AshOnetime.ExternalRecovery.reserve(subject, protection, trusted)
+        AshOnetime.ExternalRecovery.reserve(subject, protection, trusted, delivery)
 
       protection.strategy == :one_time_nonce and protection.commit == :independent ->
         reserve_committed(subject, protection, trusted)
@@ -726,7 +728,14 @@ defmodule AshOnetime.Admission do
 
     with :ok <- validate_admitted(result, state.request, state.target, transaction) do
       class = execution_class(state.strategy, mode)
-      state = %{state | class: class, claim: sanitize_claim(result.claim)}
+
+      state = %{
+        state
+        | class: class,
+          claim: sanitize_claim(result.claim),
+          delivery_source: :executed
+      }
+
       emit_admission(state, started, :admitted)
       {:execute, state}
     end
@@ -745,7 +754,14 @@ defmodule AshOnetime.Admission do
          {:ok, replayed} <- replay(result, state, started) do
       emit_conflict(state, :complete)
       emit_admission(state, started, :admitted)
-      replay_state = %{state | class: :replay, claim: result.claim, replayed: replayed}
+      replay_state = %{
+        state
+        | class: :replay,
+          claim: result.claim,
+          replayed: replayed,
+          delivery_source: :replayed
+      }
+
       {:replay, replayed, replay_state}
     else
       :fingerprint_mismatch ->

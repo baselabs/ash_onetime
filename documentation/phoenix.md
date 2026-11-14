@@ -100,7 +100,9 @@ defmodule MyAppWeb.OnetimeErrors do
     response_codec_mismatch: :unprocessable_entity,
     response_contract_mismatch: :unprocessable_entity,
     external_effect_unavailable: :unprocessable_entity,
-    external_recovery_unavailable: :unprocessable_entity
+    external_recovery_unavailable: :unprocessable_entity,
+    executing_only_refused: :unprocessable_entity,
+    executing_only_requires_call: :unprocessable_entity
   }
 
   @retryable_codes [
@@ -132,6 +134,8 @@ defmodule MyAppWeb.OnetimeErrors do
     :response_completion_failed,
     :admission_request_invalid,
     :telemetry_invalid,
+    :executing_only_invalid,
+    :executing_only_lost,
     :missing_prefix,
     :not_in_transaction,
     :in_transaction,

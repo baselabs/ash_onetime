@@ -194,6 +194,7 @@ defmodule AshOnetime.Resource.Transformer do
          :ok <- verify_scope_bound(scope, limits, protection, dsl_state),
          {:ok, normalized} <-
            verify_strategy(%{protection | scope: scope, key: key, limits: limits}, context),
+         :ok <- verify_executing_only(normalized, context),
          :ok <- verify_lifecycle(normalized, context) do
       {:ok, normalized}
     end
@@ -706,10 +707,18 @@ defmodule AshOnetime.Resource.Transformer do
 
   defp verify_response_fields([], %{action: %{type: :action}}), do: :ok
 
-  defp verify_response_fields(_fields, %{action: %{type: :action}}),
-    do: {:field_error, "generic action response fields must be empty"}
-
+  # A generic action's `fields` are validated against the resource it returns (§2.7.6).
   defp verify_response_fields(fields, context) do
+    case record_source(context) do
+      {:ok, source} ->
+        verify_record_fields(fields, source)
+
+      :error ->
+        {:field_error, "generic action response fields require a resource return"}
+    end
+  end
+
+  defp verify_record_fields(fields, source) do
     reserved = Ash.Resource.reserved_names()
 
     cond do
@@ -719,7 +728,7 @@ defmodule AshOnetime.Resource.Transformer do
       Enum.any?(fields, &(&1 in reserved)) ->
         {:field_error, "response fields must not contain reserved names"}
 
-      invalid = Enum.find(fields, &(not valid_response_attribute?(&1, context))) ->
+      invalid = Enum.find(fields, &(not valid_response_attribute?(&1, source))) ->
         {:field_error,
          "response field #{inspect(invalid)} must be a public non-sensitive attribute"}
 
@@ -728,10 +737,162 @@ defmodule AshOnetime.Resource.Transformer do
     end
   end
 
-  defp valid_response_attribute?(field, context) do
-    case ResourceInfo.attribute(context.dsl_state, field) do
+  defp valid_response_attribute?(field, source) do
+    case ResourceInfo.attribute(source, field) do
       %{public?: true, sensitive?: false} -> true
       _other -> false
+    end
+  end
+
+  # The resource whose record the action returns: this resource for a create, update or
+  # destroy; for a generic action, the resource its return type names (a bare resource
+  # module, or `:struct` with an `instance_of` resource). The DSL state stands in for
+  # this resource, which is still compiling.
+  defp record_source(%{action: %{type: :action} = action, dsl_state: dsl_state}) do
+    candidate =
+      case action.returns do
+        Ash.Type.Struct -> Keyword.get(action.constraints || [], :instance_of)
+        returns -> returns
+      end
+
+    cond do
+      is_nil(candidate) or not is_atom(candidate) ->
+        :error
+
+      candidate == Transformer.get_persisted(dsl_state, :module) ->
+        {:ok, dsl_state}
+
+      match?({:module, _}, Code.ensure_compiled(candidate)) and
+          ResourceInfo.resource?(candidate) ->
+        {:ok, candidate}
+
+      true ->
+        :error
+    end
+  end
+
+  defp record_source(%{dsl_state: dsl_state}), do: {:ok, dsl_state}
+
+  # Executing-only values (§2.7.6): V1 to V5 and V7. V6 is withdrawn (§2.7.4).
+  defp verify_executing_only(%{executing_only: []} = protection, context) do
+    reject_present(
+      protection.produce,
+      protection,
+      context,
+      :produce,
+      "produce requires executing_only names"
+    )
+  end
+
+  defp verify_executing_only(protection, context) do
+    names = protection.executing_only
+
+    cond do
+      # V3
+      protection.strategy != :idempotency ->
+        error(
+          context.dsl_state,
+          protection,
+          :executing_only,
+          "executing_only requires the :idempotency strategy"
+        )
+
+      protection.on_definite_store_failure == :execute_untracked ->
+        error(
+          context.dsl_state,
+          protection,
+          :on_definite_store_failure,
+          "executing_only values cannot execute untracked"
+        )
+
+      # V5
+      names != Enum.uniq(names) ->
+        error(
+          context.dsl_state,
+          protection,
+          :executing_only,
+          "executing_only names must be unique"
+        )
+
+      # V1
+      shared = Enum.find(names, &(&1 in response_fields(protection))) ->
+        error(
+          context.dsl_state,
+          protection,
+          :executing_only,
+          "executing_only name #{inspect(shared)} is also a response field"
+        )
+
+      # V2
+      field = Enum.find(names, &record_field?(&1, context)) ->
+        error(
+          context.dsl_state,
+          protection,
+          :executing_only,
+          "executing_only name #{inspect(field)} names a field of the returned resource"
+        )
+
+      # V7
+      context.action.type in [:update, :destroy] and
+          Map.get(context.action, :require_atomic?) == true ->
+        error(
+          context.dsl_state,
+          protection,
+          :action,
+          "an action with executing_only values must set require_atomic? false"
+        )
+
+      true ->
+        verify_executing_only_source(protection, context)
+    end
+  end
+
+  # V4: a local action declares a producer; an external effect produces from execute/3.
+  defp verify_executing_only_source(%{external_effect: nil, produce: nil} = protection, context) do
+    error(
+      context.dsl_state,
+      protection,
+      :produce,
+      "executing_only requires produce or external_effect"
+    )
+  end
+
+  defp verify_executing_only_source(%{external_effect: nil} = protection, context) do
+    case ensure_callbacks(protection.produce, produce: 2) do
+      :ok -> :ok
+      {:error, reason} -> error(context.dsl_state, protection, :produce, reason)
+    end
+  end
+
+  defp verify_executing_only_source(%{produce: nil}, _context), do: :ok
+
+  defp verify_executing_only_source(protection, context) do
+    error(
+      context.dsl_state,
+      protection,
+      :produce,
+      "produce applies to local actions; an external effect produces from execute/3"
+    )
+  end
+
+  defp response_fields(%{response: %Response{fields: fields}}) when is_list(fields), do: fields
+  defp response_fields(_protection), do: []
+
+  defp record_field?(name, context) do
+    case record_source(context) do
+      {:ok, source} ->
+        Enum.any?(
+          [
+            &ResourceInfo.attribute/2,
+            &ResourceInfo.relationship/2,
+            &ResourceInfo.calculation/2,
+            &ResourceInfo.aggregate/2
+          ],
+          &(not is_nil(&1.(source, name)))
+        )
+
+      :error ->
+        false
     end
   end
 

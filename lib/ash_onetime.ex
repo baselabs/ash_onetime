@@ -39,6 +39,39 @@ defmodule AshOnetime do
   def replayed?(_other), do: nil
 
   @doc """
+  Runs a protected action that declares `executing_only` values and delivers those values
+  to this caller, at most once.
+
+  `subject` is one changeset or action input already built for that action
+  (`Ash.Changeset.for_create/4`, `for_update/4`, `for_destroy/4`,
+  `Ash.ActionInput.for_action/4`). `opts` are the options of `Ash.create/2`,
+  `Ash.update/2`, `Ash.destroy/2` or `Ash.run_action/2`. An update runs with
+  `atomic_upgrade?: false`.
+
+  Returns:
+
+    * `{:ok, result, %AshOnetime.Delivery{}}`, or
+      `{:ok, result, notifications, %AshOnetime.Delivery{}}` when Ash returns
+      notifications. `result` is `nil` where Ash returns `:ok` (a generic action without a
+      return type; a destroy without `return_destroyed?`).
+    * `{:error, error}` with no values.
+
+  The `AshOnetime.Delivery` outcome is `:executed` with every declared value,
+  `:replayed` or `:recovered` with none. Only this caller can open the values: they are
+  sealed when the producer returns them, to a key that exists only inside this call.
+
+  Refused with `:executing_only_refused` before anything runs: a bulk subject, a subject
+  not built for its action, or a call Ash would run in another process. Any doubt after
+  the action ran returns `:executing_only_lost` with no value; a value lost after commit
+  is lost for good (revoke and reissue).
+  """
+  @spec deliver(Ash.Changeset.t() | Ash.ActionInput.t(), keyword()) ::
+          {:ok, term(), AshOnetime.Delivery.t()}
+          | {:ok, term(), [Ash.Notifier.Notification.t()], AshOnetime.Delivery.t()}
+          | {:error, term()}
+  def deliver(subject, opts \\ []), do: AshOnetime.Delivery.deliver(subject, opts)
+
+  @doc """
   The reserved verification-input names a protected action must never accept from caller
   input — `:key`, `:issued_at`, `:expires_at`, `:verification_state`, `:algorithm`. These
   are trusted local facts the verification path derives itself; accepting them as action

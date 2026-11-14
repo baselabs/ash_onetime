@@ -146,3 +146,34 @@ not hold grant options. Same-named functions in the table schema do not enter th
 All package calls are schema-qualified and explicitly typed. The routine manifest checks the
 whole executable `pg_proc` row, normalized argument-default and SQL-body trees, a zero
 `prosupport`, and the source digest.
+
+## Executing-only values
+
+Executing-only values have two guarantees. Confidentiality: only the caller of
+`AshOnetime.deliver/2` can receive the value; it is sealed when the producer returns it, to a
+key that exists only inside that call. At most one delivery, failing closed: each call
+delivers at most once, and any doubt returns an error with no value.
+
+A value is delivered only after its effect has committed. `deliver/2` refuses to run inside
+an open transaction (`:executing_only_in_transaction`), because a transaction it does not own
+can roll back after the value was returned, and a retry under the same key would then
+deliver a second one. After Ash returns success, `deliver/2` reads the store's committed
+completion for its own claim, outside any transaction, and opens the value only when that
+completion exists. When it does not (for example, an `after_transaction` hook turned a
+rolled-back action into success), the call returns `:executing_only_lost` and the effect did
+not happen: a retry under the same key executes and delivers once.
+
+The proven limit: code in your own action pipeline that is handed the built changeset or
+input before the package's entry and outside the action's transaction (a
+`before_transaction` hook) can run the same action on it. That spends the claim. The effect
+happens once, nobody receives the value, and the `deliver/2` call returns
+`:executing_only_lost` (or the error Ash returns for the row that effect changed); revoke and
+reissue. If that code itself calls `deliver/2`, it is the caller that receives the value, and
+your outer call replays with none. Code that runs inside the action's transaction (a policy
+check) cannot call `deliver/2`: it is refused as above.
+
+Outside the guarantees: the producer that creates the value, the caller after the return, and
+code with access to the running node. A value lost after its transaction committed is lost
+for good: no path re-derives it, so the remedy is to revoke what it granted and reissue under
+a new key. Any other way to observe the value, or to receive it twice, is a defect: report it
+as a security issue.

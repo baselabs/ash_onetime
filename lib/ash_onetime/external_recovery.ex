@@ -1,7 +1,7 @@
 defmodule AshOnetime.ExternalRecovery do
   @moduledoc false
 
-  alias AshOnetime.{Admission, Error, ExternalEffect, Telemetry}
+  alias AshOnetime.{Admission, Delivery, Error, ExternalEffect, Telemetry}
   alias AshOnetime.Store
   alias AshOnetime.Store.Result
 
@@ -10,11 +10,16 @@ defmodule AshOnetime.ExternalRecovery do
   # 30s ceiling. Overridable per protection via `external_lock_timeout_ms`.
   @default_claim_lock_timeout 2_000
 
-  @spec reserve(Ash.Changeset.t() | Ash.ActionInput.t(), struct(), map()) ::
+  @spec reserve(Ash.Changeset.t() | Ash.ActionInput.t(), struct(), map(), map() | nil) ::
           {:execute, Ash.Changeset.t() | Ash.ActionInput.t(), Admission.State.t()}
           | {:replay, term(), Admission.State.t()}
           | {:error, Error.t()}
-  def reserve(subject, %{strategy: :idempotency, external_effect: module} = protection, context)
+  def reserve(
+        subject,
+        %{strategy: :idempotency, external_effect: module} = protection,
+        context,
+        delivery
+      )
       when is_atom(module) and is_map(context) do
     started = System.monotonic_time()
 
@@ -41,7 +46,7 @@ defmodule AshOnetime.ExternalRecovery do
               :committed_external_claim
             )
 
-          continue(decision, subject, protection, context, started)
+          continue(decision, subject, protection, context, started, delivery)
       end
     else
       {:error, %Error{} = error} -> {:error, error}
@@ -52,16 +57,24 @@ defmodule AshOnetime.ExternalRecovery do
     _kind, _reason -> unavailable()
   end
 
-  def reserve(_subject, _protection, _context), do: unavailable()
+  def reserve(_subject, _protection, _context, _delivery), do: unavailable()
 
-  defp continue({:execute, state}, subject, protection, context, started) do
+  defp continue({:execute, state}, subject, protection, context, started, delivery) do
     emit(state, started, :processing_committed)
     operation_key = state.claim.id
 
     with :ok <- validate_operation_key(operation_key) do
       case lock_for_peer(state, protection, started) do
         {:ok, locked} ->
-          execute_then_settle(locked, subject, protection, context, operation_key, started)
+          execute_then_settle(
+            locked,
+            subject,
+            protection,
+            context,
+            operation_key,
+            started,
+            delivery
+          )
 
         other ->
           other
@@ -69,13 +82,21 @@ defmodule AshOnetime.ExternalRecovery do
     end
   end
 
-  defp continue({:recover, state}, subject, protection, context, started) do
+  defp continue({:recover, state}, subject, protection, context, started, delivery) do
     operation_key = state.claim.id
 
     with :ok <- validate_operation_key(operation_key) do
       case lock_for_peer(state, protection, started) do
         {:ok, locked} ->
-          recover_processing(locked, subject, protection, context, operation_key, started)
+          recover_processing(
+            locked,
+            subject,
+            protection,
+            context,
+            operation_key,
+            started,
+            delivery
+          )
 
         other ->
           other
@@ -83,14 +104,15 @@ defmodule AshOnetime.ExternalRecovery do
     end
   end
 
-  defp continue({:replay, _replayed, state}, _subject, protection, _context, started) do
+  defp continue({:replay, _replayed, state}, _subject, protection, _context, started, _delivery) do
     lock_replay(state, protection, started)
   end
 
-  defp continue({:error, %Error{} = error}, _subject, _protection, _context, _started),
+  defp continue({:error, %Error{} = error}, _subject, _protection, _context, _started, _delivery),
     do: {:error, error}
 
-  defp continue(_decision, _subject, _protection, _context, _started), do: unavailable()
+  defp continue(_decision, _subject, _protection, _context, _started, _delivery),
+    do: unavailable()
 
   # ADR-0010 pre-peer claim lock: before ANY peer call, take the claim row FOR UPDATE in the
   # caller's open transaction with a bounded wait, then re-resolve. A same-key retry now
@@ -134,7 +156,7 @@ defmodule AshOnetime.ExternalRecovery do
     :ok
   end
 
-  defp recover_processing(state, subject, protection, context, operation_key, started) do
+  defp recover_processing(state, subject, protection, context, operation_key, started, delivery) do
     # mutation sentinel: external-recover
     case safe_recover(
            protection.external_effect,
@@ -144,24 +166,39 @@ defmodule AshOnetime.ExternalRecovery do
          ) do
       {:ok, peer_result} ->
         emit(state, started, :recover_succeeded)
-        finalize(state, subject, protection, peer_result, started)
+        finalize(state, subject, protection, peer_result, started, :recovered)
 
       :absent ->
         emit(state, started, :absence_proven)
-        execute_then_settle(state, subject, protection, context, operation_key, started)
+
+        execute_then_settle(
+          state,
+          subject,
+          protection,
+          context,
+          operation_key,
+          started,
+          delivery
+        )
 
       :unknown ->
         ambiguous_recovery(state, started)
     end
   end
 
-  defp execute_then_settle(state, subject, protection, context, operation_key, started) do
+  defp execute_then_settle(state, subject, protection, context, operation_key, started, delivery) do
     callback_context = callback_context(state, context)
 
-    case safe_execute(protection.external_effect, operation_key, subject, callback_context) do
+    case safe_execute(
+           protection.external_effect,
+           operation_key,
+           subject,
+           callback_context,
+           delivery
+         ) do
       {:ok, peer_result} ->
         emit(state, started, :execute_succeeded)
-        finalize(state, subject, protection, peer_result, started)
+        finalize(state, subject, protection, peer_result, started, :executed)
 
       :unknown ->
         settle_unknown_execute(
@@ -191,7 +228,7 @@ defmodule AshOnetime.ExternalRecovery do
          ) do
       {:ok, peer_result} ->
         emit(state, started, :recover_succeeded)
-        finalize(state, subject, protection, peer_result, started)
+        finalize(state, subject, protection, peer_result, started, :recovered)
 
       :absent ->
         emit(state, started, :external_effect_unavailable)
@@ -210,7 +247,7 @@ defmodule AshOnetime.ExternalRecovery do
     {:error, Error.new(:outcome_unknown, "external effect outcome is unknown")}
   end
 
-  defp finalize(state, subject, protection, peer_result, started) do
+  defp finalize(state, subject, protection, peer_result, started, source) do
     loaded = Store.load(state.target, state.claim)
 
     case Admission.resolve(
@@ -224,7 +261,7 @@ defmodule AshOnetime.ExternalRecovery do
         emit(locked_state, started, :finalize_locked)
 
         {:execute, ExternalEffect.put_result(subject, locked_state.claim.id, peer_result),
-         locked_state}
+         %{locked_state | delivery_source: source}}
 
       {:replay, replayed, replay_state} ->
         emit(replay_state, started, :replayed)
@@ -258,11 +295,29 @@ defmodule AshOnetime.ExternalRecovery do
     end
   end
 
-  defp safe_execute(module, operation_key, subject, context) do
+  # Without executing-only values, `execute/3` returns `{:ok, peer_result}`. With them it
+  # returns `{:ok, peer_result, values}`, and the values are sealed here, in the function
+  # that receives them and inside the same containment (§2.7.3, step 3). A seal failure is
+  # an unknown outcome: the claim stays processing and recovery applies.
+  defp safe_execute(module, operation_key, subject, context, nil) do
     case module.execute(operation_key, subject, context) do
       {:ok, peer_result} -> {:ok, peer_result}
       {:error, :outcome_unknown} -> :unknown
       _other -> :unknown
+    end
+  rescue
+    _exception -> :unknown
+  catch
+    _kind, _reason -> :unknown
+  end
+
+  defp safe_execute(module, operation_key, subject, context, delivery) do
+    case module.execute(operation_key, subject, context) do
+      {:ok, peer_result, values} ->
+        if Delivery.seal(delivery, values) == :ok, do: {:ok, peer_result}, else: :unknown
+
+      _other ->
+        :unknown
     end
   rescue
     _exception -> :unknown

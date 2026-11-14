@@ -1,0 +1,374 @@
+defmodule AshOnetime.Delivery do
+  @moduledoc """
+  The executing-only values one `AshOnetime.deliver/2` call received.
+
+  `outcome` says which path completed the call:
+
+    * `:executed` — this call executed the effect; `values` holds every declared
+      `executing_only` value, exactly once.
+    * `:replayed` — a stored completion for the same key and request was replayed;
+      `values` is empty. The value was delivered to the call that executed.
+    * `:recovered` — an external effect's earlier execution was recovered; `values` is
+      empty.
+
+  A value lost after its transaction committed is lost for good: no path re-derives it.
+  The remedy is to revoke what it granted and reissue under a new key.
+
+  `inspect/1` prints the outcome and the value names only.
+  """
+
+  alias AshOnetime.Delivery.Envelope
+  alias AshOnetime.Error
+  alias AshOnetime.Resource.Info
+
+  defstruct [:outcome, values: %{}]
+
+  @type outcome :: :executed | :replayed | :recovered
+  @type t :: %__MODULE__{outcome: outcome(), values: %{optional(atom()) => binary()}}
+
+  @reference :ash_onetime_delivery
+  @cell :ash_onetime_delivery_cell
+  @bulk_keys [:bulk_create, :bulk_update, :bulk_destroy]
+
+  @doc false
+  @spec deliver(Ash.Changeset.t() | Ash.ActionInput.t(), keyword()) ::
+          {:ok, term(), t()} | {:ok, term(), [Ash.Notifier.Notification.t()], t()} | {:error, term()}
+  def deliver(subject, opts) when is_list(opts) do
+    with {:ok, protection} <- protection(subject),
+         :ok <- route(subject, opts),
+         {:ok, cell} <- cell(subject) do
+      armed_call(subject, protection, cell, opts)
+    else
+      {:error, %Error{} = error} -> {:error, Ash.Error.to_error_class(error)}
+    end
+  end
+
+  def deliver(_subject, _opts), do: {:error, Ash.Error.to_error_class(refused())}
+
+  # Rule 1: everything the entry needs lives in this process's dictionary under a hash of
+  # the reference; the subject's context carries the reference only. The private key
+  # never leaves this frame.
+  defp armed_call(subject, protection, cell, opts) do
+    {public, secret} = :crypto.generate_key(:ecdh, :x25519)
+    ref = :crypto.strong_rand_bytes(16)
+    key = key(ref)
+    resource = subject.resource
+    action = subject.action.name
+
+    try do
+      Process.put(key, {:armed, self(), resource, action, cell, public})
+
+      subject
+      |> put_reference(ref)
+      |> dispatch(opts)
+      |> normalize(subject.action.type, opts)
+      |> finish(fn -> open(key, ref, secret, public, protection, resource, action) end)
+    after
+      Process.delete(key)
+    end
+  end
+
+  defp dispatch(%Ash.Changeset{action: %{type: :create}} = changeset, opts),
+    do: Ash.create(changeset, opts)
+
+  defp dispatch(%Ash.Changeset{action: %{type: :update}} = changeset, opts),
+    do: Ash.update(changeset, Keyword.put(opts, :atomic_upgrade?, false))
+
+  defp dispatch(%Ash.Changeset{action: %{type: :destroy}} = changeset, opts),
+    do: Ash.destroy(changeset, opts)
+
+  defp dispatch(%Ash.ActionInput{} = input, opts), do: Ash.run_action(input, opts)
+
+  defp normalize({:error, _error} = error, _type, _opts), do: error
+  defp normalize(:ok, _type, _opts), do: {:ok, nil}
+  defp normalize({:ok, result, notifications}, _type, _opts), do: {:ok, result, notifications}
+
+  defp normalize({:ok, value}, :destroy, opts) do
+    if opts[:return_notifications?] && !opts[:return_destroyed?],
+      do: {:ok, nil, value},
+      else: {:ok, value}
+  end
+
+  defp normalize({:ok, result}, _type, _opts), do: {:ok, result}
+
+  defp finish({:error, _error} = error, _open), do: error
+
+  defp finish({:ok, result}, open) do
+    with {:ok, delivery} <- open.(), do: {:ok, result, delivery}
+  end
+
+  defp finish({:ok, result, notifications}, open) do
+    with {:ok, delivery} <- open.(), do: {:ok, result, notifications, delivery}
+  end
+
+  defp open(key, ref, secret, public, protection, resource, action) do
+    case Process.get(key) do
+      {:done, inv, :executed, envelope} when is_binary(envelope) ->
+        names = protection.executing_only
+        context = Envelope.context(ref, inv, resource, action)
+
+        case Envelope.open(envelope, secret, public, length(names), context) do
+          {:ok, values} ->
+            {:ok, %__MODULE__{outcome: :executed, values: Map.new(Enum.zip(names, values))}}
+
+          {:error, _reason} ->
+            lost_class()
+        end
+
+      {:done, _inv, outcome, nil} when outcome in [:replayed, :recovered] ->
+        {:ok, %__MODULE__{outcome: outcome, values: %{}}}
+
+      _other ->
+        lost_class()
+    end
+  rescue
+    _exception -> lost_class()
+  catch
+    _kind, _reason -> lost_class()
+  end
+
+  defp protection(%{resource: resource, action: %{name: name, type: type}} = subject)
+       when is_atom(resource) and is_atom(name) do
+    with true <- subject_type?(subject, type),
+         %{executing_only: [_ | _]} = protection <- Info.protection(resource, name) do
+      {:ok, protection}
+    else
+      _other -> {:error, refused()}
+    end
+  rescue
+    _exception -> {:error, refused()}
+  end
+
+  defp protection(_subject), do: {:error, refused()}
+
+  defp subject_type?(%Ash.Changeset{}, type), do: type in [:create, :update, :destroy]
+  defp subject_type?(%Ash.ActionInput{}, type), do: type == :action
+  defp subject_type?(_subject, _type), do: false
+
+  # Route refusals before arming (§2.7.4): the conditions under which the package's entry
+  # would not run, or would run in another process.
+  defp route(subject, opts) do
+    cond do
+      bulk?(subject) -> {:error, refused()}
+      not built_for_action?(subject) -> {:error, refused()}
+      task_route?(subject, opts) -> {:error, refused()}
+      true -> :ok
+    end
+  end
+
+  defp bulk?(%{context: context}) when is_map(context),
+    do: Enum.any?(@bulk_keys, &Map.has_key?(context, &1))
+
+  defp bulk?(_subject), do: false
+
+  defp built_for_action?(%Ash.Changeset{__validated_for_action__: name, action: %{name: name}}),
+    do: true
+
+  defp built_for_action?(%Ash.Changeset{}), do: false
+  defp built_for_action?(%Ash.ActionInput{}), do: true
+
+  # Ash takes its Task route exactly when all five hold (changeset.ex:4782-4796, :4864-4869;
+  # process_helpers.ex:66-74). Generic actions never take it.
+  defp task_route?(%Ash.Changeset{} = changeset, opts) do
+    resource = changeset.resource
+    timeout = opts[:timeout] || changeset.timeout
+
+    not (changeset.action.transaction? and Ash.DataLayer.data_layer_can?(resource, :transact)) and
+      not is_nil(timeout) and timeout != :infinity and
+      !Application.get_env(:ash, :disable_async?) and
+      Ash.DataLayer.data_layer_can?(resource, :async_engine) and
+      not Ash.DataLayer.in_transaction?(resource)
+  end
+
+  defp task_route?(_subject, _opts), do: false
+
+  defp cell(%{context: %{private: %{@cell => cell}}}) when is_reference(cell), do: {:ok, cell}
+  defp cell(_subject), do: {:error, refused()}
+
+  defp put_reference(subject, ref), do: put_private(subject, @reference, %{ref: ref})
+
+  @doc false
+  @spec put_cell(Ash.Changeset.t() | Ash.ActionInput.t()) ::
+          {Ash.Changeset.t() | Ash.ActionInput.t(), reference()}
+  def put_cell(subject) do
+    cell = make_ref()
+    {put_private(subject, @cell, cell), cell}
+  end
+
+  defp put_private(%{context: context} = subject, name, value) do
+    private =
+      case Map.get(context, :private) do
+        %{} = private -> Map.put(private, name, value)
+        _other -> %{name => value}
+      end
+
+    %{subject | context: Map.put(context, :private, private)}
+  end
+
+  @doc false
+  @spec key(binary()) :: {module(), binary()}
+  def key(ref), do: {__MODULE__, :crypto.hash(:sha256, ref)}
+
+  defp reference(%{context: %{private: %{@reference => %{ref: ref}}}}) when is_binary(ref),
+    do: {:ok, ref}
+
+  defp reference(_subject), do: :error
+
+  @doc false
+  # The entry check (§2.7.3, step 2): the package entry's first act, and the only code
+  # that claims the armed entry.
+  @spec claim(Ash.Changeset.t() | Ash.ActionInput.t(), reference(), [atom()]) ::
+          {:ok, map()} | {:error, Error.t()}
+  def claim(subject, cell, names) do
+    with {:ok, ref} <- reference(subject),
+         key = key(ref),
+         entry when not is_nil(entry) <- Process.get(key) do
+      claim_entry(entry, key, ref, subject, cell, names)
+    else
+      _missing -> {:error, requires_call()}
+    end
+  end
+
+  defp claim_entry({:armed, pid, resource, action, entry_cell, public}, key, ref, subject, cell, names) do
+    if pid == self() and resource == subject.resource and action == subject.action.name and
+         entry_cell == cell do
+      inv = :crypto.strong_rand_bytes(16)
+      Process.put(key, {:claimed, inv, public})
+      {:ok, %{key: key, ref: ref, inv: inv, resource: resource, action: action, names: names}}
+    else
+      {:error, refused()}
+    end
+  end
+
+  defp claim_entry(_spent, _key, _ref, _subject, _cell, _names), do: {:error, lost()}
+
+  @doc false
+  # Produce and seal in one function and one containment boundary (§2.7.3, step 3).
+  # `trusted` is admission's trusted context (actor and tenant only).
+  @spec produce(map(), module(), Ash.Changeset.t() | Ash.ActionInput.t(), map()) ::
+          :ok | {:error, Error.t()}
+  def produce(handle, module, subject, trusted) do
+    context =
+      trusted
+      |> Map.take([:actor, :tenant])
+      |> Map.reject(fn {_name, value} -> is_nil(value) end)
+      |> Map.merge(%{resource: handle.resource, action: handle.action})
+
+    result =
+      case module.produce(subject, context) do
+        {:ok, values} -> seal(handle, values)
+        _other -> :error
+      end
+
+    if result == :ok, do: :ok, else: {:error, invalid()}
+  rescue
+    _exception -> {:error, invalid()}
+  catch
+    _kind, _reason -> {:error, invalid()}
+  end
+
+  @doc false
+  @spec seal(map(), term()) :: :ok | :error
+  def seal(%{key: key, ref: ref, inv: inv, names: names} = handle, values) when is_map(values) do
+    with true <- map_size(values) == length(names),
+         {:ok, ordered} <- ordered_values(names, values),
+         {:claimed, ^inv, public} <- Process.get(key),
+         context = Envelope.context(ref, inv, handle.resource, handle.action),
+         {:ok, envelope} <- Envelope.seal(public, ordered, context) do
+      Process.put(key, {:sealed, inv, envelope})
+      :ok
+    else
+      _other -> :error
+    end
+  end
+
+  def seal(_handle, _values), do: :error
+
+  defp ordered_values(names, values) do
+    Enum.reduce_while(names, {:ok, []}, fn name, {:ok, ordered} ->
+      case Map.fetch(values, name) do
+        {:ok, value} when is_binary(value) ->
+          if byte_size(value) <= Envelope.max_value_bytes(),
+            do: {:cont, {:ok, [value | ordered]}},
+            else: {:halt, :error}
+
+        _other ->
+          {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, ordered} -> {:ok, Enum.reverse(ordered)}
+      :error -> :error
+    end
+  end
+
+  @doc false
+  # Complete (§2.7.3, step 4) for the CRUD entry, which holds its own handle.
+  @spec complete(map(), outcome()) :: :ok | {:error, Error.t()}
+  def complete(%{key: key, inv: inv}, outcome), do: complete_entry(key, inv, outcome)
+
+  @doc false
+  # Complete for the generic after-action, which reads `inv` from the entry.
+  @spec complete_current(Ash.ActionInput.t(), outcome()) :: :ok | {:error, Error.t()}
+  def complete_current(subject, outcome) do
+    with {:ok, ref} <- reference(subject),
+         key = key(ref),
+         {state, inv, _value} when state in [:claimed, :sealed] <- Process.get(key) do
+      complete_entry(key, inv, outcome)
+    else
+      _other -> {:error, lost()}
+    end
+  end
+
+  defp complete_entry(key, inv, outcome) do
+    case {Process.get(key), outcome} do
+      {{:sealed, ^inv, envelope}, :executed} ->
+        Process.put(key, {:done, inv, :executed, envelope})
+        :ok
+
+      {{:sealed, ^inv, _envelope}, :replayed} ->
+        Process.put(key, {:done, inv, :replayed, nil})
+        :ok
+
+      {{:claimed, ^inv, _public}, outcome} when outcome in [:replayed, :recovered] ->
+        Process.put(key, {:done, inv, outcome, nil})
+        :ok
+
+      _other ->
+        {:error, lost()}
+    end
+  end
+
+  @doc false
+  def lost, do: Error.new(:executing_only_lost, "executing-only values were lost")
+
+  @doc false
+  def invalid,
+    do: Error.new(:executing_only_invalid, "executing-only values could not be produced")
+
+  defp refused,
+    do: Error.new(:executing_only_refused, "executing-only delivery was refused")
+
+  defp requires_call,
+    do:
+      Error.new(
+        :executing_only_requires_call,
+        "an action with executing-only values runs only through AshOnetime.deliver/2"
+      )
+
+  defp lost_class, do: {:error, Ash.Error.to_error_class(lost())}
+
+  defimpl Inspect do
+    import Inspect.Algebra
+
+    def inspect(%{outcome: outcome, values: values}, opts) do
+      names = values |> Map.keys() |> Enum.sort()
+
+      concat([
+        "#AshOnetime.Delivery<",
+        to_doc([outcome: outcome, values: names], opts),
+        ">"
+      ])
+    end
+  end
+end

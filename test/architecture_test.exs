@@ -24,6 +24,8 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Codec.ActionResult,
     AshOnetime.Codec.JSON,
     AshOnetime.Codec.Resource,
+    AshOnetime.Delivery,
+    AshOnetime.Delivery.Envelope,
     AshOnetime.Error,
     AshOnetime.ExternalEffect,
     AshOnetime.ExternalRecovery,
@@ -39,6 +41,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Oban.PartitionWorker,
     AshOnetime.Oban.ReapWorker,
     AshOnetime.Plug,
+    AshOnetime.Producer,
     AshOnetime.ReplaySafety,
     AshOnetime.Resource,
     AshOnetime.Resource.Info,
@@ -72,6 +75,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Verified,
     AshOnetime.Verifier,
     AshOnetime.Window,
+    Inspect.AshOnetime.Delivery,
     Mix.Tasks.AshOnetime.Doctor,
     Mix.Tasks.AshOnetime.Gen.LogicalPartitions,
     Mix.Tasks.AshOnetime.Gen.Migrations,
@@ -97,6 +101,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Codec.ActionResult,
     AshOnetime.Codec.JSON,
     AshOnetime.Codec.Resource,
+    AshOnetime.Delivery,
     AshOnetime.Error,
     AshOnetime.ExternalEffect,
     AshOnetime.Fingerprint,
@@ -110,6 +115,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Oban.PartitionWorker,
     AshOnetime.Oban.ReapWorker,
     AshOnetime.Plug,
+    AshOnetime.Producer,
     AshOnetime.ReplaySafety,
     AshOnetime.Resource,
     AshOnetime.Resource.Info,
@@ -137,7 +143,7 @@ defmodule AshOnetime.ArchitectureTest do
   ]
 
   @exports %{
-    AshOnetime => [replayed?: 1, reserved_verification_inputs: 0],
+    AshOnetime => [deliver: 1, deliver: 2, replayed?: 1, reserved_verification_inputs: 0],
     AshOnetime.Boundary => [
       append_if: 4,
       append_if: 5,
@@ -152,7 +158,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Admission => [
       bounded_callback_context: 1,
       complete: 2,
-      dispatch_reservation: 3,
+      dispatch_reservation: 4,
       prepare: 3,
       put_replay: 2,
       put_state: 2,
@@ -224,6 +230,18 @@ defmodule AshOnetime.ArchitectureTest do
       normalize: 2,
       require_normalized: 2
     ],
+    AshOnetime.Delivery => [
+      claim: 3,
+      complete: 2,
+      complete_current: 2,
+      deliver: 2,
+      invalid: 0,
+      key: 1,
+      lost: 0,
+      produce: 4,
+      put_cell: 1,
+      seal: 2
+    ],
     AshOnetime.Error => [
       code: 1,
       exception: 1,
@@ -242,6 +260,7 @@ defmodule AshOnetime.ArchitectureTest do
     AshOnetime.Oban.PartitionWorker => [backoff: 1, perform: 1],
     AshOnetime.Oban.ReapWorker => [backoff: 1, perform: 1],
     AshOnetime.Plug => [call: 2, init: 1],
+    AshOnetime.Producer => [],
     AshOnetime.ReplaySafety => [],
     AshOnetime.Resource => [],
     AshOnetime.Resource.Info => [
