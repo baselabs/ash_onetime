@@ -98,6 +98,7 @@ defmodule AshOnetime.Test.DeliveryExamples.Resource do
     create :issue do
       transaction? true
       argument :request_key, :string, allow_nil?: false
+      argument :note, :string, default: "example"
       accept [:amount]
     end
 
@@ -105,6 +106,7 @@ defmodule AshOnetime.Test.DeliveryExamples.Resource do
       transaction? true
       require_atomic? false
       argument :request_key, :string, allow_nil?: false
+      argument :note, :string, default: "example"
       accept [:amount]
     end
 
@@ -112,6 +114,7 @@ defmodule AshOnetime.Test.DeliveryExamples.Resource do
       transaction? true
       require_atomic? false
       argument :request_key, :string, allow_nil?: false
+      argument :note, :string, default: "example"
     end
 
     destroy :retire do
@@ -119,6 +122,7 @@ defmodule AshOnetime.Test.DeliveryExamples.Resource do
       soft? true
       require_atomic? false
       argument :request_key, :string, allow_nil?: false
+      argument :note, :string, default: "example"
       change set_attribute(:retired_at, &DateTime.utc_now/0)
     end
 
@@ -135,7 +139,7 @@ defmodule AshOnetime.Test.DeliveryExamples.Resource do
       strategy :idempotency
       scope([{:static, "delivery"}])
       key({:client, :request_key})
-      fingerprint(arguments: [], attributes: [])
+      fingerprint(arguments: [:note], attributes: [])
 
       response(AshOnetime.Test.Support.ResponseCodec,
         fields: [:id, :amount],
@@ -151,7 +155,7 @@ defmodule AshOnetime.Test.DeliveryExamples.Resource do
       strategy :idempotency
       scope([{:static, "delivery"}])
       key({:client, :request_key})
-      fingerprint(arguments: [], attributes: [])
+      fingerprint(arguments: [:note], attributes: [])
 
       response(AshOnetime.Test.Support.ResponseCodec,
         fields: [:id, :amount],
@@ -167,7 +171,7 @@ defmodule AshOnetime.Test.DeliveryExamples.Resource do
       strategy :idempotency
       scope([{:static, "delivery"}])
       key({:client, :request_key})
-      fingerprint(arguments: [], attributes: [])
+      fingerprint(arguments: [:note], attributes: [])
 
       response(AshOnetime.Test.Support.ResponseCodec,
         fields: [:id, :amount],
@@ -183,7 +187,7 @@ defmodule AshOnetime.Test.DeliveryExamples.Resource do
       strategy :idempotency
       scope([{:static, "delivery"}])
       key({:client, :request_key})
-      fingerprint(arguments: [], attributes: [])
+      fingerprint(arguments: [:note], attributes: [])
 
       response(AshOnetime.Test.Support.ResponseCodec,
         fields: [:id, :amount],
