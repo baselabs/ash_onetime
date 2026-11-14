@@ -75,7 +75,6 @@ defmodule AshOnetime.ArchitectureTest do
     Mix.Tasks.AshOnetime.Doctor,
     Mix.Tasks.AshOnetime.Gen.LogicalPartitions,
     Mix.Tasks.AshOnetime.Gen.Migrations,
-    Mix.Tasks.AshOnetime.Gen.RollForward,
     Mix.Tasks.AshOnetime.Install,
     Mix.Tasks.AshOnetime.Prune,
     Mix.Tasks.AshOnetime.Reap,
@@ -131,7 +130,6 @@ defmodule AshOnetime.ArchitectureTest do
     Mix.Tasks.AshOnetime.Doctor,
     Mix.Tasks.AshOnetime.Gen.LogicalPartitions,
     Mix.Tasks.AshOnetime.Gen.Migrations,
-    Mix.Tasks.AshOnetime.Gen.RollForward,
     Mix.Tasks.AshOnetime.Install,
     Mix.Tasks.AshOnetime.Prune,
     Mix.Tasks.AshOnetime.Reap,
@@ -328,7 +326,6 @@ defmodule AshOnetime.ArchitectureTest do
       processing_backlog: 1,
       reap: 3,
       release: 2,
-      roll_advisory_key: 1,
       roll_partitions: 2,
       target: 1,
       target: 2
@@ -346,12 +343,11 @@ defmodule AshOnetime.ArchitectureTest do
       render: 2,
       render_fact_tables: 2,
       render_logical_partition_upgrade: 2,
+      render_maintenance_upgrade: 2,
       render_operation_hold_upgrade: 2,
-      render_roll_forward: 2,
       run: 1,
       timestamp: 0
     ],
-    Mix.Tasks.AshOnetime.Gen.RollForward => [run: 1],
     Mix.Tasks.AshOnetime.Install => [
       igniter: 1,
       info: 2,

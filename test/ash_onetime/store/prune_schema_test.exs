@@ -34,6 +34,12 @@ defmodule AshOnetime.Store.PruneSchemaTest do
         []
       )
 
+      SQL.query!(
+        Repo,
+        ~s|SELECT "#{schema}".ash_onetime_maintenance_copy_policy($1::text::regclass)|,
+        [schema <> ".ash_onetime_response_payloads_2001_01"]
+      )
+
       target = Postgres.for_repo(Repo, if(@explicit_prefix, do: schema))
       assert {:ok, %{payload_partitions: 1}} = Store.cleanup(target, 100, 10)
 
@@ -74,8 +80,8 @@ defmodule AshOnetime.Store.PruneSchemaTest do
       )
     end
 
-    source = Generator.render_roll_forward(Repo, partition_start: ~D[2101-01-01], months: 1)
-    run_sql_migration!(source, "RollForwardAshOnetime", nil)
+    assert {:ok, _} = Store.roll_partitions(Postgres.for_repo(Repo, "public"), 1)
+    assert {:ok, _} = Store.cleanup(Postgres.for_repo(Repo, "public"), 100, 0)
 
     assert %{rows: [[1, "operation"]]} =
              SQL.query!(
@@ -90,7 +96,7 @@ defmodule AshOnetime.Store.PruneSchemaTest do
     assert %{rows: [[true]]} =
              SQL.query!(
                Repo,
-               "SELECT to_regclass('public.ash_onetime_response_payloads_2101_01') IS NOT NULL",
+               "SELECT to_regclass('public.ash_onetime_response_payloads_2100_01') IS NOT NULL",
                []
              )
   end

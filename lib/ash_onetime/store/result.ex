@@ -21,6 +21,10 @@ defmodule AshOnetime.Store.Result do
           | :rolled_back
           | :corrupt_payload
           | :store_invariant
+          | :maintenance_not_permitted
+          | :maintenance_blinded
+          | :untrusted_dependency
+          | :prune_blocked
 
   @type t :: %__MODULE__{
           status: status(),
@@ -48,7 +52,7 @@ defmodule AshOnetime.Store.Result do
   @spec failure(
           reason(),
           :not_started | :sent | :unknown,
-          :open | :rolled_back | :unknown | :not_applicable
+          :open | :committed | :rolled_back | :unknown | :not_applicable
         ) ::
           t()
   def failure(reason, dispatch, transaction) do

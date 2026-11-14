@@ -90,41 +90,21 @@ defmodule AshOnetime.Store.RollContentionTest do
     end
   end
 
-  # L3: the partition-roll advisory lock is derived per-prefix so distinct tenants do not
-  # serialize against each other (partitions are schema-scoped; two tenants have distinct
-  # parents and can never race on the same CREATE PARTITION OF). This drives the PRODUCTION
-  # Postgres.roll_advisory_key/1 directly (exposed @doc false) rather than mirroring its
-  # formula locally, so a production-formula regression (wrong mask, wrong hash input,
-  # dropped nil clause) fails here against the real function, not a replica. Pins: same
-  # prefix → same key (within-tenant serialization preserved); distinct prefixes → distinct
-  # keys (cross-tenant concurrency unblocked); nil prefix → the historical constant.
-  @tag roll_advisory_key_per_prefix: true
-  test "roll advisory key is per-prefix (distinct tenants do not over-serialize)" do
-    nil_key = Postgres.roll_advisory_key(advisory_target(nil))
-    a_key = Postgres.roll_advisory_key(advisory_target("tenant_a"))
-    b_key = Postgres.roll_advisory_key(advisory_target("tenant_b"))
-    a_again = Postgres.roll_advisory_key(advisory_target("tenant_a"))
+  @tag unboxed: true
+  test "roll advisory lock identifies the physical parent OID", %{prefix: prefix} do
+    RealConnection.with_connection(fn ->
+      Repo.transaction(fn ->
+        assert {:ok, _} = Store.roll_partitions(Postgres.for_repo(Repo, prefix), 1)
 
-    # Nil-prefix keeps the historical constant (single-tenant backward compat).
-    assert nil_key == 0x41_5348_4F54
-    # Same prefix → same key (within-tenant serialization preserved).
-    assert a_key == a_again
-    # Distinct prefixes → distinct keys (cross-tenant concurrency unblocked).
-    assert a_key != b_key
-    # All keys are positive 63-bit bigints (the pg_advisory_xact_lock(bigint) domain; the
-    # sign bit is cleared so the value is always non-negative).
-    for key <- [nil_key, a_key, b_key], do: assert(key >= 0 and key < 0x8000000000000000)
+        assert %{rows: [[true]]} =
+                 SQL.query!(
+                   Repo,
+                   "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND classid=1095717452 AND objid=$1::text::regclass::oid AND pid=pg_backend_pid())",
+                   [~s("#{prefix}".ash_onetime_response_payloads)]
+                 )
+      end)
+    end)
   end
-
-  # roll_advisory_key/1 reads only the prefix; repo_module/dynamic_repo satisfy the Target
-  # enforce_keys and are otherwise unused on this path.
-  defp advisory_target(prefix),
-    do: %Postgres.Target{
-      repo_module: Repo,
-      dynamic_repo: Repo,
-      prefix: prefix,
-      logical_partition: "global"
-    }
 
   defp partition_children(prefix, parent) do
     %{rows: rows} =

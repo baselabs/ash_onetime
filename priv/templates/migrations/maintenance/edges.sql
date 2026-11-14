@@ -1,0 +1,3 @@
+BEGIN
+  @edges@
+END

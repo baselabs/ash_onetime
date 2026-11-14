@@ -567,24 +567,33 @@ library must not admit a vulnerable floor. Historical v0.3.0 upgrade instruction
 See ADR-0004 (Security-driven Ash floor). The CI compatibility matrix narrows from
 `[3.29.3, 3.30.1, latest]` to `[3.31.1, latest]`.
 
-## Forward response-partition maintenance (apply once to existing installs)
+## Database maintenance upgrade (unreleased draft)
 
-Two data-layer fixes shipped for the response store: the `response_partition` index (cleanup's
-partition-empty check was a full scan) and forward monthly partition creation (payloads past
-the install window routed to `_default`, which claim cleanup empties row by row but never
-reclaims as a table). Greenfield installs on the current version get both automatically from the install
-migration. **Existing installs should generate and run the forward migration once:**
+Do not deploy this draft until the builtin SQL-dispatch trust regression is resolved. Its
+catalog allowlist currently cannot establish the promised owner-execution boundary.
+
+The replacement for forward-migration generation is one maintenance upgrade per schema:
 
 ```sh
-mix ash_onetime.gen.roll_forward --repo MyApp.Repo --months 18
+mix ash_onetime.gen.migrations --repo MyApp.Repo --prefix store --maintenance --maintenance-role store_maintenance
 mix ecto.migrate
 ```
 
-It adds the index, back-fills the elapsed+forward partitions, and drains past-retention
-payloads stranded in `_default`. After that, schedule `mix ash_onetime.roll_partitions` (or
-`AshOnetime.Oban.PartitionWorker`) on a cadence ahead of your retention horizon — see
-[Operations](operations.md#forward-response-partitions). This is additive (no DSL/contract
-change) and does not require a dependency version bump.
+The generator requires the 1.10.0 operation-hold migration to be present. Stop old maintenance
+jobs first: their prefix-hash advisory lock does not coordinate with the new OID lock. Scope
+all consumer policies on package tables to runtime roles before applying the migration;
+it raises and names every extra policy that applies to the owner.
+
+The migrator must own every replaced function and be able to SET ROLE to the payload owner;
+that owner needs CREATE on the install schema. The current draft also requires column SELECT
+on `pg_catalog.pg_statistic` for `starelid`, `staop1` through `staop5`, and `stacoll1` through
+`stacoll5`. Those permissions expose catalog metadata, not statistic values. This added
+installation precondition is a design deviation. The install record's timestamp is creation
+time within the transaction; exact commit time cannot be written before that commit happens.
+
+After upgrading, call `mix ash_onetime.roll_partitions` to recover missed past and forward
+months from `_default`. Recovery replaces the removed `ash_onetime.gen.roll_forward` task.
+The roll does not delete retained or held claims. See [Operations](operations.md#forward-response-partitions).
 
 ## DPoP replay fence (`commit: :independent`)
 

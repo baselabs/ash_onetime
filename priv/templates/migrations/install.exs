@@ -2,15 +2,9 @@ defmodule <%= inspect(module) %> do
   use Ecto.Migration
 
   @payload_ceiling 16_777_216
+  @install_prefix <%= inspect(install_prefix) %>
 
-  # Hard safety floor (seconds) for the abandoned-processing reaper. A `processing` claim may be
-  # reaped only when it is older than this floor AND older than the operator's abandonment horizon
-  # AND past its own retention horizon. The floor is enforced independently in both the delete
-  # guard and the reaper function, so no caller — however it arms the reap session variable — can
-  # delete a recently-admitted recovery point. The floor is orders of magnitude beyond any single
-  # request's in-flight window; a retry that begins recovery near the horizon is serialized against
-  # the reaper by the row lock and fails closed, so the floor need not bound recovery latency.
-  @abandonment_floor_seconds 86_400
+  <%= EEx.eval_file(Path.join(__DIR__, "maintenance_helpers.exs"), binding()) %>
 
   def up do
     execute("""
@@ -115,6 +109,10 @@ defmodule <%= inspect(module) %> do
     execute("DROP FUNCTION IF EXISTS #{q("ash_onetime_guard_idempotency_delete")}()")
     execute("DROP FUNCTION IF EXISTS #{q("ash_onetime_cleanup_eligible")}(timestamptz)")
     execute("DROP TABLE IF EXISTS #{q("ash_onetime_response_payloads")} CASCADE")
+    execute("DROP TABLE IF EXISTS #{q("ash_onetime_maintenance_runs")} CASCADE")
+    for routine <- @maintenance_functions do
+      execute("DROP FUNCTION IF EXISTS #{q(routine.name)}(#{routine.args})")
+    end
   end
 
   defp create_payloads do
@@ -129,12 +127,33 @@ defmodule <%= inspect(module) %> do
     ) PARTITION BY RANGE (partition_date)
     """)
 
+    <%= if relative_partitions do %>
+    execute("DO " <> maintenance_literal("""
+    DECLARE
+      install_schema text;
+      first_month date := date_trunc('month',transaction_timestamp())::date;
+      month_date date;
+      next_month date;
+      ordinal integer;
+    BEGIN
+      SELECT n.nspname INTO STRICT install_schema FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE c.oid=#{maintenance_literal(q("ash_onetime_response_payloads"))}::regclass;
+      FOR ordinal IN 0..12 LOOP
+        month_date := (first_month+ordinal*interval '1 month')::date;
+        next_month := (month_date+interval '1 month')::date;
+        EXECUTE format('CREATE TABLE %I.%I PARTITION OF %I.ash_onetime_response_payloads FOR VALUES FROM (%L) TO (%L)',
+          install_schema,'ash_onetime_response_payloads_' || to_char(month_date,'YYYY_MM'),install_schema,month_date,next_month);
+      END LOOP;
+    END
+    """))
+    <% else %>
     for %{name: name, from: from, to: to} <- <%= inspect(response_partitions) %> do
       execute("""
       CREATE TABLE #{q(name)} PARTITION OF #{q("ash_onetime_response_payloads")}
       FOR VALUES FROM ('#{Date.to_iso8601(from)}') TO ('#{Date.to_iso8601(to)}')
       """)
     end
+    <% end %>
 
     execute("""
     CREATE TABLE #{q("ash_onetime_response_payloads_default")}
@@ -160,221 +179,14 @@ defmodule <%= inspect(module) %> do
   end
 
   defp create_cleanup_functions do
-    execute("""
-    CREATE FUNCTION #{q("ash_onetime_cleanup_eligible")}(retain_until timestamptz)
-    RETURNS boolean
-    LANGUAGE sql
-    STABLE
-    AS $cleanup$ SELECT transaction_timestamp() <%= cleanup_comparator %> retain_until $cleanup$
-    """)
-
-    execute("""
-    CREATE FUNCTION #{q("ash_onetime_guard_idempotency_delete")}()
-    RETURNS trigger
-    LANGUAGE plpgsql
-    AS $guard$
-    DECLARE
-      payload_count integer;
-      reap_before text;
-    BEGIN
-      IF OLD.hold_reference IS NOT NULL THEN
-        RAISE EXCEPTION 'held idempotency claim cannot be deleted; release its operation hold first'
-          USING ERRCODE = '23514';
-      END IF;
-
-      IF OLD.state = 'processing' THEN
-        -- Processing rows are recovery points. They are deletable only inside a sanctioned reap:
-        -- the reaper arms the ash_onetime.reap_before session variable, and even then only a row
-        -- older than BOTH that cutoff and the hard floor AND past its own retention horizon may
-        -- go. Anything else RAISEs, exactly as before.
-        reap_before := current_setting('ash_onetime.reap_before', true);
-
-        IF reap_before IS NULL OR reap_before = '' THEN
-          RAISE EXCEPTION 'processing idempotency claims are recovery points and cannot be deleted'
-            USING ERRCODE = '23514';
-        END IF;
-
-        IF OLD.inserted_at >= reap_before::timestamptz
-           OR OLD.inserted_at >= transaction_timestamp() - (#{@abandonment_floor_seconds} * interval '1 second')
-           OR NOT #{q("ash_onetime_cleanup_eligible")}(OLD.retain_until) THEN
-          RAISE EXCEPTION 'processing idempotency claims are recovery points and cannot be deleted'
-            USING ERRCODE = '23514';
-        END IF;
-
-        SELECT count(*) INTO payload_count
-        FROM #{q("ash_onetime_response_payloads")}
-        WHERE logical_partition = OLD.logical_partition AND claim_id = OLD.id;
-        IF payload_count <> 0 THEN
-          RAISE EXCEPTION 'reaped processing idempotency claim unexpectedly carries a payload'
-            USING ERRCODE = '23514';
-        END IF;
-
-        RETURN OLD;
-      END IF;
-
-      IF NOT #{q("ash_onetime_cleanup_eligible")}(OLD.retain_until) THEN
-        RAISE EXCEPTION 'idempotency claim is inside its retention horizon'
-          USING ERRCODE = '23514';
-      END IF;
-
-      SELECT count(*) INTO payload_count
-      FROM #{q("ash_onetime_response_payloads")}
-      WHERE logical_partition = OLD.logical_partition
-        AND partition_date = OLD.response_partition AND claim_id = OLD.id;
-      IF payload_count <> 1 THEN
-        RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
-          USING ERRCODE = '23514';
-      END IF;
-
-      DELETE FROM #{q("ash_onetime_response_payloads")}
-      WHERE logical_partition = OLD.logical_partition
-        AND partition_date = OLD.response_partition AND claim_id = OLD.id;
-      GET DIAGNOSTICS payload_count = ROW_COUNT;
-      IF payload_count <> 1 THEN
-        RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
-          USING ERRCODE = '23514';
-      END IF;
-
-      RETURN OLD;
-    END
-    $guard$
-    """)
-
-    execute("""
-    CREATE TRIGGER ash_onetime_idempotency_delete_guard
-    BEFORE DELETE ON #{q("ash_onetime_idempotency_claims")}
-    FOR EACH ROW EXECUTE FUNCTION #{q("ash_onetime_guard_idempotency_delete")}()
-    """)
-
-    execute("""
-    CREATE FUNCTION #{q("ash_onetime_guard_nonce_delete")}()
-    RETURNS trigger
-    LANGUAGE plpgsql
-    AS $guard$
-    BEGIN
-      IF NOT #{q("ash_onetime_cleanup_eligible")}(OLD.retain_until) THEN
-        RAISE EXCEPTION 'nonce claim is inside its retention horizon'
-          USING ERRCODE = '23514';
-      END IF;
-      RETURN OLD;
-    END
-    $guard$
-    """)
-
-    execute("""
-    CREATE TRIGGER ash_onetime_nonce_delete_guard
-    BEFORE DELETE ON #{q("ash_onetime_nonce_claims")}
-    FOR EACH ROW EXECUTE FUNCTION #{q("ash_onetime_guard_nonce_delete")}()
-    """)
-
-    execute("""
-    CREATE FUNCTION #{q("ash_onetime_cleanup_idempotency")}(batch_size integer)
-    RETURNS bigint
-    LANGUAGE plpgsql
-    AS $cleanup$
-    DECLARE deleted_count bigint;
-    BEGIN
-      IF batch_size < 1 OR batch_size > 10000 THEN
-        RAISE EXCEPTION 'invalid cleanup batch size' USING ERRCODE = '22023';
-      END IF;
-
-      WITH candidates AS (
-        SELECT logical_partition, operation_hash, id
-        FROM #{q("ash_onetime_idempotency_claims")}
-        WHERE state = 'complete'
-          AND hold_reference IS NULL
-          AND #{q("ash_onetime_cleanup_eligible")}(retain_until)
-        ORDER BY retain_until, logical_partition, operation_hash, id
-        FOR UPDATE SKIP LOCKED
-        LIMIT batch_size
-      ), deleted AS (
-        DELETE FROM #{q("ash_onetime_idempotency_claims")} claims
-        USING candidates
-        WHERE <%= cleanup_delete_predicate %>
-        RETURNING claims.id
-      )
-      SELECT count(*) INTO deleted_count FROM deleted;
-      RETURN deleted_count;
-    END
-    $cleanup$
-    """)
-
-    execute("""
-    CREATE FUNCTION #{q("ash_onetime_cleanup_nonce")}(batch_size integer)
-    RETURNS bigint
-    LANGUAGE plpgsql
-    AS $cleanup$
-    DECLARE deleted_count bigint;
-    BEGIN
-      IF batch_size < 1 OR batch_size > 10000 THEN
-        RAISE EXCEPTION 'invalid cleanup batch size' USING ERRCODE = '22023';
-      END IF;
-
-      WITH candidates AS (
-        SELECT logical_partition, operation_hash, id
-        FROM #{q("ash_onetime_nonce_claims")}
-        WHERE #{q("ash_onetime_cleanup_eligible")}(retain_until)
-        ORDER BY retain_until, logical_partition, operation_hash, id
-        FOR UPDATE SKIP LOCKED
-        LIMIT batch_size
-      ), deleted AS (
-        DELETE FROM #{q("ash_onetime_nonce_claims")} claims
-        USING candidates
-        WHERE <%= cleanup_delete_predicate %>
-        RETURNING claims.id
-      )
-      SELECT count(*) INTO deleted_count FROM deleted;
-      RETURN deleted_count;
-    END
-    $cleanup$
-    """)
-
-    execute("""
-    CREATE FUNCTION #{q("ash_onetime_reap_idempotency")}(batch_size integer, abandonment_seconds bigint)
-    RETURNS bigint
-    LANGUAGE plpgsql
-    AS $reap$
-    DECLARE
-      reaped_count bigint;
-      reap_before timestamptz;
-    BEGIN
-      IF batch_size < 1 OR batch_size > 10000 THEN
-        RAISE EXCEPTION 'invalid reap batch size' USING ERRCODE = '22023';
-      END IF;
-
-      IF abandonment_seconds < #{@abandonment_floor_seconds} THEN
-        RAISE EXCEPTION 'reap abandonment horizon is below the safe floor' USING ERRCODE = '22023';
-      END IF;
-
-      reap_before := transaction_timestamp() - (abandonment_seconds * interval '1 second');
-      PERFORM set_config('ash_onetime.reap_before', reap_before::text, true);
-
-      WITH candidates AS (
-        SELECT logical_partition, operation_hash, id
-        FROM #{q("ash_onetime_idempotency_claims")}
-        WHERE state = 'processing'
-          AND inserted_at < reap_before
-          AND #{q("ash_onetime_cleanup_eligible")}(retain_until)
-        ORDER BY inserted_at, logical_partition, operation_hash, id
-        FOR UPDATE SKIP LOCKED
-        LIMIT batch_size
-      ), deleted AS (
-        DELETE FROM #{q("ash_onetime_idempotency_claims")} claims
-        USING candidates
-        WHERE <%= cleanup_delete_predicate %>
-        RETURNING claims.id
-      )
-      SELECT count(*) INTO reaped_count FROM deleted;
-
-      PERFORM set_config('ash_onetime.reap_before', '', true);
-      RETURN reaped_count;
-    END
-    $reap$
-    """)
+    install_maintenance()
+    execute("CREATE TRIGGER ash_onetime_idempotency_delete_guard BEFORE DELETE ON #{q("ash_onetime_idempotency_claims")} FOR EACH ROW EXECUTE FUNCTION #{q("ash_onetime_guard_idempotency_delete")}()")
+    execute("CREATE TRIGGER ash_onetime_nonce_delete_guard BEFORE DELETE ON #{q("ash_onetime_nonce_claims")} FOR EACH ROW EXECUTE FUNCTION #{q("ash_onetime_guard_nonce_delete")}()")
   end
 
+
   defp q(name) do
-    case prefix() do
+    case @install_prefix || prefix() do
       nil -> quote_identifier(name)
       prefix -> quote_identifier(prefix) <> "." <> quote_identifier(name)
     end

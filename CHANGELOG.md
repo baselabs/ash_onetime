@@ -26,6 +26,25 @@ All notable changes to this project are documented in this file.
 - **Custody conformance.** A portable suite checks RFC 4231/RFC 8032 known answers,
   reference-signer interoperability, purpose/algorithm binding and signature tampering.
 
+
+This draft is blocked from release: allowing every builtin routine admits SQL-string
+dispatchers such as `query_to_xml`, which can call consumer code as the payload owner
+without a catalog dependency. The quarantined regression in `maintenance_test.exs`
+reproduces it; the trust design needs revision before these definers are safe to deploy.
+
+- Maintenance moves into per-schema owner-owned functions with fixed search paths,
+  bounded arguments, READ COMMITTED checks, owner-scoped policies, catalog checks,
+  ACL resets, and transactional step records. PostgreSQL privilege refusals surface as
+  `:maintenance_not_permitted`.
+- The roll recovers up to 24 historical and forward months per call from `_default`,
+  preserves rows and FORCE flags, and resets every new child's table and column grants.
+  `ash_onetime.gen.roll_forward` is removed; the roll performs recovery.
+- `ash_onetime.gen.migrations --maintenance --maintenance-role ROLE` generates the
+  upgrade after operation holds. Installation currently requires the owner to have SELECT
+  on the routine-bearing metadata columns of `pg_catalog.pg_statistic`; no statistics
+  values are requested. `installed_at` currently records creation time within the migration,
+  rather than its future transaction commit time. Both are explicit design deviations.
+
 ## v1.10.0 — November 13, 2026
 
 **Upgrade action required for existing installations.** Generate and apply the operation-hold

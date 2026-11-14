@@ -4,6 +4,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
 
       mix ash_onetime.gen.migrations --repo MyApp.Repo
       mix ash_onetime.gen.migrations --repo MyApp.Repo --operation-hold
+      mix ash_onetime.gen.migrations --repo MyApp.Repo --prefix store --maintenance --maintenance-role store_maintenance
       mix ash_onetime.gen.migrations --repo MyApp.Repo --claims hash --claim-partitions 8
       mix ash_onetime.gen.migrations --repo MyApp.Repo --fact-tables ledger_facts,payment_facts
 
@@ -24,11 +25,12 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
 
   @shortdoc "Generates ash_onetime PostgreSQL migrations"
   @collision_constraint "UNIQUE (logical_partition, operation_hash, scope_hash, key_hash)"
-  @cleanup_comparator ">"
-  @cleanup_delete_predicate "claims.logical_partition = candidates.logical_partition AND claims.operation_hash = candidates.operation_hash AND claims.id = candidates.id"
   @switches [
     repo: :string,
     operation_hold: :boolean,
+    maintenance: :boolean,
+    maintenance_role: :string,
+    prefix: :string,
     claims: :string,
     claim_partitions: :integer,
     fact_tables: :string,
@@ -49,9 +51,40 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
 
     repo = parse_repo!(options[:repo])
 
-    if options[:operation_hold],
-      do: generate_operation_hold(repo, options),
-      else: generate_install(repo, options)
+    cond do
+      options[:maintenance] -> generate_maintenance(repo, options)
+      options[:operation_hold] -> generate_operation_hold(repo, options)
+      true -> generate_install(repo, options)
+    end
+  end
+
+  defp generate_maintenance(repo, options) do
+    if Enum.any?(
+         [:operation_hold, :claims, :claim_partitions, :fact_tables, :partition_start],
+         &Keyword.has_key?(options, &1)
+       ),
+       do: Mix.raise("--maintenance cannot be combined with install or operation-hold options")
+
+    if is_nil(options[:maintenance_role]) or options[:maintenance_role] == "",
+      do: Mix.raise("--maintenance requires --maintenance-role")
+
+    path = migration_path(repo, options)
+
+    if Path.wildcard(Path.join(path, "*_add_ash_onetime_operation_hold.exs")) == [],
+      do: Mix.raise("--maintenance requires the 1.10.0 operation-hold migration")
+
+    if Path.wildcard(Path.join(path, "*_add_ash_onetime_maintenance.exs")) != [],
+      do: Mix.raise("a maintenance upgrade migration already exists")
+
+    file =
+      Path.join(path, "#{parse_timestamp!(options[:timestamp])}_add_ash_onetime_maintenance.exs")
+
+    create_file(
+      file,
+      render_maintenance_upgrade(repo, Keyword.take(options, [:prefix, :maintenance_role]))
+    )
+
+    file
   end
 
   defp generate_operation_hold(repo, options) do
@@ -86,7 +119,19 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
 
     timestamp = parse_timestamp!(options[:timestamp])
     partition_start = parse_partition_start!(options[:partition_start])
-    source = render(repo, hash_partitions: hash_partitions, partition_start: partition_start)
+
+    render_options = [
+      hash_partitions: hash_partitions,
+      maintenance_role: options[:maintenance_role],
+      prefix: options[:prefix]
+    ]
+
+    render_options =
+      if options[:partition_start],
+        do: Keyword.put(render_options, :partition_start, partition_start),
+        else: render_options
+
+    source = render(repo, render_options)
     file = Path.join(path, "#{timestamp}_install_ash_onetime.exs")
     create_file(file, source)
     Mix.shell().info("Generated #{file}")
@@ -117,13 +162,33 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
       |> EEx.eval_file(
         module: module,
         collision_constraint: @collision_constraint,
-        cleanup_comparator: @cleanup_comparator,
-        cleanup_delete_predicate: @cleanup_delete_predicate,
         hash_partitions: hash_partitions,
-        response_partitions: response_partitions(partition_start)
+        response_partitions: response_partitions(partition_start),
+        relative_partitions: not Keyword.has_key?(options, :partition_start),
+        maintenance_role: Keyword.get(options, :maintenance_role),
+        install_prefix: Keyword.get(options, :prefix)
       )
 
     source
+    |> Code.format_string!()
+    |> IO.iodata_to_binary()
+  end
+
+  @doc "Renders the reversible owner-maintenance upgrade for an operation-hold installation."
+  @spec render_maintenance_upgrade(module(), keyword()) :: binary()
+  def render_maintenance_upgrade(repo, options) when is_atom(repo) and is_list(options) do
+    role = Keyword.fetch!(options, :maintenance_role)
+
+    unless is_binary(role) and byte_size(role) in 1..63,
+      do: raise(ArgumentError, "maintenance_role must be a PostgreSQL role name")
+
+    "maintenance.exs"
+    |> template_path()
+    |> EEx.eval_file(
+      module: Module.concat([repo, Migrations, AddAshOnetimeMaintenance]),
+      maintenance_role: role,
+      install_prefix: Keyword.get(options, :prefix)
+    )
     |> Code.format_string!()
     |> IO.iodata_to_binary()
   end
@@ -144,39 +209,6 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
       "fact_tables.exs"
       |> template_path()
       |> EEx.eval_file(module: module, fact_tables: fact_tables)
-
-    source
-    |> Code.format_string!()
-    |> IO.iodata_to_binary()
-  end
-
-  @doc """
-  Renders the SEC-5/SEC-6 forward migration deterministically for existing installs: the
-  response_partition index, a back-fill of monthly partitions from `partition_start` through
-  `partition_start + months`, and the past-retention DEFAULT drain. Pure (no filesystem writes).
-  """
-  @spec render_roll_forward(module(), keyword()) :: binary()
-  def render_roll_forward(repo, options) when is_atom(repo) and is_list(options) do
-    partition_start = render_partition_start!(Keyword.get(options, :partition_start))
-    months = render_months!(Keyword.get(options, :months))
-    module = Module.concat([repo, Migrations, RollForwardAshOnetime])
-
-    partitions =
-      for offset <- 0..(months - 1) do
-        from = shift_month(partition_start, offset)
-        to = shift_month(partition_start, offset + 1)
-
-        %{
-          name: "ash_onetime_response_payloads_#{from.year}_#{pad(from.month)}",
-          from: from,
-          to: to
-        }
-      end
-
-    source =
-      "roll_forward.exs"
-      |> template_path()
-      |> EEx.eval_file(module: module, partitions: partitions)
 
     source
     |> Code.format_string!()
@@ -326,10 +358,6 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
   defp render_partition_start!(nil), do: Date.beginning_of_month(Date.utc_today())
   defp render_partition_start!(%Date{day: 1} = date), do: date
   defp render_partition_start!(_date), do: raise(ArgumentError, "invalid partition start")
-
-  defp render_months!(nil), do: 13
-  defp render_months!(months) when is_integer(months) and months >= 1 and months <= 24, do: months
-  defp render_months!(_months), do: raise(ArgumentError, "invalid months")
 
   defp render_partitioning!(nil), do: nil
   defp render_partitioning!(count), do: validate_partition_count!(count)

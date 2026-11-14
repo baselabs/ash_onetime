@@ -60,7 +60,7 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert {:error, error} = Ash.run_action(replay)"
     },
     "operation-hold-delete-guard" => %{
-      path: "priv/templates/migrations/install.exs",
+      path: "priv/templates/migrations/maintenance/guard_idempotency.sql",
       original: "IF OLD.hold_reference IS NOT NULL THEN",
       mutated: "IF FALSE THEN",
       test: "test/ash_onetime/operation_hold_test.exs",
@@ -70,9 +70,9 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert initial_message =~ \"held idempotency claim\""
     },
     "operation-hold-cleanup-exclusion" => %{
-      path: "priv/templates/migrations/install.exs",
-      original: "          AND hold_reference IS NULL",
-      mutated: "          AND TRUE",
+      path: "priv/templates/migrations/maintenance/cleanup_idempotency.sql",
+      original: "AND hold_reference IS NULL",
+      mutated: "AND TRUE",
       test: "test/ash_onetime/operation_hold_test.exs",
       tag: "hold_cleanup_mutation",
       test_name: "cleanup excludes held rows before the guard; the guard is not invoked",
@@ -668,9 +668,9 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert admitted == 1"
     },
     "rls-prune-unforce" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original: ~S|"ALTER TABLE #{relation} NO FORCE ROW LEVEL SECURITY", []|,
-      mutated: ~S|"SELECT 1", []|,
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original: "EXECUTE format('ALTER TABLE %s NO FORCE ROW LEVEL SECURITY',child_name);",
+      mutated: "PERFORM 1;",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_unforce_mutation",
       test_name:
@@ -678,20 +678,18 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} = result"
     },
     "rls-isolation-precondition" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original:
-        "  defp cleanup_counts(target, batch_size, partition_limit, lock_budget) do\n    with :ok <- transaction_preconditions(target),",
-      mutated:
-        "  defp cleanup_counts(target, batch_size, partition_limit, lock_budget) do\n    with :ok <- :ok,",
-      test: "test/ash_onetime/store/rls_prune_test.exs",
-      tag: "rls_isolation_precondition_mutation",
-      test_name: "cleanup refuses when its transaction is not READ COMMITTED",
-      assertion: "assert %Result{reason: :unsupported_isolation} = result"
+      path: "priv/templates/migrations/maintenance/lock.sql",
+      original: "IF current_setting('transaction_isolation') <> 'read committed' THEN",
+      mutated: "IF false THEN",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "maintenance_isolation_mutation",
+      test_name: "SQL rejects NULL and out of range bounds and repeatable read",
+      assertion: "pg_code: \"25001\""
     },
     "rls-partition-kept" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original: ~S|"ROLLBACK TO SAVEPOINT #{@prune_savepoint}", []|,
-      mutated: ~S|"RELEASE SAVEPOINT #{@prune_savepoint}", []|,
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original: "IF occupied THEN RAISE EXCEPTION 'occupied' USING ERRCODE='AOP01'; END IF;",
+      mutated: "IF occupied THEN kept := kept+1; CONTINUE; END IF;",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_partition_kept_mutation",
       test_name:
@@ -699,19 +697,14 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} = result"
     },
     "rls-child-policy-copy" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
+      path: "priv/templates/migrations/maintenance/copy_policy.sql",
       original:
-        ~S|FOR r IN
-        SELECT * FROM pg_policies WHERE schemaname = '#{literal_schema}' AND tablename = 'ash_onetime_response_payloads'|,
-      mutated:
-        ~S|FOR r IN
-        SELECT * FROM pg_policies WHERE schemaname = '#{literal_schema}' AND tablename = 'ash_onetime_none'|,
-      test: "test/ash_onetime/store/rls_prune_test.exs",
+        "WHERE p.polrelid=format('%I.%I', @schema_name@, 'ash_onetime_response_payloads')::regclass",
+      mutated: "WHERE p.polrelid=0",
+      test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "rls_child_policy_copy_mutation",
-      test_name:
-        "a rolled child carries the parent's policies, so a direct tenant read stays scoped",
-      assertion:
-        ~S|assert scalar!(session, "SELECT count(*) FROM \"#{prefix}\".\"#{child}\"", []) == 1|
+      test_name: "forward roll copies policies and flags and resets table and column ACLs",
+      assertion: "policy_sql"
     },
     "boundary-lock-noop" => %{
       path: "lib/ash_onetime/boundary.ex",
@@ -723,9 +716,9 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert admitted == 1"
     },
     "cleanup-boundary" => %{
-      path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
-      original: "@cleanup_comparator \">\"",
-      mutated: "@cleanup_comparator \">=\"",
+      path: "priv/templates/migrations/maintenance/eligible.sql",
+      original: "transaction_timestamp() > retain_until",
+      mutated: "transaction_timestamp() >= retain_until",
       test: "test/system/window_cleanup_test.exs",
       tag: "cleanup_strictness_mutation",
       test_name:
@@ -733,7 +726,7 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert %{rows: [[false]]} ="
     },
     "reap-removes-abandoned" => %{
-      path: "priv/templates/migrations/install.exs",
+      path: "priv/templates/migrations/maintenance/reap.sql",
       original: "AND inserted_at < reap_before",
       mutated: "AND false",
       test: "test/ash_onetime/store/reap_test.exs",
@@ -743,8 +736,8 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert {:ok, 1} = Store.reap(target, 100, @horizon)"
     },
     "reap-retention-guard" => %{
-      path: "priv/templates/migrations/install.exs",
-      original: "OR NOT \#{q(\"ash_onetime_cleanup_eligible\")}(OLD.retain_until) THEN",
+      path: "priv/templates/migrations/maintenance/guard_idempotency.sql",
+      original: "OR NOT @schema@.ash_onetime_cleanup_eligible(OLD.retain_until) THEN",
       mutated: "OR false THEN",
       test: "test/ash_onetime/store/reap_test.exs",
       tag: "reap_retention_guard_mutation",
@@ -752,9 +745,8 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} ="
     },
     "reap-floor-guard" => %{
-      path: "priv/templates/migrations/install.exs",
-      original:
-        "OR OLD.inserted_at >= transaction_timestamp() - (\#{@abandonment_floor_seconds} * interval '1 second')",
+      path: "priv/templates/migrations/maintenance/guard_idempotency.sql",
+      original: "OR OLD.inserted_at >= transaction_timestamp() - interval '86400 seconds'",
       mutated: "OR false",
       test: "test/ash_onetime/store/reap_test.exs",
       tag: "reap_floor_guard_mutation",
@@ -762,19 +754,18 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} ="
     },
     "reap-skips-locked-recovery" => %{
-      path: "priv/templates/migrations/install.exs",
-      original:
-        "ORDER BY inserted_at, logical_partition, operation_hash, id\n        FOR UPDATE SKIP LOCKED",
-      mutated: "ORDER BY inserted_at, logical_partition, operation_hash, id\n        FOR UPDATE",
+      path: "priv/templates/migrations/maintenance/reap.sql",
+      original: "FOR UPDATE SKIP LOCKED LIMIT batch_size",
+      mutated: "FOR UPDATE LIMIT batch_size",
       test: "test/ash_onetime/store/reap_contention_test.exs",
       tag: "reap_skips_locked_recovery_mutation",
       test_name: "the reaper skips a recovery point locked by an in-flight finalization",
       assertion: "assert_receive {:reaper_done, ^reaper, {:ok, 0}}"
     },
     "payload-partition" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original: "Date.compare(database_date, &1.until_date) == :gt",
-      mutated: "Date.compare(database_date, &1.until_date) in [:eq, :gt]",
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original: "transaction_timestamp()::date <= bounds[2]::date",
+      mutated: "transaction_timestamp()::date < bounds[2]::date",
       test: "test/mix/tasks/ash_onetime.prune_test.exs",
       tag: "payload_partition_mutation",
       test_name:
@@ -792,18 +783,18 @@ defmodule AshOnetime.MutationCheck do
       assertion: ":partitions_created"
     },
     "rls-error-to-kept" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original: "do: rollback_prune(target, {:refused, fallback})",
-      mutated: "do: raise(\"mutation: refused prune must not fail the run\")",
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original: "WHEN OTHERS THEN reason := 'ddl_blocked';",
+      mutated: "WHEN OTHERS THEN RAISE;",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_error_to_kept_mutation",
       test_name: "an event trigger blocking ALTER TABLE keeps partitions and fails nothing",
       assertion: "assert {:ok, %{payload_partitions: 0, payload_partitions_kept: 2}} ="
     },
     "payload-partition-count" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original: ~S|"SELECT EXISTS (SELECT 1 FROM #{relation})", []|,
-      mutated: ~S|"SELECT false", []|,
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original: "EXECUTE format('SELECT EXISTS(SELECT 1 FROM %s)',child_name) INTO occupied;",
+      mutated: "occupied := false;",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_count_mutation",
       test_name:
@@ -811,10 +802,9 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} = result"
     },
     "rls-prune-force-gate" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original:
-        "         {:ok, %{rows: [[false]]}} <-\n           dispatched_query(\n             target,\n             \"SELECT relforcerowsecurity FROM pg_catalog.pg_class WHERE oid = $1::text::pg_catalog.regclass\",\n             [relation]\n           )",
-      mutated: "         :ok <- :ok",
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original: "IF (SELECT relforcerowsecurity FROM pg_class WHERE oid=candidate.oid) THEN",
+      mutated: "IF false THEN",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_force_gate_mutation",
       test_name:
@@ -822,46 +812,48 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert {:ok, %{payload_partitions_refused: %{force_reapplied: 2}}} = result"
     },
     "rls-prune-row-security" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original: "\"SET LOCAL row_security = off\", []",
-      mutated: "\"SELECT 1\", []",
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original: "PERFORM set_config('row_security','off',true);",
+      mutated: "PERFORM set_config('row_security','on',true);",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_guc_mutation",
       test_name: "row_security is off before NO FORCE and both caller GUCs are restored",
       assertion: "assert {:ok, %{payload_partitions: 2}} ="
     },
     "rls-prune-parent-lock" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original: "\"LOCK TABLE ONLY \#{parent} IN ACCESS EXCLUSIVE MODE\"",
-      mutated: "\"LOCK TABLE ONLY \#{parent} IN SHARE UPDATE EXCLUSIVE MODE\"",
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original:
+        "LOCK TABLE ONLY @schema@.ash_onetime_response_payloads IN ACCESS EXCLUSIVE MODE;",
+      mutated:
+        "LOCK TABLE ONLY @schema@.ash_onetime_response_payloads IN SHARE UPDATE EXCLUSIVE MODE;",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_lock_mutation",
       test_name: "a parent reader bounds prune and insert waits without a child lock deadlock",
       assertion: "assert child_locks == 0"
     },
     "rls-prune-lock-timeout" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original: "\"SET LOCAL lock_timeout = \#{timeout}\", []",
-      mutated: "\"SELECT 1\", []",
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original: "PERFORM set_config('lock_timeout',remaining::text,true);",
+      mutated: "PERFORM 1;",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_lock_mutation",
       test_name: "a parent reader bounds prune and insert waits without a child lock deadlock",
       assertion: "Task.await(prune_task, 3_000)"
     },
     "rls-prune-pass-budget" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original: "drop_empty_partition(partition, counts, target, schema, remaining)",
-      mutated: "drop_empty_partition(partition, counts, target, schema, remaining + 3_000)",
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original:
+        "remaining := floor(extract(epoch FROM (deadline-clock_timestamp()))*1000)::integer;",
+      mutated: "remaining := lock_budget_ms;",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_budget_mutation",
       test_name: "the budget spans acquisitions: a second holder gets only what remains",
       assertion: "assert elapsed < 3700"
     },
     "rls-prune-single-pruner" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original:
-        "\"SELECT pg_catalog.pg_try_advisory_xact_lock($1::int4, $2::text::pg_catalog.regclass::pg_catalog.oid::int4)\"",
-      mutated: "\"SELECT $1::int4 IS NOT NULL AND $2::text IS NOT NULL\"",
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original: "IF NOT pg_try_advisory_xact_lock(1095716946,parent_oid::integer) THEN",
+      mutated: "IF false THEN",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_single_pruner_mutation",
       test_name: "overlapping cleanups on one payload parent neither deadlock nor double-prune",
@@ -869,9 +861,9 @@ defmodule AshOnetime.MutationCheck do
         "assert {a.payload_partitions_refused, b.payload_partitions_refused} == {%{}, %{}}"
     },
     "prune-child-nowait" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original: "\"LOCK TABLE ONLY \#{relation} IN ACCESS EXCLUSIVE MODE NOWAIT\"",
-      mutated: "\"LOCK TABLE ONLY \#{relation} IN ACCESS EXCLUSIVE MODE\"",
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original: "LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',child_name",
+      mutated: "LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE',child_name",
       test: "test/mix/tasks/ash_onetime.prune_test.exs",
       tag: "payload_partition_lock_mutation",
       test_name:
@@ -879,24 +871,22 @@ defmodule AshOnetime.MutationCheck do
       assertion: "payload_partitions: 1"
     },
     "prune-default-nowait" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original:
-        "\"LOCK TABLE ONLY \#{qualified_relation(schema, name)} IN ACCESS EXCLUSIVE MODE NOWAIT\"",
-      mutated:
-        "\"LOCK TABLE ONLY \#{qualified_relation(schema, name)} IN ACCESS EXCLUSIVE MODE\"",
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original: "LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',default_oid::regclass",
+      mutated: "LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE',default_oid::regclass",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_default_mutation",
       test_name: "a DEFAULT-only holder is refused without waiting while the parent is held",
       assertion: "payload_partitions_refused: %{lock_unavailable: 2}"
     },
     "rls-prune-catalog-count" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original: "\"SELECT EXISTS (SELECT 1 FROM \#{relation})\", []",
-      mutated: "\"SELECT count(*) > 0 FROM \#{relation}\", []",
-      test: "test/ash_onetime/store/rls_prune_test.exs",
-      tag: "rls_prune_catalog_count_mutation",
-      test_name: "the prune count ignores a consumer aggregate earlier in search_path",
-      assertion: "assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} = result"
+      path: "priv/templates/migrations/maintenance_helpers.exs",
+      original: "SET search_path = pg_catalog, pg_temp AS %L",
+      mutated: "AS %L",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "maintenance_functions_mutation",
+      test_name: "all maintenance entry points are owner definers with a fixed search path",
+      assertion: "search_path=pg_catalog, pg_temp"
     },
     "rls-prune-refusal-telemetry" => %{
       path: "lib/ash_onetime/store.ex",
@@ -908,9 +898,11 @@ defmodule AshOnetime.MutationCheck do
       assertion: "refute_receive {:cleanup_event, _, %{result_class: :partitions_kept}}"
     },
     "rls-prune-foreign-child" => %{
-      path: "lib/ash_onetime/store/postgres.ex",
-      original: "not plain_heap or not payload_child -> {:refused, :not_plain_child}",
-      mutated: "not payload_child -> {:refused, :not_plain_child}",
+      path: "priv/templates/migrations/maintenance/prune.sql",
+      original:
+        "      SELECT c.relkind,c.relowner,EXISTS(SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=parent_oid) AS child\n      INTO facts FROM pg_class c WHERE c.oid=candidate.oid;\n      IF NOT FOUND THEN RAISE EXCEPTION 'missing' USING ERRCODE='AOP01'; END IF;\n      IF facts.relkind<>'r' OR NOT facts.child THEN RAISE EXCEPTION 'not_plain_child' USING ERRCODE='AOP01'; END IF;\n      IF facts.relowner<>@owner@ THEN RAISE EXCEPTION 'not_owner' USING ERRCODE='AOP01'; END IF;\n      IF NOT pg_try_advisory_xact_lock(1095716946,parent_oid::integer) THEN\n        RAISE EXCEPTION 'pruner_busy' USING ERRCODE='AOP01';\n      END IF;\n      PERFORM set_config('lock_timeout',remaining::text,true);\n      PERFORM set_config('row_security','off',true);\n      LOCK TABLE ONLY @schema@.ash_onetime_response_payloads IN ACCESS EXCLUSIVE MODE;\n      EXECUTE format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',child_name);\n      IF default_oid<>0 THEN\n        EXECUTE format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',default_oid::regclass);\n      END IF;\n      SELECT c.relkind,c.relowner,EXISTS(SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=parent_oid) AS child\n      INTO facts FROM pg_class c WHERE c.oid=candidate.oid;\n      IF NOT FOUND THEN RAISE EXCEPTION 'missing' USING ERRCODE='AOP01'; END IF;\n      IF facts.relkind<>'r' OR NOT facts.child THEN RAISE EXCEPTION 'not_plain_child' USING ERRCODE='AOP01'; END IF;",
+      mutated:
+        "      SELECT c.relkind,c.relowner,EXISTS(SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=parent_oid) AS child\n      INTO facts FROM pg_class c WHERE c.oid=candidate.oid;\n      IF NOT FOUND THEN RAISE EXCEPTION 'missing' USING ERRCODE='AOP01'; END IF;\n      IF NOT facts.child THEN RAISE EXCEPTION 'not_plain_child' USING ERRCODE='AOP01'; END IF;\n      IF facts.relowner<>@owner@ THEN RAISE EXCEPTION 'not_owner' USING ERRCODE='AOP01'; END IF;\n      IF NOT pg_try_advisory_xact_lock(1095716946,parent_oid::integer) THEN\n        RAISE EXCEPTION 'pruner_busy' USING ERRCODE='AOP01';\n      END IF;\n      PERFORM set_config('lock_timeout',remaining::text,true);\n      PERFORM set_config('row_security','off',true);\n      LOCK TABLE ONLY @schema@.ash_onetime_response_payloads IN ACCESS EXCLUSIVE MODE;\n      EXECUTE format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',child_name);\n      IF default_oid<>0 THEN\n        EXECUTE format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',default_oid::regclass);\n      END IF;\n      SELECT c.relkind,c.relowner,EXISTS(SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=parent_oid) AS child\n      INTO facts FROM pg_class c WHERE c.oid=candidate.oid;\n      IF NOT FOUND THEN RAISE EXCEPTION 'missing' USING ERRCODE='AOP01'; END IF;\n      IF NOT facts.child THEN RAISE EXCEPTION 'not_plain_child' USING ERRCODE='AOP01'; END IF;",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_foreign_child_mutation",
       test_name: "a real foreign child is refused before its remote RLS-filtered count",
@@ -1002,11 +994,10 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert {:ok, %Result{status: :complete, claim: complete}}"
     },
     "operation-hash-cleanup" => %{
-      path: "lib/mix/tasks/ash_onetime.gen.migrations.ex",
-      original:
-        "@cleanup_delete_predicate \"claims.logical_partition = candidates.logical_partition AND claims.operation_hash = candidates.operation_hash AND claims.id = candidates.id\"",
+      path: "priv/templates/migrations/maintenance/cleanup_idempotency.sql",
+      original: "AND claims.operation_hash=candidates.operation_hash AND claims.id=candidates.id",
       mutated:
-        "@cleanup_delete_predicate \"claims.logical_partition = candidates.logical_partition AND candidates.operation_hash = candidates.operation_hash AND claims.id = candidates.id\"",
+        "AND candidates.operation_hash=candidates.operation_hash AND claims.id=candidates.id",
       test: "test/ash_onetime/store/partition_test.exs",
       tag: "operation_hash_cleanup_mutation",
       test_name: "cleanup delete keeps operation identity when hash partitions share an id",

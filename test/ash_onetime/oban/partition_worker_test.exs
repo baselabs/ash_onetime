@@ -105,15 +105,17 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
   test "worker surfaces :lock_timeout from a contended advisory lock (L5 behavioral)", %{
     prefix: prefix
   } do
-    target = Postgres.for_repo(Repo, prefix)
-    roll_key = Postgres.roll_advisory_key(target)
+    %{rows: [[parent_oid]]} =
+      SQL.query!(Repo, "SELECT $1::text::regclass::oid", [
+        ~s("#{prefix}".ash_onetime_response_payloads)
+      ])
 
     # Hold the per-prefix advisory lock in a separate real connection. Store.roll_partitions
     # sets SET LOCAL lock_timeout = 5s internally, so a roll that cannot acquire the held lock
     # fails closed with reason :lock_timeout. No session lock_timeout is needed here.
     LockContention.with_contention(
-      "SELECT pg_advisory_xact_lock($1::bigint)",
-      [roll_key],
+      "SELECT pg_advisory_xact_lock(1095717452, $1::integer)",
+      [parent_oid],
       fn ->
         job = %Oban.Job{
           args: %{"repo" => inspect(Repo), "prefix" => prefix, "months" => 3}

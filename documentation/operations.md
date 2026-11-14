@@ -109,43 +109,30 @@ against the old guard.
 
 ### Forward response partitions
 
-The `ash_onetime_response_payloads` table is range-partitioned by month. The install migration
-generates a fixed window (install month through +12). Cleanup drops only past, empty named
-partitions; the `_default` partition is excluded from drop enumeration. Retention itself is
-enforced by claim cleanup: deleting an expired claim deletes its payload row in whichever
-partition holds it, `_default` included. Once retention exceeds the generated window, payloads
-route to `_default`, which is emptied row by row but never reclaimed as a table. Forward
-monthly partition creation keeps the window ahead of retention so expired months drop whole:
+**The unreleased database-maintenance implementation is a draft. Do not deploy its
+SECURITY DEFINER functions until the builtin SQL-dispatch trust blocker is resolved.**
+
+The payload table is range-partitioned by month. Fresh migrations calculate the window
+from the transaction's current month. Cleanup deletes expired claims and their payloads;
+prune drops only expired, empty named partitions and never drops `_default`.
+
+After the maintenance upgrade, the runtime role calls owner-owned functions through its
+declared maintenance role. The roll creates forward months and recovers historical months
+whose rows are in `_default`, with at most 24 total months created per call:
 
 ```sh
 mix ash_onetime.roll_partitions --repo MyApp.Repo --months 6
 ```
 
-`--months` (default 3, 1..24) sets how many forward months to ensure exist. The roll is
-idempotent and concurrency-safe (advisory-locked, bounded `lock_timeout`), so concurrent or
-overlapping runs are safe. Schedule `AshOnetime.Oban.PartitionWorker` (or a cron cadence) ahead
-of your retention horizon — missing it causes new writes to route to `_default`, so the roll is
-more time-sensitive than cleanup/reap. Existing installs that predate the roll or have crossed
-the window should generate and run the forward migration once:
+The roll serializes by the payload parent's OID. Recovery moves every payload column without
+changing claim locators, attaches the new child, copies policies and flags, and explicitly
+restores `_default`'s FORCE flag. Every created child is owner-only, including column grants
+and grant options. Runtime queries use the parent. A failed recovery leaves all rows,
+partitions, flags, ACLs, and step records unchanged.
 
-```sh
-mix ash_onetime.gen.roll_forward --repo MyApp.Repo --months 18
-mix ecto.migrate
-```
-
-It adds the `response_partition` index, back-fills the elapsed+forward partitions, and drains
-past-retention payloads stranded in `_default` (a claim-scoped delete; the delete guard removes
-the payload). Within-retention stranded payloads are left — a retry under a new key is a new
-execution, and the rolled-forward partitions now route future inserts correctly.
-
-**Gap recovery:** `roll_partitions` only creates partitions ahead of the current month — it does
-not back-fill. If the worker/cron is down for a month or longer, that month's payloads land in
-`_default`. Claim cleanup still deletes them at retention, but `_default` is never dropped, so
-its storage is only reused, never reclaimed as a table. Re-running
-`mix ash_onetime.gen.roll_forward` is the recovery procedure: it creates the missing months, and
-its idempotent drain deletes past-retention claims (and their payloads) immediately. An exhausted `PartitionWorker`
-(`max_attempts: 3` discards persistent failures) leaves the same gap — monitor for discarded
-jobs and re-run the forward migration when the worker has been down across a month boundary.
+There is no separate `ash_onetime.gen.roll_forward` task. A subsequent roll repairs missed
+months, including past months. Schedule it ahead of the retention horizon and inspect the
+per-schema `ash_onetime_maintenance_status()` facts for coverage and `_default` backlog.
 
 **Worker backoff and discard alert.** Each Oban worker (`CleanupWorker`, `PartitionWorker`,
 `ReapWorker`) declares a bounded, jittered `backoff/1` (`30 × attempt + :rand.uniform(30) − 1`,
@@ -166,8 +153,8 @@ WHERE state = 'discarded' AND queue IN ('ash_onetime_cleanup', 'ash_onetime_reap
   AND discarded_at > now() - interval '24 hours';
 ```
 
-A discarded `PartitionWorker` is the signal to run `mix ash_onetime.gen.roll_forward` (its drain is
-idempotent). A rising discard rate on any of the three queues is contention — inspect
+A discarded `PartitionWorker` is the signal to rerun `mix ash_onetime.roll_partitions`; its
+historical recovery is idempotent. A rising discard rate on any of the three queues is contention — inspect
 `pg_stat_activity` for lock waits during the worker's window and consider raising the pool or
 scheduling the worker off-peak.
 
@@ -319,8 +306,7 @@ both creates the elapsed+forward partitions AND drains past-retention payloads s
 `_default`:
 
 ```sh
-mix ash_onetime.gen.roll_forward --repo MyApp.Repo --months 18
-mix ecto.migrate
+mix ash_onetime.roll_partitions --repo MyApp.Repo --months 18
 ```
 
 Then re-schedule the `PartitionWorker` (or cron) ahead of the retention horizon so the window
@@ -497,20 +483,15 @@ policy; an attached partition without grants). That is a mechanism, not a list o
 Empty ⇒ drop; otherwise — or on any statement error — rollback-to-savepoint restores
 FORCE invisibly to every other session and the partition is reported as kept.
 
-**Consumer pattern: owner-run maintenance on a schedule.** Partition maintenance runs as
-the schema owner (a CronJob using the migrator Secret is the established shape — the same
-login that runs migrations). An in-app Oban worker running as a non-owner role keeps
-claims/nonce cleanup working; every past partition it cannot prune is counted in
-`payload_partitions_kept` on the cleanup result. This total includes ordinary occupied
-partitions. Refusals also appear in `payload_partitions_refused`, a map of reason to count:
-`:not_owner`, `:not_plain_child`, `:missing`, `:ddl_blocked`, `:lock_unavailable`,
-`:force_reapplied`, or `:error` (absent reasons have zero count). Only the sum of these
-refusal counts is emitted as a
-`[:ash_onetime, :cleanup]` telemetry event with `result_class: :partitions_kept` (the
-Oban worker does not log counts itself — attach a telemetry handler to see them). If such
-a worker is all you run, set its `partition_limit: 0` and schedule the owner-run prune
-instead; a `:partitions_kept` event that never stops means the owner-run prune is
-misconfigured (wrong role, or something is blocking its DDL).
+**Maintenance privileges.** The unreleased upgrade replaces caller-owned maintenance SQL
+with per-schema SECURITY DEFINER functions owned by the payload parent's owner. Runtime
+schedules need membership in the declared maintenance role, with no owner login or owner
+membership. The runs table and every child are owner-only; runtime DML addresses the parents.
+Non-package policies must be scoped to runtime roles. Any additional policy applying to the
+owner directly, through PUBLIC, or through role membership refuses cleanup and reap with
+`:maintenance_blinded`. Untrusted attached routines refuse before work starts, subject to the
+release-blocking builtin-dispatch limitation stated above. Transient lock refusals remain
+separate from permanent prune refusals in the recorded facts.
 
 Operational notes:
 

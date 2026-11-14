@@ -60,6 +60,49 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
     end
   end
 
+  test "maintenance generation requires operation holds and bakes the declared schema and role",
+       %{temporary: path} do
+    arguments = [
+      "--repo",
+      inspect(Repo),
+      "--migrations-path",
+      path,
+      "--prefix",
+      "store",
+      "--maintenance",
+      "--maintenance-role",
+      "store_maintenance",
+      "--timestamp",
+      "20261113000000"
+    ]
+
+    assert_raise Mix.Error, ~r/requires the 1.10.0 operation-hold migration/, fn ->
+      GenerateMigrations.run(arguments)
+    end
+
+    File.mkdir_p!(path)
+
+    File.write!(
+      Path.join(path, "20261112000000_add_ash_onetime_operation_hold.exs"),
+      "# applied predecessor\n"
+    )
+
+    generated = GenerateMigrations.run(arguments)
+    assert Path.basename(generated) == "20261113000000_add_ash_onetime_maintenance.exs"
+
+    assert File.read!(generated) ==
+             GenerateMigrations.render_maintenance_upgrade(Repo,
+               prefix: "store",
+               maintenance_role: "store_maintenance"
+             )
+
+    assert_raise Mix.Error, ~r/already exists/, fn -> GenerateMigrations.run(arguments) end
+
+    assert_raise Mix.Error, ~r/requires --maintenance-role/, fn ->
+      GenerateMigrations.run(["--repo", inspect(Repo), "--maintenance"])
+    end
+  end
+
   test "generates a fact-table migration only with --fact-tables", %{temporary: temporary} do
     plain = Path.join(temporary, "plain")
     path = run_generator(plain, [])
@@ -220,8 +263,27 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
              "priv/templates/migrations/hash_partitioned.exs",
              "priv/templates/migrations/install.exs",
              "priv/templates/migrations/logical_partitions.exs",
-             "priv/templates/migrations/operation_hold.exs",
-             "priv/templates/migrations/roll_forward.exs"
+             "priv/templates/migrations/maintenance.exs",
+             "priv/templates/migrations/maintenance/acl.sql",
+             "priv/templates/migrations/maintenance/active.sql",
+             "priv/templates/migrations/maintenance/cleanup_idempotency.sql",
+             "priv/templates/migrations/maintenance/cleanup_nonce.sql",
+             "priv/templates/migrations/maintenance/copy_policy.sql",
+             "priv/templates/migrations/maintenance/edges.sql",
+             "priv/templates/migrations/maintenance/eligible.sql",
+             "priv/templates/migrations/maintenance/guard_idempotency.sql",
+             "priv/templates/migrations/maintenance/guard_nonce.sql",
+             "priv/templates/migrations/maintenance/lock.sql",
+             "priv/templates/migrations/maintenance/policy.sql",
+             "priv/templates/migrations/maintenance/prune.sql",
+             "priv/templates/migrations/maintenance/reap.sql",
+             "priv/templates/migrations/maintenance/relations.sql",
+             "priv/templates/migrations/maintenance/reset_acl.sql",
+             "priv/templates/migrations/maintenance/roll.sql",
+             "priv/templates/migrations/maintenance/status.sql",
+             "priv/templates/migrations/maintenance/trust.sql",
+             "priv/templates/migrations/maintenance_helpers.exs",
+             "priv/templates/migrations/operation_hold.exs"
            ]
   end
 

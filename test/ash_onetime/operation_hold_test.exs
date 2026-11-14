@@ -2,7 +2,6 @@ defmodule AshOnetime.OperationHoldTest do
   use AshOnetime.Test.StoreCase, async: false
 
   alias AshOnetime.{Error, Transaction}
-  alias Mix.Tasks.AshOnetime.Gen.Migrations, as: Generator
 
   setup_all do
     installation = install_store!()
@@ -73,38 +72,12 @@ defmodule AshOnetime.OperationHoldTest do
       [uuid(id)]
     )
 
-    source =
-      Generator.render_roll_forward(Repo,
-        partition_start: Date.beginning_of_month(Date.utc_today()),
-        months: 1
-      )
+    assert {:ok, _} = Store.roll_partitions(ctx.target, 1)
+    assert row(ctx.prefix, id) != [], "recovery must preserve the held claim"
 
-    # Execute the actual rendered migration, substituting only its Ecto command runner.
-    source =
-      source
-      |> String.replace(
-        "use Ecto.Migration",
-        "def prefix, do: Process.get({__MODULE__, :prefix}, #{inspect(ctx.prefix)})\n def repo, do: AshOnetime.Test.Repo\n def execute(sql), do: Ecto.Adapters.SQL.query!(AshOnetime.Test.Repo, sql, [])"
-      )
-
-    module = Module.concat(__MODULE__, "Drain")
-
-    source =
-      String.replace(
-        source,
-        inspect(Repo) <> ".Migrations.RollForwardAshOnetime",
-        inspect(module)
-      )
-
-    Code.compile_string(source)
-
-    try do
-      module.up()
-      assert row(ctx.prefix, id) != [], "the drain must not invoke the held-row guard"
-    after
-      :code.purge(module)
-      :code.delete(module)
-    end
+    assert SQL.query!(Repo, "SELECT count(*) FROM #{payloads(ctx.prefix)} WHERE claim_id=$1", [
+             uuid(id)
+           ]).rows == [[1]]
   end
 
   test "release restarts the full retention window, and cleanup later removes the claim", ctx do
@@ -310,6 +283,12 @@ defmodule AshOnetime.OperationHoldTest do
       Repo,
       "CREATE TABLE #{~s("#{ctx.prefix}"."ash_onetime_response_payloads_2001_01")} PARTITION OF #{payloads(ctx.prefix)} FOR VALUES FROM ('2001-01-01') TO ('2001-02-01')",
       []
+    )
+
+    SQL.query!(
+      Repo,
+      ~s|SELECT "#{ctx.prefix}".ash_onetime_maintenance_copy_policy($1::text::regclass)|,
+      [ctx.prefix <> ".ash_onetime_response_payloads_2001_01"]
     )
 
     id = complete!(ctx.prefix, "prune")

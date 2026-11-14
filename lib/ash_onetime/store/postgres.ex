@@ -339,13 +339,11 @@ defmodule AshOnetime.Store.Postgres do
     lock_budget = Application.get_env(:ash_onetime, :partition_prune_lock_timeout_ms, 2_000)
 
     with_dynamic_repo(target, fn ->
+      transaction = if target.repo_module.in_transaction?(), do: :open, else: :committed
+
       cleanup_transaction(target, batch_size, partition_limit, lock_budget)
+      |> cleanup_result(transaction)
     end)
-    |> case do
-      {:ok, counts} -> {:ok, counts}
-      {:error, %Result{} = result} -> result
-      _other -> Result.failure(:dispatched_unknown, :unknown, :unknown)
-    end
   rescue
     _exception -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
   catch
@@ -354,6 +352,19 @@ defmodule AshOnetime.Store.Postgres do
 
   def cleanup(_target, _batch_size, _partition_limit),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
+
+  defp cleanup_result({:ok, counts}, transaction) do
+    if Map.keys(counts.payload_partitions_refused) -- [:lock_unavailable] == [] do
+      {:ok, counts}
+    else
+      Result.failure(:prune_blocked, :sent, transaction)
+    end
+  end
+
+  defp cleanup_result({:error, %Result{} = result}, _transaction), do: result
+
+  defp cleanup_result(_other, _transaction),
+    do: Result.failure(:dispatched_unknown, :unknown, :unknown)
 
   # Hard safety floor (seconds) for the abandoned-processing reaper, mirroring the migration's
   # @abandonment_floor_seconds (install.exs) and the worker/task floors. A sub-floor caller hits
@@ -382,29 +393,16 @@ defmodule AshOnetime.Store.Postgres do
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
   @max_months_ahead 24
-  @default_lock_timeout_seconds 5
-  # Base advisory-lock key for response-payload partition creation. pg_advisory_xact_lock
-  # serializes concurrent rolls within one transaction so two cannot race on CREATE PARTITION
-  # OF (Postgres has no CREATE PARTITION OF IF NOT EXISTS). The key is per-prefix (see
-  # roll_advisory_key/1): partitions are schema-scoped (per-tenant), so two tenants rolling
-  # concurrently target distinct parents (distinct pg_class OIDs) and need not serialize
-  # against each other — only within one tenant. The nil-prefix (single-tenant) path keeps
-  # this constant for backward compatibility. "ASHOT"
-  @partition_roll_advisory_key 0x41_5348_4F54
-
   @doc """
-  Creates the next `months_ahead` monthly `ash_onetime_response_payloads` range partitions,
-  from the current month forward, so payloads past the install window land in monthly
-  partitions the prune can drop whole. Without this, payloads whose `response_partition` falls
-  outside the generated window route to the `_default` partition. Claim cleanup still deletes
-  them row by row (retention holds), but `_default` is excluded from `prune_payload_partitions`
-  and is never reclaimed as a table (ADR-0001, November 2026 amendment).
+  Calls the installation's owner-owned roll function. It recovers historical months from
+  `_default` before ensuring the requested forward window, creating at most 24 months per call.
+  Recovery preserves payload columns and claim locators, copies policies and row-security flags,
+  and resets each new child's table and column ACLs to owner-only access.
 
-  Idempotent and concurrency-safe: an transaction-scoped advisory lock serializes concurrent
-  rolls, and each partition is created only if absent (existence read from `pg_inherits` after
-  acquiring the lock, so no read/write race). A bounded `lock_timeout` (default 5s) makes a roll
-  blocked by a long cleanup fail closed rather than hang. Returns `{:ok,
-  %{partitions_created: n}}` or an `AshOnetime.Store.Result` failure.
+  A transaction-scoped advisory lock on the payload parent's OID serializes rolls. SQL enforces
+  READ COMMITTED and the 1..24 month bound. Returns `{:ok, %{partitions_created: n}}` or an
+  `AshOnetime.Store.Result` failure. The unreleased definer implementation remains blocked by
+  the builtin SQL-dispatch trust regression described in the changelog.
   """
   @spec roll_partitions(Target.t(), pos_integer()) ::
           {:ok, %{partitions_created: non_neg_integer()}} | Result.t()
@@ -545,7 +543,7 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   defp reap_count(target, batch_size, abandonment_seconds) do
-    case dispatched_query(
+    case maintenance_query(
            target,
            "SELECT #{relation(target, "ash_onetime_reap_idempotency")}($1, $2)",
            [batch_size, abandonment_seconds]
@@ -1106,7 +1104,7 @@ defmodule AshOnetime.Store.Postgres do
         :nonce -> "ash_onetime_cleanup_nonce"
       end
 
-    case dispatched_query(target, "SELECT #{relation(target, function)}($1)", [batch_size]) do
+    case maintenance_query(target, "SELECT #{relation(target, function)}($1)", [batch_size]) do
       {:ok, %{rows: [[count]]}} when is_integer(count) and count >= 0 -> {:ok, count}
       {:ok, _result} -> {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
       {:error, %Result{} = result} -> {:error, result}
@@ -1115,551 +1113,104 @@ defmodule AshOnetime.Store.Postgres do
 
   defp prune_payload_partitions(_target, 0, _lock_budget), do: {:ok, 0, 0, %{}}
 
-  # The lock budget bounds the whole pass, not each lock: every pending parent
-  # ACCESS EXCLUSIVE queues all tenants' payload traffic, so one run may stall
-  # it for at most the budget (plus the candidate in flight), never once per
-  # candidate. Candidates left when it is spent wait for the next run.
   defp prune_payload_partitions(target, limit, lock_budget) do
-    deadline = System.monotonic_time(:millisecond) + lock_budget
-
-    with {:ok, schema, database_date} <- database_schema_and_date(target),
-         {:ok, partitions} <- payload_partitions(target, schema) do
-      partitions
-      |> Enum.filter(&(Date.compare(database_date, &1.until_date) == :gt))
-      |> Enum.sort_by(&{&1.until_date, &1.name})
-      |> Enum.take(limit)
-      |> drop_empty_partitions(target, schema, deadline)
-    end
-  end
-
-  # A relation name resolved exactly once, for every statement of a sequence:
-  # LOCK, the OID re-check, ALTER, the count, and DROP must all address the
-  # same table the catalog listing found, never the caller's search_path.
-  defp qualified_relation(schema, name),
-    do: quote_identifier(schema) <> "." <> quote_identifier(name)
-
-  defp database_schema_and_date(target) do
-    sql = """
-    SELECT namespace.nspname, pg_catalog.transaction_timestamp()::date
-    FROM pg_catalog.pg_class parent
-    JOIN pg_catalog.pg_namespace namespace ON namespace.oid = parent.relnamespace
-    WHERE parent.oid = $1::text::regclass
-    """
-
-    case dispatched_query(target, sql, [relation(target, "ash_onetime_response_payloads")]) do
-      {:ok, %{rows: [[schema, %Date{} = date]]}} when is_binary(schema) ->
-        {:ok, schema, date}
-
-      {:ok, _result} ->
-        {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
+    case maintenance_query(
+           target,
+           "SELECT #{relation(target, "ash_onetime_prune_payload_partitions")}($1, $2)",
+           [limit, lock_budget]
+         ) do
+      {:ok, %{rows: [[report]]}} ->
+        decode_prune_report(report)
 
       {:error, %Result{} = result} ->
         {:error, result}
+
+      _other ->
+        {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
     end
   end
 
-  defp payload_partitions(target, schema) do
-    sql = """
-    SELECT child.relname, pg_catalog.pg_get_expr(child.relpartbound, child.oid)
-    FROM pg_catalog.pg_inherits i
-    JOIN pg_catalog.pg_class parent ON parent.oid = i.inhparent
-    JOIN pg_catalog.pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
-    JOIN pg_catalog.pg_class child ON child.oid = i.inhrelid
-    WHERE parent_namespace.nspname = $1
-      AND parent.relname = 'ash_onetime_response_payloads'
-    """
+  @prune_refusal_reasons %{
+    "missing" => :missing,
+    "not_plain_child" => :not_plain_child,
+    "not_owner" => :not_owner,
+    "force_reapplied" => :force_reapplied,
+    "lock_unavailable" => :lock_unavailable,
+    "ddl_blocked" => :ddl_blocked
+  }
 
-    case dispatched_query(target, sql, [schema]) do
-      {:ok, %{rows: rows}} when is_list(rows) -> decode_payload_partitions(rows)
-      {:ok, _result} -> {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
-      {:error, %Result{} = result} -> {:error, result}
-    end
-  end
-
-  defp decode_payload_partitions(rows) do
-    Enum.reduce_while(rows, {:ok, []}, &decode_payload_partition/2)
-  end
-
-  defp decode_payload_partition([_name, "DEFAULT"], accumulator),
-    do: {:cont, accumulator}
-
-  defp decode_payload_partition([name, bound], {:ok, partitions})
-       when is_binary(name) and is_binary(bound) do
-    case Regex.run(
-           ~r/^FOR VALUES FROM \('([^']+)'\) TO \('([^']+)'\)$/,
-           bound,
-           capture: :all_but_first
-         ) do
-      [from, until_date] -> build_payload_partition(name, from, until_date, partitions)
-      _invalid -> partition_decode_failure()
-    end
-  end
-
-  defp decode_payload_partition(_row, _accumulator), do: partition_decode_failure()
-
-  defp build_payload_partition(name, from, until_date, partitions) do
-    with {:ok, from_date} <- Date.from_iso8601(from),
-         {:ok, to_date} <- Date.from_iso8601(until_date) do
-      {:cont, {:ok, [%{name: name, from_date: from_date, until_date: to_date} | partitions]}}
+  defp decode_prune_report(%{"dropped" => dropped, "kept" => kept, "refusals" => refusals})
+       when is_integer(dropped) and dropped >= 0 and is_integer(kept) and kept >= 0 and
+              is_map(refusals) do
+    if Enum.all?(refusals, fn {key, count} ->
+         Map.has_key?(@prune_refusal_reasons, key) and is_integer(count) and count > 0
+       end) do
+      {:ok, dropped, kept,
+       Map.new(refusals, fn {key, count} -> {Map.fetch!(@prune_refusal_reasons, key), count} end)}
     else
-      _invalid -> partition_decode_failure()
+      {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
     end
   end
 
-  defp partition_decode_failure,
-    do: {:halt, {:error, Result.failure(:store_invariant, :sent, :rolled_back)}}
-
-  defp drop_empty_partitions(partitions, target, schema, deadline) do
-    Enum.reduce_while(partitions, {:ok, 0, 0, %{}}, fn partition, counts ->
-      case deadline - System.monotonic_time(:millisecond) do
-        remaining when remaining > 0 ->
-          drop_empty_partition(partition, counts, target, schema, remaining)
-
-        _spent ->
-          {:halt, counts}
-      end
-    end)
-  end
-
-  # Each candidate is decided as its owner inside a savepoint. Take the DROP's
-  # actual parent lock before touching a child, with a bounded wait; a late
-  # upgrade can stall every tenant and deadlock a parent reader reaching a child.
-  # The child lock never waits (NOWAIT): it is requested while the parent is
-  # held, so any wait would stall every tenant. Only one cleanup prunes a
-  # physical parent at a time (advisory key on its OID): two cleanups both
-  # hold parent RowExclusive from claim deletion, so both requesting ACCESS
-  # EXCLUSIVE would deadlock. The key is taken only by an owner about to lock,
-  # inside the savepoint: a drop keeps it to commit, a rollback releases it.
-  # READ COMMITTED makes a row committed while we wait visible to the count.
-  # NO FORCE is uncommitted and rolls back for every kept/refused partition.
-  # Both the FORCE re-check and row_security=off are load-bearing defenses:
-  # consumer DDL hooks can reapply FORCE. Never trust a filtered count.
-  @prune_savepoint "ash_onetime_partition_prune"
-
-  defp drop_empty_partition(partition, {:ok, dropped, kept, refused}, target, schema, timeout) do
-    parent = qualified_relation(schema, "ash_onetime_response_payloads")
-    relation = qualified_relation(schema, partition.name)
-
-    case owner_savepoint_prune(target, relation, parent, timeout) do
-      {:ok, :dropped} ->
-        {:cont, {:ok, dropped + 1, kept, refused}}
-
-      {:ok, :occupied} ->
-        {:cont, {:ok, dropped, kept + 1, refused}}
-
-      {:ok, {:refused, reason}} ->
-        {:cont, {:ok, dropped, kept + 1, Map.update(refused, reason, 1, &(&1 + 1))}}
-
-      {:ok, :pruner_busy} ->
-        {:halt, {:ok, dropped, kept, refused}}
-
-      {:error, %Result{} = result} ->
-        {:halt, {:error, result}}
-    end
-  end
-
-  defp owner_savepoint_prune(target, relation, parent, timeout) do
-    with {:ok, _} <- dispatched_query(target, "SAVEPOINT #{@prune_savepoint}", []),
-         {:ok, %{rows: [[lock_guc, rls_guc]]}} <-
-           dispatched_query(
-             target,
-             "SELECT pg_catalog.current_setting('lock_timeout'), pg_catalog.current_setting('row_security')",
-             []
-           ),
-         # Refuse non-owners without relying on a lock privilege error. These
-         # facts are checked again under the locks before any ALTER/count.
-         {:ok, %{rows: [facts]}} <- prune_relation_facts(target, parent, relation),
-         :prunable <- prune_facts(facts),
-         :claimed <- claim_parent_pruner(target, parent),
-         {:ok, _} <- dispatched_query(target, "SET LOCAL lock_timeout = #{timeout}", []),
-         {:ok, _} <- dispatched_query(target, "SET LOCAL row_security = off", []),
-         {:ok, _} <-
-           dispatched_query(target, "LOCK TABLE ONLY #{parent} IN ACCESS EXCLUSIVE MODE", []),
-         {:ok, _} <-
-           dispatched_query(
-             target,
-             "LOCK TABLE ONLY #{relation} IN ACCESS EXCLUSIVE MODE NOWAIT",
-             []
-           ),
-         :ok <- lock_default_partition(target, parent),
-         {:ok, %{rows: [facts]}} <- prune_relation_facts(target, parent, relation),
-         :prunable <- prune_facts(facts) do
-      owner_count_and_drop(target, relation, lock_guc, rls_guc)
-    else
-      {:refused, reason} -> rollback_prune(target, {:refused, reason})
-      :busy -> rollback_prune(target, :pruner_busy)
-      {:error, %Result{} = result} -> prune_error(target, result, :error)
-    end
-  end
-
-  # DROP of a partition also takes ACCESS EXCLUSIVE on the parent's DEFAULT
-  # partition. Take it here without waiting, so the DROP never waits on a
-  # DEFAULT-only holder (a direct reader, vacuum) while the parent is held.
-  defp lock_default_partition(target, parent) do
-    sql = """
-    SELECT n.nspname, c.relname
-    FROM pg_catalog.pg_partitioned_table p
-    JOIN pg_catalog.pg_class c ON c.oid = p.partdefid
-    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-    WHERE p.partrelid = $1::text::pg_catalog.regclass
-    """
-
-    with {:ok, %{rows: [[schema, name]]}} <- dispatched_query(target, sql, [parent]),
-         {:ok, _} <-
-           dispatched_query(
-             target,
-             "LOCK TABLE ONLY #{qualified_relation(schema, name)} IN ACCESS EXCLUSIVE MODE NOWAIT",
-             []
-           ) do
-      :ok
-    else
-      {:ok, %{rows: []}} -> :ok
-      {:ok, _other} -> {:refused, :error}
-      {:error, %Result{}} = error -> error
-    end
-  end
-
-  # The two-int4 advisory key space is disjoint from the roll's bigint keys.
-  # An OID above 2^31 reinterprets to a negative int4: still one key per OID.
-  @prune_advisory_class 0x414F_5052
-
-  defp claim_parent_pruner(target, parent) do
-    case dispatched_query(
-           target,
-           "SELECT pg_catalog.pg_try_advisory_xact_lock($1::int4, $2::text::pg_catalog.regclass::pg_catalog.oid::int4)",
-           [@prune_advisory_class, parent]
-         ) do
-      {:ok, %{rows: [[true]]}} -> :claimed
-      {:ok, %{rows: [[false]]}} -> :busy
-      {:ok, _other} -> {:refused, :error}
-      {:error, %Result{}} = error -> error
-    end
-  end
-
-  # Resolve the schema-qualified name to an OID, then check the physical and
-  # ownership facts. No policy enumeration or caller search_path is trusted.
-  defp prune_relation_facts(target, parent, relation) do
-    sql = """
-    SELECT
-      (c.oid IS NOT NULL) AS present,
-      (c.relkind = 'r') AS plain_heap,
-      (c.relowner = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)) AS owned,
-      EXISTS (
-        SELECT 1 FROM pg_catalog.pg_inherits i
-        WHERE i.inhrelid = c.oid AND i.inhparent = $1::text::pg_catalog.regclass
-      ) AS payload_child
-    FROM pg_catalog.pg_class c
-    WHERE c.oid = $2::text::pg_catalog.regclass
-    """
-
-    case dispatched_query(target, sql, [parent, relation]) do
-      {:ok, %{rows: [facts]}} when is_list(facts) -> {:ok, %{rows: [facts]}}
-      {:ok, _other} -> {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
-      {:error, %Result{} = result} -> {:error, result}
-    end
-  end
-
-  defp prune_facts([present, plain_heap, owned, payload_child])
-       when is_boolean(present) and is_boolean(plain_heap) and is_boolean(owned) and
-              is_boolean(payload_child) do
-    cond do
-      not present -> {:refused, :missing}
-      not plain_heap or not payload_child -> {:refused, :not_plain_child}
-      not owned -> {:refused, :not_owner}
-      true -> :prunable
-    end
-  end
-
-  defp prune_facts(_other), do: {:refused, :error}
-
-  defp owner_count_and_drop(target, relation, lock_guc, rls_guc) do
-    with {:ok, _} <-
-           dispatched_query(target, "ALTER TABLE #{relation} NO FORCE ROW LEVEL SECURITY", []),
-         {:ok, %{rows: [[false]]}} <-
-           dispatched_query(
-             target,
-             "SELECT relforcerowsecurity FROM pg_catalog.pg_class WHERE oid = $1::text::pg_catalog.regclass",
-             [relation]
-           ) do
-      count_and_drop_unforced(target, relation, lock_guc, rls_guc)
-    else
-      {:ok, %{rows: [[true]]}} -> rollback_prune(target, {:refused, :force_reapplied})
-      {:error, %Result{} = result} -> prune_error(target, result, :ddl_blocked)
-      _other -> rollback_prune(target, {:refused, :error})
-    end
-  end
-
-  defp count_and_drop_unforced(target, relation, lock_guc, rls_guc) do
-    # row_security=off stays armed through the emptiness probe, even after the
-    # FORCE gate: it raises instead of silently narrowing if RLS would still
-    # apply. EXISTS, not count(*): the parent's ACCESS EXCLUSIVE lock is held
-    # here, so an occupied partition must answer at its first live row instead
-    # of stalling every tenant's payload traffic behind a full scan. It also
-    # resolves no function through the caller's search_path.
-    case dispatched_query(target, "SELECT EXISTS (SELECT 1 FROM #{relation})", []) do
-      {:ok, %{rows: [[false]]}} -> drop_pruned_partition(target, relation, lock_guc, rls_guc)
-      {:ok, %{rows: [[true]]}} -> rollback_prune(target, :occupied)
-      {:ok, _other} -> rollback_prune(target, {:refused, :error})
-      {:error, %Result{} = result} -> prune_error(target, result, :error)
-    end
-  end
-
-  defp drop_pruned_partition(target, relation, lock_guc, rls_guc) do
-    with {:ok, _} <- dispatched_query(target, "DROP TABLE #{relation}", []),
-         {:ok, _} <-
-           dispatched_query(
-             target,
-             "SELECT pg_catalog.set_config('lock_timeout', $1, true), pg_catalog.set_config('row_security', $2, true)",
-             [lock_guc, rls_guc]
-           ),
-         {:ok, _} <- dispatched_query(target, "RELEASE SAVEPOINT #{@prune_savepoint}", []) do
-      {:ok, :dropped}
-    else
-      {:error, %Result{} = result} -> prune_error(target, result, :ddl_blocked)
-    end
-  end
-
-  defp prune_error(_target, %Result{reason: reason} = result, _fallback)
-       when reason in [:disconnected, :checkout_unavailable, :dispatched_unknown],
-       do: {:error, result}
-
-  defp prune_error(target, %Result{reason: :lock_timeout}, _fallback),
-    do: rollback_prune(target, {:refused, :lock_unavailable})
-
-  defp prune_error(target, %Result{}, fallback),
-    do: rollback_prune(target, {:refused, fallback})
-
-  # Undo NO FORCE, local GUCs, and locks on every occupied/refused candidate.
-  # Connection failures still halt cleanup: a failed rollback cannot be hidden.
-  defp rollback_prune(target, outcome) do
-    with {:ok, _} <- dispatched_query(target, "ROLLBACK TO SAVEPOINT #{@prune_savepoint}", []),
-         {:ok, _} <- dispatched_query(target, "RELEASE SAVEPOINT #{@prune_savepoint}", []) do
-      {:ok, outcome}
-    else
-      {:error, %Result{} = result} -> {:error, result}
-    end
-  end
+  defp decode_prune_report(_report),
+    do: {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
 
   defp roll_partitions_transaction(target, months_ahead) do
-    target.repo_module.transaction(fn -> roll_partitions_counts(target, months_ahead) end)
-  end
-
-  defp roll_partitions_counts(target, months_ahead) do
-    lock_timeout = partition_roll_lock_timeout()
-
-    with :ok <- arm_partition_roll_lock(target, lock_timeout),
-         {:ok, schema, database_date} <- database_schema_and_date(target),
-         {:ok, existing} <- payload_partition_names(target, schema),
-         {:ok, count} <-
-           create_roll_partitions(target, schema, database_date, months_ahead, existing) do
-      count
-    else
-      {:error, %Result{} = result} -> target.repo_module.rollback(result)
-    end
-  end
-
-  defp partition_roll_lock_timeout do
-    @default_lock_timeout_seconds * 1000
-  end
-
-  # Acquire a transaction-scoped advisory lock so concurrent rolls serialize (no CREATE PARTITION
-  # OF race), and set a bounded lock_timeout so a roll blocked by a long cleanup fails closed
-  # instead of hanging the worker. Both are scoped to this transaction and released on commit/
-  # rollback. lock_timeout is an integer in milliseconds (Postgres accepts the bare integer).
-  defp arm_partition_roll_lock(target, lock_timeout_ms) do
-    with {:ok, _} <-
-           dispatched_query(target, "SET LOCAL lock_timeout = #{lock_timeout_ms}", []),
-         {:ok, _} <-
-           dispatched_query(
+    target.repo_module.transaction(fn ->
+      case maintenance_query(
              target,
-             "SELECT pg_advisory_xact_lock($1::bigint)",
-             [roll_advisory_key(target)]
+             "SELECT #{relation(target, "ash_onetime_roll_payload_partitions")}($1)",
+             [months_ahead]
            ) do
-      :ok
-    end
-  end
+        {:ok, %{rows: [[count]]}} when is_integer(count) and count >= 0 ->
+          count
 
-  # Per-prefix advisory-lock key. pg_advisory_xact_lock(bigint) keys are cluster-global (not
-  # schema-scoped), so a single constant key over-serialized cross-tenant rolls even though
-  # each tenant's partitions live in its own schema (distinct parents, distinct pg_class OIDs
-  # — two tenants can never race on the same CREATE PARTITION OF). Deriving the key from the
-  # prefix preserves within-tenant serialization (same prefix → same key) while letting
-  # distinct tenants roll concurrently. A birthday collision across prefixes would only
-  # over-serialize (two tenants sharing a key serialize — the prior behavior), never
-  # under-serialize: a benign degradation, not a correctness hole. The nil-prefix
-  # (single-tenant) path keeps the historical constant.
-  #
-  # Exposed as a @doc false public function so the per-prefix derivation can be pinned
-  # directly (nil→constant, same-prefix→same-key, distinct→distinct, 63-bit positive)
-  # rather than through a live pg_advisory_xact_lock roll. Mirrors the
-  # bounded_callback_context/1 test seam in admission.ex.
-  @doc false
-  def roll_advisory_key(%Target{prefix: nil}), do: @partition_roll_advisory_key
+        {:error, %Result{} = result} ->
+          target.repo_module.rollback(result)
 
-  def roll_advisory_key(%Target{prefix: prefix}) do
-    # 63-bit positive bigint from the prefix. Take the first 8 bytes of the SHA-256 and mask
-    # to 63 bits (clear the sign bit) so the result is always a non-negative bigint in the
-    # pg_advisory_xact_lock(bigint) domain.
-    <<first_8::binary-size(8), _rest::binary>> = :crypto.hash(:sha256, prefix)
-    <<value::64-unsigned-integer>> = first_8
-    Bitwise.band(value, 0x7FFFFFFFFFFFFFFF)
-  end
-
-  defp payload_partition_names(target, schema) do
-    case payload_partitions(target, schema) do
-      {:ok, partitions} -> {:ok, MapSet.new(partitions, & &1.name)}
-      {:error, %Result{}} = error -> error
-    end
-  end
-
-  defp create_roll_partitions(target, schema, database_date, months_ahead, existing) do
-    database_date
-    |> roll_partition_descriptors(months_ahead)
-    |> Enum.reject(&MapSet.member?(existing, &1.name))
-    |> Enum.reduce_while({:ok, 0}, fn descriptor, {:ok, count} ->
-      case create_one_partition(target, schema, descriptor) do
-        :ok -> {:cont, {:ok, count + 1}}
-        {:error, %Result{} = result} -> {:halt, {:error, result}}
+        _other ->
+          target.repo_module.rollback(Result.failure(:store_invariant, :sent, :rolled_back))
       end
     end)
   end
 
-  defp roll_partition_descriptors(first_month, months_ahead) do
-    beginning = Date.beginning_of_month(first_month)
+  defp maintenance_query(target, sql, arguments) do
+    Process.put(@phase_key, :sent)
 
-    for offset <- 0..(months_ahead - 1) do
-      from = shift_month(beginning, offset)
-      to = shift_month(beginning, offset + 1)
+    case SQL.query(target.dynamic_repo, sql, arguments) do
+      {:ok, result} ->
+        {:ok, result}
 
-      %{
-        name: "ash_onetime_response_payloads_#{from.year}_#{pad_month(from.month)}",
-        from: from,
-        to: to
-      }
+      {:error, error} ->
+        {:error, classify_maintenance_error(error)}
     end
+  rescue
+    _exception -> {:error, Result.failure(:dispatched_unknown, :unknown, :unknown)}
+  catch
+    :exit, _reason -> {:error, Result.failure(:disconnected, :unknown, :unknown)}
   end
 
-  defp create_one_partition(target, schema, %{name: name, from: from, to: to}) do
-    sql = """
-    CREATE TABLE #{qualified_relation(schema, name)} PARTITION OF #{qualified_relation(schema, "ash_onetime_response_payloads")}
-    FOR VALUES FROM ('#{Date.to_iso8601(from)}') TO ('#{Date.to_iso8601(to)}')
-    """
+  defp classify_maintenance_error(%Postgrex.Error{postgres: %{code: :insufficient_privilege}}),
+    do: Result.failure(:maintenance_not_permitted, :sent, :rolled_back)
 
-    case dispatched_query(target, sql, []) do
-      {:ok, _result} ->
-        copy_parent_row_security(target, schema, name)
+  defp classify_maintenance_error(%Postgrex.Error{postgres: %{code: :active_sql_transaction}}),
+    do: Result.failure(:unsupported_isolation, :sent, :rolled_back)
 
-      # A duplicate_relation (42P07) is converted by dispatched_query to a store_invariant
-      # Result. Under the advisory lock this should not happen (rolls serialize), but treat it
-      # as idempotent success if it does — never fail a roll on a partition that already exists.
-      # partition_exists? is SCHEMA-SCOPED (joins pg_namespace + filters nspname) so a
-      # same-named partition in another tenant's schema never satisfies this check — the
-      # multitenant isolation invariant its sibling payload_partitions enforces.
-      {:error, %Result{reason: :store_invariant} = result} ->
-        if partition_exists?(target, schema, name), do: :ok, else: {:error, result}
+  defp classify_maintenance_error(%Postgrex.Error{
+         postgres: %{code: :raise_exception, message: message}
+       }) do
+    reason =
+      cond do
+        String.starts_with?(message, "maintenance_blinded:") -> :maintenance_blinded
+        String.starts_with?(message, "untrusted_dependency:") -> :untrusted_dependency
+        String.starts_with?(message, "prune_blocked:") -> :prune_blocked
+        true -> :store_invariant
+      end
 
-      {:error, %Result{} = result} ->
-        {:error, result}
-    end
+    Result.failure(reason, :sent, :rolled_back)
   end
 
-  # A child partition queried by name applies its OWN row-security grants and
-  # policies, and a freshly created child has none — including under a FORCE
-  # RLS parent. Copy the parent's ENABLE/FORCE settings and every parent
-  # policy the child lacks. The prune itself no longer needs anything here (it
-  # decides as the table owner, exempt of an un-FORCEd relation), but the
-  # runtime role typically holds default privileges on tables the owner
-  # creates, so children ARE directly readable by name: without the copied
-  # policies a direct child read crosses tenants. Pinned by the
-  # default-privileged-runtime-role test in rls_prune_test.exs.
-  defp copy_parent_row_security(target, schema, child) do
-    # The schema is quoted for regclass and escaped for string literals — a
-    # prefix is length-checked but not charset-checked, so build both forms
-    # instead of interpolating it raw.
-    quoted_schema = quote_identifier(schema)
-    literal_schema = String.replace(schema, "'", "''")
-
-    sql = """
-    DO $copy$
-    DECLARE
-      parent_oid regclass := $mig$#{quoted_schema}."ash_onetime_response_payloads"$mig$::regclass;
-      child_oid regclass := $mig$#{quoted_schema}.#{quote_identifier(child)}$mig$::regclass;
-      parent_flags record;
-      r record;
-      roles text;
-      cmd_part text;
-      using_part text;
-      check_part text;
-      ddl text;
-    BEGIN
-      SELECT relrowsecurity AS enabled, relforcerowsecurity AS forced
-      INTO parent_flags
-      FROM pg_class WHERE oid = parent_oid;
-
-      IF parent_flags.enabled THEN
-        ddl := 'ALTER TABLE ' || child_oid || ' ENABLE ROW LEVEL SECURITY';
-        EXECUTE ddl;
-      END IF;
-
-      IF parent_flags.forced THEN
-        ddl := 'ALTER TABLE ' || child_oid || ' FORCE ROW LEVEL SECURITY';
-        EXECUTE ddl;
-      END IF;
-
-      FOR r IN
-        SELECT * FROM pg_policies WHERE schemaname = '#{literal_schema}' AND tablename = 'ash_onetime_response_payloads'
-      LOOP
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_policies
-          WHERE schemaname = '#{literal_schema}' AND tablename = '#{child}' AND policyname = r.policyname
-        ) THEN
-          roles := coalesce(
-            (SELECT string_agg(quote_ident(member), ', ') FROM unnest(r.roles) AS member),
-            'PUBLIC'
-          );
-          cmd_part := CASE r.cmd WHEN 'ALL' THEN '' ELSE 'FOR ' || r.cmd || ' ' END;
-          using_part := CASE WHEN r.qual IS NULL THEN '' ELSE 'USING (' || r.qual || ') ' END;
-          check_part := CASE WHEN r.with_check IS NULL THEN '' ELSE 'WITH CHECK (' || r.with_check || ')' END;
-          ddl := 'CREATE POLICY ' || quote_ident(r.policyname) || ' ON ' || child_oid ||
-            ' AS ' || r.permissive || ' ' || cmd_part || 'TO ' || roles || ' ' || using_part || check_part;
-          EXECUTE ddl;
-        END IF;
-      END LOOP;
-    END
-    $copy$;
-    """
-
-    case dispatched_query(target, sql, []) do
-      {:ok, _result} -> :ok
-      {:error, %Result{} = result} -> {:error, result}
-    end
-  end
-
-  defp partition_exists?(target, schema, name) do
-    sql = """
-    SELECT 1
-    FROM pg_inherits
-    JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
-    JOIN pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
-    JOIN pg_class child ON child.oid = pg_inherits.inhrelid
-    WHERE parent_namespace.nspname = $1
-      AND parent.relname = 'ash_onetime_response_payloads'
-      AND child.relname = $2
-    LIMIT 1
-    """
-
-    case dispatched_query(target, sql, [schema, name]) do
-      {:ok, %{rows: [[1]]}} -> true
-      _other -> false
-    end
-  end
-
-  defp shift_month(date, offset) do
-    month_index = date.year * 12 + date.month - 1 + offset
-    Date.new!(div(month_index, 12), rem(month_index, 12) + 1, 1)
-  end
-
-  defp pad_month(month), do: String.pad_leading(Integer.to_string(month), 2, "0")
+  defp classify_maintenance_error(error), do: classify_query_error(error)
 
   defp validate_request(%Request{strategy: :idempotency, retention_seconds: retention_seconds})
        when is_integer(retention_seconds) and retention_seconds > 0 and

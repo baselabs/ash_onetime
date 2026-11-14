@@ -1,58 +1,15 @@
 defmodule AshOnetime.Store.RollForwardTest do
-  @moduledoc """
-  Pins the SEC-5/SEC-6 forward migration (`mix ash_onetime.gen.roll_forward`).
-
-  Tripwires:
-  1. The rendered migration source parses and contains the index, the partition CREATEs, and
-     the claim-scoped DEFAULT drain.
-  2. The DEFAULT drain is CLAIM-SCOPED — it deletes a past-retention CLAIM (and the trigger
-     removes the stranded DEFAULT payload), so the delete-guard cardinality invariant stays
-     satisfied and the claim is not orphaned into permanent undeletability (plan-review finding
-     #2). The tripwire asserts BOTH the claim and the payload are gone.
-  3. The drain leaves a within-retention stranded payload alone (re-completion is a new
-     execution per ADR-0001:65).
-  """
-
   use AshOnetime.Test.StoreCase, async: false
 
   alias AshOnetime.Store
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
-  alias Mix.Tasks.AshOnetime.Gen.Migrations, as: GenerateMigrations
 
   @moduletag :store
 
   setup_all do
     installation = install_store!()
     {:ok, prefix: installation.schema}
-  end
-
-  describe "render_roll_forward/2 source" do
-    test "renders a parsing migration with the index, partitions, and claim-scoped drain" do
-      source =
-        GenerateMigrations.render_roll_forward(Repo,
-          partition_start: Date.utc_today() |> Date.beginning_of_month(),
-          months: 3
-        )
-
-      assert {:ok, _} = Code.string_to_quoted(source)
-      assert source =~ "ash_onetime_idempotency_claims_response_partition_index"
-      assert source =~ "CREATE TABLE IF NOT EXISTS"
-      assert source =~ "PARTITION OF"
-      # Claim-scoped: the DELETE targets the claims table, joining payloads in _default.
-      assert source =~ "DELETE FROM"
-      assert source =~ "ash_onetime_idempotency_claims"
-      assert source =~ "ash_onetime_response_payloads_default"
-      # Every relation and the DEFAULT OID lookup use the addressed parent's namespace.
-      # Nil-prefix installs resolve it from regclass, even behind an empty user schema.
-      assert source =~ "relnamespace"
-      assert source =~ "schema_name(schema)"
-      assert source =~ "defp schema_name(schema)"
-      # The helper must branch on prefix() (not unconditionally use current_schema()).
-      assert source =~ "case prefix() do"
-      # An explicit prefix remains authoritative.
-      assert source =~ "prefix_value ->"
-    end
   end
 
   describe "the DEFAULT drain (claim-scoped)" do
@@ -128,27 +85,10 @@ defmodule AshOnetime.Store.RollForwardTest do
     end
   end
 
-  # Run only the drain portion of the rendered migration (the index/partitions already exist
-  # from the install; the drain is the claim-scoped DELETE).
   defp run_drain!(prefix) do
-    SQL.query!(
-      Repo,
-      """
-      DELETE FROM "#{prefix}"."ash_onetime_idempotency_claims"
-      WHERE state = 'complete'
-        AND "#{prefix}"."ash_onetime_cleanup_eligible"(retain_until)
-        AND id IN (
-          SELECT claim_id
-          FROM "#{prefix}"."ash_onetime_response_payloads"
-          WHERE tableoid IN (
-            SELECT oid FROM pg_class
-            WHERE relname = 'ash_onetime_response_payloads_default'
-              AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = $1)
-          )
-        )
-      """,
-      [prefix]
-    )
+    target = Postgres.for_repo(Repo, prefix)
+    assert {:ok, _} = Store.roll_partitions(target, 1)
+    assert {:ok, _} = Store.cleanup(target, 100, 0)
   end
 
   # Seed a complete claim whose payload is stranded in _default. retain_until is set far in the
