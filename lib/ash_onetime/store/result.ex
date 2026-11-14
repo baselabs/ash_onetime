@@ -4,7 +4,7 @@ defmodule AshOnetime.Store.Result do
   alias AshOnetime.Store.Claim
 
   @enforce_keys [:status, :admission_dispatch, :transaction]
-  defstruct [:status, :claim, :payload, :reason, :admission_dispatch, :transaction]
+  defstruct [:status, :claim, :payload, :reason, :admission_dispatch, :transaction, :error]
 
   @type status :: :admitted | :collision | :processing | :complete | :failure
   @type reason ::
@@ -21,6 +21,9 @@ defmodule AshOnetime.Store.Result do
           | :rolled_back
           | :corrupt_payload
           | :store_invariant
+          | :in_transaction
+          | :maintenance_timeout
+          | :lock_unavailable
           | :maintenance_not_permitted
           | :maintenance_blinded
           | :untrusted_dependency
@@ -31,6 +34,7 @@ defmodule AshOnetime.Store.Result do
           claim: Claim.t() | nil,
           payload: binary() | nil,
           reason: reason() | nil,
+          error: AshOnetime.Error.t() | nil,
           admission_dispatch: :not_started | :sent | :unknown,
           transaction: :open | :committed | :rolled_back | :unknown | :not_applicable
         }
@@ -59,6 +63,10 @@ defmodule AshOnetime.Store.Result do
     %__MODULE__{
       status: :failure,
       reason: reason,
+      error:
+        if(reason == :maintenance_timeout,
+          do: AshOnetime.Error.new(:maintenance_timeout, "maintenance statement timed out")
+        ),
       admission_dispatch: dispatch,
       transaction: transaction
     }

@@ -21,7 +21,7 @@ defmodule <%= inspect(module) %> do
       response_codec text,
       response_digest bytea,
       hold_reference text CONSTRAINT ash_onetime_idempotency_claims_hold_check
-        CHECK (hold_reference IS NULL OR (octet_length(hold_reference) BETWEEN 1 AND 255 AND state = 'complete')),
+        CHECK (hold_reference IS NULL OR (octet_length(hold_reference) >= 1 AND octet_length(hold_reference) <= 255 AND state = 'complete')),
       admitted_at timestamptz NOT NULL,
       retain_until timestamptz NOT NULL,
       inserted_at timestamptz NOT NULL,
@@ -34,10 +34,10 @@ defmodule <%= inspect(module) %> do
         OR
         (state = 'complete' AND response_partition IS NOT NULL AND response_codec IS NOT NULL
           AND response_digest IS NOT NULL
-          AND octet_length(response_codec) BETWEEN 1 AND 128
+          AND octet_length(response_codec) >= 1 AND octet_length(response_codec) <= 128
           AND octet_length(response_digest) = 32)
       )
-    ) <%= if hash_partitions, do: "PARTITION BY HASH (operation_hash)" %>
+    ) <%= if hash_partitions, do: "PARTITION BY HASH (operation_hash)", else: "USING heap" %>
     """)
 
     create_claim_partitions("ash_onetime_idempotency_claims")
@@ -85,7 +85,7 @@ defmodule <%= inspect(module) %> do
       CHECK (retain_until > issued_at),
       CHECK (retain_until > admitted_at),
       CHECK (inserted_at >= admitted_at)
-    ) <%= if hash_partitions, do: "PARTITION BY HASH (operation_hash)" %>
+    ) <%= if hash_partitions, do: "PARTITION BY HASH (operation_hash)", else: "USING heap" %>
     """)
 
     create_claim_partitions("ash_onetime_nonce_claims")
@@ -100,19 +100,20 @@ defmodule <%= inspect(module) %> do
   end
 
   def down do
-    execute("DROP FUNCTION IF EXISTS #{q("ash_onetime_reap_idempotency")}(integer, bigint)")
-    execute("DROP FUNCTION IF EXISTS #{q("ash_onetime_cleanup_nonce")}(integer)")
-    execute("DROP FUNCTION IF EXISTS #{q("ash_onetime_cleanup_idempotency")}(integer)")
+    execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_reap_idempotency")}(integer, bigint)")
+    execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_cleanup_nonce")}(integer)")
+    execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_cleanup_idempotency")}(integer)")
     execute("DROP TABLE IF EXISTS #{q("ash_onetime_nonce_claims")} CASCADE")
     execute("DROP TABLE IF EXISTS #{q("ash_onetime_idempotency_claims")} CASCADE")
-    execute("DROP FUNCTION IF EXISTS #{q("ash_onetime_guard_nonce_delete")}()")
-    execute("DROP FUNCTION IF EXISTS #{q("ash_onetime_guard_idempotency_delete")}()")
-    execute("DROP FUNCTION IF EXISTS #{q("ash_onetime_cleanup_eligible")}(timestamptz)")
+    execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_guard_nonce_delete")}()")
+    execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_guard_idempotency_delete")}()")
+    execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_cleanup_eligible")}(timestamptz)")
     execute("DROP TABLE IF EXISTS #{q("ash_onetime_response_payloads")} CASCADE")
     execute("DROP TABLE IF EXISTS #{q("ash_onetime_maintenance_runs")} CASCADE")
     for routine <- @maintenance_functions do
-      execute("DROP FUNCTION IF EXISTS #{q(routine.name)}(#{routine.args})")
+      execute("DROP FUNCTION IF EXISTS #{rq(routine.name)}(#{routine.args})")
     end
+    execute("DROP SCHEMA #{quote_identifier(routine_schema_name())}")
   end
 
   defp create_payloads do
@@ -141,7 +142,7 @@ defmodule <%= inspect(module) %> do
       FOR ordinal IN 0..12 LOOP
         month_date := (first_month+ordinal*interval '1 month')::date;
         next_month := (month_date+interval '1 month')::date;
-        EXECUTE format('CREATE TABLE %I.%I PARTITION OF %I.ash_onetime_response_payloads FOR VALUES FROM (%L) TO (%L)',
+        EXECUTE format('CREATE TABLE %I.%I PARTITION OF %I.ash_onetime_response_payloads FOR VALUES FROM (%L) TO (%L) USING heap',
           install_schema,'ash_onetime_response_payloads_' || to_char(month_date,'YYYY_MM'),install_schema,month_date,next_month);
       END LOOP;
     END
@@ -150,14 +151,14 @@ defmodule <%= inspect(module) %> do
     for %{name: name, from: from, to: to} <- <%= inspect(response_partitions) %> do
       execute("""
       CREATE TABLE #{q(name)} PARTITION OF #{q("ash_onetime_response_payloads")}
-      FOR VALUES FROM ('#{Date.to_iso8601(from)}') TO ('#{Date.to_iso8601(to)}')
+      FOR VALUES FROM ('#{Date.to_iso8601(from)}') TO ('#{Date.to_iso8601(to)}') USING heap
       """)
     end
     <% end %>
 
     execute("""
     CREATE TABLE #{q("ash_onetime_response_payloads_default")}
-    PARTITION OF #{q("ash_onetime_response_payloads")} DEFAULT
+    PARTITION OF #{q("ash_onetime_response_payloads")} DEFAULT USING heap
     """)
   end
 
@@ -169,7 +170,7 @@ defmodule <%= inspect(module) %> do
       execute("""
       CREATE TABLE #{q("#{parent}_p#{remainder}")}
       PARTITION OF #{q(parent)}
-      FOR VALUES WITH (MODULUS #{count}, REMAINDER #{remainder})
+      FOR VALUES WITH (MODULUS #{count}, REMAINDER #{remainder}) USING heap
       """)
     end
     <% else %>
@@ -180,8 +181,6 @@ defmodule <%= inspect(module) %> do
 
   defp create_cleanup_functions do
     install_maintenance()
-    execute("CREATE TRIGGER ash_onetime_idempotency_delete_guard BEFORE DELETE ON #{q("ash_onetime_idempotency_claims")} FOR EACH ROW EXECUTE FUNCTION #{q("ash_onetime_guard_idempotency_delete")}()")
-    execute("CREATE TRIGGER ash_onetime_nonce_delete_guard BEFORE DELETE ON #{q("ash_onetime_nonce_claims")} FOR EACH ROW EXECUTE FUNCTION #{q("ash_onetime_guard_nonce_delete")}()")
   end
 
 

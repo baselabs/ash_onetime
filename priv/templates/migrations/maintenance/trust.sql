@@ -1,74 +1,134 @@
 DECLARE
-  node record;
-  proc_row record;
-  expected jsonb;
   manifest jsonb := '[]'::jsonb; -- @routine_manifest@
-  relation_ids oid[];
-  bad record;
+  expected jsonb;
+  actual jsonb;
+  relation_row record;
+  root_name text;
+  bound text;
+  normalized_bound text;
+  key_name text;
+  policy_error text;
+  date_token record;
+  date_bytes integer[];
+  day_number bigint;
+  bound_dates date[];
 BEGIN
-  SELECT array_agg(r) INTO relation_ids FROM @schema@.ash_onetime_maintenance_relations() r;
-  IF jsonb_array_length(manifest)=0 THEN RAISE EXCEPTION 'untrusted_dependency: package manifest'; END IF;
-
-  SELECT t.tgname, t.tgrelid::regclass AS relation INTO bad FROM pg_trigger t
-  WHERE t.tgrelid=ANY(relation_ids) AND NOT (
-    (t.tgname='ash_onetime_idempotency_delete_guard'
-     AND t.tgfoid=format('%I.ash_onetime_guard_idempotency_delete()',@schema_name@)::regprocedure
-     AND (t.tgrelid=@idempotency@::regclass OR EXISTS (
-       SELECT 1 FROM pg_inherits WHERE inhrelid=t.tgrelid AND inhparent=@idempotency@::regclass)))
-    OR (t.tgname='ash_onetime_nonce_delete_guard'
-     AND t.tgfoid=format('%I.ash_onetime_guard_nonce_delete()',@schema_name@)::regprocedure
-     AND (t.tgrelid=@nonce@::regclass OR EXISTS (
-       SELECT 1 FROM pg_inherits WHERE inhrelid=t.tgrelid AND inhparent=@nonce@::regclass)))
-  ) LIMIT 1;
-  IF FOUND THEN RAISE EXCEPTION 'untrusted_dependency: trigger %.%', bad.relation,bad.tgname; END IF;
-  SELECT rulename, ev_class::regclass AS relation INTO bad FROM pg_rewrite WHERE ev_class=ANY(relation_ids) LIMIT 1;
-  IF FOUND THEN RAISE EXCEPTION 'untrusted_dependency: rule %.%', bad.relation,bad.rulename; END IF;
-
-  FOR node IN
-    WITH RECURSIVE walk(classid,objectid) AS (
-      SELECT 'pg_class'::regclass::oid, r FROM unnest(relation_ids) r
-      UNION
-      SELECT e.classid,e.objectid FROM walk w
-      CROSS JOIN LATERAL @schema@.ash_onetime_maintenance_edges(w.classid,w.objectid) e
-      WHERE e.objectid<>0
-    ) SELECT * FROM walk
+  -- R2: only exact package identities and definitions are trusted. A runtime
+  -- overload is unrelated and cannot match these argument type identities.
+  IF jsonb_array_length(manifest)=0 OR EXISTS (
+    SELECT 1 FROM jsonb_array_elements(manifest) m
+    LEFT JOIN pg_namespace n ON n.nspname=m->>'schema'
+    LEFT JOIN pg_proc p ON p.pronamespace=n.oid AND p.proname=m->>'name' AND p.proargtypes::text=m->>'arguments'
+    WHERE p.oid IS NULL OR p.proowner IS DISTINCT FROM (m->>'owner')::oid
+      OR p.prosecdef IS DISTINCT FROM (m->>'definer')::boolean
+      OR to_jsonb(p.proconfig) IS DISTINCT FROM m->'config'
+      OR (to_jsonb(p)-ARRAY['oid','pronamespace','proowner','proacl','prosrc','prosupport','proargdefaults','prosqlbody','pronargdefaults']) IS DISTINCT FROM m->'identity'
+      OR encode(sha256(convert_to(p.prosrc,'UTF8')),'hex') IS DISTINCT FROM m->>'digest'
+  ) THEN RAISE EXCEPTION 'untrusted_dependency: package routine digest'; END IF;
+  -- R2c executable metadata. Verify support before invoking any normalizer.
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(manifest) m
+    JOIN pg_namespace n ON n.nspname=m->>'schema'
+    JOIN pg_proc p ON p.pronamespace=n.oid AND p.proname=m->>'name' AND p.proargtypes::text=m->>'arguments'
+    WHERE p.prosupport<>0) THEN
+    RAISE EXCEPTION 'untrusted_dependency: routine support';
+  END IF;
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(manifest) m
+    JOIN pg_namespace n ON n.nspname=m->>'schema'
+    JOIN pg_proc p ON p.pronamespace=n.oid AND p.proname=m->>'name' AND p.proargtypes::text=m->>'arguments'
+    WHERE jsonb_build_object('support',p.prosupport,'default_count',p.pronargdefaults,
+      'defaults',@routines@.ash_onetime_maintenance_normalize(p.proargdefaults::text,0::oid),
+      'sqlbody',@routines@.ash_onetime_maintenance_normalize(p.prosqlbody::text,0::oid)) IS DISTINCT FROM m->'executable') THEN
+    RAISE EXCEPTION 'untrusted_dependency: routine executable trees';
+  END IF;
+  -- End R2c executable metadata.
+  -- R2b uses the trusted-owner/server boundary. Scheduled roles cannot join it.
+  IF EXISTS (WITH RECURSIVE scheduled(oid) AS (
+    SELECT @maintenance@::oid WHERE @maintenance@<>@owner@
+    UNION SELECT m.member FROM scheduled s JOIN pg_auth_members m ON m.roleid=s.oid WHERE m.member<>@owner@
+  ) SELECT 1 FROM scheduled s JOIN pg_roles r ON r.oid=s.oid WHERE NOT r.rolsuper
+    AND pg_has_role(r.oid,@owner@,'MEMBER')) THEN
+    RAISE EXCEPTION 'untrusted_dependency: runtime or maintenance owner membership';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname=@routine_schema_name@ AND nspowner=@owner@)
+    OR EXISTS (SELECT 1 FROM pg_roles r WHERE NOT r.rolsuper AND r.oid<>@owner@
+      AND NOT pg_has_role(r.oid,@owner@,'USAGE')
+      AND has_schema_privilege(r.oid,@routine_schema_name@,'CREATE')) THEN
+    RAISE EXCEPTION 'untrusted_dependency: routine schema CREATE';
+  END IF;
+  expected := @routines@.ash_onetime_maintenance_shapes();
+  -- R1e: publication membership is safe only without executable row filters.
+  IF EXISTS (SELECT 1 FROM pg_publication_rel p
+    WHERE p.prrelid IN (SELECT @routines@.ash_onetime_maintenance_relations()) AND p.prqual IS NOT NULL) THEN
+    RAISE EXCEPTION 'untrusted_dependency: publication row filter';
+  END IF;
+  -- R1: catalog trees only; no deparser and no routine ownership allowlist.
+  FOR relation_row IN
+    SELECT c.*,p.relname AS parent_name,i.inhparent
+    FROM @routines@.ash_onetime_maintenance_relations() r
+    JOIN pg_class c ON c.oid=r
+    LEFT JOIN pg_inherits i ON i.inhrelid=c.oid
+    LEFT JOIN pg_class p ON p.oid=i.inhparent
+    WHERE true -- R1 relation set
   LOOP
-    IF node.classid='pg_proc'::regclass THEN
-      SELECT p.*, n.nspname, r.rolsuper INTO STRICT proc_row
-      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner
-      WHERE p.oid=node.objectid;
-      IF node.objectid < 16384 OR proc_row.rolsuper THEN CONTINUE; END IF;
-      SELECT m INTO expected FROM jsonb_array_elements(manifest) m
-      WHERE m->>'schema'=proc_row.nspname AND m->>'name'=proc_row.proname
-        AND m->>'arguments'=proc_row.proargtypes::text
-        AND (m->>'owner')::oid=proc_row.proowner
-        AND (m->>'definer')::boolean=proc_row.prosecdef
-        AND m->'config'=to_jsonb(proc_row.proconfig)
-        AND m->>'digest'=encode(sha256(convert_to(proc_row.prosrc,'UTF8')),'hex');
-      IF expected IS NULL THEN
-        RAISE EXCEPTION 'untrusted_dependency: routine %', node.objectid::regprocedure;
-      END IF;
-    ELSIF node.classid='pg_type'::regclass AND node.objectid >= 16384 THEN
-      IF EXISTS (SELECT 1 FROM pg_type t JOIN pg_roles r ON r.oid=t.typowner
-        WHERE t.oid=node.objectid AND NOT r.rolsuper
-          AND NOT (t.typrelid=ANY(relation_ids))
-          AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid=ANY(relation_ids) AND c.reltype=t.typelem)) THEN
-        RAISE EXCEPTION 'untrusted_dependency: type %',node.objectid::regtype;
-      END IF;
-    ELSIF node.classid='pg_operator'::regclass AND node.objectid >= 16384 THEN
-      IF EXISTS (SELECT 1 FROM pg_operator o JOIN pg_roles r ON r.oid=o.oprowner WHERE o.oid=node.objectid AND NOT r.rolsuper) THEN
-        RAISE EXCEPTION 'untrusted_dependency: operator %',node.objectid::regoperator;
-      END IF;
-    ELSIF node.classid='pg_class'::regclass THEN
-      IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner
-        WHERE c.oid=node.objectid AND c.relkind='S' AND NOT r.rolsuper) THEN
-        RAISE EXCEPTION 'untrusted_dependency: sequence %',node.objectid::regclass;
-      END IF;
-    ELSIF node.classid='pg_collation'::regclass AND node.objectid >= 16384 THEN
-      IF EXISTS (SELECT 1 FROM pg_collation c JOIN pg_roles r ON r.oid=c.collowner
-        WHERE c.oid=node.objectid AND NOT r.rolsuper) THEN
-        RAISE EXCEPTION 'untrusted_dependency: collation %',node.objectid;
+    root_name := CASE WHEN relation_row.inhparent IS NULL THEN relation_row.relname ELSE relation_row.parent_name END;
+    IF root_name NOT IN ('ash_onetime_idempotency_claims','ash_onetime_nonce_claims',
+        'ash_onetime_response_payloads','ash_onetime_maintenance_runs') OR
+      (relation_row.inhparent IS NOT NULL AND (NOT relation_row.relispartition OR
+        (SELECT count(*) FROM pg_inherits WHERE inhrelid=relation_row.oid)<>1)) THEN
+      RAISE EXCEPTION 'untrusted_dependency: relation set';
+    END IF;
+    key_name := root_name || CASE WHEN relation_row.inhparent IS NULL THEN '' ELSE '_child' END;
+    actual := @routines@.ash_onetime_maintenance_shape(relation_row.oid::oid);
+    IF actual IS DISTINCT FROM expected->key_name THEN
+      RAISE EXCEPTION 'untrusted_dependency: relation shape %',relation_row.relname;
+    END IF;
+    IF relation_row.relispartition THEN
+      bound := regexp_replace(relation_row.relpartbound::text, ':location [-0-9]+', ':location -1','g');
+      IF root_name='ash_onetime_response_payloads' THEN
+        normalized_bound := regexp_replace(bound, ':constvalue 4 \[ [0-9 -]+ \]', ':constvalue <date>', 'g');
+        IF normalized_bound IS DISTINCT FROM expected->>'payload_range_bound' AND
+          bound IS DISTINCT FROM expected->>'payload_default_bound' THEN
+          RAISE EXCEPTION 'untrusted_dependency: partition bound %',relation_row.relname;
+        END IF;
+        IF bound IS DISTINCT FROM expected->>'payload_default_bound' THEN
+          bound_dates := '{}';
+          BEGIN
+            FOR date_token IN SELECT m FROM regexp_matches(bound,':constvalue 4 \[ ([0-9 -]+) \]','g') m LOOP
+              date_bytes := regexp_split_to_array(btrim(date_token.m[1]),'\s+')::integer[];
+              IF expected->>'payload_byte_order'='big' THEN
+                date_bytes := ARRAY[date_bytes[4],date_bytes[3],date_bytes[2],date_bytes[1]];
+              END IF;
+              day_number := mod(date_bytes[1]+256,256)::bigint + mod(date_bytes[2]+256,256)*256::bigint
+                + mod(date_bytes[3]+256,256)*65536::bigint + mod(date_bytes[4]+256,256)*16777216::bigint;
+              IF day_number>2147483647 THEN day_number := day_number-4294967296; END IF;
+              bound_dates := array_append(bound_dates,date '2000-01-01'+day_number::integer);
+            END LOOP;
+            IF cardinality(bound_dates)<>2 OR bound_dates[2]<=bound_dates[1] THEN
+              RAISE EXCEPTION 'untrusted_dependency: invalid partition range';
+            END IF;
+          EXCEPTION WHEN datetime_field_overflow OR numeric_value_out_of_range THEN
+            RAISE EXCEPTION 'untrusted_dependency: partition date range';
+          END;
+        END IF;
+      ELSIF bound !~ '^\{PARTITIONBOUNDSPEC :strategy h :is_default false :modulus (2|4|8|16|32|64) :remainder [0-9]+ :listdatums <> :lowerdatums <> :upperdatums <> :location -1\}$' THEN
+        RAISE EXCEPTION 'untrusted_dependency: hash partition bound';
       END IF;
     END IF;
   END LOOP;
+  IF (SELECT count(*) FROM pg_class c WHERE c.relnamespace=(SELECT oid FROM pg_namespace WHERE nspname=@schema_name@)
+    AND c.relname IN ('ash_onetime_idempotency_claims','ash_onetime_nonce_claims','ash_onetime_response_payloads','ash_onetime_maintenance_runs'))<>4 THEN
+    RAISE EXCEPTION 'untrusted_dependency: missing package root';
+  END IF;
+  -- The policy refusal has its own closed error, including Table 1 row 5.
+  policy_error := @routines@.ash_onetime_maintenance_policy_error();
+  IF policy_error IS NOT NULL THEN RAISE EXCEPTION 'maintenance_blinded: %',policy_error; END IF;
+  -- R3a: effective privilege, including pg_maintain membership. Owners are
+  -- trusted; every other role that can maintain a relation is refused.
+  IF EXISTS (SELECT 1 FROM pg_roles r CROSS JOIN LATERAL @routines@.ash_onetime_maintenance_relations() t
+    WHERE (r.rolcanlogin OR r.oid=(SELECT (last_counts->>'maintenance_role')::oid FROM @schema@.ash_onetime_maintenance_runs WHERE step='install')
+      OR r.rolname=current_setting('role')) AND NOT r.rolsuper AND r.oid<>@owner@ AND NOT pg_has_role(r.oid,@owner@,'USAGE')
+      AND has_table_privilege(r.oid,t::oid,'MAINTAIN')) THEN
+    RAISE EXCEPTION 'untrusted_dependency: effective MAINTAIN privilege';
+  END IF;
+
 END

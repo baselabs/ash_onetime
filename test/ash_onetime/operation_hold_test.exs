@@ -261,11 +261,11 @@ defmodule AshOnetime.OperationHoldTest do
     SQL.query!(Repo, "SET LOCAL enable_seqscan = off", [])
 
     for {query, index} <- [
-          {"SELECT logical_partition, operation_hash, id FROM #{claims(ctx.prefix)} WHERE state = 'complete' AND hold_reference IS NULL AND \"#{ctx.prefix}\".ash_onetime_cleanup_eligible(retain_until) ORDER BY retain_until, logical_partition, operation_hash, id FOR UPDATE SKIP LOCKED LIMIT 100",
+          {"SELECT logical_partition, operation_hash, id FROM #{claims(ctx.prefix)} WHERE state = 'complete' AND hold_reference IS NULL AND \"#{Postgres.routine_schema(ctx.prefix)}\".ash_onetime_cleanup_eligible(retain_until) ORDER BY retain_until, logical_partition, operation_hash, id FOR UPDATE SKIP LOCKED LIMIT 100",
            "ash_onetime_idempotency_claims_cleanup_index"},
           {"UPDATE #{claims(ctx.prefix)} SET hold_reference = NULL WHERE logical_partition = 'global' AND hold_reference = 'operation'",
            "ash_onetime_idempotency_claims_hold_index"},
-          {"SELECT logical_partition, operation_hash, id FROM #{claims(ctx.prefix)} WHERE state = 'processing' AND inserted_at < now() - interval '1 day' AND \"#{ctx.prefix}\".ash_onetime_cleanup_eligible(retain_until) ORDER BY inserted_at, logical_partition, operation_hash, id FOR UPDATE SKIP LOCKED LIMIT 100",
+          {"SELECT logical_partition, operation_hash, id FROM #{claims(ctx.prefix)} WHERE state = 'processing' AND inserted_at < now() - interval '1 day' AND \"#{Postgres.routine_schema(ctx.prefix)}\".ash_onetime_cleanup_eligible(retain_until) ORDER BY inserted_at, logical_partition, operation_hash, id FOR UPDATE SKIP LOCKED LIMIT 100",
            "ash_onetime_idempotency_claims_processing_index"}
         ] do
       %{rows: plan} = SQL.query!(Repo, "EXPLAIN " <> query, [])
@@ -287,7 +287,7 @@ defmodule AshOnetime.OperationHoldTest do
 
     SQL.query!(
       Repo,
-      ~s|SELECT "#{ctx.prefix}".ash_onetime_maintenance_copy_policy($1::text::regclass)|,
+      ~s|SELECT "#{Postgres.routine_schema(ctx.prefix)}".ash_onetime_maintenance_copy_policy($1::text::regclass)|,
       [ctx.prefix <> ".ash_onetime_response_payloads_2001_01"]
     )
 

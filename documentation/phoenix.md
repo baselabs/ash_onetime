@@ -111,6 +111,8 @@ defmodule MyAppWeb.OnetimeErrors do
     :disconnected,
     :worker_timeout,
     :lock_timeout,
+    :lock_unavailable,
+    :maintenance_timeout,
     :dispatched_unknown,
     :store_failure
   ]
@@ -132,6 +134,7 @@ defmodule MyAppWeb.OnetimeErrors do
     :telemetry_invalid,
     :missing_prefix,
     :not_in_transaction,
+    :in_transaction,
     :unsupported_isolation,
     :corrupt_payload,
     :invalid_request

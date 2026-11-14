@@ -27,11 +27,6 @@ All notable changes to this project are documented in this file.
   reference-signer interoperability, purpose/algorithm binding and signature tampering.
 
 
-This draft is blocked from release: allowing every builtin routine admits SQL-string
-dispatchers such as `query_to_xml`, which can call consumer code as the payload owner
-without a catalog dependency. The quarantined regression in `maintenance_test.exs`
-reproduces it; the trust design needs revision before these definers are safe to deploy.
-
 - Maintenance moves into per-schema owner-owned functions with fixed search paths,
   bounded arguments, READ COMMITTED checks, owner-scoped policies, catalog checks,
   ACL resets, and transactional step records. PostgreSQL privilege refusals surface as
@@ -40,10 +35,17 @@ reproduces it; the trust design needs revision before these definers are safe to
   preserves rows and FORCE flags, and resets every new child's table and column grants.
   `ash_onetime.gen.roll_forward` is removed; the roll performs recovery.
 - `ash_onetime.gen.migrations --maintenance --maintenance-role ROLE` generates the
-  upgrade after operation holds. Installation currently requires the owner to have SELECT
-  on the routine-bearing metadata columns of `pg_catalog.pg_statistic`; no statistics
-  values are requested. `installed_at` currently records creation time within the migration,
-  rather than its future transaction commit time. Both are explicit design deviations.
+  upgrade after operation holds. Exact relation shapes use stored node trees captured from
+  package DDL on the same PostgreSQL server. Package routines are checked by identity and
+  definition digest. Recursive locks precede checks; effective MAINTAIN is refused.
+  Routines use an owner-owned schema with an effective CREATE audit and no runtime owner
+  membership. Executable routine metadata and publication row filters are checked too.
+- Maintenance Store calls arm a configurable caller-side statement deadline (60 seconds by
+  default). SQLSTATE 57014 returns transient `:maintenance_timeout` and rolls back the step.
+  Store maintenance refuses caller-owned transactions before SQL with `:in_transaction`.
+- `installed_at` records install-row creation time; deadlines begin no later than commit.
+  The prune's single wall-clock lock budget includes its preflight.
+
 
 ## v1.10.0 — November 13, 2026
 

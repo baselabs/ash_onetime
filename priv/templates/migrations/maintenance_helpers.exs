@@ -1,4 +1,22 @@
-<% functions = [
+<%
+install_source = File.read!(Path.join(__DIR__, "install.exs"))
+reference_ddl = Regex.scan(~r/execute\("""\n(.*?)\n    """\)/s, install_source)
+  |> Enum.map(fn [_, ddl] -> String.trim(ddl) end)
+  |> Enum.filter(fn ddl -> String.starts_with?(ddl, "CREATE INDEX") or Regex.match?(~r/^CREATE TABLE #\{q\("ash_onetime_(idempotency_claims|nonce_claims|response_payloads)"\)\}/, ddl) end)
+  |> Enum.map(fn ddl ->
+    ddl = EEx.eval_string(ddl, hash_partitions: nil, collision_constraint: "UNIQUE (logical_partition, operation_hash, scope_hash, key_hash)")
+    ddl = Regex.replace(~r/#\{q\("([^"]+)"\)\}/, ddl, fn _, name -> "@schema@." <> inspect(name) end)
+    ddl = String.replace(ddl, "#" <> "{@payload_ceiling}", "16777216")
+    [_, root] = Regex.run(~r/ash_onetime_(idempotency_claims|nonce_claims|response_payloads)/, ddl)
+    {"ash_onetime_" <> root, ddl}
+  end)
+  |> Enum.group_by(&elem(&1,0), &elem(&1,1))
+runs_ddl = "CREATE TABLE @schema@.ash_onetime_maintenance_runs (step text PRIMARY KEY CHECK (step IN ('install','roll','cleanup','reap','prune')), installed_at timestamptz, last_success_at timestamptz, last_counts jsonb NOT NULL DEFAULT '{}', last_refusals jsonb NOT NULL DEFAULT '{}', updated_at timestamptz NOT NULL DEFAULT clock_timestamp()) USING heap"
+reference_ddl = Map.put(reference_ddl, "ash_onetime_maintenance_runs", [runs_ddl])
+  |> Enum.sort() |> Enum.map_join("\n", fn {name, statements} ->
+    "WHEN '" <> name <> "' THEN '" <> (Enum.join(statements,";") |> String.replace("'","''")) <> "'"
+  end)
+functions = [
   {"ash_onetime_cleanup_eligible", "retain_until timestamptz", "boolean", "eligible", false},
   {"ash_onetime_guard_idempotency_delete", "", "trigger", "guard_idempotency", false},
   {"ash_onetime_guard_nonce_delete", "", "trigger", "guard_nonce", false},
@@ -9,6 +27,11 @@
   {"ash_onetime_maintenance_copy_policy", "child_oid oid", "void", "copy_policy", false},
   {"ash_onetime_maintenance_lock", "exclusive_parent boolean, budget_ms integer", "void", "lock", false},
   {"ash_onetime_maintenance_edges", "class_oid oid, object_oid oid", "TABLE(classid oid, objectid oid, kind text)", "edges", false},
+  {"ash_onetime_maintenance_normalize", "tree text, relation_oid oid", "text", "normalize", false},
+  {"ash_onetime_maintenance_shape", "relation_oid oid", "jsonb", "shape", false},
+  {"ash_onetime_maintenance_capture", "", "jsonb", "capture", false},
+  {"ash_onetime_maintenance_reference", "legacy_mode boolean", "jsonb", "reference", false},
+  {"ash_onetime_maintenance_shapes", "", "jsonb", "shapes", false},
   {"ash_onetime_maintenance_trust", "", "void", "trust", false},
   {"ash_onetime_maintenance_acl", "", "boolean", "acl", false},
   {"ash_onetime_cleanup_idempotency", "batch_size integer", "bigint", "cleanup_idempotency", true},
@@ -18,15 +41,19 @@
   {"ash_onetime_roll_payload_partitions", "months_ahead integer", "bigint", "roll", true},
   {"ash_onetime_maintenance_status", "", "jsonb", "status", true}
 ] |> Enum.map(fn {name,args,result,file,definer} ->
-  %{name: name, args: args, result: result, body: File.read!(Path.join([__DIR__,"maintenance",file <> ".sql"])), definer: definer}
+  %{name: name, args: args, types: (args |> String.split(",", trim: true) |> Enum.map(&(String.split(&1) |> List.last())) |> Enum.join(",")), result: result, body: File.read!(Path.join([__DIR__,"maintenance",file <> ".sql"])) |> String.replace("@reference_ddl@", String.replace(reference_ddl,"@schema@","__package_schema__")), definer: definer}
 end) %>
 @maintenance_functions <%= inspect(functions, limit: :infinity, printable_limit: :infinity) %>
 @maintenance_role <%= inspect(maintenance_role) %>
 
 defp install_maintenance do
+  flush()
   execute("DO " <> maintenance_literal("""
   DECLARE
     install_schema text;
+    routine_schema text;
+    routine_schema_oid oid;
+    old_routine jsonb;
     owner_oid oid;
     owner_name text;
     migrating_role text := current_user;
@@ -49,6 +76,9 @@ defp install_maintenance do
     old_functions jsonb;
     old_acls jsonb;
     manifest jsonb;
+    legacy_shapes jsonb;
+    actual_shape jsonb;
+    check_ddl record;
     policy_error text;
     expected_policy text;
   BEGIN
@@ -56,6 +86,7 @@ defp install_maintenance do
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     WHERE c.oid=#{maintenance_literal(q("ash_onetime_response_payloads"))}::regclass;
     owner_name := pg_catalog.pg_get_userbyid(owner_oid);
+    routine_schema := 'ash_onetime_' || substr(encode(sha256(convert_to(install_schema,'UTF8')),'hex'),1,48);
     IF NOT pg_catalog.pg_has_role(current_user,owner_oid,'SET') THEN
       RAISE EXCEPTION 'maintenance_owner_set_role: migrating role must be able to SET ROLE to %',owner_name;
     END IF;
@@ -63,20 +94,13 @@ defp install_maintenance do
       RAISE EXCEPTION 'maintenance_owner_schema_create: owner % needs CREATE on schema %',owner_name,install_schema;
     END IF;
     IF EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace=schema_oid
-      AND p.proname IN (SELECT x->>'name' FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@maintenance_functions))}::jsonb) x)
+      AND p.oid IN (SELECT to_regprocedure(format('%I.%I(%s)',install_schema,x->>'name',x->>'types')) FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@maintenance_functions))}::jsonb) x)
       AND NOT pg_catalog.pg_has_role(current_user,p.proowner,'USAGE')) THEN
       RAISE EXCEPTION 'maintenance_function_ownership: migrating role must own every replaced function';
     END IF;
     maintenance_oid := CASE WHEN #{@maintenance_role |> maintenance_literal()} IS NULL THEN owner_oid
       ELSE (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=#{@maintenance_role |> maintenance_literal()}) END;
     IF maintenance_oid IS NULL THEN RAISE EXCEPTION 'maintenance_role_missing: declared maintenance role does not exist'; END IF;
-    SELECT string_agg(column_name,', ' ORDER BY column_name) INTO policy_error
-    FROM unnest(ARRAY['starelid','staop1','staop2','staop3','staop4','staop5',
-      'stacoll1','stacoll2','stacoll3','stacoll4','stacoll5']) column_name
-    WHERE NOT has_column_privilege(owner_oid,'pg_catalog.pg_statistic',column_name,'SELECT');
-    IF policy_error IS NOT NULL THEN
-      RAISE EXCEPTION 'maintenance_catalog_access: owner % requires metadata column SELECT (%) ON pg_catalog.pg_statistic',owner_name,policy_error;
-    END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute
       WHERE attrelid=format('%I.ash_onetime_idempotency_claims',install_schema)::regclass
         AND attname='hold_reference' AND NOT attisdropped)
@@ -86,10 +110,11 @@ defp install_maintenance do
       RAISE EXCEPTION 'operation_hold_required: apply the 1.10.0 operation-hold migration first';
     END IF;
 
-    SELECT coalesce(jsonb_agg(jsonb_build_object('definition',pg_get_functiondef(p.oid),'owner',pg_get_userbyid(p.proowner))),'[]')
+    SELECT coalesce(jsonb_agg(jsonb_build_object('oid',p.oid,'identity',p.oid::regprocedure::text,'definition',pg_get_functiondef(p.oid),'owner',pg_get_userbyid(p.proowner))),'[]')
     INTO old_functions FROM pg_proc p WHERE p.pronamespace=schema_oid
       AND p.proname IN ('ash_onetime_cleanup_idempotency','ash_onetime_cleanup_nonce','ash_onetime_reap_idempotency',
-        'ash_onetime_cleanup_eligible','ash_onetime_guard_nonce_delete','ash_onetime_guard_idempotency_delete');
+        'ash_onetime_cleanup_eligible','ash_onetime_guard_nonce_delete','ash_onetime_guard_idempotency_delete')
+      AND p.oid IN (SELECT to_regprocedure(format('%I.%I(%s)',install_schema,x->>'name',x->>'types')) FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@maintenance_functions))}::jsonb) x);
     WITH RECURSIVE relations(oid) AS (
       SELECT unnest(ARRAY[format('%I.ash_onetime_idempotency_claims',install_schema)::regclass::oid,
         format('%I.ash_onetime_nonce_claims',install_schema)::regclass::oid,
@@ -105,12 +130,26 @@ defp install_maintenance do
         FROM pg_proc p WHERE p.pronamespace=schema_oid
           AND p.proname IN ('ash_onetime_cleanup_idempotency','ash_onetime_cleanup_nonce','ash_onetime_reap_idempotency',
             'ash_onetime_cleanup_eligible','ash_onetime_guard_nonce_delete','ash_onetime_guard_idempotency_delete')
+          AND p.oid IN (SELECT to_regprocedure(format('%I.%I(%s)',install_schema,x->>'name',x->>'types')) FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@maintenance_functions))}::jsonb) x)
     ) SELECT coalesce(jsonb_agg(jsonb_build_object('kind',o.kind,'oid',o.oid,'column',o.column_number,'owner',o.owner,
-      'grants',coalesce((SELECT jsonb_agg(jsonb_build_object('grantee',a.grantee,'privilege',a.privilege_type,'grantable',a.is_grantable))
+      'grants',coalesce((SELECT jsonb_agg(jsonb_build_object('grantor',a.grantor,'grantee',a.grantee,'privilege',a.privilege_type,'grantable',a.is_grantable))
         FROM aclexplode(o.acl) a),'[]'))),'[]') INTO old_acls FROM objects o;
-    EXECUTE format('CREATE TABLE %I.ash_onetime_maintenance_runs (step text PRIMARY KEY CHECK (step IN (''install'',''roll'',''cleanup'',''reap'',''prune'')), installed_at timestamptz, last_success_at timestamptz, last_counts jsonb NOT NULL DEFAULT ''{}'', last_refusals jsonb NOT NULL DEFAULT ''{}'', updated_at timestamptz NOT NULL DEFAULT clock_timestamp())',install_schema);
+    -- Transfer while the migrator still owns the old functions. After schema
+    -- creation, use SET ROLE before touching the owner's namespace ACL.
+    FOR old_routine IN SELECT * FROM jsonb_array_elements(old_functions) LOOP
+      EXECUTE format('ALTER FUNCTION %s OWNER TO %I',(old_routine->>'oid')::oid::regprocedure,owner_name);
+    END LOOP;
+    EXECUTE format('CREATE SCHEMA %I AUTHORIZATION %I',routine_schema,owner_name);
+    PERFORM set_config('role',owner_name,true);
+    EXECUTE format('REVOKE ALL PRIVILEGES ON SCHEMA %I FROM PUBLIC',routine_schema);
+    EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I',routine_schema,pg_get_userbyid(maintenance_oid));
+    SELECT oid INTO STRICT routine_schema_oid FROM pg_namespace WHERE nspname=routine_schema;
+    FOR old_routine IN SELECT * FROM jsonb_array_elements(old_functions) LOOP
+      EXECUTE format('ALTER FUNCTION %s SET SCHEMA %I',(old_routine->>'oid')::oid::regprocedure,routine_schema);
+    END LOOP;
+    EXECUTE format('CREATE TABLE %I.ash_onetime_maintenance_runs (step text PRIMARY KEY CHECK (step IN (''install'',''roll'',''cleanup'',''reap'',''prune'')), installed_at timestamptz, last_success_at timestamptz, last_counts jsonb NOT NULL DEFAULT ''{}'', last_refusals jsonb NOT NULL DEFAULT ''{}'', updated_at timestamptz NOT NULL DEFAULT clock_timestamp()) USING heap',install_schema);
     EXECUTE format('INSERT INTO %I.ash_onetime_maintenance_runs(step,installed_at,last_counts) VALUES (''install'',clock_timestamp(),$1)',install_schema)
-      USING jsonb_build_object('previous_functions',old_functions,'previous_acls',old_acls,'maintenance_role',maintenance_oid);
+      USING jsonb_build_object('previous_functions',old_functions,'previous_acls',old_acls,'maintenance_role',maintenance_oid,'table_schema',install_schema,'routine_schema',routine_schema);
     EXECUTE format('INSERT INTO %I.ash_onetime_maintenance_runs(step) VALUES (''roll''),(''cleanup''),(''reap''),(''prune'')',install_schema);
     EXECUTE format('ALTER TABLE %I.ash_onetime_maintenance_runs OWNER TO %I',install_schema,owner_name);
 
@@ -121,7 +160,7 @@ defp install_maintenance do
         AND fktable IN ('pg_class'::regclass,'pg_proc'::regclass,'pg_type'::regclass,'pg_operator'::regclass,
           'pg_opclass'::regclass,'pg_opfamily'::regclass,'pg_collation'::regclass,'pg_constraint'::regclass,'pg_cast'::regclass,
           'pg_attrdef'::regclass,'pg_attribute'::regclass,'pg_index'::regclass,'pg_partitioned_table'::regclass,
-          'pg_trigger'::regclass,'pg_policy'::regclass,'pg_rewrite'::regclass,'pg_statistic'::regclass,'pg_statistic_ext'::regclass,
+          'pg_trigger'::regclass,'pg_policy'::regclass,'pg_rewrite'::regclass,'pg_statistic_ext'::regclass,
           'pg_sequence'::regclass,'pg_foreign_table'::regclass,'pg_amop'::regclass,'pg_amproc'::regclass,
           'pg_range'::regclass,'pg_aggregate'::regclass,'pg_am'::regclass,'pg_language'::regclass,
           'pg_transform'::regclass,'pg_ts_config'::regclass,'pg_ts_config_map'::regclass,'pg_ts_dict'::regclass,
@@ -144,7 +183,7 @@ defp install_maintenance do
         ('pg_index','indrelid','pg_class'),('pg_index','indexrelid','pg_class'),
         ('pg_partitioned_table','partrelid','pg_class'),('pg_trigger','tgrelid','pg_class'),
         ('pg_policy','polrelid','pg_class'),('pg_rewrite','ev_class','pg_class'),
-        ('pg_statistic','starelid','pg_class'),('pg_statistic_ext','stxrelid','pg_class'),
+        ('pg_statistic_ext','stxrelid','pg_class'),
         ('pg_sequence','seqrelid','pg_class'),('pg_foreign_table','ftrelid','pg_class'),
         ('pg_amop','amopfamily','pg_opfamily'),('pg_amproc','amprocfamily','pg_opfamily'),
         ('pg_range','rngtypid','pg_type'),('pg_range','rngmultitypid','pg_type'),
@@ -191,11 +230,13 @@ defp install_maintenance do
         '@nonce@',quote_literal(format('%I.ash_onetime_nonce_claims',install_schema))),
         '@payload@',quote_literal(format('%I.ash_onetime_response_payloads',install_schema))),
         '@edges@',edge_query);
-      EXECUTE format('CREATE OR REPLACE FUNCTION %I.%I(%s) RETURNS %s LANGUAGE plpgsql SECURITY %s SET search_path = pg_catalog, pg_temp AS %L',
-        install_schema,routine->>'name',routine->>'args',routine->>'result',
+      routine_body := replace(replace(replace(routine_body,'@routines@',format('%I',routine_schema)),
+        '@routine_schema_name@',quote_literal(routine_schema)),'@maintenance@',maintenance_oid::text);
+      EXECUTE format('CREATE OR REPLACE FUNCTION %I.%I(%s) RETURNS %s LANGUAGE plpgsql SECURITY %s SET search_path = pg_catalog, pg_temp SET DateStyle = ''ISO, YMD'' SET row_security = on AS %L',
+        routine_schema,routine->>'name',routine->>'args',routine->>'result',
         CASE WHEN (routine->>'definer')::boolean THEN 'DEFINER' ELSE 'INVOKER' END,routine_body);
       -- Argument names are accepted by CREATE, but regprocedure takes types.
-      SELECT p.oid INTO STRICT routine_oid FROM pg_proc p WHERE p.pronamespace=schema_oid AND p.proname=routine->>'name';
+      routine_oid := to_regprocedure(format('%I.%I(%s)',routine_schema,routine->>'name',routine->>'types'));
       FOR grantee_oid IN SELECT DISTINCT a.grantee FROM pg_proc p,
         LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE p.oid=routine_oid AND a.grantee<>owner_oid
       LOOP
@@ -214,40 +255,75 @@ defp install_maintenance do
     PERFORM set_config('role',owner_name,true);
     FOR target IN SELECT c.oid,c.relowner,format('%I.%I',n.nspname,c.relname) AS relation_name
       FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE c.oid IN (SELECT * FROM #{q("ash_onetime_maintenance_relations")}())
+      WHERE c.oid IN (SELECT * FROM #{rq("ash_onetime_maintenance_relations")}())
     LOOP
       IF EXISTS (SELECT 1 FROM pg_policy WHERE polrelid=target.oid AND polname='ash_onetime_maintenance') THEN
         RAISE EXCEPTION 'maintenance_blinded: reserved policy ash_onetime_maintenance already exists on %',target.relation_name;
       END IF;
       EXECUTE format('CREATE POLICY ash_onetime_maintenance ON %s AS PERMISSIVE FOR ALL TO %I USING (%I.ash_onetime_maintenance_active()) WITH CHECK (%I.ash_onetime_maintenance_active())',
-        target.relation_name,owner_name,install_schema,install_schema);
-      PERFORM #{q("ash_onetime_maintenance_reset_acl")}(target.oid,
-        target.oid NOT IN (format('%I.ash_onetime_idempotency_claims',install_schema)::regclass,
-          format('%I.ash_onetime_nonce_claims',install_schema)::regclass,format('%I.ash_onetime_response_payloads',install_schema)::regclass));
+        target.relation_name,owner_name,routine_schema,routine_schema);
+      PERFORM #{rq("ash_onetime_maintenance_reset_acl")}(target.oid,
+        (target.oid NOT IN (format('%I.ash_onetime_idempotency_claims',install_schema)::regclass,
+          format('%I.ash_onetime_nonce_claims',install_schema)::regclass,format('%I.ash_onetime_response_payloads',install_schema)::regclass))::boolean);
     END LOOP;
-    SELECT regexp_replace(polqual::text,':location [-0-9]+',':location -1','g') INTO STRICT expected_policy
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid=format('%I.ash_onetime_nonce_claims',install_schema)::regclass AND tgname='ash_onetime_nonce_delete_guard') THEN
+      EXECUTE format('CREATE TRIGGER ash_onetime_nonce_delete_guard BEFORE DELETE ON %I.ash_onetime_nonce_claims FOR EACH ROW EXECUTE FUNCTION %I.ash_onetime_guard_nonce_delete()',install_schema,routine_schema);
+      EXECUTE format('CREATE TRIGGER ash_onetime_idempotency_delete_guard BEFORE DELETE ON %I.ash_onetime_idempotency_claims FOR EACH ROW EXECUTE FUNCTION %I.ash_onetime_guard_idempotency_delete()',install_schema,routine_schema);
+    END IF;
+    -- Fresh objects are captured in the creating transaction. Upgrades use
+    -- the package DDL reference, not the existing consumer's expressions.
+    IF jsonb_array_length(old_functions)=0 THEN
+      manifest := #{rq("ash_onetime_maintenance_capture")}();
+    ELSE
+      manifest := #{rq("ash_onetime_maintenance_reference")}(false::boolean);
+      legacy_shapes := #{rq("ash_onetime_maintenance_reference")}(true::boolean);
+      FOR target IN SELECT c.oid,c.relname FROM pg_class c WHERE c.relnamespace=schema_oid
+        AND c.relname IN ('ash_onetime_idempotency_claims','ash_onetime_nonce_claims') LOOP
+        actual_shape := #{rq("ash_onetime_maintenance_shape")}(target.oid::oid);
+        IF actual_shape IS DISTINCT FROM manifest->target.relname THEN
+          IF actual_shape-'constraints' IS DISTINCT FROM (manifest->target.relname)-'constraints'
+            OR EXISTS (SELECT 1 FROM jsonb_array_elements(actual_shape->'constraints') x
+              WHERE NOT (manifest->target.relname->'constraints') @> jsonb_build_array(x)
+                AND NOT (legacy_shapes->target.relname->'constraints') @> jsonb_build_array(x)) THEN
+            RAISE EXCEPTION 'untrusted_dependency: upgrade relation shape %',target.relname;
+          END IF;
+          FOR check_ddl IN SELECT key,value FROM jsonb_each_text(manifest->(target.relname || '_check_ddl')) LOOP
+            EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I',target.oid::regclass,check_ddl.key);
+            EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I %s',target.oid::regclass,check_ddl.key,check_ddl.value);
+          END LOOP;
+        END IF;
+      END LOOP;
+    END IF;
+    SELECT prosrc INTO STRICT routine_body FROM pg_proc WHERE oid=format('%I.ash_onetime_maintenance_shapes()',routine_schema)::regprocedure;
+    routine_body := replace(routine_body,quote_literal('{}') || '::jsonb; -- @relation_manifest@',quote_literal(manifest::text) || '::jsonb;');
+    EXECUTE format('CREATE OR REPLACE FUNCTION %I.ash_onetime_maintenance_shapes() RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path=pg_catalog,pg_temp AS %L',routine_schema,routine_body);
+    SELECT #{rq("ash_onetime_maintenance_normalize")}(polqual::text,polrelid::oid) INTO STRICT expected_policy
     FROM pg_policy WHERE polrelid=format('%I.ash_onetime_response_payloads',install_schema)::regclass
       AND polname='ash_onetime_maintenance';
-    SELECT prosrc INTO STRICT routine_body FROM pg_proc WHERE pronamespace=schema_oid AND proname='ash_onetime_maintenance_policy_error';
+    SELECT prosrc INTO STRICT routine_body FROM pg_proc WHERE oid=format('%I.ash_onetime_maintenance_policy_error()',routine_schema)::regprocedure;
     routine_body := replace(routine_body,quote_literal('@policy_expression@'),quote_literal(expected_policy));
-    EXECUTE format('CREATE OR REPLACE FUNCTION %I.ash_onetime_maintenance_policy_error() RETURNS text LANGUAGE plpgsql SECURITY INVOKER SET search_path=pg_catalog,pg_temp AS %L',install_schema,routine_body);
+    EXECUTE format('CREATE OR REPLACE FUNCTION %I.ash_onetime_maintenance_policy_error() RETURNS text LANGUAGE plpgsql SECURITY INVOKER SET search_path=pg_catalog,pg_temp AS %L',routine_schema,routine_body);
     SELECT jsonb_agg(jsonb_build_object('schema',n.nspname,'name',p.proname,'arguments',p.proargtypes::text,
-      'owner',p.proowner,'definer',p.prosecdef,'config',to_jsonb(p.proconfig),'digest',encode(sha256(convert_to(p.prosrc,'UTF8')),'hex')))
-    INTO manifest FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.pronamespace=schema_oid
-      AND p.proname IN (SELECT x->>'name' FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@maintenance_functions))}::jsonb) x)
+      'owner',p.proowner,'definer',p.prosecdef,'config',to_jsonb(p.proconfig),
+      'identity',to_jsonb(p)-ARRAY['oid','pronamespace','proowner','proacl','prosrc','prosupport','proargdefaults','prosqlbody','pronargdefaults'],
+      'executable',jsonb_build_object('support',p.prosupport,'default_count',p.pronargdefaults,'defaults',#{rq("ash_onetime_maintenance_normalize")}(p.proargdefaults::text,0::oid),'sqlbody',#{rq("ash_onetime_maintenance_normalize")}(p.prosqlbody::text,0::oid)),'digest',encode(sha256(convert_to(p.prosrc,'UTF8')),'hex')))
+    INTO manifest FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.pronamespace=routine_schema_oid
+      AND p.oid IN (SELECT to_regprocedure(format('%I.%I(%s)',routine_schema,x->>'name',x->>'types')) FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@maintenance_functions))}::jsonb) x)
       AND p.proname<>'ash_onetime_maintenance_trust';
-    SELECT prosrc INTO STRICT routine_body FROM pg_proc WHERE pronamespace=schema_oid AND proname='ash_onetime_maintenance_trust';
+    SELECT prosrc INTO STRICT routine_body FROM pg_proc WHERE oid=format('%I.ash_onetime_maintenance_trust()',routine_schema)::regprocedure;
     routine_body := replace(routine_body,quote_literal('[]') || '::jsonb; -- @routine_manifest@',quote_literal(manifest::text) || '::jsonb;');
-    EXECUTE format('CREATE OR REPLACE FUNCTION %I.ash_onetime_maintenance_trust() RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path=pg_catalog,pg_temp AS %L',install_schema,routine_body);
+    EXECUTE format('CREATE OR REPLACE FUNCTION %I.ash_onetime_maintenance_trust() RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path=pg_catalog,pg_temp AS %L',routine_schema,routine_body);
     SELECT jsonb_agg(jsonb_build_object('schema',n.nspname,'name',p.proname,'arguments',p.proargtypes::text,
-      'owner',p.proowner,'definer',p.prosecdef,'config',to_jsonb(p.proconfig),'digest',encode(sha256(convert_to(p.prosrc,'UTF8')),'hex')))
-    INTO manifest FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.pronamespace=schema_oid
-      AND p.proname IN (SELECT x->>'name' FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@maintenance_functions))}::jsonb) x);
+      'owner',p.proowner,'definer',p.prosecdef,'config',to_jsonb(p.proconfig),
+      'identity',to_jsonb(p)-ARRAY['oid','pronamespace','proowner','proacl','prosrc','prosupport','proargdefaults','prosqlbody','pronargdefaults'],
+      'executable',jsonb_build_object('support',p.prosupport,'default_count',p.pronargdefaults,'defaults',#{rq("ash_onetime_maintenance_normalize")}(p.proargdefaults::text,0::oid),'sqlbody',#{rq("ash_onetime_maintenance_normalize")}(p.prosqlbody::text,0::oid)),'digest',encode(sha256(convert_to(p.prosrc,'UTF8')),'hex')))
+    INTO manifest FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.pronamespace=routine_schema_oid
+      AND p.oid IN (SELECT to_regprocedure(format('%I.%I(%s)',routine_schema,x->>'name',x->>'types')) FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@maintenance_functions))}::jsonb) x);
     EXECUTE format('UPDATE %I.ash_onetime_maintenance_runs SET last_counts=last_counts || jsonb_build_object(''routines'',$1) WHERE step=''install''',install_schema) USING manifest;
-    policy_error := #{q("ash_onetime_maintenance_policy_error")}();
+    policy_error := #{rq("ash_onetime_maintenance_policy_error")}();
     IF policy_error IS NOT NULL THEN RAISE EXCEPTION 'maintenance_blinded: %',policy_error; END IF;
-    PERFORM #{q("ash_onetime_maintenance_lock")}(false,5000);
-    PERFORM #{q("ash_onetime_maintenance_trust")}();
+    PERFORM #{rq("ash_onetime_maintenance_lock")}(false::boolean,5000::integer);
+    PERFORM #{rq("ash_onetime_maintenance_trust")}();
     PERFORM set_config('role',migrating_role,true);
   END
   """))
@@ -255,3 +331,11 @@ end
 
 defp maintenance_literal(nil), do: "NULL"
 defp maintenance_literal(value), do: "E'" <> (value |> String.replace("\\", "\\\\") |> String.replace("'", "''")) <> "'"
+
+defp routine_schema_name do
+  schema = @install_prefix || prefix() ||
+    (repo().query!("SELECT n.nspname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=pg_catalog.to_regclass($1::text)", ["ash_onetime_response_payloads"]).rows |> hd() |> hd())
+  "ash_onetime_" <> binary_part(Base.encode16(:crypto.hash(:sha256,schema),case: :lower),0,48)
+end
+
+defp rq(name), do: quote_identifier(routine_schema_name()) <> "." <> quote_identifier(name)

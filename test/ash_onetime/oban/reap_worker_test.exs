@@ -76,15 +76,17 @@ defmodule AshOnetime.Oban.ReapWorkerTest do
   end
 
   # L5 (behavioral): a reaper whose DELETE is blocked by a contended table lock surfaces as
-  # {:error, {:reap_failed, :lock_timeout}} — the worker embeds the Store Result.reason so
+  # {:error, {:reap_failed, :lock_unavailable}} — the worker embeds the Store Result.reason so
   # Oban's job error carries the distinguishable cause past exhaustion, not an opaque
   # :reap_failed. reap does not set its own lock_timeout, so a short session lock_timeout is
   # set around the contention; an ACCESS EXCLUSIVE lock held on the claims table in a separate
-  # connection blocks the reap SQL function's DELETE, which times out to :lock_timeout. The
+  # connection blocks the reap SQL function's DELETE, which times out to :lock_unavailable. The
   # SET/RESET + holder release are handled by with_contention so no GUC or connection leaks on
   # any path (incl. an assertion failure).
   @tag unboxed: true
-  test "worker surfaces :lock_timeout from a contended reap (L5 behavioral)", %{prefix: prefix} do
+  test "worker surfaces :lock_unavailable from a contended reap (L5 behavioral)", %{
+    prefix: prefix
+  } do
     LockContention.with_contention(
       ~s(LOCK TABLE "#{prefix}"."ash_onetime_idempotency_claims" IN ACCESS EXCLUSIVE MODE),
       [],
@@ -99,7 +101,7 @@ defmodule AshOnetime.Oban.ReapWorkerTest do
           }
         }
 
-        assert {:error, {:reap_failed, :lock_timeout}} = ReapWorker.perform(job)
+        assert {:error, {:reap_failed, :lock_unavailable}} = ReapWorker.perform(job)
       end
     )
   end

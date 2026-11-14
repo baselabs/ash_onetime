@@ -109,9 +109,6 @@ against the old guard.
 
 ### Forward response partitions
 
-**The unreleased database-maintenance implementation is a draft. Do not deploy its
-SECURITY DEFINER functions until the builtin SQL-dispatch trust blocker is resolved.**
-
 The payload table is range-partitioned by month. Fresh migrations calculate the window
 from the transaction's current month. Cleanup deletes expired claims and their payloads;
 prune drops only expired, empty named partitions and never drops `_default`.
@@ -489,14 +486,49 @@ schedules need membership in the declared maintenance role, with no owner login 
 membership. The runs table and every child are owner-only; runtime DML addresses the parents.
 Non-package policies must be scoped to runtime roles. Any additional policy applying to the
 owner directly, through PUBLIC, or through role membership refuses cleanup and reap with
-`:maintenance_blinded`. Untrusted attached routines refuse before work starts, subject to the
-release-blocking builtin-dispatch limitation stated above. Transient lock refusals remain
+`:maintenance_blinded`. Any relation-shape difference or package-routine digest mismatch refuses before work starts
+with `:untrusted_dependency`. The check compares stored node trees without deparsing and
+runs after recursive SHARE UPDATE EXCLUSIVE locks on every package root. Runtime DML
+continues; inheritance, partition, and trigger DDL cannot enter between the check and work.
+The install revokes MAINTAIN, and each step audits effective privileges, including pg_maintain. Transient lock refusals remain
 separate from permanent prune refusals in the recorded facts.
+
+Package tables stay in the selected table schema. Routines live in the owner-owned schema
+`ash_onetime_` plus the first 48 lowercase hexadecimal characters of SHA-256 of the table
+schema's UTF-8 name. The install record and status record both schema names, and the Store
+resolves the actual table namespace before addressing its routine schema. Installation
+revokes PUBLIC CREATE, grants USAGE to the maintenance role, and each step audits effective
+CREATE under the trusted-owner/server boundary described in [Security](security.md).
+Publish package tables without row filters. A non-NULL publication row filter refuses the
+step with `:untrusted_dependency`; publication membership without a filter is supported.
+
+PostgreSQL 18 `pg_dump`/`pg_restore` preserves package expressions but recreates partition
+primary keys with different inheritance metadata (`connoinherit`). The exact relation check
+refuses those restored children with `:untrusted_dependency`. A restore procedure must
+preserve the package's partition DDL shape; do not bypass the trust check to resume maintenance.
+
+Store maintenance calls each run in a transaction with a separate
+`SET LOCAL statement_timeout` statement before the function call. Configure
+`config :ash_onetime, :maintenance_statement_timeout_ms, 60_000` (1–2,147,483,647 ms).
+Invoke Store maintenance outside a caller-owned transaction. It refuses nested calls with
+`:in_transaction` before sending SQL, preserving the caller's settings and pending work.
+A direct caller of any definer function must set its own `statement_timeout` before calling
+it. An in-function setting cannot arm the current statement's timer. A 57014 cancellation
+returns `:maintenance_timeout`, with the fixed message "maintenance statement timed out"
+and empty details; retry the rolled-back step. Definers pin `search_path`,
+`DateStyle = 'ISO, YMD'`, and `row_security = on`, restoring caller settings on return.
+
+`installed_at` is the install row's creation time inside the migration transaction.
+This is conservative: overdue and refusal deadlines start no later than commit.
+The reaper accepts 86,400–315,576,000,000 seconds. SQL rejects NULL or an out-of-range
+horizon with SQLSTATE `22023`; the Store reports `:invalid_request`.
+If an accepted horizon reaches before PostgreSQL's finite timestamp range, no finite
+claim is old enough; the reap returns zero rather than raising a timestamp underflow.
 
 Operational notes:
 
 - **One lock budget per prune run.** `config :ash_onetime, :partition_prune_lock_timeout_ms, 2_000`
-  (1–5,000 ms; invalid values return `:invalid_request`) bounds the whole partition pass, not
+  (1–5,000 ms; invalid values return `:invalid_request`) bounds the whole call, including lock and trust preflight, not
   each lock: a pending parent `ACCESS EXCLUSIVE` queues every tenant's payload reads and writes,
   so one run can stall that traffic for at most the budget plus the candidate in flight. Each
   parent lock waits only for what remains of the budget; a timeout keeps that candidate with

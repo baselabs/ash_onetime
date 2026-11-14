@@ -47,7 +47,7 @@ if Code.ensure_loaded?(Oban.Worker) do
 
         # Store.roll_partitions returns a bare %Result{} on failure (not {:error, %Result{}}),
         # so it falls through here. Embed the Result.reason so Oban's job error carries the
-        # distinguishable cause (:lock_timeout / :disconnected / :store_invariant / ...) past
+        # distinguishable cause (:lock_unavailable / :disconnected / :store_invariant / ...) past
         # exhaustion, not an opaque :roll_partitions_failed.
         %Result{reason: reason} ->
           {:error, {:roll_partitions_failed, reason}}

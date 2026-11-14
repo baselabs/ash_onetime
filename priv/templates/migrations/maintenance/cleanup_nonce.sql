@@ -7,16 +7,12 @@ BEGIN
   IF batch_size IS NULL OR batch_size < 1 OR batch_size > 10000 THEN
     RAISE EXCEPTION 'invalid cleanup batch size' USING ERRCODE = '22023';
   END IF;
-  PERFORM @schema@.ash_onetime_maintenance_lock(false, 5000);
-  policy_error := @schema@.ash_onetime_maintenance_policy_error();
-  IF policy_error IS NOT NULL THEN
-    RAISE EXCEPTION 'maintenance_blinded: %', policy_error;
-  END IF;
-  PERFORM @schema@.ash_onetime_maintenance_trust();
+  PERFORM @routines@.ash_onetime_maintenance_lock(false::boolean, 5000::integer);
+  PERFORM @routines@.ash_onetime_maintenance_trust();
   PERFORM set_config('ash_onetime.maintenance', 'on', true);
   WITH candidates AS (
     SELECT logical_partition, operation_hash, id FROM @schema@.ash_onetime_nonce_claims
-    WHERE @schema@.ash_onetime_cleanup_eligible(retain_until)
+    WHERE @routines@.ash_onetime_cleanup_eligible(retain_until::timestamptz)
     ORDER BY retain_until, logical_partition, operation_hash, id
     FOR UPDATE SKIP LOCKED LIMIT batch_size
   ), deleted AS (

@@ -327,6 +327,7 @@ defmodule AshOnetime.ArchitectureTest do
       reap: 3,
       release: 2,
       roll_partitions: 2,
+      routine_schema: 1,
       target: 1,
       target: 2
     ],

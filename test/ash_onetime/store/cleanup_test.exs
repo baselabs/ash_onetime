@@ -18,7 +18,7 @@ defmodule AshOnetime.Store.CleanupTest do
     assert %{rows: [[false]]} =
              SQL.query!(
                Repo,
-               "SELECT #{relation(prefix, "ash_onetime_cleanup_eligible")}(transaction_timestamp())",
+               "SELECT #{relation(Postgres.routine_schema(prefix), "ash_onetime_cleanup_eligible")}(transaction_timestamp())",
                []
              )
 

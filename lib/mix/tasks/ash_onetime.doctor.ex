@@ -42,6 +42,7 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
 
   alias AshOnetime.Store
   alias AshOnetime.Store.Postgres
+  alias AshOnetime.Store.Postgres
   alias Ecto.Adapters.SQL
 
   @shortdoc "Checks ash_onetime install health (Ash floor, Oban queues, prefix validity)"
@@ -285,7 +286,7 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   SELECT p.proname, p.pronargs
   FROM pg_proc p
   JOIN pg_namespace n ON n.oid = p.pronamespace
-  WHERE n.nspname = $1 AND p.proname = ANY($2)
+  WHERE n.nspname::text = ANY($1::text[]) AND p.proname = ANY($2)
   """
   # Constrained to the claim tables by tgrelid — an identically named trigger on an
   # unrelated table must not satisfy the verdict — and DISTINCT because PostgreSQL clones
@@ -320,10 +321,10 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
         )) = 2
       AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class old_index
         WHERE old_index.relnamespace = n.oid AND old_index.relname = 'ash_onetime_idempotency_claims_retain_until_index')
-      AND EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace = n.oid
+      AND EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace IN (n.oid,to_regnamespace($2))
         AND p.proname = 'ash_onetime_guard_idempotency_delete' AND p.pronargs = 0
         AND p.prosrc LIKE '%IF OLD.hold_reference IS NOT NULL THEN%')
-      AND EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace = n.oid
+      AND EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace IN (n.oid,to_regnamespace($2))
         AND p.proname = 'ash_onetime_cleanup_idempotency' AND p.pronargs = 1
         AND p.prosrc LIKE '%AND hold_reference IS NULL%')
   )
@@ -406,9 +407,16 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
          {:ok, payload} <- query(repo, @payload_table_sql, [schema]),
          {:ok, default} <- query(repo, @default_partition_sql, [schema]),
          {:ok, functions} <-
-           query(repo, @function_sql, [schema, Enum.map(@expected_functions, &elem(&1, 0))]),
+           query(repo, @function_sql, [
+             [schema, Postgres.routine_schema(schema)],
+             Enum.map(@expected_functions, &elem(&1, 0))
+           ]),
          {:ok, triggers} <- query(repo, @trigger_sql, [schema, @claim_tables]),
-         {:ok, hold} <- query(repo, @operation_hold_sql, [schema]) do
+         {:ok, hold} <-
+           query(repo, @operation_hold_sql, [
+             schema,
+             Postgres.routine_schema(schema)
+           ]) do
       {:ok,
        %{
          logical_partition_tables: Enum.map(columns.rows, &hd/1),

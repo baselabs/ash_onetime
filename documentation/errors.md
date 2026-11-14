@@ -145,6 +145,8 @@ configuration faults that will not clear by retrying.
 | `:checkout_unavailable` | **503** | No database connection could be checked out (pool exhausted or down). |
 | `:disconnected` | **503** | The database connection dropped mid-operation. |
 | `:worker_timeout` | **503** | The independently committed claim's worker exceeded its 30s ceiling. |
+| `:maintenance_timeout` | **503** | SQLSTATE 57014 cancels a maintenance statement at its caller-armed deadline. Fixed message: "maintenance statement timed out"; details `%{}`. Transient; the step rolls back. |
+| `:lock_unavailable` | **503** | A maintenance lock could not be acquired within the remaining lock budget. |
 | `:lock_timeout` | **503** | A row lock could not be acquired within the timeout. |
 | `:dispatched_unknown` | **503** | A statement was dispatched but its outcome is unknown (retryable). |
 | `:store_failure` | **503** | The authoritative store failed for an unenumerated reason. |
@@ -152,7 +154,8 @@ configuration faults that will not clear by retrying.
 | `:not_in_transaction` | **500** | Admission ran outside the required database transaction. |
 | `:unsupported_isolation` | **500** | The connection's transaction isolation level is unsupported. |
 | `:corrupt_payload` | **500** | A persisted response payload failed its integrity check. |
-| `:invalid_request` | **500** | The store received an internally malformed request. |
+| `:invalid_request` | **500** | The store received an internally malformed request. Maintenance SQL rejects NULL or out-of-range bounds with `22023`, including reap horizons outside 86,400–315,576,000,000 seconds. |
+| `:in_transaction` | **500** | Store maintenance was called inside a caller-owned transaction. It sends no SQL; invoke it outside that transaction. |
 
 ## `details` and classified data
 

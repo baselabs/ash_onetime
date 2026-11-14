@@ -410,7 +410,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
     end
 
     @tag @rls_prune_tier
-    test "a sub-partitioned child is refused; its plain sibling drops" do
+    test "a sub-partitioned child refuses the step before its plain sibling is touched" do
       substrate = rls_substrate!()
       %{prefix: prefix} = install_rls_store!(install_context(substrate))
 
@@ -450,12 +450,13 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
       put_repo(substrate.owner_repo)
 
-      assert {:ok, %{payload_partitions: 1, payload_partitions_kept: 1}} =
-               prune_counts!(Postgres.for_repo(Repo, prefix), 100, 4)
+      assert_raise Postgrex.Error, ~r/untrusted_dependency/, fn ->
+        prune_counts!(Postgres.for_repo(Repo, prefix), 100, 4)
+      end
 
       Repo.put_dynamic_repo(Repo)
 
-      refute partition_exists?(prefix, empty_partition)
+      assert partition_exists?(prefix, empty_partition)
       assert partition_exists?(prefix, nested)
 
       tenant_b = start_tenant_repo(app_url(), "tenant-b")
@@ -548,8 +549,11 @@ defmodule AshOnetime.Store.RLSPruneTest do
       )
 
       assert scalar!(Repo, "SELECT pg_catalog.count(*) FROM #{prefix}.#{child}", []) == 0
-      result = prune_counts!(Postgres.for_repo(Repo, prefix), 100, 4)
-      assert {:ok, %{payload_partitions_refused: %{not_plain_child: 1}}} = result
+
+      assert_raise Postgrex.Error, ~r/untrusted_dependency/, fn ->
+        prune_counts!(Postgres.for_repo(Repo, prefix), 100, 4)
+      end
+
       Repo.put_dynamic_repo(Repo)
       assert partition_exists?(prefix, child)
       assert scalar!(Repo, "SELECT pg_catalog.count(*) FROM #{prefix}.remote_payloads", []) == 1
@@ -804,14 +808,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
       put_prune_budget(1_000)
       holder = hold_parent!(start_tenant_repo(owner_url(), "tenant-a"), prefix)
 
-      # Measure the same catalog traversal with a minimal lock budget. The
-      # contract bounds lock waiting; catalog validation itself is required.
-      put_repo(substrate.owner_repo)
-      put_prune_budget(1)
-      baseline_started = System.monotonic_time(:millisecond)
-      assert {:ok, _} = prune_counts!(Postgres.for_repo(Repo, prefix), 100, 4)
-      baseline = System.monotonic_time(:millisecond) - baseline_started
-      put_prune_budget(1_000)
+      # One deadline includes both catalog and lock preflight.
 
       started = System.monotonic_time(:millisecond)
       put_repo(substrate.owner_repo)
@@ -823,7 +820,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
       assert {:ok, %{payload_partitions: 0, payload_partitions_refused: %{lock_unavailable: 1}}} =
                result
 
-      assert elapsed - baseline < 1_600
+      assert elapsed < 1_600
       Repo.put_dynamic_repo(Repo)
       assert partition_exists?(prefix, partition_name(~D[2026-08-01]))
       assert partition_exists?(prefix, partition_name(~D[2026-09-01]))
@@ -1154,12 +1151,26 @@ defmodule AshOnetime.Store.RLSPruneTest do
   defp prune_counts!(target, _batch, limit) do
     budget = Application.get_env(:ash_onetime, :partition_prune_lock_timeout_ms, 2_000)
 
-    function =
+    parent =
       if target.prefix,
-        do: ~s|"#{target.prefix}".ash_onetime_prune_payload_partitions|,
-        else: "ash_onetime_prune_payload_partitions"
+        do: ~s|"#{target.prefix}".ash_onetime_response_payloads|,
+        else: "ash_onetime_response_payloads"
 
-    result = SQL.query!(target.dynamic_repo, "SELECT #{function}($1,$2)", [limit, budget])
+    [[schema]] =
+      SQL.query!(
+        target.dynamic_repo,
+        "SELECT n.nspname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=pg_catalog.to_regclass($1::text)",
+        [parent]
+      ).rows
+
+    function = ~s|"#{Postgres.routine_schema(schema)}".ash_onetime_prune_payload_partitions|
+
+    result =
+      SQL.query!(target.dynamic_repo, "SELECT #{function}($1::integer,$2::integer)", [
+        limit,
+        budget
+      ])
+
     [[report]] = result.rows
 
     {:ok,
@@ -1329,12 +1340,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
     query!(Repo, "CREATE ROLE #{app_role} LOGIN PASSWORD #{quote_literal(app_password)}", [])
 
-    query!(
-      Repo,
-      "GRANT SELECT (starelid,staop1,staop2,staop3,staop4,staop5,stacoll1,stacoll2,stacoll3,stacoll4,stacoll5) ON pg_catalog.pg_statistic TO #{owner_role}",
-      []
-    )
-
     owner_url =
       url
       |> URI.parse()
@@ -1489,10 +1494,14 @@ defmodule AshOnetime.Store.RLSPruneTest do
     Repo.put_dynamic_repo(Repo)
 
     if context[:app_role] do
-      for kind <- ["TABLES", "SEQUENCES", "FUNCTIONS"] do
+      for table <- [
+            "ash_onetime_idempotency_claims",
+            "ash_onetime_nonce_claims",
+            "ash_onetime_response_payloads"
+          ] do
         query!(
           Repo,
-          ~s{GRANT ALL ON ALL #{kind} IN SCHEMA "#{prefix}" TO #{context.app_role}},
+          ~s{GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "#{prefix}"."#{table}" TO #{context.app_role}},
           []
         )
       end
@@ -1554,13 +1563,13 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
     query!(
       repo,
-      ~s|SELECT "#{prefix}".ash_onetime_maintenance_copy_policy($1::text::regclass::oid)|,
+      ~s|SELECT "#{Postgres.routine_schema(prefix)}".ash_onetime_maintenance_copy_policy($1::text::regclass::oid)|,
       [relation]
     )
 
     query!(
       repo,
-      ~s|SELECT "#{prefix}".ash_onetime_maintenance_reset_acl($1::text::regclass::oid,true)|,
+      ~s|SELECT "#{Postgres.routine_schema(prefix)}".ash_onetime_maintenance_reset_acl($1::text::regclass::oid,true)|,
       [relation]
     )
   end

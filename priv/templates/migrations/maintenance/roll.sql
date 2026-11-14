@@ -8,22 +8,22 @@ DECLARE
   until_date date;
   child_name text;
   child_oid oid;
+  create_child text;
+  primary_constraint name;
   created integer := 0;
   months date[] := '{}';
   previous_setting text := current_setting('ash_onetime.maintenance',true);
   previous_rls text := current_setting('row_security');
   previous_timeout text := current_setting('lock_timeout');
-  previous_statement text := current_setting('statement_timeout');
 BEGIN
   IF months_ahead IS NULL OR months_ahead<1 OR months_ahead>24 THEN
     RAISE EXCEPTION 'invalid roll months (1..24)' USING ERRCODE='22023';
   END IF;
   PERFORM set_config('lock_timeout','5000',true);
-  PERFORM set_config('statement_timeout','60000',true);
   -- This two-int key is disjoint from prune's class and identifies the parent OID.
   PERFORM pg_advisory_xact_lock(1095717452,parent_oid::integer);
-  PERFORM @schema@.ash_onetime_maintenance_lock(true,5000);
-  PERFORM @schema@.ash_onetime_maintenance_trust();
+  PERFORM @routines@.ash_onetime_maintenance_lock(true::boolean,5000::integer);
+  PERFORM @routines@.ash_onetime_maintenance_trust();
   PERFORM set_config('ash_onetime.maintenance','on',true);
   SELECT partdefid INTO default_oid FROM pg_partitioned_table WHERE partrelid=parent_oid;
   IF default_oid<>0 THEN
@@ -73,25 +73,31 @@ BEGIN
       ELSE has_default_rows := false;
       END IF;
       IF has_default_rows THEN
-        EXECUTE format('CREATE TABLE %I.%I (LIKE %I.ash_onetime_response_payloads INCLUDING ALL)',@schema_name@,child_name,@schema_name@);
-        child_oid := to_regclass(format('%I.%I',@schema_name@,child_name));
-        PERFORM @schema@.ash_onetime_maintenance_reset_acl(child_oid,true);
+        create_child := format('CREATE TABLE %I.%I (LIKE %I.ash_onetime_response_payloads INCLUDING ALL)',@schema_name@,child_name,@schema_name@);
+      ELSE
+        create_child := format('CREATE TABLE %I.%I PARTITION OF %I.ash_onetime_response_payloads FOR VALUES FROM (%L) TO (%L)',@schema_name@,child_name,@schema_name@,month_date,until_date);
+      END IF;
+      EXECUTE create_child || ' USING heap';
+      child_oid := to_regclass(format('%I.%I',@schema_name@,child_name));
+      PERFORM @routines@.ash_onetime_maintenance_reset_acl(child_oid::oid,true::boolean);
+      IF has_default_rows THEN
+        -- LIKE copies a standalone primary constraint with connoinherit=true.
+        -- Let ATTACH create the parent's native partition constraint instead,
+        -- so recovered and forward children have the very same catalog shape.
+        SELECT conname INTO STRICT primary_constraint FROM pg_constraint WHERE conrelid=child_oid AND contype='p';
+        EXECUTE format('ALTER TABLE %I.%I DROP CONSTRAINT %I',@schema_name@,child_name,primary_constraint);
         EXECUTE format('WITH moved AS (DELETE FROM %s WHERE partition_date >= $1 AND partition_date < $2 RETURNING *) INSERT INTO %I.%I SELECT * FROM moved',
           default_oid::regclass,@schema_name@,child_name) USING month_date,until_date;
         EXECUTE format('ALTER TABLE %I.ash_onetime_response_payloads ATTACH PARTITION %I.%I FOR VALUES FROM (%L) TO (%L)',@schema_name@,@schema_name@,child_name,month_date,until_date);
-      ELSE
-        EXECUTE format('CREATE TABLE %I.%I PARTITION OF %I.ash_onetime_response_payloads FOR VALUES FROM (%L) TO (%L)',@schema_name@,child_name,@schema_name@,month_date,until_date);
-        child_oid := to_regclass(format('%I.%I',@schema_name@,child_name));
-        PERFORM @schema@.ash_onetime_maintenance_reset_acl(child_oid,true);
       END IF;
-      PERFORM @schema@.ash_onetime_maintenance_copy_policy(child_oid);
+      PERFORM @routines@.ash_onetime_maintenance_copy_policy(child_oid::oid);
       IF default_oid<>0 AND default_forced THEN
         EXECUTE format('ALTER TABLE %s FORCE ROW LEVEL SECURITY',default_oid::regclass);
       END IF;
       PERFORM set_config('row_security',previous_rls,true);
       created := created+1;
     EXCEPTION WHEN duplicate_table THEN
-      RAISE EXCEPTION 'untrusted_dependency: name_collision %',child_name;
+      RAISE EXCEPTION 'untrusted_dependency: name collision';
     WHEN OTHERS THEN
       -- The subtransaction restores moved rows, attachment, flags, policies,
       -- ACLs, and settings as one unit; the exception also aborts this call.
@@ -105,6 +111,5 @@ BEGIN
   PERFORM set_config('ash_onetime.maintenance',coalesce(previous_setting,''),true);
   PERFORM set_config('row_security',previous_rls,true);
   PERFORM set_config('lock_timeout',previous_timeout,true);
-  PERFORM set_config('statement_timeout',previous_statement,true);
   RETURN created;
 END

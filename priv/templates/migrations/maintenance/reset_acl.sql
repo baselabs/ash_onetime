@@ -11,7 +11,7 @@ BEGIN
     WHERE c.oid = relation_oid AND a.grantee <> c.relowner
   LOOP
     EXECUTE format('REVOKE %s ON TABLE %s FROM %s CASCADE',
-      CASE WHEN owner_only THEN 'ALL PRIVILEGES' ELSE 'TRIGGER, TRUNCATE, REFERENCES' END,
+      CASE WHEN owner_only THEN 'ALL PRIVILEGES' ELSE 'TRIGGER, TRUNCATE, REFERENCES, MAINTAIN' END,
       target_name, CASE WHEN grant_row.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(grant_row.grantee)) END);
   END LOOP;
   FOR column_row IN

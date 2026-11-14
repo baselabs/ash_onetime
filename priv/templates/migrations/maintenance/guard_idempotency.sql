@@ -12,7 +12,7 @@ BEGIN
     END IF;
     IF OLD.inserted_at >= reap_before::timestamptz
        OR OLD.inserted_at >= transaction_timestamp() - interval '86400 seconds'
-       OR NOT @schema@.ash_onetime_cleanup_eligible(OLD.retain_until) THEN
+       OR NOT @routines@.ash_onetime_cleanup_eligible(OLD.retain_until::timestamptz) THEN
       RAISE EXCEPTION 'processing idempotency claims are recovery points and cannot be deleted' USING ERRCODE = '23514';
     END IF;
     SELECT count(*) INTO payload_count FROM @schema@.ash_onetime_response_payloads
@@ -22,7 +22,7 @@ BEGIN
     END IF;
     RETURN OLD;
   END IF;
-  IF NOT @schema@.ash_onetime_cleanup_eligible(OLD.retain_until) THEN
+  IF NOT @routines@.ash_onetime_cleanup_eligible(OLD.retain_until::timestamptz) THEN
     RAISE EXCEPTION 'idempotency claim is inside its retention horizon' USING ERRCODE = '23514';
   END IF;
   SELECT count(*) INTO payload_count FROM @schema@.ash_onetime_response_payloads

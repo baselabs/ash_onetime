@@ -94,7 +94,12 @@ defmodule AshOnetime.Store.RollContentionTest do
   test "roll advisory lock identifies the physical parent OID", %{prefix: prefix} do
     RealConnection.with_connection(fn ->
       Repo.transaction(fn ->
-        assert {:ok, _} = Store.roll_partitions(Postgres.for_repo(Repo, prefix), 1)
+        assert %{rows: [[_]]} =
+                 SQL.query!(
+                   Repo,
+                   ~s|SELECT "#{Postgres.routine_schema(prefix)}".ash_onetime_roll_payload_partitions(1::integer)|,
+                   []
+                 )
 
         assert %{rows: [[true]]} =
                  SQL.query!(

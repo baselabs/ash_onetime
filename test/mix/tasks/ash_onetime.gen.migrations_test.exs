@@ -23,7 +23,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
     source = File.read!(path)
 
     assert source =~ "id uuid PRIMARY KEY"
-    refute source =~ "PARTITION BY HASH (operation_hash)"
+    refute source =~ "count = 4"
 
     assert source =~
              ~S|encoded_response bytea NOT NULL CHECK (octet_length(encoded_response) <= #{@payload_ceiling})|
@@ -266,6 +266,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
              "priv/templates/migrations/maintenance.exs",
              "priv/templates/migrations/maintenance/acl.sql",
              "priv/templates/migrations/maintenance/active.sql",
+             "priv/templates/migrations/maintenance/capture.sql",
              "priv/templates/migrations/maintenance/cleanup_idempotency.sql",
              "priv/templates/migrations/maintenance/cleanup_nonce.sql",
              "priv/templates/migrations/maintenance/copy_policy.sql",
@@ -274,12 +275,16 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
              "priv/templates/migrations/maintenance/guard_idempotency.sql",
              "priv/templates/migrations/maintenance/guard_nonce.sql",
              "priv/templates/migrations/maintenance/lock.sql",
+             "priv/templates/migrations/maintenance/normalize.sql",
              "priv/templates/migrations/maintenance/policy.sql",
              "priv/templates/migrations/maintenance/prune.sql",
              "priv/templates/migrations/maintenance/reap.sql",
+             "priv/templates/migrations/maintenance/reference.sql",
              "priv/templates/migrations/maintenance/relations.sql",
              "priv/templates/migrations/maintenance/reset_acl.sql",
              "priv/templates/migrations/maintenance/roll.sql",
+             "priv/templates/migrations/maintenance/shape.sql",
+             "priv/templates/migrations/maintenance/shapes.sql",
              "priv/templates/migrations/maintenance/status.sql",
              "priv/templates/migrations/maintenance/trust.sql",
              "priv/templates/migrations/maintenance_helpers.exs",

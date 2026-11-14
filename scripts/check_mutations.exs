@@ -59,6 +59,160 @@ defmodule AshOnetime.MutationCheck do
       test_name: "generic completion rolls back relationship state injected by a caller hook",
       assertion: "assert {:error, error} = Ash.run_action(replay)"
     },
+    "maintenance-routine-schema" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "AND has_schema_privilege(r.oid,@routine_schema_name@,'CREATE')",
+      mutated: "AND false",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "routine_schema_mutation",
+      test_name: "effective routine schema CREATE refuses an untrusted runtime grant",
+      assertion: "assert_refusal"
+    },
+    "maintenance-routine-executable" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original:
+        "  -- R2c executable metadata. Verify support before invoking any normalizer.\n  IF EXISTS (SELECT 1 FROM jsonb_array_elements(manifest) m\n    JOIN pg_namespace n ON n.nspname=m->>'schema'\n    JOIN pg_proc p ON p.pronamespace=n.oid AND p.proname=m->>'name' AND p.proargtypes::text=m->>'arguments'\n    WHERE p.prosupport<>0) THEN\n    RAISE EXCEPTION 'untrusted_dependency: routine support';\n  END IF;\n  IF EXISTS (SELECT 1 FROM jsonb_array_elements(manifest) m\n    JOIN pg_namespace n ON n.nspname=m->>'schema'\n    JOIN pg_proc p ON p.pronamespace=n.oid AND p.proname=m->>'name' AND p.proargtypes::text=m->>'arguments'\n    WHERE jsonb_build_object('support',p.prosupport,'default_count',p.pronargdefaults,\n      'defaults',@routines@.ash_onetime_maintenance_normalize(p.proargdefaults::text,0::oid),\n      'sqlbody',@routines@.ash_onetime_maintenance_normalize(p.prosqlbody::text,0::oid)) IS DISTINCT FROM m->'executable') THEN\n    RAISE EXCEPTION 'untrusted_dependency: routine executable trees';\n  END IF;\n  -- End R2c executable metadata.\n",
+      mutated: "  NULL;\n",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "routine_executable_mutation",
+      test_name: "executable pg_proc metadata rejects support",
+      assertion: "assert_refusal"
+    },
+    "maintenance-publication-filter" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "p.prqual IS NOT NULL",
+      mutated: "false",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "publication_filter_mutation",
+      test_name: "publication membership permits no filter and refuses a row filter",
+      assertion: "assert_refusal"
+    },
+    "maintenance-owner-membership" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "AND pg_has_role(r.oid,@owner@,'MEMBER')",
+      mutated: "AND false",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "routine_owner_membership_mutation",
+      test_name: "maintenance refuses owner membership for runtime, INHERIT=true",
+      assertion: "assert_refusal"
+    },
+    "maintenance-name-collision" => %{
+      path: "priv/templates/migrations/maintenance/roll.sql",
+      original: "RAISE EXCEPTION 'untrusted_dependency: name collision';",
+      mutated: "RAISE duplicate_table;",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "collision",
+      test_name:
+        "Table 1 row 33: roll refuses a colliding standalone table without adopting or executing it",
+      assertion: "assert_refusal"
+    },
+    "maintenance-shape" => %{
+      path: ~S|priv/templates/migrations/maintenance/trust.sql|,
+      original: ~S|WHERE true -- R1 relation set|,
+      mutated: ~S|WHERE false -- R1 relation set|,
+      test: ~S|test/ash_onetime/store/maintenance_test.exs|,
+      tag: ~S|maintenance_shape_mutation|,
+      test_name: ~S|a builtin array input cannot dispatch a runtime domain check|,
+      assertion: ~S|assert_refusal|
+    },
+    "maintenance-check-before-lock" => %{
+      path: ~S|priv/templates/migrations/maintenance/cleanup_nonce.sql|,
+      original:
+        "  PERFORM @routines@.ash_onetime_maintenance_lock(false::boolean, 5000::integer);\n  PERFORM @routines@.ash_onetime_maintenance_trust();",
+      mutated:
+        "  PERFORM @routines@.ash_onetime_maintenance_trust();\n  PERFORM @routines@.ash_onetime_maintenance_lock(false::boolean, 5000::integer);",
+      test: ~S|test/ash_onetime/store/maintenance_test.exs|,
+      tag: ~S|maintenance_lock_mutation|,
+      test_name: ~S|recursive locks exclude concurrent inheritance before the check|,
+      assertion: ~S|assert {:error, %Postgrex.Error{postgres: %{pg_code: "55P03"}}}|
+    },
+    "maintenance-recursive-lock" => %{
+      path: ~S|priv/templates/migrations/maintenance/lock.sql|,
+      original: ~S|IN SHARE UPDATE EXCLUSIVE MODE|,
+      mutated: ~S|IN ROW EXCLUSIVE MODE|,
+      test: ~S|test/ash_onetime/store/maintenance_test.exs|,
+      tag: ~S|maintenance_lock_mutation|,
+      test_name: ~S|recursive locks exclude concurrent inheritance before the check|,
+      assertion: ~S|assert {:error, %Postgrex.Error{postgres: %{pg_code: "55P03"}}}|
+    },
+    "maintenance-acl-reset" => %{
+      path: ~S|priv/templates/migrations/maintenance/roll.sql|,
+      original:
+        ~S|PERFORM @routines@.ash_onetime_maintenance_reset_acl(child_oid::oid,true::boolean);|,
+      mutated: ~S|NULL;|,
+      test: ~S|test/ash_onetime/store/maintenance_test.exs|,
+      tag: ~S|rls_child_policy_copy_mutation|,
+      test_name: ~S|forward roll copies policies and flags and resets table and column ACLs|,
+      assertion: ~S|refute SQL.query!|
+    },
+    "maintenance-maintain" => %{
+      path: ~S|priv/templates/migrations/maintenance/trust.sql|,
+      original: ~S|AND has_table_privilege(r.oid,t::oid,'MAINTAIN')|,
+      mutated: ~S|AND false|,
+      test: ~S|test/ash_onetime/store/maintenance_test.exs|,
+      tag: ~S|maintenance_maintain_mutation|,
+      test_name:
+        ~S|effective MAINTAIN audit covers pg_maintain and install revokes direct ANALYZE|,
+      assertion: ~S|assert_refusal|
+    },
+    "maintenance-policy" => %{
+      path: ~S|priv/templates/migrations/maintenance/policy.sql|,
+      original: ~S|IF offending <> '' THEN RETURN offending; END IF;|,
+      mutated: ~S|IF false THEN RETURN offending; END IF;|,
+      test: ~S|test/ash_onetime/store/maintenance_test.exs|,
+      tag: ~S|maintenance_policy_mutation|,
+      test_name: ~S|Table 1 row 5: an owner-applicable policy cannot execute runtime-owned code|,
+      assertion: ~S|assert_refusal|
+    },
+    "maintenance-digest" => %{
+      path: ~S|priv/templates/migrations/maintenance/trust.sql|,
+      original:
+        ~S|OR encode(sha256(convert_to(p.prosrc,'UTF8')),'hex') IS DISTINCT FROM m->>'digest'|,
+      mutated: ~S|OR false|,
+      test: ~S|test/ash_onetime/store/maintenance_test.exs|,
+      tag: ~S|maintenance_digest_mutation|,
+      test_name: ~S|package routine identity also requires its exact source digest|,
+      assertion: ~S|assert_refusal|
+    },
+    "maintenance-null-bound" => %{
+      path: ~S|priv/templates/migrations/maintenance/roll.sql|,
+      original: ~S|months_ahead IS NULL OR months_ahead<1|,
+      mutated: ~S|months_ahead<1|,
+      test: ~S|test/ash_onetime/store/maintenance_test.exs|,
+      tag: ~S|maintenance_isolation_mutation|,
+      test_name: ~S|SQL rejects NULL and out of range bounds and repeatable read|,
+      assertion: ~S|assert {:error, %Postgrex.Error{postgres: %{pg_code: "22023"}}}|
+    },
+    "maintenance-heap" => %{
+      path: ~S|priv/templates/migrations/maintenance/roll.sql|,
+      original: "EXECUTE create_child || ' USING heap';",
+      mutated: ~S|EXECUTE create_child;|,
+      test: ~S|test/ash_onetime/store/maintenance_test.exs|,
+      tag: ~S|maintenance_heap_mutation|,
+      test_name: ~S|recovery and forward children use heap despite caller access method|,
+      assertion: ~S|assert SQL.query!|
+    },
+    "maintenance-transaction" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "if target.repo_module.in_transaction?() do\n      {:error, Result.failure(:in_transaction, :not_started, :open)}",
+      mutated:
+        "if false do\n      {:error, Result.failure(:in_transaction, :not_started, :open)}",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "maintenance_transaction_mutation",
+      test_name:
+        "Store maintenance refuses caller transactions before SQL and preserves their settings",
+      assertion: "reason: :in_transaction"
+    },
+    "maintenance-caller-timeout" => %{
+      path: ~S|lib/ash_onetime/store/postgres.ex|,
+      original: ~S|SET LOCAL statement_timeout = #{bound}|,
+      mutated: ~S|SELECT #{bound}|,
+      test: ~S|test/ash_onetime/store/maintenance_test.exs|,
+      tag: ~S|maintenance_timeout_mutation|,
+      test_name: ~S|Store bounds real server work and rolls it back at the caller timeout|,
+      assertion: ~S|reason: :maintenance_timeout|
+    },
     "operation-hold-delete-guard" => %{
       path: "priv/templates/migrations/maintenance/guard_idempotency.sql",
       original: "IF OLD.hold_reference IS NOT NULL THEN",
@@ -737,7 +891,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "reap-retention-guard" => %{
       path: "priv/templates/migrations/maintenance/guard_idempotency.sql",
-      original: "OR NOT @schema@.ash_onetime_cleanup_eligible(OLD.retain_until) THEN",
+      original:
+        "OR NOT @routines@.ash_onetime_cleanup_eligible(OLD.retain_until::timestamptz) THEN",
       mutated: "OR false THEN",
       test: "test/ash_onetime/store/reap_test.exs",
       tag: "reap_retention_guard_mutation",
@@ -857,8 +1012,7 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_single_pruner_mutation",
       test_name: "overlapping cleanups on one payload parent neither deadlock nor double-prune",
-      assertion:
-        "assert {a.payload_partitions_refused, b.payload_partitions_refused} == {%{}, %{}}"
+      assertion: "deadlock_detected"
     },
     "prune-child-nowait" => %{
       path: "priv/templates/migrations/maintenance/prune.sql",
@@ -881,7 +1035,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "rls-prune-catalog-count" => %{
       path: "priv/templates/migrations/maintenance_helpers.exs",
-      original: "SET search_path = pg_catalog, pg_temp AS %L",
+      original:
+        "SET search_path = pg_catalog, pg_temp SET DateStyle = ''ISO, YMD'' SET row_security = on AS %L",
       mutated: "AS %L",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "maintenance_functions_mutation",
@@ -898,15 +1053,13 @@ defmodule AshOnetime.MutationCheck do
       assertion: "refute_receive {:cleanup_event, _, %{result_class: :partitions_kept}}"
     },
     "rls-prune-foreign-child" => %{
-      path: "priv/templates/migrations/maintenance/prune.sql",
-      original:
-        "      SELECT c.relkind,c.relowner,EXISTS(SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=parent_oid) AS child\n      INTO facts FROM pg_class c WHERE c.oid=candidate.oid;\n      IF NOT FOUND THEN RAISE EXCEPTION 'missing' USING ERRCODE='AOP01'; END IF;\n      IF facts.relkind<>'r' OR NOT facts.child THEN RAISE EXCEPTION 'not_plain_child' USING ERRCODE='AOP01'; END IF;\n      IF facts.relowner<>@owner@ THEN RAISE EXCEPTION 'not_owner' USING ERRCODE='AOP01'; END IF;\n      IF NOT pg_try_advisory_xact_lock(1095716946,parent_oid::integer) THEN\n        RAISE EXCEPTION 'pruner_busy' USING ERRCODE='AOP01';\n      END IF;\n      PERFORM set_config('lock_timeout',remaining::text,true);\n      PERFORM set_config('row_security','off',true);\n      LOCK TABLE ONLY @schema@.ash_onetime_response_payloads IN ACCESS EXCLUSIVE MODE;\n      EXECUTE format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',child_name);\n      IF default_oid<>0 THEN\n        EXECUTE format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',default_oid::regclass);\n      END IF;\n      SELECT c.relkind,c.relowner,EXISTS(SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=parent_oid) AS child\n      INTO facts FROM pg_class c WHERE c.oid=candidate.oid;\n      IF NOT FOUND THEN RAISE EXCEPTION 'missing' USING ERRCODE='AOP01'; END IF;\n      IF facts.relkind<>'r' OR NOT facts.child THEN RAISE EXCEPTION 'not_plain_child' USING ERRCODE='AOP01'; END IF;",
-      mutated:
-        "      SELECT c.relkind,c.relowner,EXISTS(SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=parent_oid) AS child\n      INTO facts FROM pg_class c WHERE c.oid=candidate.oid;\n      IF NOT FOUND THEN RAISE EXCEPTION 'missing' USING ERRCODE='AOP01'; END IF;\n      IF NOT facts.child THEN RAISE EXCEPTION 'not_plain_child' USING ERRCODE='AOP01'; END IF;\n      IF facts.relowner<>@owner@ THEN RAISE EXCEPTION 'not_owner' USING ERRCODE='AOP01'; END IF;\n      IF NOT pg_try_advisory_xact_lock(1095716946,parent_oid::integer) THEN\n        RAISE EXCEPTION 'pruner_busy' USING ERRCODE='AOP01';\n      END IF;\n      PERFORM set_config('lock_timeout',remaining::text,true);\n      PERFORM set_config('row_security','off',true);\n      LOCK TABLE ONLY @schema@.ash_onetime_response_payloads IN ACCESS EXCLUSIVE MODE;\n      EXECUTE format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',child_name);\n      IF default_oid<>0 THEN\n        EXECUTE format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',default_oid::regclass);\n      END IF;\n      SELECT c.relkind,c.relowner,EXISTS(SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=parent_oid) AS child\n      INTO facts FROM pg_class c WHERE c.oid=candidate.oid;\n      IF NOT FOUND THEN RAISE EXCEPTION 'missing' USING ERRCODE='AOP01'; END IF;\n      IF NOT facts.child THEN RAISE EXCEPTION 'not_plain_child' USING ERRCODE='AOP01'; END IF;",
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "WHERE true -- R1 relation set",
+      mutated: "WHERE false -- R1 relation set",
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_foreign_child_mutation",
       test_name: "a real foreign child is refused before its remote RLS-filtered count",
-      assertion: "assert {:ok, %{payload_partitions_refused: %{not_plain_child: 1}}} = result"
+      assertion: "untrusted_dependency"
     },
     "doctor-ash-floor" => %{
       path: "lib/mix/tasks/ash_onetime.doctor.ex",

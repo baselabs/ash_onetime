@@ -17,6 +17,7 @@ defmodule AshOnetime.Store.Postgres do
   @default_logical_partition "global"
   @max_logical_partition_bytes 255
   @phase_key {__MODULE__, :admission_phase}
+  @routine_schema_placeholder "\"__ash_onetime_routines__\""
   @logical_key_predicate "logical_partition = $1 AND operation_hash = $2 AND scope_hash = $3 AND key_hash = $4"
   @completion_key_predicate "logical_partition = $4 AND operation_hash = $5 AND scope_hash = $6 AND key_hash = $7"
 
@@ -39,6 +40,12 @@ defmodule AshOnetime.Store.Postgres do
             logical_partition: binary(),
             context_multitenant?: boolean()
           }
+  end
+
+  @doc false
+  def routine_schema(table_schema) when is_binary(table_schema) do
+    digest = :crypto.hash(:sha256, table_schema) |> Base.encode16(case: :lower)
+    "ash_onetime_" <> binary_part(digest, 0, 48)
   end
 
   @spec for_repo(Ecto.Repo.t(), binary() | nil, keyword()) :: Target.t()
@@ -363,20 +370,19 @@ defmodule AshOnetime.Store.Postgres do
 
   defp cleanup_result({:error, %Result{} = result}, _transaction), do: result
 
-  defp cleanup_result(_other, _transaction),
-    do: Result.failure(:dispatched_unknown, :unknown, :unknown)
-
   # Hard safety floor (seconds) for the abandoned-processing reaper, mirroring the migration's
   # @abandonment_floor_seconds (install.exs) and the worker/task floors. A sub-floor caller hits
   # :invalid_request here (without a DB round-trip) rather than the migration's 22023 raise
   # misclassified as :store_invariant by classify_query_error.
   @abandonment_floor_seconds 86_400
+  @abandonment_ceiling_seconds 315_576_000_000
 
   @spec reap(Target.t(), pos_integer(), pos_integer()) ::
           {:ok, non_neg_integer()} | Result.t()
   def reap(%Target{} = target, batch_size, abandonment_seconds)
       when is_integer(batch_size) and batch_size > 0 and batch_size <= 10_000 and
-             is_integer(abandonment_seconds) and abandonment_seconds >= @abandonment_floor_seconds do
+             is_integer(abandonment_seconds) and abandonment_seconds >= @abandonment_floor_seconds and
+             abandonment_seconds <= @abandonment_ceiling_seconds do
     with_dynamic_repo(target, fn -> reap_transaction(target, batch_size, abandonment_seconds) end)
     |> case do
       {:ok, count} when is_integer(count) -> {:ok, count}
@@ -401,8 +407,7 @@ defmodule AshOnetime.Store.Postgres do
 
   A transaction-scoped advisory lock on the payload parent's OID serializes rolls. SQL enforces
   READ COMMITTED and the 1..24 month bound. Returns `{:ok, %{partitions_created: n}}` or an
-  `AshOnetime.Store.Result` failure. The unreleased definer implementation remains blocked by
-  the builtin SQL-dispatch trust regression described in the changelog.
+  `AshOnetime.Store.Result` failure. Each call has a caller-armed statement deadline.
   """
   @spec roll_partitions(Target.t(), pos_integer()) ::
           {:ok, %{partitions_created: non_neg_integer()}} | Result.t()
@@ -539,51 +544,49 @@ defmodule AshOnetime.Store.Postgres do
   defp oldest_age(_count, _age), do: 0
 
   defp reap_transaction(target, batch_size, abandonment_seconds) do
-    target.repo_module.transaction(fn -> reap_count(target, batch_size, abandonment_seconds) end)
+    reap_count(target, batch_size, abandonment_seconds)
   end
 
   defp reap_count(target, batch_size, abandonment_seconds) do
     case maintenance_query(
            target,
-           "SELECT #{relation(target, "ash_onetime_reap_idempotency")}($1, $2)",
+           "SELECT #{routine_relation("ash_onetime_reap_idempotency")}($1::integer, $2::bigint)",
            [batch_size, abandonment_seconds]
          ) do
       {:ok, %{rows: [[count]]}} when is_integer(count) and count >= 0 ->
-        count
+        {:ok, count}
 
       {:ok, _result} ->
-        target.repo_module.rollback(Result.failure(:store_invariant, :sent, :rolled_back))
+        {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
 
       {:error, %Result{} = result} ->
-        target.repo_module.rollback(result)
+        {:error, result}
     end
   end
 
   defp cleanup_transaction(target, batch_size, partition_limit, lock_budget)
        when is_integer(lock_budget) and lock_budget > 0 and lock_budget <= 5_000 do
-    target.repo_module.transaction(fn ->
-      cleanup_counts(target, batch_size, partition_limit, lock_budget)
-    end)
+    cleanup_counts(target, batch_size, partition_limit, lock_budget)
   end
 
   defp cleanup_transaction(_target, _batch_size, _partition_limit, _lock_budget),
     do: {:error, Result.failure(:invalid_request, :not_started, :not_applicable)}
 
   defp cleanup_counts(target, batch_size, partition_limit, lock_budget) do
-    with :ok <- transaction_preconditions(target),
-         {:ok, idempotency} <- cleanup_strategy(target, :idempotency, batch_size),
+    with {:ok, idempotency} <- cleanup_strategy(target, :idempotency, batch_size),
          {:ok, nonce} <- cleanup_strategy(target, :nonce, batch_size),
          {:ok, payload_partitions, payload_partitions_kept, refused} <-
            prune_payload_partitions(target, partition_limit, lock_budget) do
-      %{
-        idempotency: idempotency,
-        nonce: nonce,
-        payload_partitions: payload_partitions,
-        payload_partitions_kept: payload_partitions_kept,
-        payload_partitions_refused: refused
-      }
+      {:ok,
+       %{
+         idempotency: idempotency,
+         nonce: nonce,
+         payload_partitions: payload_partitions,
+         payload_partitions_kept: payload_partitions_kept,
+         payload_partitions_refused: refused
+       }}
     else
-      {:error, %Result{} = result} -> target.repo_module.rollback(result)
+      {:error, %Result{} = result} -> {:error, result}
     end
   end
 
@@ -1104,7 +1107,9 @@ defmodule AshOnetime.Store.Postgres do
         :nonce -> "ash_onetime_cleanup_nonce"
       end
 
-    case maintenance_query(target, "SELECT #{relation(target, function)}($1)", [batch_size]) do
+    case maintenance_query(target, "SELECT #{routine_relation(function)}($1::integer)", [
+           batch_size
+         ]) do
       {:ok, %{rows: [[count]]}} when is_integer(count) and count >= 0 -> {:ok, count}
       {:ok, _result} -> {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
       {:error, %Result{} = result} -> {:error, result}
@@ -1116,7 +1121,7 @@ defmodule AshOnetime.Store.Postgres do
   defp prune_payload_partitions(target, limit, lock_budget) do
     case maintenance_query(
            target,
-           "SELECT #{relation(target, "ash_onetime_prune_payload_partitions")}($1, $2)",
+           "SELECT #{routine_relation("ash_onetime_prune_payload_partitions")}($1::integer, $2::integer)",
            [limit, lock_budget]
          ) do
       {:ok, %{rows: [[report]]}} ->
@@ -1156,39 +1161,91 @@ defmodule AshOnetime.Store.Postgres do
     do: {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
 
   defp roll_partitions_transaction(target, months_ahead) do
-    target.repo_module.transaction(fn ->
-      case maintenance_query(
-             target,
-             "SELECT #{relation(target, "ash_onetime_roll_payload_partitions")}($1)",
-             [months_ahead]
-           ) do
-        {:ok, %{rows: [[count]]}} when is_integer(count) and count >= 0 ->
-          count
-
-        {:error, %Result{} = result} ->
-          target.repo_module.rollback(result)
-
-        _other ->
-          target.repo_module.rollback(Result.failure(:store_invariant, :sent, :rolled_back))
-      end
-    end)
+    case maintenance_query(
+           target,
+           "SELECT #{routine_relation("ash_onetime_roll_payload_partitions")}($1::integer)",
+           [months_ahead]
+         ) do
+      {:ok, %{rows: [[count]]}} when is_integer(count) and count >= 0 -> {:ok, count}
+      {:error, %Result{} = result} -> {:error, result}
+      _other -> {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
+    end
   end
 
   defp maintenance_query(target, sql, arguments) do
-    Process.put(@phase_key, :sent)
+    bound = Application.get_env(:ash_onetime, :maintenance_statement_timeout_ms, 60_000)
+    maintenance_query(target, sql, arguments, bound)
+  end
 
-    case SQL.query(target.dynamic_repo, sql, arguments) do
-      {:ok, result} ->
-        {:ok, result}
-
-      {:error, error} ->
-        {:error, classify_maintenance_error(error)}
+  defp maintenance_query(target, sql, arguments, bound)
+       when is_integer(bound) and bound > 0 and bound <= 2_147_483_647 do
+    if target.repo_module.in_transaction?() do
+      {:error, Result.failure(:in_transaction, :not_started, :open)}
+    else
+      maintenance_transaction(target, sql, arguments, bound)
     end
+  end
+
+  defp maintenance_query(_target, _sql, _arguments, _bound),
+    do: {:error, Result.failure(:invalid_request, :not_started, :not_applicable)}
+
+  defp maintenance_transaction(target, sql, arguments, bound) do
+    target.repo_module.transaction(
+      fn ->
+        Process.put(@phase_key, :sent)
+        # Arm the server timer in a separate top-level statement.
+        with {:ok, _} <-
+               SQL.query(target.dynamic_repo, "SET LOCAL statement_timeout = #{bound}", []),
+             {:ok, sql} <- maintenance_sql(target, sql),
+             {:ok, result} <-
+               SQL.query(target.dynamic_repo, sql, arguments, timeout: bound + 5_000) do
+          result
+        else
+          {:error, error} -> target.repo_module.rollback(classify_maintenance_error(error))
+        end
+      end,
+      timeout: bound + 5_000
+    )
   rescue
     _exception -> {:error, Result.failure(:dispatched_unknown, :unknown, :unknown)}
   catch
     :exit, _reason -> {:error, Result.failure(:disconnected, :unknown, :unknown)}
   end
+
+  defp routine_relation(name), do: @routine_schema_placeholder <> "." <> quote_identifier(name)
+
+  defp maintenance_sql(target, sql) do
+    case SQL.query(
+           target.dynamic_repo,
+           "SELECT n.nspname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=pg_catalog.to_regclass($1::text)",
+           [relation(target, "ash_onetime_response_payloads")]
+         ) do
+      {:ok, %{rows: [[table_schema]]}} ->
+        {:ok,
+         String.replace(
+           sql,
+           @routine_schema_placeholder,
+           quote_identifier(routine_schema(table_schema))
+         )}
+
+      {:ok, _} ->
+        {:error, Result.failure(:store_invariant, :sent, :rolled_back)}
+
+      {:error, error} ->
+        {:error, error}
+    end
+  end
+
+  defp classify_maintenance_error(%Result{} = result), do: result
+
+  defp classify_maintenance_error(%Postgrex.Error{postgres: %{pg_code: "22023"}}),
+    do: Result.failure(:invalid_request, :sent, :rolled_back)
+
+  defp classify_maintenance_error(%Postgrex.Error{postgres: %{pg_code: "57014"}}),
+    do: Result.failure(:maintenance_timeout, :sent, :rolled_back)
+
+  defp classify_maintenance_error(%Postgrex.Error{postgres: %{pg_code: "55P03"}}),
+    do: Result.failure(:lock_unavailable, :sent, :rolled_back)
 
   defp classify_maintenance_error(%Postgrex.Error{postgres: %{code: :insufficient_privilege}}),
     do: Result.failure(:maintenance_not_permitted, :sent, :rolled_back)

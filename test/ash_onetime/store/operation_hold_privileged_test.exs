@@ -27,7 +27,12 @@ defmodule AshOnetime.Store.OperationHoldPrivilegedTest do
     on_exit(fn ->
       Repo.put_dynamic_repo(previous)
       query!(super, ~s|DROP SCHEMA IF EXISTS "#{schema}" CASCADE|)
-      for role <- [runtime, owner], do: query!(super, ~s|DROP ROLE IF EXISTS "#{role}"|)
+
+      for role <- [runtime, owner] do
+        query!(super, ~s|DROP OWNED BY "#{role}"|)
+        query!(super, ~s|DROP ROLE IF EXISTS "#{role}"|)
+      end
+
       stop_repo(super)
       :code.purge(module)
       :code.delete(module)
@@ -46,6 +51,8 @@ defmodule AshOnetime.Store.OperationHoldPrivilegedTest do
       )
     end
 
+    %{rows: [[database]]} = query!(super, "SELECT current_database()")
+    query!(super, ~s|GRANT CREATE ON DATABASE "#{database}" TO "#{owner}"|)
     query!(super, ~s|CREATE SCHEMA "#{schema}" AUTHORIZATION "#{owner}"|)
     owner_repo = start_repo(role_url(url, owner, password))
     on_exit(fn -> stop_repo(owner_repo) end)

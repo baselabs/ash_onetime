@@ -53,6 +53,9 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
   @tag payload_partition_lock_mutation: true
   test "a child held by a direct reader is skipped without waiting and its sibling still drops",
        %{prefix: prefix, target: target} do
+    baseline_started = System.monotonic_time(:millisecond)
+    assert {:ok, _} = Store.cleanup(target, 100, 10)
+    baseline_elapsed = System.monotonic_time(:millisecond) - baseline_started
     today = database_date()
     detach_generated_partitions(prefix, today, ["held", "sibling"])
     create_partition(prefix, "held", Date.add(today, -8), Date.add(today, -7))
@@ -72,7 +75,7 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
     assert {:ok, %{payload_partitions: 1, payload_partitions_refused: %{lock_unavailable: 1}}} =
              result
 
-    assert elapsed < 1_000
+    assert elapsed < baseline_elapsed + 1_000
     assert partition_exists?(prefix, "held")
     refute partition_exists?(prefix, "sibling")
 
@@ -111,7 +114,6 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
   end
 
   defp detach_generated_partitions(prefix, today, temporary_suffixes) do
-    detach_default(prefix)
     current = detach_current_month(prefix, today)
 
     on_exit(fn ->
@@ -136,24 +138,10 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
           "ALTER TABLE #{relation(prefix, "ash_onetime_response_payloads")} ATTACH PARTITION #{relation(prefix, current.name)} FOR VALUES FROM ('#{current.from}') TO ('#{current.until_date}')",
           []
         )
-
-        Postgrex.query!(
-          connection,
-          "ALTER TABLE #{relation(prefix, "ash_onetime_response_payloads")} ATTACH PARTITION #{relation(prefix, "ash_onetime_response_payloads_default")} DEFAULT",
-          []
-        )
       after
         GenServer.stop(connection, :normal, 5_000)
       end
     end)
-  end
-
-  defp detach_default(prefix) do
-    SQL.query!(
-      Repo,
-      "ALTER TABLE #{relation(prefix, "ash_onetime_response_payloads")} DETACH PARTITION #{relation(prefix, "ash_onetime_response_payloads_default")}",
-      []
-    )
   end
 
   defp detach_current_month(prefix, today) do
@@ -177,6 +165,18 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
       Repo,
       "CREATE TABLE #{relation(prefix, "ash_onetime_response_payloads_#{suffix}")} PARTITION OF #{relation(prefix, "ash_onetime_response_payloads")} FOR VALUES FROM ('#{Date.to_iso8601(from)}') TO ('#{Date.to_iso8601(until_date)}')",
       []
+    )
+
+    SQL.query!(
+      Repo,
+      "SELECT #{relation(Postgres.routine_schema(prefix), "ash_onetime_maintenance_copy_policy")}($1::text::regclass::oid)",
+      [relation(prefix, "ash_onetime_response_payloads_#{suffix}")]
+    )
+
+    SQL.query!(
+      Repo,
+      "SELECT #{relation(Postgres.routine_schema(prefix), "ash_onetime_maintenance_reset_acl")}($1::text::regclass::oid,true)",
+      [relation(prefix, "ash_onetime_response_payloads_#{suffix}")]
     )
   end
 
@@ -221,6 +221,31 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
       "INSERT INTO #{relation(prefix, "ash_onetime_response_payloads")} (partition_date, claim_id, encoded_response) VALUES ($1, $2::uuid, $3)",
       [partition_date, Ecto.UUID.dump!(id), payload]
     )
+
+    on_exit(fn ->
+      {:ok, connection} =
+        Postgrex.start_link(
+          ExternalPeer.database_options(System.get_env("ASH_ONETIME_EXPECTED_TEST_DATABASE"))
+        )
+
+      Process.unlink(connection)
+
+      try do
+        Postgrex.query!(
+          connection,
+          "UPDATE #{relation(prefix, "ash_onetime_idempotency_claims")} SET admitted_at=now()-interval '2 hours', inserted_at=now()-interval '2 hours', retain_until=now()-interval '1 hour' WHERE id=$1::uuid",
+          [Ecto.UUID.dump!(id)]
+        )
+
+        Postgrex.query!(
+          connection,
+          "DELETE FROM #{relation(prefix, "ash_onetime_idempotency_claims")} WHERE id=$1::uuid",
+          [Ecto.UUID.dump!(id)]
+        )
+      after
+        GenServer.stop(connection, :normal, 5_000)
+      end
+    end)
   end
 
   defp connection! do

@@ -91,3 +91,36 @@ rows visible to the caller's role. Monitor the held backlog and the live doctor 
 The DELETE guard refuses held claims even for an owner or superuser, but does not stop
 TRUNCATE, DROP, or a superuser's `session_replication_role = replica`. See
 [Operation holds](idempotency.md#keep-an-open-operations-record) for the complete contract.
+
+
+## Maintenance and the trusted server
+
+Maintenance checks exact package relation shapes, including whole trigger rows, relation
+flags, defaults, generated expressions, constraints, indexes, partition keys and bounds.
+Only the package policy may apply to the owner. Each step takes recursive SHARE UPDATE
+EXCLUSIVE locks on every root before checking the catalogs and retains them through work
+and its success record. Package routines require exact identity and a `prosrc` digest;
+being built-in or owned by a superuser does not grant a routine blanket trust. Columns and
+expressions must match the package's own DDL. Unexpected shapes refuse maintenance with
+`:untrusted_dependency`; status and the live doctor report the refusal.
+
+The PostgreSQL server and the migrator are trusted. Superuser event triggers, preloaded
+hooks, and backend libraries execute outside a relation closure. Autovacuum ANALYZE runs
+as the table owner outside maintenance steps. The package cannot stop the server from
+executing objects an owner or superuser installed. Install revokes runtime MAINTAIN and
+steps audit effective MAINTAIN with `has_table_privilege`, including `pg_maintain`.
+The CREATE and MAINTAIN audits exclude superusers (the trusted server) and roles that
+inherit the owner's privileges (owner-equivalent). Runtime and maintenance roles must hold
+no membership in the owner, whether through INHERIT or SET; every step checks that boundary.
+
+Function DDL takes no relation lock. A migrator acting as the owner can replace a package
+routine after its digest was checked. Relation locks cannot serialize that replacement;
+the migrator must coordinate function changes with maintenance.
+
+
+Package routines live in a dedicated schema owned by the table owner, with no public CREATE.
+Every step audits effective CREATE with `has_schema_privilege`. Runtime retains CREATE only
+in the table schema, so it cannot add a defaulted overload beside a package routine.
+All package calls are schema-qualified and explicitly typed. The routine manifest checks the
+whole executable `pg_proc` row, normalized argument-default and SQL-body trees, a zero
+`prosupport`, and the source digest.

@@ -1,8 +1,6 @@
 defmodule AshOnetime.Store.OperationHoldUpgradeTest do
   use ExUnit.Case, async: false
 
-  alias AshOnetime.Store
-  alias AshOnetime.Store.Postgres
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
@@ -151,11 +149,13 @@ defmodule AshOnetime.Store.OperationHoldUpgradeTest do
                    :ok
                  end)
 
-        assert {:ok, %{idempotency: 1}} =
-                 Store.cleanup(
-                   Postgres.for_repo(Repo, schema),
-                   100,
-                   0
+        # This fixture is still a 1.x install: exercise its invoker directly.
+        # The 2.0 Store addresses the dedicated schema after maintenance upgrade.
+        assert %{rows: [[1]]} =
+                 SQL.query!(
+                   Repo,
+                   ~s|SELECT "#{schema}".ash_onetime_cleanup_idempotency(100::integer)|,
+                   []
                  )
 
         assert_raise Postgrex.Error, ~r/release operation holds/, fn ->

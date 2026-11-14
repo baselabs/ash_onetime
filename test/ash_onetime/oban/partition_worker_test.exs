@@ -94,15 +94,15 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
   end
 
   # L5 (behavioral): a contended partition-roll advisory lock surfaces as
-  # {:error, {:roll_partitions_failed, :lock_timeout}} — the worker embeds the Store
+  # {:error, {:roll_partitions_failed, :lock_unavailable}} — the worker embeds the Store
   # Result.reason so Oban's job error carries the distinguishable cause past exhaustion, not an
   # opaque :roll_partitions_failed. Store.roll_partitions sets `SET LOCAL lock_timeout = 5s`
   # internally (arm_partition_roll_lock), so a roll that cannot acquire the per-prefix advisory
-  # lock fails closed with reason :lock_timeout after 5s. This pins the error tuple
+  # lock fails closed with reason :lock_unavailable after 5s. This pins the error tuple
   # BEHAVIORALLY (a real store fault -> the actual tuple returned to Oban); a regression that
   # collapses the tuple to the opaque atom, or drops the inner reason, fails here.
   @tag unboxed: true
-  test "worker surfaces :lock_timeout from a contended advisory lock (L5 behavioral)", %{
+  test "worker surfaces :lock_unavailable from a contended advisory lock (L5 behavioral)", %{
     prefix: prefix
   } do
     %{rows: [[parent_oid]]} =
@@ -112,7 +112,7 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
 
     # Hold the per-prefix advisory lock in a separate real connection. Store.roll_partitions
     # sets SET LOCAL lock_timeout = 5s internally, so a roll that cannot acquire the held lock
-    # fails closed with reason :lock_timeout. No session lock_timeout is needed here.
+    # fails closed with reason :lock_unavailable. No session lock_timeout is needed here.
     LockContention.with_contention(
       "SELECT pg_advisory_xact_lock(1095717452, $1::integer)",
       [parent_oid],
@@ -121,7 +121,8 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
           args: %{"repo" => inspect(Repo), "prefix" => prefix, "months" => 3}
         }
 
-        assert {:error, {:roll_partitions_failed, :lock_timeout}} = PartitionWorker.perform(job)
+        assert {:error, {:roll_partitions_failed, :lock_unavailable}} =
+                 PartitionWorker.perform(job)
       end
     )
   end

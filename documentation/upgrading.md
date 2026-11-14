@@ -567,10 +567,7 @@ library must not admit a vulnerable floor. Historical v0.3.0 upgrade instruction
 See ADR-0004 (Security-driven Ash floor). The CI compatibility matrix narrows from
 `[3.29.3, 3.30.1, latest]` to `[3.31.1, latest]`.
 
-## Database maintenance upgrade (unreleased draft)
-
-Do not deploy this draft until the builtin SQL-dispatch trust regression is resolved. Its
-catalog allowlist currently cannot establish the promised owner-execution boundary.
+## Database maintenance upgrade
 
 The replacement for forward-migration generation is one maintenance upgrade per schema:
 
@@ -584,12 +581,24 @@ jobs first: their prefix-hash advisory lock does not coordinate with the new OID
 all consumer policies on package tables to runtime roles before applying the migration;
 it raises and names every extra policy that applies to the owner.
 
-The migrator must own every replaced function and be able to SET ROLE to the payload owner;
-that owner needs CREATE on the install schema. The current draft also requires column SELECT
-on `pg_catalog.pg_statistic` for `starelid`, `staop1` through `staop5`, and `stacoll1` through
-`stacoll5`. Those permissions expose catalog metadata, not statistic values. This added
-installation precondition is a design deviation. The install record's timestamp is creation
-time within the transaction; exact commit time cannot be written before that commit happens.
+The migrator needs CREATE on the database for the dedicated routine schema. It must own
+every replaced function and be able to SET ROLE to the payload owner;
+that owner needs CREATE on the install schema. No catalog grants are required.
+The migration constructs a reference copy from package DDL in its own transaction and drops
+it after capturing the expected shape. Attribute numbers are normalized to column names,
+so adding operation-hold columns to a 1.x install does not change its logical shape.
+Shapes are keyed to `server_version_num`; after a server-version change the function
+rebuilds its reference on that server. The install record's `installed_at` is its creation
+time inside the transaction, so deadlines start no later than commit.
+The upgrade moves the original package functions into the dedicated routine schema before
+replacing them. Downgrade restores their original schema, owners, definitions, and grants.
+
+
+Downgrade restores the original routine owners and ACL grantor chains. PostgreSQL requires
+the migrating login to be able to SET ROLE to every original owner and grantor. SET ROLE to
+the payload owner alone cannot authorize acting as a different grantor. Without that
+capability, PostgreSQL returns `42501` and the entire downgrade rolls back; it does not
+silently attribute grants to the owner. Grant the needed SET membership before downgrading.
 
 After upgrading, call `mix ash_onetime.roll_partitions` to recover missed past and forward
 months from `_default`. Recovery replaces the removed `ash_onetime.gen.roll_forward` task.

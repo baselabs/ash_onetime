@@ -1,4 +1,5 @@
 DECLARE
+  deadline timestamptz := clock_timestamp();
   candidate record;
   parent_oid oid := @payload@::regclass;
   default_oid oid;
@@ -6,7 +7,6 @@ DECLARE
   facts record;
   bounds text[];
   occupied boolean;
-  deadline timestamptz;
   remaining integer;
   dropped integer := 0;
   kept integer := 0;
@@ -21,9 +21,17 @@ BEGIN
     OR lock_budget_ms IS NULL OR lock_budget_ms < 1 OR lock_budget_ms > 5000 THEN
     RAISE EXCEPTION 'invalid prune bounds' USING ERRCODE='22023';
   END IF;
-  PERFORM @schema@.ash_onetime_maintenance_lock(false,lock_budget_ms);
-  PERFORM @schema@.ash_onetime_maintenance_trust();
-  deadline := clock_timestamp() + lock_budget_ms * interval '1 millisecond';
+  -- Take the nonblocking pruner key before relation locks. A direct caller
+  -- may already hold a DML lock; letting two such callers wait for SUE and
+  -- then upgrade the parent would form a lock cycle.
+  IF NOT pg_try_advisory_xact_lock(1095716946,parent_oid::integer) THEN
+    RETURN jsonb_build_object('dropped',0,'kept',0,'refusals','{}'::jsonb,'blocked',false);
+  END IF;
+  deadline := deadline + lock_budget_ms * interval '1 millisecond';
+  remaining := greatest(1,floor(extract(epoch FROM (deadline-clock_timestamp()))*1000)::integer);
+  PERFORM @routines@.ash_onetime_maintenance_lock(false::boolean,remaining::integer);
+  PERFORM @routines@.ash_onetime_maintenance_trust();
+
   PERFORM set_config('ash_onetime.maintenance','on',true);
   SELECT partdefid INTO default_oid FROM pg_partitioned_table WHERE partrelid=parent_oid;
 
@@ -48,9 +56,6 @@ BEGIN
       IF NOT FOUND THEN RAISE EXCEPTION 'missing' USING ERRCODE='AOP01'; END IF;
       IF facts.relkind<>'r' OR NOT facts.child THEN RAISE EXCEPTION 'not_plain_child' USING ERRCODE='AOP01'; END IF;
       IF facts.relowner<>@owner@ THEN RAISE EXCEPTION 'not_owner' USING ERRCODE='AOP01'; END IF;
-      IF NOT pg_try_advisory_xact_lock(1095716946,parent_oid::integer) THEN
-        RAISE EXCEPTION 'pruner_busy' USING ERRCODE='AOP01';
-      END IF;
       PERFORM set_config('lock_timeout',remaining::text,true);
       PERFORM set_config('row_security','off',true);
       LOCK TABLE ONLY @schema@.ash_onetime_response_payloads IN ACCESS EXCLUSIVE MODE;
@@ -76,7 +81,6 @@ BEGIN
       WHEN lock_not_available THEN reason := 'lock_unavailable';
       WHEN OTHERS THEN reason := 'ddl_blocked';
     END;
-    EXIT WHEN reason='pruner_busy';
     IF reason IS NOT NULL THEN
       kept := kept+1;
       IF reason<>'occupied' THEN

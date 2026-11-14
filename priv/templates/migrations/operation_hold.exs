@@ -16,7 +16,7 @@ defmodule <%= inspect(module) %> do
     unless constraint_exists?() do
       execute("""
       ALTER TABLE #{q(@claims)} ADD CONSTRAINT #{qi(@check)}
-      CHECK (hold_reference IS NULL OR (octet_length(hold_reference) BETWEEN 1 AND 255 AND state = 'complete')) NOT VALID
+      CHECK (hold_reference IS NULL OR (octet_length(hold_reference) >= 1 AND octet_length(hold_reference) <= 255 AND state = 'complete')) NOT VALID
       """)
       flush()
     end

@@ -36,7 +36,7 @@ defmodule AshOnetime.Store.PruneSchemaTest do
 
       SQL.query!(
         Repo,
-        ~s|SELECT "#{schema}".ash_onetime_maintenance_copy_policy($1::text::regclass)|,
+        ~s|SELECT "#{Postgres.routine_schema(schema)}".ash_onetime_maintenance_copy_policy($1::text::regclass)|,
         [schema <> ".ash_onetime_response_payloads_2001_01"]
       )
 
@@ -106,22 +106,25 @@ defmodule AshOnetime.Store.PruneSchemaTest do
 
   defp run_sql_migration!(source, name, prefix) do
     module = Module.concat(__MODULE__, name)
-    Process.put({module, :prefix}, prefix)
-
+    # The sandbox shares one connection; the migrator's advisory/table lock
+    # would hold it while its task requests it. Keep the native DDL transaction.
     source =
       source
       |> String.replace(inspect(Repo) <> ".Migrations." <> name, inspect(module))
-      |> String.replace(
-        "use Ecto.Migration",
-        "def prefix, do: Process.get({__MODULE__, :prefix})\n def repo, do: AshOnetime.Test.Repo\n def execute(sql), do: Ecto.Adapters.SQL.query!(AshOnetime.Test.Repo, sql, [])"
-      )
+      |> String.replace("use Ecto.Migration", "use Ecto.Migration\n @disable_migration_lock true")
 
     Code.compile_string(source)
 
     try do
-      module.up()
+      assert :ok =
+               Ecto.Migrator.up(
+                 Repo,
+                 20_269_999_000_000 + System.unique_integer([:positive]),
+                 module,
+                 prefix: prefix,
+                 log: false
+               )
     after
-      Process.delete({module, :prefix})
       :code.purge(module)
       :code.delete(module)
     end
