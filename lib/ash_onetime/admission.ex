@@ -595,10 +595,6 @@ defmodule AshOnetime.Admission do
       {:error, %Error{} = error} ->
         emit_verification(subject, strategy, started, :rejected)
         {:error, error}
-
-      _other ->
-        emit_verification(subject, strategy, started, :rejected)
-        {:error, Callback.error(:verifier_contract_violation)}
     end
   end
 
