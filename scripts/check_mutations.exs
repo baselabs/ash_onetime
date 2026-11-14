@@ -397,7 +397,7 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/token_test.exs",
       tag: "token_from_body_bounds_mutation",
       test_name: "verify re-validates the decoded body's key_id bound before the signature",
-      assertion: "Token.verify(encoded, KeyResolver, verify_options())"
+      assertion: "Token.verify(encoded, Local, verify_options())"
     },
     # secure-equal-truncate was RETIRED: the full-length constant-time compare moved into
     # the :crypto.hash_equals/2 NIF when secure_equal/2 became a one-line wrapper, so the
@@ -438,13 +438,14 @@ defmodule AshOnetime.MutationCheck do
     },
     "signature" => %{
       path: "lib/ash_onetime/token.ex",
-      original: "      signing_bytes = body_bytes",
+      original:
+        "{:ok, signature} <- custody_sign(custody, token, body_bytes, custody_context),",
       mutated:
-        "      signing_bytes = (case body_bytes do <<first, rest::binary>> -> <<Bitwise.bxor(first, 1), rest::binary>> end)",
+        "{:ok, signature} <- custody_sign(custody, token, (case body_bytes do <<first, rest::binary>> -> <<Bitwise.bxor(first, 1), rest::binary>> end), custody_context),",
       test: "test/ash_onetime/token_test.exs",
       tag: "signature_mutation",
       test_name: "signature binds the exact canonical body bytes",
-      assertion: "assert {:ok, ^token} = Token.verify(encoded, KeyResolver, verify_options())"
+      assertion: "assert {:ok, ^token} = Token.verify(encoded, Local, verify_options())"
     },
     "dsl-idempotency" => %{
       path: "lib/ash_onetime/resource/transformer.ex",

@@ -4,6 +4,10 @@ defmodule AshOnetime.PackageBoundaryTest do
   alias AshOnetime.Test.Migration
   alias AshOnetime.Test.Repo
 
+  # The one application callback the package owns: the supervision tree for bounded
+  # callbacks (KeyCustody and verifier workers) and the maintenance installs.
+  @package_application "lib/ash_onetime/application.ex"
+
   @forbidden_dependencies [
     :ash_age,
     :ash_webhook_it,
@@ -25,10 +29,24 @@ defmodule AshOnetime.PackageBoundaryTest do
     assert Enum.count(violations([], deps), &match?({:forbidden_dependency, _, _}, &1)) == 3
   end
 
-  test "runtime application callbacks are rejected" do
-    entries = [{"lib/example.ex", "use Application\ndef start(_type, _args), do: :ok"}]
+  test "runtime application callbacks outside the package application are rejected" do
+    callback = "use Application\ndef start(_type, _args), do: :ok"
 
-    assert [{:application_callback, "lib/example.ex"}] = violations(entries, [])
+    assert [{:application_callback, "lib/example.ex"}] =
+             violations([{"lib/example.ex", callback}], [])
+
+    assert [{:application_callback, "lib/ash_onetime/application_extra.ex"}] =
+             violations([{"lib/ash_onetime/application_extra.ex", callback}], [])
+  end
+
+  test "the package application is the one callback and starts only the callback supervisor" do
+    assert Mix.Project.config()[:application][:mod] == {AshOnetime.Application, []}
+    assert violations([{@package_application, File.read!(@package_application)}], []) == []
+
+    assert [{Task.Supervisor, _pid, :supervisor, [Task.Supervisor]}] =
+             Supervisor.which_children(AshOnetime.Supervisor)
+
+    assert is_pid(Process.whereis(AshOnetime.TaskSupervisor))
   end
 
   test "secret literals are rejected" do
@@ -95,10 +113,11 @@ defmodule AshOnetime.PackageBoundaryTest do
   defp source_violations(path, source) do
     []
     |> maybe_add(
-      Regex.match?(
-        ~r/\b(?:use Application|@behaviour Application|def start\s*\(_type,\s*_args\))/,
-        source
-      ),
+      path != @package_application and
+        Regex.match?(
+          ~r/\b(?:use Application|@behaviour Application|def start\s*\(_type,\s*_args\))/,
+          source
+        ),
       {:application_callback, path}
     )
     |> maybe_add(
