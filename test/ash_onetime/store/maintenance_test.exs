@@ -398,11 +398,31 @@ defmodule AshOnetime.Store.MaintenanceTest do
       assert config == [
                "search_path=pg_catalog, pg_temp",
                "DateStyle=ISO, YMD",
-               "row_security=on"
+               "row_security=on",
+               "lock_timeout=5s"
              ]
 
       assert owner == c.owner
     end
+  end
+
+  @tag routine_lock_catalog_mutation: true
+  test "every routine that pins search_path, DateStyle and row security also pins lock_timeout",
+       c do
+    [[pinned, with_lock_timeout]] =
+      SQL.query!(
+        c.owner_repo,
+        """
+        SELECT count(*), count(*) FILTER (WHERE 'lock_timeout=5s' = ANY(p.proconfig))
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = $1
+          AND p.proconfig @> ARRAY['search_path=pg_catalog, pg_temp', 'DateStyle=ISO, YMD',
+                                   'row_security=on']
+        """,
+        [routine_schema(c.schema)]
+      ).rows
+
+    assert {pinned, with_lock_timeout} == {23, 23}
   end
 
   @tag quoted_schema: true
@@ -1466,9 +1486,15 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   @tag revision7: true
-  test "definers pin DateStyle and row security and restore caller settings", c do
+  @tag routine_lock_scope_mutation: true
+  test "routines pin DateStyle, row security and lock_timeout and restore the caller's settings",
+       c do
     for {{setting, value}, index} <-
-          Enum.with_index([{"DateStyle", "SQL, DMY"}, {"row_security", "off"}]) do
+          Enum.with_index([
+            {"DateStyle", "SQL, DMY"},
+            {"row_security", "off"},
+            {"lock_timeout", "7s"}
+          ]) do
       child = rel(c, "session_past_#{index}")
 
       sql!(
@@ -2801,7 +2827,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
       sql!(
         c.owner_repo,
-        "CREATE OR REPLACE FUNCTION #{rel(c, "ash_onetime_cleanup_nonce")}(batch_size integer) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp SET DateStyle='ISO, YMD' SET row_security=on AS #{literal(body)}"
+        "CREATE OR REPLACE FUNCTION #{rel(c, "ash_onetime_cleanup_nonce")}(batch_size integer) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp SET DateStyle='ISO, YMD' SET row_security=on SET lock_timeout='5s' AS #{literal(body)}"
       )
 
       reseal_fixture_routine(c, "ash_onetime_cleanup_nonce(integer)")

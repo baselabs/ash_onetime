@@ -70,11 +70,11 @@ defmodule AshOnetime.Oban.CleanupWorkerTest do
   # L5 (behavioral): a cleanup whose first DELETE is blocked by a contended table lock
   # surfaces as {:error, {:cleanup_failed, :lock_unavailable}} — the worker embeds the Store
   # Result.reason so Oban's job error carries the distinguishable cause past exhaustion, not an
-  # opaque :cleanup_failed. cleanup does not set its own lock_timeout, so a short session
-  # lock_timeout is set around the contention; an ACCESS EXCLUSIVE lock held on the idempotency
-  # claims table in a separate connection blocks cleanup_strategy(:idempotency)'s DELETE, which
-  # times out to :lock_unavailable. The SET/RESET + holder release are handled by with_contention
-  # so no GUC or connection leaks on any path (incl. an assertion failure).
+  # opaque :cleanup_failed. An ACCESS EXCLUSIVE lock held on the idempotency claims table in a
+  # separate connection blocks the cleanup routine's lock step, which gives up under the
+  # routine's own lock_timeout (a session lock_timeout does not reach inside it) and surfaces
+  # as :lock_unavailable. with_contention releases the holder on every path (incl. an
+  # assertion failure).
   @tag unboxed: true
   test "worker surfaces :lock_unavailable from a contended cleanup (L5 behavioral)", %{
     prefix: prefix
@@ -82,7 +82,6 @@ defmodule AshOnetime.Oban.CleanupWorkerTest do
     LockContention.with_contention(
       ~s(LOCK TABLE "#{prefix}"."ash_onetime_idempotency_claims" IN ACCESS EXCLUSIVE MODE),
       [],
-      [lock_timeout_ms: 300],
       fn ->
         job = %Oban.Job{
           args: %{

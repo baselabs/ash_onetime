@@ -12,7 +12,6 @@ DECLARE
   kept integer := 0;
   refusals jsonb := '{}';
   reason text;
-  previous_timeout text := current_setting('lock_timeout');
   previous_rls text := current_setting('row_security');
   previous_setting text := current_setting('ash_onetime.maintenance',true);
   report jsonb;
@@ -97,6 +96,5 @@ BEGIN
     last_counts=EXCLUDED.last_counts,last_refusals=EXCLUDED.last_refusals,updated_at=EXCLUDED.updated_at;
   PERFORM set_config('ash_onetime.maintenance',coalesce(previous_setting,''),true);
   PERFORM set_config('row_security',previous_rls,true);
-  PERFORM set_config('lock_timeout',previous_timeout,true);
   RETURN report;
 END

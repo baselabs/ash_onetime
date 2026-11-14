@@ -13,12 +13,10 @@ DECLARE
   months date[] := '{}';
   previous_setting text := current_setting('ash_onetime.maintenance',true);
   previous_rls text := current_setting('row_security');
-  previous_timeout text := current_setting('lock_timeout');
 BEGIN
   IF months_ahead IS NULL OR months_ahead<1 OR months_ahead>24 THEN
     RAISE EXCEPTION 'invalid roll months (1..24)' USING ERRCODE='22023';
   END IF;
-  PERFORM set_config('lock_timeout','5000',true);
   -- This two-int key is disjoint from prune's class and identifies the parent OID.
   PERFORM pg_advisory_xact_lock(1095717452,parent_oid::integer);
   PERFORM @routines@.ash_onetime_maintenance_lock(true::boolean,5000::integer);
@@ -104,6 +102,5 @@ BEGIN
     last_counts=EXCLUDED.last_counts,last_refusals=EXCLUDED.last_refusals,updated_at=EXCLUDED.updated_at;
   PERFORM set_config('ash_onetime.maintenance',coalesce(previous_setting,''),true);
   PERFORM set_config('row_security',previous_rls,true);
-  PERFORM set_config('lock_timeout',previous_timeout,true);
   RETURN created;
 END

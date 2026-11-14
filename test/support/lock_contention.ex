@@ -7,8 +7,8 @@ defmodule AshOnetime.Test.LockContention do
   # transaction) blocks against it and times out. Two real connections is what makes the
   # contention observable.
   #
-  # Robustness (per cross-vendor review): every acquired holder is released and every session
-  # GUC is reset on EVERY path — including the failure path where the worker assertion raised
+  # Robustness (per cross-vendor review): every acquired holder is released on EVERY path —
+  # including the failure path where the worker assertion raised
   # or the holder never signaled readiness. The holder TRAPS EXITS so a `:shutdown` signal runs
   # its `after` (Sandbox.stop_owner, returning the connection); `:kill` is never used because it
   # would skip the after and leak the checked-out connection + lock to the pool.
@@ -68,24 +68,16 @@ defmodule AshOnetime.Test.LockContention do
   end
 
   @doc """
-  Runs `fun` against a contended lock. Optionally sets a short session `lock_timeout` (for
-  operations that do not set their own) and ALWAYS resets it in the `after`. The acquired
-  holder is tracked through the process dictionary so the `after` can release it even when
-  `fun` raised or the holder never signaled readiness — no holder and no GUC ever leak to the
-  pool on any path.
-
-  Options: `:lock_timeout_ms` (the session lock_timeout to set/reset around the contention).
+  Runs `fun` against a contended lock. The operation under test bounds its own wait. The
+  acquired holder is tracked through the process dictionary so the `after` can release it even
+  when `fun` raised or the holder never signaled readiness — no holder ever leaks to the pool
+  on any path.
   """
-  def with_contention(lock_sql, lock_params \\ [], opts \\ [], fun) do
-    lock_timeout_ms = Keyword.get(opts, :lock_timeout_ms)
+  def with_contention(lock_sql, lock_params \\ [], fun) do
     holder_key = {__MODULE__, :holder}
     Process.put(holder_key, nil)
 
     try do
-      if lock_timeout_ms do
-        {:ok, _} = SQL.query(Repo, "SET lock_timeout = #{lock_timeout_ms}")
-      end
-
       holder = acquire(self(), lock_sql, lock_params)
       Process.put(holder_key, holder)
 
@@ -98,7 +90,6 @@ defmodule AshOnetime.Test.LockContention do
       fun.()
     after
       if holder = Process.get(holder_key), do: release(holder)
-      if lock_timeout_ms, do: {:ok, _} = SQL.query(Repo, "RESET lock_timeout")
     end
   end
 end

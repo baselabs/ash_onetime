@@ -1,6 +1,5 @@
 DECLARE
   previous_setting text := current_setting('ash_onetime.maintenance',true);
-  previous_timeout text := current_setting('lock_timeout');
   checks jsonb;
   policy_error text;
   trust_error text;
@@ -30,7 +29,6 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN GET STACKED DIAGNOSTICS trust_error=MESSAGE_TEXT;
   END;
   IF trust_error IS NOT NULL THEN
-    PERFORM set_config('lock_timeout',previous_timeout,true);
     RETURN jsonb_build_object('checks',jsonb_build_object('policy',policy_error IS NULL,'acl',false,'trust',false,'definers',false),
       'policy_error',policy_error,'trust_error',trust_error);
   END IF;
@@ -85,7 +83,6 @@ BEGIN
     END IF;
   END LOOP;
   PERFORM set_config('ash_onetime.maintenance',coalesce(previous_setting,''),true);
-  PERFORM set_config('lock_timeout',previous_timeout,true);
   RETURN jsonb_build_object('table_schema',@schema_name@,'routine_schema',@routine_schema_name@,'installed_at',installed,'steps',steps,'checks',checks,
     'policy_error',policy_error,'trust_error',trust_error,'oldest_cleanup_age_seconds',cleanup_age,
     'oldest_reapable_age_seconds',reap_age,'coverage_until',coverage_until,'default_has_rows',default_rows,

@@ -1,7 +1,6 @@
 DECLARE
   deleted_count bigint;
   previous_setting text := current_setting('ash_onetime.maintenance', true);
-  previous_timeout text := current_setting('lock_timeout');
   policy_error text;
 BEGIN
   IF batch_size IS NULL OR batch_size < 1 OR batch_size > 10000 THEN
@@ -28,6 +27,5 @@ BEGIN
     last_counts=ash_onetime_maintenance_runs.last_counts || EXCLUDED.last_counts,
     last_refusals=EXCLUDED.last_refusals,updated_at=EXCLUDED.updated_at;
   PERFORM set_config('ash_onetime.maintenance', coalesce(previous_setting,''), true);
-  PERFORM set_config('lock_timeout', previous_timeout, true);
   RETURN deleted_count;
 END

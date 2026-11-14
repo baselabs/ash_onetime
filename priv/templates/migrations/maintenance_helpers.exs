@@ -61,6 +61,10 @@ defp install_maintenance(mode) when mode in [:fresh, :upgrade] do
     routine jsonb;
     routine_body text;
     routine_oid oid;
+    -- Every routine runs under these settings and PostgreSQL restores the caller's
+    -- values on exit, so a routine that narrows lock_timeout narrows it only for itself.
+    -- 5s is the package's lock ceiling; each lock budget is a narrowing below it.
+    routine_settings text := 'SET search_path = pg_catalog, pg_temp SET DateStyle = ''ISO, YMD'' SET row_security = on SET lock_timeout = ''5s''';
     grantee_oid oid;
     target record;
     fk record;
@@ -237,9 +241,9 @@ defp install_maintenance(mode) when mode in [:fresh, :upgrade] do
         '@edges@',edge_query);
       routine_body := replace(replace(replace(routine_body,'@routines@',format('%I',routine_schema)),
         '@routine_schema_name@',quote_literal(routine_schema)),'@maintenance@',maintenance_oid::text);
-      EXECUTE format('CREATE OR REPLACE FUNCTION %I.%I(%s) RETURNS %s LANGUAGE plpgsql SECURITY %s SET search_path = pg_catalog, pg_temp SET DateStyle = ''ISO, YMD'' SET row_security = on AS %L',
+      EXECUTE format('CREATE OR REPLACE FUNCTION %I.%I(%s) RETURNS %s LANGUAGE plpgsql SECURITY %s %s AS %L',
         routine_schema,routine->>'name',routine->>'args',routine->>'result',
-        CASE WHEN (routine->>'definer')::boolean THEN 'DEFINER' ELSE 'INVOKER' END,routine_body);
+        CASE WHEN (routine->>'definer')::boolean THEN 'DEFINER' ELSE 'INVOKER' END,routine_settings,routine_body);
       -- Argument names are accepted by CREATE, but regprocedure takes types.
       routine_oid := to_regprocedure(format('%I.%I(%s)',routine_schema,routine->>'name',routine->>'types'));
       FOR grantee_oid IN SELECT DISTINCT a.grantee FROM pg_proc p,
@@ -335,13 +339,13 @@ defp install_maintenance(mode) when mode in [:fresh, :upgrade] do
     END IF;
     SELECT prosrc INTO STRICT routine_body FROM pg_proc WHERE oid=format('%I.ash_onetime_maintenance_shapes()',routine_schema)::regprocedure;
     routine_body := replace(routine_body,quote_literal('{}') || '::jsonb; -- @relation_manifest@',quote_literal(manifest::text) || '::jsonb;');
-    EXECUTE format('CREATE OR REPLACE FUNCTION %I.ash_onetime_maintenance_shapes() RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path=pg_catalog,pg_temp AS %L',routine_schema,routine_body);
+    EXECUTE format('CREATE OR REPLACE FUNCTION %I.ash_onetime_maintenance_shapes() RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER %s AS %L',routine_schema,routine_settings,routine_body);
     SELECT #{rq("ash_onetime_maintenance_normalize")}(polqual::text,polrelid::oid) INTO STRICT expected_policy
     FROM pg_policy WHERE polrelid=format('%I.ash_onetime_response_payloads',install_schema)::regclass
       AND polname='ash_onetime_maintenance';
     SELECT prosrc INTO STRICT routine_body FROM pg_proc WHERE oid=format('%I.ash_onetime_maintenance_policy_error()',routine_schema)::regprocedure;
     routine_body := replace(routine_body,quote_literal('@policy_expression@'),quote_literal(expected_policy));
-    EXECUTE format('CREATE OR REPLACE FUNCTION %I.ash_onetime_maintenance_policy_error() RETURNS text LANGUAGE plpgsql SECURITY INVOKER SET search_path=pg_catalog,pg_temp AS %L',routine_schema,routine_body);
+    EXECUTE format('CREATE OR REPLACE FUNCTION %I.ash_onetime_maintenance_policy_error() RETURNS text LANGUAGE plpgsql SECURITY INVOKER %s AS %L',routine_schema,routine_settings,routine_body);
     SELECT jsonb_agg(jsonb_build_object('schema',n.nspname,'name',p.proname,'arguments',p.proargtypes::text,
       'owner',p.proowner,'definer',p.prosecdef,'config',to_jsonb(p.proconfig),
       'identity',to_jsonb(p)-ARRAY['oid','pronamespace','proowner','proacl','prosrc','prosupport','proargdefaults','prosqlbody','pronargdefaults'],
@@ -351,7 +355,7 @@ defp install_maintenance(mode) when mode in [:fresh, :upgrade] do
       AND p.proname<>'ash_onetime_maintenance_trust';
     SELECT prosrc INTO STRICT routine_body FROM pg_proc WHERE oid=format('%I.ash_onetime_maintenance_trust()',routine_schema)::regprocedure;
     routine_body := replace(routine_body,quote_literal('[]') || '::jsonb; -- @routine_manifest@',quote_literal(manifest::text) || '::jsonb;');
-    EXECUTE format('CREATE OR REPLACE FUNCTION %I.ash_onetime_maintenance_trust() RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path=pg_catalog,pg_temp AS %L',routine_schema,routine_body);
+    EXECUTE format('CREATE OR REPLACE FUNCTION %I.ash_onetime_maintenance_trust() RETURNS void LANGUAGE plpgsql SECURITY INVOKER %s AS %L',routine_schema,routine_settings,routine_body);
     SELECT jsonb_agg(jsonb_build_object('schema',n.nspname,'name',p.proname,'arguments',p.proargtypes::text,
       'owner',p.proowner,'definer',p.prosecdef,'config',to_jsonb(p.proconfig),
       'identity',to_jsonb(p)-ARRAY['oid','pronamespace','proowner','proacl','prosrc','prosupport','proargdefaults','prosqlbody','pronargdefaults'],

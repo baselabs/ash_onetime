@@ -251,6 +251,15 @@ defmodule AshOnetime.MutationCheck do
       test_name: "every package expression is a PostgreSQL 18 dump restore fixpoint, default",
       assertion: "assert normalized_policies(c) == policies"
     },
+    "maintenance-normalize-referenced" => %{
+      path: "priv/templates/migrations/maintenance/normalize.sql",
+      original: "WHERE m.captures[1]::bigint <= 4294967295;",
+      mutated: "WHERE false;",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "restore_fixpoint",
+      test_name: "every package expression is a PostgreSQL 18 dump restore fixpoint, default",
+      assertion: "assert normalized_policies(c) == policies"
+    },
     "maintenance-normalize-attnum" => %{
       path: "priv/templates/migrations/maintenance/normalize.sql",
       original:
@@ -1256,12 +1265,32 @@ defmodule AshOnetime.MutationCheck do
     "rls-prune-catalog-count" => %{
       path: "priv/templates/migrations/maintenance_helpers.exs",
       original:
-        "SET search_path = pg_catalog, pg_temp SET DateStyle = ''ISO, YMD'' SET row_security = on AS %L",
-      mutated: "AS %L",
+        "routine_settings text := 'SET search_path = pg_catalog, pg_temp SET DateStyle = ''ISO, YMD'' SET row_security = on SET lock_timeout = ''5s''';",
+      mutated: "routine_settings text := '';",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "maintenance_functions_mutation",
       test_name: "all maintenance entry points are owner definers with a fixed search path",
       assertion: "search_path=pg_catalog, pg_temp"
+    },
+    "routine-lock-timeout-scope" => %{
+      path: "priv/templates/migrations/maintenance_helpers.exs",
+      original: "SET row_security = on SET lock_timeout = ''5s''';",
+      mutated: "SET row_security = on';",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "routine_lock_scope_mutation",
+      test_name:
+        "routines pin DateStyle, row security and lock_timeout and restore the caller's settings",
+      assertion: ~S|assert scalar(c.runtime_repo, "SHOW #{setting}") == value|
+    },
+    "routine-lock-timeout-catalog" => %{
+      path: "priv/templates/migrations/maintenance_helpers.exs",
+      original: "SET row_security = on SET lock_timeout = ''5s''';",
+      mutated: "SET row_security = on SET lock_timeout = ''7s''';",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "routine_lock_catalog_mutation",
+      test_name:
+        "every routine that pins search_path, DateStyle and row security also pins lock_timeout",
+      assertion: "assert {pinned, with_lock_timeout} == {23, 23}"
     },
     "rls-prune-refusal-telemetry" => %{
       path: "lib/ash_onetime/store.ex",

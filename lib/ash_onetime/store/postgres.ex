@@ -1049,7 +1049,7 @@ defmodule AshOnetime.Store.Postgres do
 
   # Transaction-scoped lock_timeout for the pre-peer claim lock (ADR-0010): bounds how long
   # a same-key waiter blocks on the FOR UPDATE row lock before failing with :lock_timeout
-  # (mapped to :request_in_progress by the caller). Mirrors arm_partition_roll_lock/2.
+  # (mapped to :request_in_progress by the caller).
   defp arm_claim_lock_timeout(_target, nil), do: :ok
 
   defp arm_claim_lock_timeout(target, lock_timeout_ms) do

@@ -96,9 +96,9 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
   # L5 (behavioral): a contended partition-roll advisory lock surfaces as
   # {:error, {:roll_partitions_failed, :lock_unavailable}} — the worker embeds the Store
   # Result.reason so Oban's job error carries the distinguishable cause past exhaustion, not an
-  # opaque :roll_partitions_failed. Store.roll_partitions sets `SET LOCAL lock_timeout = 5s`
-  # internally (arm_partition_roll_lock), so a roll that cannot acquire the per-prefix advisory
-  # lock fails closed with reason :lock_unavailable after 5s. This pins the error tuple
+  # opaque :roll_partitions_failed. The roll routine runs under its own 5s lock_timeout, so a
+  # roll that cannot acquire the per-prefix advisory lock fails closed with reason
+  # :lock_unavailable after 5s. This pins the error tuple
   # BEHAVIORALLY (a real store fault -> the actual tuple returned to Oban); a regression that
   # collapses the tuple to the opaque atom, or drops the inner reason, fails here.
   @tag unboxed: true
@@ -110,9 +110,9 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
         ~s("#{prefix}".ash_onetime_response_payloads)
       ])
 
-    # Hold the per-prefix advisory lock in a separate real connection. Store.roll_partitions
-    # sets SET LOCAL lock_timeout = 5s internally, so a roll that cannot acquire the held lock
-    # fails closed with reason :lock_unavailable. No session lock_timeout is needed here.
+    # Hold the per-prefix advisory lock in a separate real connection. The roll routine's own
+    # 5s lock_timeout makes a roll that cannot acquire the held lock fail closed with reason
+    # :lock_unavailable.
     LockContention.with_contention(
       "SELECT pg_advisory_xact_lock(1095717452, $1::integer)",
       [parent_oid],
