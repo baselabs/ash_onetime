@@ -4,13 +4,13 @@ defmodule AshOnetime.ChangeTest do
   alias AshOnetime.Resource.Protection
   alias AshOnetime.Test.ActionExamples.Resource
 
-  test "change installs admission before-hook and outer completion hook without doing I/O" do
+  test "change installs transactional admission and completion without doing I/O" do
     protection = %Protection{strategy: :idempotency, action: :charge}
     changeset = Ash.Changeset.for_create(Resource, :charge, valid_input())
 
     changed = AshOnetime.Change.change(changeset, [protection: protection], %{})
 
-    assert length(changed.before_action) == length(changeset.before_action) + 1
+    assert changed.before_action == changeset.before_action
     assert length(changed.around_action) == length(changeset.around_action) + 1
     assert changed.valid?
   end

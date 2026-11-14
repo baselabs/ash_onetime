@@ -12,9 +12,10 @@ defmodule AshOnetime.NonceRollbackGapTest do
      the acceptance window. A retry with the same proof is rejected with `:nonce_already_used`
      (RFC 9449 §11.1 request-attempt scope).
 
-  The gap trace (why the default rolls back): change.ex before_action -> admission.ex
-  Store.claim -> postgres.ex plain INSERT on the action's transaction. No inner commit. The
-  fence trace: change.ex before_action -> admission.ex reserve_committed -> Store.claim_committed
+  The gap trace (why the default rolls back): the transactional admission hook -> admission.ex
+  Store.claim -> postgres.ex plain INSERT on the action's transaction. No inner commit. CRUD
+  admits in change.ex around_action; generic actions admit in generic_action.ex before_action.
+  The fence trace uses that same hook -> admission.ex reserve_committed -> Store.claim_committed
   -> postgres.ex worker process commits in its own transaction before the body runs.
 
   The fence test runs against an UNBOXED repo (`start_unboxed_repo!`) because `claim_committed`

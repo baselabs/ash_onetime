@@ -221,13 +221,13 @@ connection. Two operational characteristics apply, inherited from the external-e
 now exercised per-request rather than per-external-effect:
 
 - **Connection-pool pressure.** The worker needs a checkout from the same pool while the
-  caller's `before_action` still holds one — effectively +1 connection per in-flight protected
+  caller's action transaction still holds one — effectively +1 connection per in-flight protected
   request. Under `pool_size N` concurrent protected actions, the `(N+1)`th blocks waiting for a
   checkout; under sustained burst this surfaces as latency and, at the limit, a
   `:checkout_unavailable` rejection (which fails closed — the request is rejected, never
   admitted unsafely). Size the pool for the expected concurrency of DPoP-protected endpoints.
 - **30s worker timeout.** If the worker stalls (slow query, lock contention on the unique index,
-  pool pressure), `before_action` blocks for up to 30s before the worker times out and returns
+  pool pressure), admission blocks for up to 30s before the worker times out and returns
   a `:worker_timeout` result, which surfaces as a `[:ash_onetime, :store_uncertainty]` telemetry
   event with `result_class: :worker_timeout` and a typed store error. This is distinct from a
   genuine disconnect (`result_class: :disconnected`) and from other unknown dispatches

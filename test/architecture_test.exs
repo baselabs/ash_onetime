@@ -441,6 +441,7 @@ defmodule AshOnetime.ArchitectureTest do
                :plug,
                :postgrex,
                :spark,
+               :simple_sat,
                :stream_data,
                :telemetry
              ])

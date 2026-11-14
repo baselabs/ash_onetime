@@ -2,6 +2,63 @@ defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "replay-callback-error-rollback" => %{
+      path: "lib/ash_onetime/change.ex",
+      original: "Ash.DataLayer.rollback(changeset.resource, callback_error)",
+      mutated: "{:error, callback_error}",
+      test: "test/ash_onetime/replay_relationship_callback_error_test.exs",
+      tag: "replay_callback_error_mutation",
+      test_name: "create replay rolls back writes and preserves an after-action error",
+      assertion: "assert %{rows: [[^markers, ^related]]} =",
+      required_failures:
+        Enum.map([:create, :update, :destroy], fn action ->
+          {"#{action} replay rolls back writes and preserves an after-action error",
+           "assert %{rows: [[^markers, ^related]]} ="}
+        end) ++
+          [
+            {"replay rolls back writes when a policy rejects the result",
+             "assert %{rows: [[^markers, ^related]]} ="},
+            {"replay rolls back partial relationship management",
+             "assert %{rows: [[^markers, ^related]]} ="}
+          ]
+    },
+    "replay-relationship-clearing" => %{
+      path: "lib/ash_onetime/change.ex",
+      original: "&Ash.Changeset.clear_change(&2, &1)",
+      mutated: "fn _relationship, pending -> pending end",
+      test: "test/ash_onetime/replay_relationship_test.exs",
+      tag: "replay_relationship_clear_mutation",
+      test_name: "create replay clears caller-managed children and returns the stored result",
+      assertion: "assert {:ok, replayed} =",
+      required_failures:
+        for action <- [:create, :update, :destroy], relationship <- [:children, :owner] do
+          {"#{action} replay clears caller-managed #{relationship} and returns the stored result",
+           "assert {:ok, replayed} ="}
+        end
+    },
+    "replay-relationship-rollback" => %{
+      path: "lib/ash_onetime/change.ex",
+      original: "Ash.DataLayer.rollback(final_changeset.resource, error)",
+      mutated: "{:error, error}",
+      test: "test/ash_onetime/replay_relationship_test.exs",
+      tag: "replay_relationship_backstop_mutation",
+      test_name: "create replay rolls back a lying pure hook even with rollback_on_error?: false",
+      assertion: "assert %{rows: [[0]]} =",
+      required_failures:
+        for action <- [:create, :update, :destroy] do
+          {"#{action} replay rolls back a lying pure hook even with rollback_on_error?: false",
+           "assert %{rows: [[0]]} ="}
+        end
+    },
+    "generic-replay-relationship-backstop" => %{
+      path: "lib/ash_onetime/generic_action.ex",
+      original: "Map.get(input, :relationships, %{}) == %{}",
+      mutated: "true",
+      test: "test/ash_onetime/replay_relationship_test.exs",
+      tag: "generic_replay_relationship_mutation",
+      test_name: "generic completion rolls back relationship state injected by a caller hook",
+      assertion: "assert {:error, error} = Ash.run_action(replay)"
+    },
     "operation-hold-delete-guard" => %{
       path: "priv/templates/migrations/install.exs",
       original: "IF OLD.hold_reference IS NOT NULL THEN",
@@ -1323,9 +1380,10 @@ defmodule AshOnetime.MutationCheck do
     },
     "authorization-order" => %{
       path: "lib/ash_onetime/change.ex",
-      original: "protection = Keyword.fetch!(opts, :protection)\n\n    changeset",
+      original:
+        "protection = Keyword.fetch!(opts, :protection)\n\n    Ash.Changeset.around_action(",
       mutated:
-        "protection = Keyword.fetch!(opts, :protection)\n\n    changeset = reserve(changeset, protection, context)\n\n    changeset",
+        "protection = Keyword.fetch!(opts, :protection)\n\n    changeset = reserve(changeset, protection, context)\n\n    Ash.Changeset.around_action(",
       test: "test/ash_onetime/authorization_order_test.exs",
       tag: "authorization_order_mutation",
       test_name: "change registration performs no admission callback before Ash authorization",
@@ -1778,6 +1836,12 @@ defmodule AshOnetime.MutationCheck do
   # that once orphaned the ARCH mutations. The named subsets below stay for fast, focused local runs.
   @groups %{
     "all" => Map.keys(@mutations),
+    "replay-relationships" => [
+      "replay-callback-error-rollback",
+      "replay-relationship-clearing",
+      "replay-relationship-rollback",
+      "generic-replay-relationship-backstop"
+    ],
     "response-allowlist" => ["response-field-guard"],
     "return-type" => ["return-contract"],
     "dsl-verifiers" => [

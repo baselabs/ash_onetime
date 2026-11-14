@@ -115,6 +115,7 @@ mis-categorize them; the per-code HTTP below overrides the `:invalid` class.
 | `:custody_contract_violation` | **500** | Custody raised, exited, was killed or returned a result outside its contract. |
 | `:verifier_contract_violation` | **500** | A verifier or minter raised, exited, was killed or returned malformed facts. |
 | `:store_invariant` | **500** | The authoritative store returned a result that violated an internal invariant (integrity fault, not client input). |
+| `:replay_relationship_change` | **500** | A relationship change reached completion on a replay; the action's transaction was explicitly rolled back. |
 | `:outcome_unknown` | **503** | External recovery was ambiguous; the effect's outcome could not be determined (retryable). |
 | `:invalid_evaluated_at` | **500** | The trusted evaluation clock returned an invalid time. |
 | `:response_payload_invalid` | **500** | The persisted response payload is invalid. |
@@ -171,3 +172,7 @@ never become caller-visible diagnostics. Other explicit verifier/minter errors b
 `:verification_failed`. Custody's closed error atoms map to `:invalid_signature`,
 `:key_unusable`, `:custody_unavailable` or `:custody_timeout`; malformed returns and worker
 failures become `:custody_contract_violation`.
+
+`:replay_relationship_change` also uses a fixed message, "relationship changes cannot run
+on a replay", and empty details. It rolls back explicitly even when the caller sets
+`rollback_on_error?: false`.

@@ -6,6 +6,24 @@ or suppress a duplicate confirmation email on the retry. `ash_onetime` exposes t
 on the result so the outer caller can observe it after `Ash.create/2` / `Ash.run_action/2`
 returns.
 
+## Relationship writes and caller hooks
+
+Relationship writes never repeat on a replay. Before returning the stored result,
+`ash_onetime` clears pending relationship changes, including relationships managed by the
+caller and belongs-to inputs. If a later hook adds a relationship change, the package
+refuses the replay with `:replay_relationship_change` and explicitly rolls back the action's
+transaction, even when the caller sets `rollback_on_error?: false`. Fresh execution keeps
+its normal relationship handling.
+
+On a replay, any error rolls back everything the replay wrote, whatever
+`rollback_on_error?` says, and the original error reaches the caller unchanged.
+
+A hook a caller attaches at the call site is the caller's code, the same as a write the
+caller makes before calling the action. These hooks still run; the package does not bind
+all caller code to its claim. A consumer that needs the whole effect bound to the claim
+uses the [Transaction path](transaction-owned-admission.md), where the caller owns the
+transaction and puts the effect in the admitted execution branch.
+
 ## `AshOnetime.replayed?/1`
 
 ```elixir
@@ -62,6 +80,9 @@ end)
 The admission module's replay predicate takes the in-flight input the caller no longer
 holds, so it is for in-action use only (the admission module is `@moduledoc false`; reach
 for it only when you cannot use a record-returning action).
+
+A generic action returning an embedded resource has a record-shaped result and can carry
+the `replayed?/1` signal.
 
 ## The carrier
 

@@ -13,6 +13,23 @@ This guide is for authors of custom `Ash.Resource.Change`, `Ash.Resource.Validat
 replay signal (how to tell fresh execution from a stored replay in your HTTP layer), see
 [Replay](replay.md).
 
+## Caller hooks and relationships
+
+A hook a caller attaches at the call site is the caller's code, the same as a write the
+caller makes before calling the action. The compile-time declarations below cover the
+action's DSL callbacks; they do not turn arbitrary caller hooks into claim-owned code.
+A consumer that needs the whole effect bound to the claim uses the
+[Transaction path](transaction-owned-admission.md), where the caller owns the transaction
+and runs that effect only after admission grants execution.
+
+Relationship writes never repeat on a replay. The package clears pending relationship
+changes when it admits a replay, including caller-managed relationships and belongs-to
+inputs. A later hook that adds a relationship change triggers
+`:replay_relationship_change` and an explicit rollback, regardless of `rollback_on_error?`.
+Declared replay-aware hooks still run on replay and remain responsible for their own
+effects. Declarative managed relationships, `relate_actor`, and undeclared DSL lifecycle
+callbacks remain compile-time refusals.
+
 ## When you need the callbacks
 
 You need them when a protected action carries a **custom, module-based** lifecycle callback —

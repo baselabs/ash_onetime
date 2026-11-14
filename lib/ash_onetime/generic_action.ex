@@ -64,7 +64,18 @@ defmodule AshOnetime.GenericAction do
   defp complete(input, result) do
     case AshOnetime.Admission.state(input) do
       {:ok, %{class: :replay} = state} ->
-        after_result(input, AshOnetime.Admission.stamp_replay(state, result))
+        # ActionInput has no relationship field, but caller code can add map keys.
+        if Map.get(input, :relationships, %{}) == %{} do
+          after_result(input, AshOnetime.Admission.stamp_replay(state, result))
+        else
+          error =
+            AshOnetime.Error.new(
+              :replay_relationship_change,
+              "relationship changes cannot run on a replay"
+            )
+
+          Ash.DataLayer.rollback(input.resource, error)
+        end
 
       {:ok, state} ->
         persisted_result = if is_nil(input.action.returns), do: :ok, else: result

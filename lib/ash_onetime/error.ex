@@ -8,6 +8,10 @@ defmodule AshOnetime.Error do
   `Ash.Error.Invalid{errors: [%AshOnetime.Error{code: ...}]}`, where it can drive HTTP
   status mapping (`AshOnetime.Error.code/1`) — see `documentation/errors.md` for the
   code→HTTP table.
+
+  `:replay_relationship_change` refuses relationship changes that reach completion on a
+  replay. Its fixed message is "relationship changes cannot run on a replay", its details
+  are empty, and the action's transaction is explicitly rolled back.
   """
 
   use Splode.Error, class: :invalid, fields: [:code, :message, :details]

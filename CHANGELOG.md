@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- **Replay relationships.** Replay admission clears all pending relationship changes,
+  including caller-managed relationships and belongs-to inputs, across create, update,
+  and destroy. A relationship change added later refuses with
+  `:replay_relationship_change` and explicitly rolls back, even with
+  `rollback_on_error?: false`; generic completion carries the same backstop. Fresh
+  relationship execution and compile-time lifecycle refusals are unchanged. The replay
+  guides explain caller hooks and the caller-owned Transaction path. On a replay,
+  any error rolls back everything the replay wrote, whatever `rollback_on_error?`
+  says, and preserves the original error. Real result-authorization tests use the
+  test-only `simple_sat` dependency.
 - **Key custody.** Token signing and verification take `AshOnetime.KeyCustody` and
   `custody_context:`. `KeyCustody.Local` accepts algorithm-tagged, purpose-specific
   material. External holders can retain signing keys without exporting them. The old

@@ -15,13 +15,16 @@ defmodule AshOnetime.Change do
   def change(changeset, opts, context) do
     protection = Keyword.fetch!(opts, :protection)
 
-    changeset
-    |> Ash.Changeset.before_action(
-      fn pending -> reserve(pending, protection, context) end,
-      prepend?: true
-    )
-    |> Ash.Changeset.around_action(
-      fn pending, callback -> complete(pending, callback) end,
+    Ash.Changeset.around_action(
+      changeset,
+      fn pending, callback ->
+        # Retain admission state here: a failed callback has no final changeset.
+        # Around hooks run inside the transaction, before before-action hooks.
+        case reserve(pending, protection, context) do
+          {:error, error} -> {:error, error}
+          admitted -> complete(admitted, callback)
+        end
+      end,
       prepend?: true
     )
   end
@@ -38,13 +41,6 @@ defmodule AshOnetime.Change do
   defp reserve(changeset, protection, context) do
     trusted = AshOnetime.Admission.trusted_context(context)
 
-    # The CRUD dispatch_reservation mirrors generic_action.ex's. Covered by the
-    # :nonce_charge_fence CRUD test (replay_fence_test.exs). A discriminating mutation sentinel
-    # for this path is infeasible: a succeeding CRUD create is observationally identical under
-    # commit-with-action vs commit-independent (both admit + commit on success), and a failing
-    # CRUD body needs a custom change that races the nonce CRUD lifecycle verifier's
-    # replay_capabilities/1 load-ordering check. The generic_action.ex dispatch — which diverges
-    # observably on body failure — carries the replay-fence-dispatch mutation sentinel.
     reservation = AshOnetime.Admission.dispatch_reservation(changeset, protection, trusted)
 
     case reservation do
@@ -58,6 +54,13 @@ defmodule AshOnetime.Change do
         AshOnetime.Admission.put_state(changeset, state)
 
       {:replay, decoded, state} ->
+        changeset =
+          Enum.reduce(
+            Map.keys(changeset.relationships),
+            changeset,
+            &Ash.Changeset.clear_change(&2, &1)
+          )
+
         changeset
         |> AshOnetime.Admission.put_replay(state)
         |> Ash.Changeset.set_result({:ok, decoded})
@@ -72,16 +75,30 @@ defmodule AshOnetime.Change do
       {:ok, result, final_changeset, instructions} ->
         complete_state(final_changeset, result, instructions)
 
-      {:error, _error} = error ->
-        error
+      {:error, callback_error} = error ->
+        if AshOnetime.Admission.replay?(changeset) do
+          Ash.DataLayer.rollback(changeset.resource, callback_error)
+        else
+          error
+        end
     end
   end
 
   defp complete_state(final_changeset, result, instructions) do
     case AshOnetime.Admission.state(final_changeset) do
       {:ok, %{class: :replay} = state} ->
-        {:ok, AshOnetime.Admission.stamp_replay(state, result), final_changeset,
-         suppress_notifications(instructions)}
+        if final_changeset.relationships == %{} do
+          {:ok, AshOnetime.Admission.stamp_replay(state, result), final_changeset,
+           suppress_notifications(instructions)}
+        else
+          error =
+            AshOnetime.Error.new(
+              :replay_relationship_change,
+              "relationship changes cannot run on a replay"
+            )
+
+          Ash.DataLayer.rollback(final_changeset.resource, error)
+        end
 
       {:ok, state} ->
         normalize_completion(state, result, final_changeset, instructions)

@@ -117,6 +117,7 @@ defmodule MyAppWeb.OnetimeErrors do
 
   @server_codes [
     :store_invariant,
+    :replay_relationship_change,
     :invalid_evaluated_at,
     :response_payload_invalid,
     :response_persisted_state_invalid,

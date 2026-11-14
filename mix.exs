@@ -106,6 +106,8 @@ defmodule AshOnetime.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
+      # Exercise real result-authorization policies without adding a consumer runtime dependency.
+      {:simple_sat, "~> 0.1 and >= 0.1.1", only: :test, runtime: false},
       {:stream_data, "~> 1.4", runtime: false}
     ]
   end
