@@ -1566,7 +1566,7 @@ defmodule AshOnetime.MutationCheck do
       mutated: "  @integer_tag 0x03",
       test: "test/system/package_consumer_test.exs",
       tag: "canonical_domain_tag_mutation",
-      test_name: "canonical domains stay distinct and the package has no application callback",
+      test_name: "canonical domains stay distinct and the package starts its callback supervisor",
       assertion: "assert {:ok, <<2, _::binary>>} = Canonical.encode(1)"
     },
     "action-replay" => %{

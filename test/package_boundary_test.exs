@@ -39,16 +39,6 @@ defmodule AshOnetime.PackageBoundaryTest do
              violations([{"lib/ash_onetime/application_extra.ex", callback}], [])
   end
 
-  test "the package application is the one callback and starts only the callback supervisor" do
-    assert Mix.Project.config()[:application][:mod] == {AshOnetime.Application, []}
-    assert violations([{@package_application, File.read!(@package_application)}], []) == []
-
-    assert [{Task.Supervisor, _pid, :supervisor, [Task.Supervisor]}] =
-             Supervisor.which_children(AshOnetime.Supervisor)
-
-    assert is_pid(Process.whereis(AshOnetime.TaskSupervisor))
-  end
-
   test "secret literals are rejected" do
     entries = [{"lib/example.ex", ~s|config :example, secret: "literal-secret"|}]
 
