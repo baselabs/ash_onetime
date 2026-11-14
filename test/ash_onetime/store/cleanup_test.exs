@@ -141,12 +141,29 @@ defmodule AshOnetime.Store.CleanupTest do
 
   @tag :cleanup_partition_limit_guard_mutation
   test "cleanup rejects out-of-range batch sizes and partition limits", %{target: target} do
-    # The reaper's identical guards are tested (reap_test); the cleanup guard was the untested
-    # sibling — a batch of 0 or >10_000, or a partition_limit above @max_partition_drops (128),
-    # must fail closed with :invalid_request before any DELETE runs.
-    assert %Result{status: :failure, reason: :invalid_request} = Store.cleanup(target, 0, 10)
-    assert %Result{status: :failure, reason: :invalid_request} = Store.cleanup(target, 20_000, 10)
-    assert %Result{status: :failure, reason: :invalid_request} = Store.cleanup(target, 100, 129)
+    # A batch of 0 or >10_000, or a partition_limit above @max_partition_drops (128), fails
+    # closed in Elixir before anything is sent. The maintenance routine refuses the same limit
+    # with 22023, but that is :sent and :rolled_back; :not_started proves the guard answered.
+    assert %Result{
+             status: :failure,
+             reason: :invalid_request,
+             admission_dispatch: :not_started,
+             transaction: :not_applicable
+           } = Store.cleanup(target, 0, 10)
+
+    assert %Result{
+             status: :failure,
+             reason: :invalid_request,
+             admission_dispatch: :not_started,
+             transaction: :not_applicable
+           } = Store.cleanup(target, 20_000, 10)
+
+    assert %Result{
+             status: :failure,
+             reason: :invalid_request,
+             admission_dispatch: :not_started,
+             transaction: :not_applicable
+           } = Store.cleanup(target, 100, 129)
   end
 
   @tag external_processing_cleanup_mutation: true

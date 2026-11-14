@@ -780,8 +780,7 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/store/cleanup_test.exs",
       tag: "cleanup_partition_limit_guard_mutation",
       test_name: "cleanup rejects out-of-range batch sizes and partition limits",
-      assertion:
-        "assert %Result{status: :failure, reason: :invalid_request} = Store.cleanup(target, 100, 129)"
+      assertion: "} = Store.cleanup(target, 100, 129)"
     },
     "resource-relationship-leak" => %{
       path: "lib/ash_onetime/codec/resource.ex",
