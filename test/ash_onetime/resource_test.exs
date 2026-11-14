@@ -29,7 +29,7 @@ defmodule AshOnetime.ResourceTest do
     assert {:ok, opts} = AshOnetime.Change.init(protection: protection)
     changed = AshOnetime.Change.change(changeset, opts, %{})
     assert changed.valid?
-    assert length(changed.before_action) == 1
+    assert changed.before_action == []
     assert length(changed.around_action) == 1
 
     assert {:not_atomic, "keyed effects require transactional stream execution"} =
