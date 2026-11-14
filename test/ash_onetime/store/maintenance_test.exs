@@ -1513,16 +1513,30 @@ defmodule AshOnetime.Store.MaintenanceTest do
       )
 
       sql!(c.runtime_repo, "SET #{setting}=#{literal(value)}")
+      previous = Repo.put_dynamic_repo(c.runtime_repo)
 
-      assert scalar(c.runtime_repo, "SELECT #{rel(c, "ash_onetime_roll_payload_partitions")}(1)") >=
-               0
+      # A transaction-local set_config inside a routine lasts until the caller's
+      # transaction ends, so the caller's value is checked before that end.
+      try do
+        assert {:ok, :restored} =
+                 Repo.transaction(fn ->
+                   assert scalar(
+                            c.runtime_repo,
+                            "SELECT #{rel(c, "ash_onetime_roll_payload_partitions")}(1)"
+                          ) >= 0
 
-      assert scalar(
-               c.runtime_repo,
-               "SELECT #{rel(c, "ash_onetime_prune_payload_partitions")}(1::integer,2000::integer)->>'dropped'"
-             ) == "1"
+                   assert scalar(
+                            c.runtime_repo,
+                            "SELECT #{rel(c, "ash_onetime_prune_payload_partitions")}(1::integer,2000::integer)->>'dropped'"
+                          ) == "1"
 
-      assert scalar(c.runtime_repo, "SHOW #{setting}") == value
+                   assert scalar(c.runtime_repo, "SHOW #{setting}") == value
+                   :restored
+                 end)
+      after
+        Repo.put_dynamic_repo(previous)
+      end
+
       sql!(c.runtime_repo, "RESET #{setting}")
     end
   end

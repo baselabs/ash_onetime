@@ -1264,9 +1264,9 @@ defmodule AshOnetime.MutationCheck do
     },
     "rls-prune-catalog-count" => %{
       path: "priv/templates/migrations/maintenance_helpers.exs",
-      original:
-        "routine_settings text := 'SET search_path = pg_catalog, pg_temp SET DateStyle = ''ISO, YMD'' SET row_security = on SET lock_timeout = ''5s''';",
-      mutated: "routine_settings text := '';",
+      original: "THEN 'DEFINER' ELSE 'INVOKER' END,routine_settings,routine_body);",
+      mutated:
+        "THEN 'DEFINER' ELSE 'INVOKER' END,replace(routine_settings,'SET search_path = pg_catalog, pg_temp ',''),routine_body);",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "maintenance_functions_mutation",
       test_name: "all maintenance entry points are owner definers with a fixed search path",
