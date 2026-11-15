@@ -139,11 +139,11 @@ defmodule AshOnetime.MutationCheck do
       mutated: "",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "evt_trust_mutation",
-      test_name: "event trigger ddl_command_start ownership is checked even when disabled",
+      test_name: "trust and doctor audit ddl_command_start event code and its execution identity",
       assertion: "assert error =~ trigger",
       required_failures:
         for event <- ["ddl_command_start", "login"] do
-          {"event trigger #{event} ownership is checked even when disabled",
+          {"trust and doctor audit #{event} event code and its execution identity",
            "assert error =~ trigger"}
         end
     },
@@ -153,11 +153,11 @@ defmodule AshOnetime.MutationCheck do
       mutated: "Enum.map([], fn",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "evt_doctor_mutation",
-      test_name: "event trigger ddl_command_start ownership is checked even when disabled",
+      test_name: "trust and doctor audit ddl_command_start event code and its execution identity",
       assertion: "Expected exception Mix.Error",
       required_failures:
         for event <- ["ddl_command_start", "login"] do
-          {"event trigger #{event} ownership is checked even when disabled",
+          {"trust and doctor audit #{event} event code and its execution identity",
            "Expected exception Mix.Error"}
         end
     },

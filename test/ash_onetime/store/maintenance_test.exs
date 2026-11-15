@@ -3,13 +3,13 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
   alias AshOnetime.Store.Postgres
   alias AshOnetime.Store.Result
-  alias AshOnetime.Test.ExternalPeer
-  alias Mix.Tasks.AshOnetime.Doctor
   alias AshOnetime.Test.ClusterIsolation
+  alias AshOnetime.Test.ExternalPeer
   alias AshOnetime.Test.Repo
   alias AshOnetime.Test.ShippedMigrations
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
+  alias Mix.Tasks.AshOnetime.Doctor
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: Generator
 
   setup context do

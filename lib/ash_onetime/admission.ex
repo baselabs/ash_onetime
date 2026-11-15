@@ -254,7 +254,7 @@ defmodule AshOnetime.Admission do
   rescue
     _exception -> {:error, Error.new(:response_completion_failed, "response completion failed")}
   catch
-    :throw, {DBConnection, connection_reference, _reason} = rollback
+    :throw, {DBConnection, connection_reference, %Error{code: :request_in_progress}} = rollback
     when is_reference(connection_reference) ->
       throw(rollback)
 

@@ -80,17 +80,19 @@ defmodule AshOnetime.Test.Migration do
   end
 
   def with_runtime_connection(schema, callback) do
-    RealConnection.with_connection(fn ->
-      role = "doctor_runtime_#{System.unique_integer([:positive])}"
-      password = Base.encode16(:crypto.strong_rand_bytes(24))
+    role = "doctor_runtime_#{System.unique_integer([:positive])}"
+    password = Base.encode16(:crypto.strong_rand_bytes(24))
 
+    RealConnection.with_connection(fn ->
       SQL.query!(
         Repo,
         ~s|CREATE ROLE "#{role}" LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '#{password}'|,
         []
       )
+    end)
 
-      try do
+    try do
+      RealConnection.with_connection(fn ->
         SQL.query!(Repo, ~s|GRANT USAGE ON SCHEMA "#{schema}" TO "#{role}"|, [])
 
         SQL.query!(
@@ -98,37 +100,39 @@ defmodule AshOnetime.Test.Migration do
           ~s|GRANT SELECT ON "#{schema}".ash_onetime_idempotency_claims TO "#{role}"|,
           []
         )
+      end)
 
-        url =
-          Application.fetch_env!(:ash_onetime, Repo)[:url]
-          |> URI.parse()
-          |> Map.put(:userinfo, role <> ":" <> password)
-          |> URI.to_string()
+      url =
+        Application.fetch_env!(:ash_onetime, Repo)[:url]
+        |> URI.parse()
+        |> Map.put(:userinfo, role <> ":" <> password)
+        |> URI.to_string()
 
-        {:ok, runtime} =
-          Repo.start_link(name: nil, url: url, pool: DBConnection.ConnectionPool, pool_size: 1)
+      {:ok, runtime} =
+        Repo.start_link(name: nil, url: url, pool: DBConnection.ConnectionPool, pool_size: 1)
 
-        Process.unlink(runtime)
-        previous = Repo.put_dynamic_repo(runtime)
+      Process.unlink(runtime)
+      previous = Repo.put_dynamic_repo(runtime)
 
-        try do
-          [[false, false]] =
-            SQL.query!(
-              Repo,
-              "SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=session_user",
-              []
-            ).rows
+      try do
+        [[false, false]] =
+          SQL.query!(
+            runtime,
+            "SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=session_user",
+            []
+          ).rows
 
-          callback.()
-        after
-          Repo.put_dynamic_repo(previous)
-          GenServer.stop(runtime)
-        end
+        callback.()
       after
+        Repo.put_dynamic_repo(previous)
+        GenServer.stop(runtime)
+      end
+    after
+      RealConnection.with_connection(fn ->
         SQL.query!(Repo, ~s|DROP OWNED BY "#{role}"|, [])
         SQL.query!(Repo, ~s|DROP ROLE "#{role}"|, [])
-      end
-    end)
+      end)
+    end
   end
 
   def uninstall_generated!(installation) do

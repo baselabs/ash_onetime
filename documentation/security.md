@@ -92,6 +92,15 @@ The DELETE guard refuses held claims even for an owner or superuser, but does no
 TRUNCATE, DROP, or a superuser's `session_replication_role = replica`. See
 [Operation holds](idempotency.md#keep-an-open-operations-record) for the complete contract.
 
+External completion arms the protection's `external_lock_timeout_ms` for each package
+payload INSERT and claims UPDATE. A `55P03` lock timeout rolls completion back and returns
+`:request_in_progress`, retaining the committed processing claim for recovery. Each successful
+statement restores the previous `lock_timeout` using SET LOCAL. Consumer changes to
+`lock_timeout` or `statement_timeout`, whether through function SET clauses, `set_config`
+or SET statements, are outside the trust model. The restore ends a transaction-local
+`lock_timeout` change made inside that statement. It masks a session-level change until the
+transaction ends: COMMIT keeps that session value and ROLLBACK undoes it. A session-level
+`statement_timeout` change takes effect immediately and is never restored by the store.
 
 ## Maintenance and the trusted server
 
