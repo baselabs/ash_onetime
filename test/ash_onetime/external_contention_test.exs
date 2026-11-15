@@ -16,6 +16,138 @@ defmodule AshOnetime.ExternalContentionTest do
     {:ok, external_repo: start_unboxed_repo!()}
   end
 
+  @tag external_replay_lock_timeout_mutation: true
+  test "immediate replay bounds its first claim lock and reports request in progress", context do
+    assert {:ok, _result} = run_quick_lock(context, "replay-lock-bound")
+    reference = make_ref()
+    parent = self()
+    handler = {__MODULE__, reference}
+    cold_repo = start_cold_replay_repo!(context.prefix)
+    context = %{context | external_repo: cold_repo}
+
+    :ok =
+      :telemetry.attach_many(
+        handler,
+        [[:ash_onetime, :replay], [:ash_onetime, :conflict]],
+        &__MODULE__.replay_lock_barrier/4,
+        {parent, reference}
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    with_observer(fn holder ->
+      Postgrex.query!(holder, "BEGIN", [])
+
+      try do
+        {caller, monitor} =
+          start_monitored_worker(fn ->
+            Process.put(:replay_lock_barrier, reference)
+            send(parent, {:external_done, self(), run_quick_lock(context, "replay-lock-bound")})
+          end)
+
+        # Admission emits replay only after the grant worker committed. Pause that caller
+        # before its first FOR UPDATE, then acquire the conflicting lock on another session.
+        assert_receive {:replay_lock_ready, ^reference, ^caller}, 30_000
+
+        Postgrex.query!(
+          holder,
+          ~s(SELECT id FROM "#{context.prefix}".ash_onetime_idempotency_claims FOR UPDATE),
+          []
+        )
+
+        started = System.monotonic_time(:millisecond)
+        send(caller, {:replay_lock_continue, reference})
+        assert {backend_pid, [_ | _], query} = wait_for_blocked_query(context.prefix)
+        assert String.contains?(String.downcase(query), "for update")
+
+        assert %{rows: [[true]]} =
+                 Postgrex.query!(
+                   holder,
+                   "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid=$1 AND NOT granted)",
+                   [backend_pid]
+                 )
+
+        # The protection is 1000ms; the independent deadline makes unfixed code fail
+        # while the holder is still locked, rather than hanging until ExUnit kills it.
+        assert_receive {:external_done, ^caller,
+                        {:error,
+                         %Ash.Error.Invalid{
+                           errors: [%AshOnetime.Error{code: :request_in_progress}]
+                         }}},
+                       2_000
+
+        elapsed = System.monotonic_time(:millisecond) - started
+        assert elapsed < 2_000
+        assert_receive {:replay_lock_conflict, ^reference, :processing}, 1_000
+        assert_receive {:DOWN, ^monitor, :process, ^caller, :normal}, 1_000
+
+        IO.puts(
+          "REPLAY_LOCK_BOUND pg_locks_wait=true elapsed_ms=#{elapsed} bound_ms=1000 margin_ms=1000"
+        )
+      after
+        Postgrex.query!(holder, "ROLLBACK", [])
+      end
+    end)
+  end
+
+  def replay_lock_barrier(event, _measurements, metadata, {parent, reference}) do
+    if Process.get(:replay_lock_barrier) == reference do
+      case event do
+        [:ash_onetime, :replay] ->
+          send(parent, {:replay_lock_ready, reference, self()})
+          receive do: ({:replay_lock_continue, ^reference} -> :ok)
+
+        [:ash_onetime, :conflict] ->
+          send(parent, {:replay_lock_conflict, reference, metadata.result_class})
+      end
+    end
+  end
+
+  defp start_cold_replay_repo!(prefix) do
+    role = "ao_replay_#{System.unique_integer([:positive])}"
+    password = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
+
+    SQL.query!(
+      Repo,
+      "CREATE ROLE #{role} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '#{password}'",
+      [], log: false)
+
+    on_exit(fn ->
+      SQL.query!(Repo, "DROP OWNED BY #{role}", [])
+      SQL.query!(Repo, "DROP ROLE #{role}", [])
+    end)
+
+    SQL.query!(Repo, ~s(GRANT USAGE ON SCHEMA "#{prefix}" TO #{role}), [])
+
+    SQL.query!(
+      Repo,
+      ~s(GRANT SELECT, INSERT, UPDATE ON "#{prefix}".ash_onetime_idempotency_claims TO #{role}),
+      []
+    )
+
+    SQL.query!(Repo, ~s(GRANT SELECT ON "#{prefix}".ash_onetime_response_payloads TO #{role}), [])
+
+    url =
+      System.fetch_env!("DATABASE_URL")
+      |> URI.parse()
+      |> Map.put(:userinfo, role <> ":" <> password)
+      |> URI.to_string()
+
+    {:ok, repo} =
+      Repo.start_link(name: nil, url: url, pool: DBConnection.ConnectionPool, pool_size: 2)
+
+    Process.unlink(repo)
+    on_exit(fn -> GenServer.stop(repo) end)
+
+    assert SQL.query!(
+             repo,
+             "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=session_user",
+             []
+           ).rows == [[false, false]]
+
+    repo
+  end
+
   @tag external_operation_key_mutation: true
   test "concurrent finalizers use one peer key and one local effect while a row lock blocks the loser",
        context do
