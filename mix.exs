@@ -169,6 +169,7 @@ defmodule AshOnetime.MixProject do
       files: [
         "lib",
         "priv/templates",
+        "priv/vectors",
         "documentation",
         "mix.exs",
         "README.md",

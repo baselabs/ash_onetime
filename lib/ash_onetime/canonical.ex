@@ -7,9 +7,54 @@ defmodule AshOnetime.Canonical do
   values. Floats, tuples, structs, improper lists, PIDs, ports, references, and
   functions are deliberately outside the algebra and return a typed error.
 
-  Every value has a pinned domain tag and a 32-bit byte length. Containers also
-  carry a 32-bit item count. Map entries are ordered by the complete encoded key
-  bytes, making construction order irrelevant.
+  `AshOnetime.Fingerprint` is SHA-256 over these bytes. Token bodies are signed over them.
+
+  ## Format 1
+
+  `format/0` returns `1`. Format 1 bytes never change: the same value always encodes to
+  the same bytes in every release. A different encoding is a new format with a new number.
+
+  Every value is one frame: a one-byte domain tag, a 32-bit unsigned big-endian payload
+  length, then the payload.
+
+  | Tag    | Value     | Payload                                                     |
+  | ------ | --------- | ----------------------------------------------------------- |
+  | `0x00` | `nil`     | empty                                                       |
+  | `0x01` | boolean   | one byte: `0x01` for `true`, `0x00` for `false`             |
+  | `0x02` | integer   | decimal ASCII, `-` for negatives, no leading zeros or `+`   |
+  | `0x03` | binary    | the bytes                                                   |
+  | `0x04` | atom      | the atom's UTF-8 name                                       |
+  | `0x05` | list      | 32-bit item count, then each item's frame in list order     |
+  | `0x06` | map       | 32-bit entry count, then key frame and value frame per entry |
+
+  Map entries are ordered by the complete encoded key bytes compared as unsigned bytes, so
+  construction order is irrelevant. Keys of different types order by tag; a shorter binary
+  key orders before a longer one because the length precedes the bytes. Distinct keys
+  always encode to distinct bytes.
+
+  ## Bounds
+
+  `bounds/0` returns the limits. A value outside them returns
+  `{:error, %AshOnetime.Error{code: :limit_exceeded, details: %{limit: limit, maximum: maximum}}}`,
+  where `limit` is the key below.
+
+  | Limit                | Maximum           | Counts                                        |
+  | -------------------- | ----------------- | --------------------------------------------- |
+  | `:integer_magnitude` | 2^255 - 1         | absolute value of one integer                 |
+  | `:binary_bytes`      | 16,384            | bytes in one binary                           |
+  | `:container_items`   | 256               | items in one list or entries in one map       |
+  | `:total_values`      | 2,048             | every value, containers and map keys included |
+  | `:depth`             | 16                | containers enclosing the deepest value        |
+  | `:encoded_bytes`     | 65,536            | bytes of the complete encoding                |
+
+  ## Vectors
+
+  The package ships `priv/vectors/canonical-1.json`
+  (`Application.app_dir(:ash_onetime, "priv/vectors/canonical-1.json")`). It holds values
+  with their format 1 bytes and SHA-256 fingerprints, values each bound rejects, and byte
+  strings a decoder must refuse. The file is immutable: format 1 vectors are only ever
+  added in a new file. An implementation in another language conforms when it produces
+  every accepted encoding and refuses every rejection.
   """
 
   alias AshOnetime.Error
@@ -22,12 +67,23 @@ defmodule AshOnetime.Canonical do
   @list_tag 0x05
   @map_tag 0x06
 
-  @max_integer Integer.pow(2, 255) - 1
-  @max_binary_bytes 16_384
-  @max_container_items 256
-  @max_total_values 2_048
-  @max_depth 16
-  @max_encoded_bytes 65_536
+  @format 1
+
+  @bounds %{
+    integer_magnitude: Integer.pow(2, 255) - 1,
+    binary_bytes: 16_384,
+    container_items: 256,
+    total_values: 2_048,
+    depth: 16,
+    encoded_bytes: 65_536
+  }
+
+  @max_integer @bounds.integer_magnitude
+  @max_binary_bytes @bounds.binary_bytes
+  @max_container_items @bounds.container_items
+  @max_total_values @bounds.total_values
+  @max_depth @bounds.depth
+  @max_encoded_bytes @bounds.encoded_bytes
   @frame_header_bytes 5
   @container_count_bytes 4
 
@@ -42,6 +98,27 @@ defmodule AshOnetime.Canonical do
 
   @type result(value) :: {:ok, value} | {:error, Error.t()}
 
+  @type bounds :: %{
+          integer_magnitude: pos_integer(),
+          binary_bytes: pos_integer(),
+          container_items: pos_integer(),
+          total_values: pos_integer(),
+          depth: pos_integer(),
+          encoded_bytes: pos_integer()
+        }
+
+  @doc "Returns the format number of the bytes `encode/1` produces."
+  @spec format() :: 1
+  def format, do: @format
+
+  @doc "Returns the bounds `encode/1` enforces, keyed by the `:limit` its errors name."
+  @spec bounds() :: bounds()
+  def bounds, do: @bounds
+
+  @doc """
+  Encodes `value` to its format 1 bytes, or returns a `:limit_exceeded` or
+  `:unsupported_term` error.
+  """
   @spec encode(term()) :: result(binary())
   def encode(value) do
     case encode_value(value, 0, %{values: 0, bytes: 0}) do
@@ -193,12 +270,13 @@ defmodule AshOnetime.Canonical.Decoder do
   @decode_list_tag 0x05
   @decode_map_tag 0x06
 
-  @max_integer Integer.pow(2, 255) - 1
-  @max_binary_bytes 16_384
-  @max_container_items 256
-  @max_total_values 2_048
-  @max_depth 16
-  @max_encoded_bytes 65_536
+  @bounds Canonical.bounds()
+  @max_integer @bounds.integer_magnitude
+  @max_binary_bytes @bounds.binary_bytes
+  @max_container_items @bounds.container_items
+  @max_total_values @bounds.total_values
+  @max_depth @bounds.depth
+  @max_encoded_bytes @bounds.encoded_bytes
 
   @spec decode(binary()) :: {:ok, Canonical.value()} | {:error, Error.t()}
   def decode(encoded) when is_binary(encoded) and byte_size(encoded) <= @max_encoded_bytes do

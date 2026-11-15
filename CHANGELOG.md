@@ -25,6 +25,14 @@ All notable changes to this project are documented in this file.
   and failed workers report contract violations. Effect callbacks keep their transaction.
 - **Custody conformance.** A portable suite checks RFC 4231/RFC 8032 known answers,
   reference-signer interoperability, purpose/algorithm binding and signature tampering.
+- **Canonical format 1.** `AshOnetime.Canonical.format/0` returns `1` and `bounds/0`
+  returns the six limits its `:limit_exceeded` errors name. The moduledoc states the
+  format 1 grammar, bounds and stability rule: format 1 bytes never change. The package
+  ships immutable vectors at `priv/vectors/canonical-1.json` with accepted values, their
+  bytes and SHA-256 fingerprints, each bound's rejection, and byte strings a decoder must
+  refuse. An independent implementation authored them; the test suite checks every one
+  against the encoder, `AshOnetime.Fingerprint` and the decoder. The fingerprint docs
+  name the real `:fingerprint_too_large` error shape.
 
 
 - Maintenance audits EXECUTE in its dedicated routine schema and refuses SET-only

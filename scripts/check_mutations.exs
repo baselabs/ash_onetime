@@ -671,6 +671,24 @@ defmodule AshOnetime.MutationCheck do
       test_name: "integer encoding uses its distinct pinned domain tag",
       assertion: "assert {:ok, <<2, 0, 0, 0, 1, \"1\">>} = Canonical.encode(1)"
     },
+    "canonical-vector-bytes" => %{
+      path: "lib/ash_onetime/canonical.ex",
+      original: "encode_scalar(@integer_tag, Integer.to_string(value), state)",
+      mutated: "encode_scalar(@integer_tag, Integer.to_string(value, 16), state)",
+      test: "test/ash_onetime/canonical_vectors_test.exs",
+      tag: "canonical_vector_bytes_mutation",
+      test_name: "every accepted vector encodes, fingerprints and decodes to its published bytes",
+      assertion: "assert {name, {:ok, expected}} == {name, Canonical.encode(value)}"
+    },
+    "canonical-vector-bounds" => %{
+      path: "lib/ash_onetime/canonical.ex",
+      original: "    depth: 16,",
+      mutated: "    depth: 17,",
+      test: "test/ash_onetime/canonical_vectors_test.exs",
+      tag: "canonical_vector_bounds_mutation",
+      test_name: "every rejected vector fails with its published error",
+      assertion: "assert {name, published} == {name, rejection(result)}"
+    },
     "canonical-order" => %{
       path: "lib/ash_onetime/canonical.ex",
       original: "      ordered = Enum.sort_by(entries, &elem(&1, 0))",

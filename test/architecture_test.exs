@@ -188,7 +188,7 @@ defmodule AshOnetime.ArchitectureTest do
       terminate: 2
     ],
     AshOnetime.Cache.None => [delete: 1, get: 1, put: 3],
-    AshOnetime.Canonical => [encode: 1],
+    AshOnetime.Canonical => [bounds: 0, encode: 1, format: 0],
     AshOnetime.Clock => [now: 0],
     AshOnetime.Codec => [
       ash_resource?: 1,
@@ -446,6 +446,7 @@ defmodule AshOnetime.ArchitectureTest do
     assert Mix.Project.config()[:package][:files] == [
              "lib",
              "priv/templates",
+             "priv/vectors",
              "documentation",
              "mix.exs",
              "README.md",

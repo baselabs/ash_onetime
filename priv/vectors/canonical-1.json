@@ -1,0 +1,514 @@
+{
+  "format": "ash_onetime canonical",
+  "version": 1,
+  "fingerprint": "SHA-256 over the canonical bytes",
+  "value_notation": {
+    "nil": "{\"t\":\"nil\"}",
+    "bool": "{\"t\":\"bool\",\"v\":true|false}",
+    "int": "{\"t\":\"int\",\"v\":\"<decimal>\"}",
+    "bin": "{\"t\":\"bin\",\"hex\":\"<hex>\"} or {\"t\":\"bin\",\"repeat\":\"<hex>\",\"count\":N}",
+    "atom": "{\"t\":\"atom\",\"v\":\"<name>\"}",
+    "list": "{\"t\":\"list\",\"v\":[...]} or {\"t\":\"list\",\"repeat\":<value>,\"count\":N}",
+    "nest": "{\"t\":\"nest\",\"depth\":N}: N lists, each the only element of the next, around []",
+    "map": "{\"t\":\"map\",\"v\":[[<key>,<value>],...]}",
+    "float": "{\"t\":\"float\",\"v\":<number>} (rejection only)",
+    "tuple": "{\"t\":\"tuple\",\"v\":[...]} (rejection only)"
+  },
+  "bounds": {
+    "integer_magnitude": "57896044618658097711785492504343953926634992332820282019728792003956564819967",
+    "binary_bytes": 16384,
+    "container_items": 256,
+    "total_values": 2048,
+    "depth": 16,
+    "encoded_bytes": 65536
+  },
+  "accept": [
+    {
+      "name": "nil",
+      "value": {
+        "t": "nil"
+      },
+      "canonical": "0000000000",
+      "sha256": "8855508aade16ec573d21e6a485dfd0a7624085c1a14b5ecdd6485de0c6839a4"
+    },
+    {
+      "name": "true",
+      "value": {
+        "t": "bool",
+        "v": true
+      },
+      "canonical": "010000000101",
+      "sha256": "71ca9703af0fda42b802aa93ef5ff20cc9d02353e1b2d514acae2ec02f2c7278"
+    },
+    {
+      "name": "false",
+      "value": {
+        "t": "bool",
+        "v": false
+      },
+      "canonical": "010000000100",
+      "sha256": "a90d4563c6a0ae0417ab3110f1ba68592833465954774201b0a69e8c457dc6ad"
+    },
+    {
+      "name": "integer zero",
+      "value": {
+        "t": "int",
+        "v": "0"
+      },
+      "canonical": "020000000130",
+      "sha256": "59aaa5fd3dc216eb33c13f9aadc2918f43d7ac37bc4e2514d78b599c4e81a9db"
+    },
+    {
+      "name": "integer one is distinct from the binary one",
+      "value": {
+        "t": "int",
+        "v": "1"
+      },
+      "canonical": "020000000131",
+      "sha256": "b67ec28e3c8c07125d6386298e64aa1d99eb7750de3aeaec7815adb643f6814c"
+    },
+    {
+      "name": "binary one is distinct from the integer one",
+      "value": {
+        "t": "bin",
+        "hex": "31"
+      },
+      "canonical": "030000000131",
+      "sha256": "89970d8c4dade7a72f672c67393595cf506524a29c10bfbe3a44abf4e6b7b91c"
+    },
+    {
+      "name": "negative integer",
+      "value": {
+        "t": "int",
+        "v": "-1"
+      },
+      "canonical": "02000000022d31",
+      "sha256": "94090f4801f81402bc26add728d12ec58cc80dd840958998c76c71b982d2cd68"
+    },
+    {
+      "name": "multi-digit integer is decimal ASCII",
+      "value": {
+        "t": "int",
+        "v": "255"
+      },
+      "canonical": "0200000003323535",
+      "sha256": "67298648702573c26340f7e2f46a4193decd863c60b98fca3cfaea1db0f720d3"
+    },
+    {
+      "name": "largest admitted integer",
+      "value": {
+        "t": "int",
+        "v": "57896044618658097711785492504343953926634992332820282019728792003956564819967"
+      },
+      "canonical": "020000004d3537383936303434363138363538303937373131373835343932353034333433393533393236363334393932333332383230323832303139373238373932303033393536353634383139393637",
+      "sha256": "b0793f1621a48754b44864b93ebce7244a807ffd2c13bf13a2ba3874b84614c3"
+    },
+    {
+      "name": "most negative admitted integer",
+      "value": {
+        "t": "int",
+        "v": "-57896044618658097711785492504343953926634992332820282019728792003956564819967"
+      },
+      "canonical": "020000004e2d3537383936303434363138363538303937373131373835343932353034333433393533393236363334393932333332383230323832303139373238373932303033393536353634383139393637",
+      "sha256": "9ef957b5d94a0be89c3f5dd93208509c7a38c9cb1dce03d86f2f6b14b105e282"
+    },
+    {
+      "name": "empty binary",
+      "value": {
+        "t": "bin",
+        "hex": ""
+      },
+      "canonical": "0300000000",
+      "sha256": "a665e6b115dd56fd3e0c89be631e6eda8e9666b822e0bd7026bf0822c4bbc68f"
+    },
+    {
+      "name": "binary with arbitrary bytes",
+      "value": {
+        "t": "bin",
+        "hex": "00ff7f80"
+      },
+      "canonical": "030000000400ff7f80",
+      "sha256": "e51249875552d657af2999cca6940cc5d91ef8524d9821792cf525627575a3b2"
+    },
+    {
+      "name": "UTF-8 binary",
+      "value": {
+        "t": "bin",
+        "hex": "636166c3a9"
+      },
+      "canonical": "0300000005636166c3a9",
+      "sha256": "33886f01c3a92379d553f0be95ec1264894da41d6469905bd60e123bb5a9b8bd"
+    },
+    {
+      "name": "atom",
+      "value": {
+        "t": "atom",
+        "v": "ok"
+      },
+      "canonical": "04000000026f6b",
+      "sha256": "71ddf90606121ceb2d081f690da9bc8c70c41b7c8dc4b3bf58b44f0e3d38397e"
+    },
+    {
+      "name": "atom and binary with the same text differ",
+      "value": {
+        "t": "list",
+        "v": [
+          {
+            "t": "atom",
+            "v": "ok"
+          },
+          {
+            "t": "bin",
+            "hex": "6f6b"
+          }
+        ]
+      },
+      "canonical": "05000000120000000204000000026f6b03000000026f6b",
+      "sha256": "6d165966ee1197de82814ed754e7639c168b97cfa0007594d0e542e44294ee3d"
+    },
+    {
+      "name": "empty list",
+      "value": {
+        "t": "list",
+        "v": []
+      },
+      "canonical": "050000000400000000",
+      "sha256": "85c6bc1fced49a5f41ccd94362ae9bc83ca214f8347a5065a10edc36c73ec285"
+    },
+    {
+      "name": "list keeps element order",
+      "value": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "2"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      },
+      "canonical": "050000001000000002020000000132020000000131",
+      "sha256": "42d6ce8e3bee90df785ed5e78a229a2ef2d9241f003a7b1ca9d88faa8071a1b5"
+    },
+    {
+      "name": "empty map",
+      "value": {
+        "t": "map",
+        "v": []
+      },
+      "canonical": "060000000400000000",
+      "sha256": "d0bb5d881e14840f134799aba1b56f530d3c3a03ee02ac3c69175c4db496f74c"
+    },
+    {
+      "name": "map orders entries by encoded key bytes",
+      "value": {
+        "t": "map",
+        "v": [
+          [
+            {
+              "t": "bin",
+              "hex": "62"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "bin",
+              "hex": "61"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "canonical": "060000001c00000002030000000161020000000131030000000162020000000132",
+      "sha256": "818c639f31ae4ce1bbeea0b350e9f41added65243302408fde088e2faf609b60"
+    },
+    {
+      "name": "shorter key sorts first because the length precedes the bytes",
+      "value": {
+        "t": "map",
+        "v": [
+          [
+            {
+              "t": "bin",
+              "hex": "6161"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "bin",
+              "hex": "62"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ]
+        ]
+      },
+      "canonical": "060000001d0000000203000000016202000000013203000000026161020000000131",
+      "sha256": "984da52e09051e8e189f1a708cd0b9d09b63532559812aecc36b854502b66d7a"
+    },
+    {
+      "name": "map key order follows the domain tag",
+      "value": {
+        "t": "map",
+        "v": [
+          [
+            {
+              "t": "atom",
+              "v": "k"
+            },
+            {
+              "t": "nil"
+            }
+          ],
+          [
+            {
+              "t": "bin",
+              "hex": "6b"
+            },
+            {
+              "t": "nil"
+            }
+          ],
+          [
+            {
+              "t": "int",
+              "v": "1"
+            },
+            {
+              "t": "nil"
+            }
+          ]
+        ]
+      },
+      "canonical": "060000002500000003020000000131000000000003000000016b000000000004000000016b0000000000",
+      "sha256": "7ed5a3beeda514447e590f068bf5b14d5e6ff9e94b1d54d9f8ed1a620cbdc69b"
+    },
+    {
+      "name": "nested containers",
+      "value": {
+        "t": "map",
+        "v": [
+          [
+            {
+              "t": "bin",
+              "hex": "6974656d73"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "map",
+                  "v": [
+                    [
+                      {
+                        "t": "bin",
+                        "hex": "736b75"
+                      },
+                      {
+                        "t": "bin",
+                        "hex": "412d31"
+                      }
+                    ],
+                    [
+                      {
+                        "t": "bin",
+                        "hex": "717479"
+                      },
+                      {
+                        "t": "int",
+                        "v": "3"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          [
+            {
+              "t": "bin",
+              "hex": "746f74616c"
+            },
+            {
+              "t": "int",
+              "v": "-42"
+            }
+          ]
+        ]
+      },
+      "canonical": "06000000500000000203000000056974656d73050000002b0000000106000000220000000203000000037174790200000001330300000003736b750300000003412d310300000005746f74616c02000000032d3432",
+      "sha256": "8c24964191feb270bf015557ce745c7ad60cd633da3dfbd701727a81618dd9f9"
+    },
+    {
+      "name": "deepest admitted nesting",
+      "value": {
+        "t": "nest",
+        "depth": 16
+      },
+      "canonical": "050000009400000001050000008b00000001050000008200000001050000007900000001050000007000000001050000006700000001050000005e00000001050000005500000001050000004c00000001050000004300000001050000003a00000001050000003100000001050000002800000001050000001f00000001050000001600000001050000000d00000001050000000400000000",
+      "sha256": "791186857945fd527371e54c6826a0844216acaa12226bafcaaeba262926d082"
+    }
+  ],
+  "reject": [
+    {
+      "name": "integer magnitude above the bound",
+      "value": {
+        "t": "int",
+        "v": "57896044618658097711785492504343953926634992332820282019728792003956564819968"
+      },
+      "error": "limit_exceeded",
+      "limit": "integer_magnitude",
+      "maximum": "57896044618658097711785492504343953926634992332820282019728792003956564819967"
+    },
+    {
+      "name": "negative integer magnitude above the bound",
+      "value": {
+        "t": "int",
+        "v": "-57896044618658097711785492504343953926634992332820282019728792003956564819968"
+      },
+      "error": "limit_exceeded",
+      "limit": "integer_magnitude",
+      "maximum": "57896044618658097711785492504343953926634992332820282019728792003956564819967"
+    },
+    {
+      "name": "binary above the byte bound",
+      "value": {
+        "t": "bin",
+        "repeat": "00",
+        "count": 16385
+      },
+      "error": "limit_exceeded",
+      "limit": "binary_bytes",
+      "maximum": "16384"
+    },
+    {
+      "name": "list above the item bound",
+      "value": {
+        "t": "list",
+        "repeat": {
+          "t": "nil"
+        },
+        "count": 257
+      },
+      "error": "limit_exceeded",
+      "limit": "container_items",
+      "maximum": "256"
+    },
+    {
+      "name": "nesting above the depth bound",
+      "value": {
+        "t": "nest",
+        "depth": 17
+      },
+      "error": "limit_exceeded",
+      "limit": "depth",
+      "maximum": "16"
+    },
+    {
+      "name": "more values than the total bound",
+      "value": {
+        "t": "list",
+        "repeat": {
+          "t": "list",
+          "repeat": {
+            "t": "nil"
+          },
+          "count": 255
+        },
+        "count": 8
+      },
+      "error": "limit_exceeded",
+      "limit": "total_values",
+      "maximum": "2048"
+    },
+    {
+      "name": "encoding above the byte bound",
+      "value": {
+        "t": "list",
+        "repeat": {
+          "t": "bin",
+          "repeat": "00",
+          "count": 16384
+        },
+        "count": 4
+      },
+      "error": "limit_exceeded",
+      "limit": "encoded_bytes",
+      "maximum": "65536"
+    },
+    {
+      "name": "float is outside the algebra",
+      "value": {
+        "t": "float",
+        "v": 1.5
+      },
+      "error": "unsupported_term"
+    },
+    {
+      "name": "tuple is outside the algebra",
+      "value": {
+        "t": "tuple",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      },
+      "error": "unsupported_term"
+    }
+  ],
+  "invalid_encoding": [
+    {
+      "name": "trailing bytes after one value",
+      "rule": "trailing_bytes",
+      "canonical": "000000000000"
+    },
+    {
+      "name": "map entries out of key order",
+      "rule": "map_key_order",
+      "canonical": "060000001c00000002030000000162020000000132030000000161020000000131"
+    },
+    {
+      "name": "duplicate map key",
+      "rule": "duplicate_map_key",
+      "canonical": "060000001c00000002030000000161020000000131030000000161020000000131"
+    },
+    {
+      "name": "unknown domain tag",
+      "rule": "unknown_tag",
+      "canonical": "0700000000"
+    },
+    {
+      "name": "declared length past the end",
+      "rule": "truncated_frame",
+      "canonical": "030000000261"
+    },
+    {
+      "name": "integer with a leading zero",
+      "rule": "noncanonical_integer",
+      "canonical": "02000000023031"
+    },
+    {
+      "name": "boolean payload other than 0 or 1",
+      "rule": "invalid_payload",
+      "canonical": "010000000102"
+    }
+  ]
+}
