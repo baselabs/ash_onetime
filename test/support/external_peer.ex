@@ -14,7 +14,7 @@ defmodule AshOnetime.Test.ExternalPeer do
     %URI{host: host, port: port, userinfo: userinfo, path: path} =
       URI.parse(Application.fetch_env!(:ash_onetime, Repo)[:url])
 
-    [user, password] = String.split(userinfo || "postgres:postgres", ":", parts: 2)
+    [user, password] = String.split(userinfo, ":", parts: 2)
 
     [
       hostname: host,

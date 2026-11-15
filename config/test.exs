@@ -1,10 +1,7 @@
 import Config
 
-database_url =
-  System.get_env(
-    "DATABASE_URL",
-    "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
-  )
+# The test lane provides DATABASE_URL; test/test_helper.exs fails closed without it.
+database_url = System.get_env("DATABASE_URL")
 
 config :ash, :disable_async?, true
 
