@@ -1,11 +1,11 @@
 defmodule AshOnetime.Test.ExitBoundary.Classifier do
   @moduledoc false
 
-  # §2.7.8 rule 3: the classes of every way a term leaves a process in OTP 29.1.2, and
+  # §2.7.8 rule 3: the classes of every way a term leaves a process in OTP 28.5 and 29.1.2, and
   # the total function from an observed event to its class. The table and the classifier
   # are one artifact: `classify_mfa/3` is defined by the tables below and nothing else.
   #
-  # - Every function of `:erlang` and `:erts_internal` at 29.1.2 is named here, each with
+  # - Every function of `:erlang` and `:erts_internal` at either supported release is named here, each with
   #   its class or as `:pure` (no term leaves the process). A function missing from the
   #   tables classifies as `:unclaimed`, and an unclaimed event fails the run.
   # - Every other module the class table names is claimed whole by exactly one class.
@@ -223,20 +223,32 @@ defmodule AshOnetime.Test.ExitBoundary.Classifier do
                       do: {module, class}
 
   def classes, do: @classes
-  def erlang_table, do: @erlang_classes
-  def erts_internal_table, do: @erts_internal_classes
+  alias AshOnetime.Test.ExitBoundary.Inventory
+
+  def erlang_table(release \\ Inventory.release())
+  def erlang_table("29.1.2"), do: @erlang_classes
+  def erlang_table("28.5"), do: Map.drop(@erlang_classes, [is_integer: 3, is_record: 1, exit_signal: 3])
+
+  def erts_internal_table(release \\ Inventory.release()) do
+    Inventory.bif_rows(release)
+    @erts_internal_classes
+  end
   def module_table, do: @module_classes
   def pure_modules, do: @pure_modules
   def traced_modules, do: [:erlang, :erts_internal | Map.keys(@module_classes)]
 
   @doc "The class of a call to `{module, function, arity}`."
-  def classify_mfa(:erlang, function, arity),
-    do: Map.get(@erlang_classes, {function, arity}, :unclaimed)
+  def classify_mfa(module, function, arity),
+    do: classify_mfa(module, function, arity, Inventory.release())
 
-  def classify_mfa(:erts_internal, function, arity),
-    do: Map.get(@erts_internal_classes, {function, arity}, :unclaimed)
+  def classify_mfa(:erlang, function, arity, release),
+    do: Map.get(erlang_table(release), {function, arity}, :unclaimed)
 
-  def classify_mfa(module, function, arity) do
+  def classify_mfa(:erts_internal, function, arity, release),
+    do: Map.get(erts_internal_table(release), {function, arity}, :unclaimed)
+
+  def classify_mfa(module, function, arity, release) do
+    Inventory.bif_rows(release)
     cond do
       class = Map.get(@overrides, {module, function, arity}) -> class
       class = Map.get(@module_classes, module) -> class

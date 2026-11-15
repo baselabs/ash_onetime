@@ -27,9 +27,10 @@ defmodule AshOnetime.Delivery.ExitBoundaryClassifierTest do
 
   test "every bif.tab declaration is claimed by a class or listed as pure" do
     unclaimed =
-      for %{module: m, function: f, arity: a} <- Inventory.bif_rows(),
-          Classifier.classify_mfa(m, f, a) == :unclaimed,
-          do: {m, f, a}
+      for release <- Inventory.releases(),
+          %{module: m, function: f, arity: a} <- Inventory.bif_rows(release),
+          Classifier.classify_mfa(m, f, a, release) == :unclaimed,
+          do: {release, m, f, a}
 
     assert unclaimed == [],
            "#{length(unclaimed)} bif.tab entries unclaimed: #{inspect(unclaimed)}"
