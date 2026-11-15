@@ -402,6 +402,39 @@ defmodule AshOnetime.Store.MaintenanceTest do
       rows = package_triggers(c)
       assert Enum.all?(rows, fn [_table, _trigger, mode] -> mode == "A" end)
       assert Enum.any?(rows, fn [_, trigger, _] -> trigger == "renamed_guard" end)
+
+      seed_guard_rows!(c)
+
+      # Legacy invoker functions inherit the writer's search_path. Their new
+      # replica admission must resolve the server's authority checks exactly.
+      sql!(c.runtime_repo, """
+      CREATE FUNCTION #{q(c.schema)}.current_setting(text) RETURNS text
+      LANGUAGE sql AS 'SELECT ''replica''::text'
+      """)
+
+      sql!(c.runtime_repo, """
+      CREATE FUNCTION #{q(c.schema)}.pg_has_role(name,oid,text) RETURNS boolean
+      LANGUAGE sql AS 'SELECT true'
+      """)
+
+      sql!(c.runtime_repo, "SET search_path=#{q(c.schema)},pg_catalog")
+
+      assert scalar(
+               c.runtime_repo,
+               "SELECT pg_catalog.current_setting('session_replication_role')"
+             ) == "origin"
+
+      refute scalar(
+               c.runtime_repo,
+               "SELECT pg_catalog.pg_has_role(current_user,#{literal(c.owner)},'SET')"
+             )
+
+      for table <- ["ash_onetime_idempotency_claims", "ash_onetime_nonce_claims"] do
+        sql!(c.owner_repo, "ALTER TABLE #{rel(c, table)} DISABLE ROW LEVEL SECURITY")
+
+        assert {:error, %Postgrex.Error{postgres: %{pg_code: "23514"}}} =
+                 SQL.query(c.runtime_repo, "DELETE FROM #{rel(c, table)}", [])
+      end
     end
   end
 
