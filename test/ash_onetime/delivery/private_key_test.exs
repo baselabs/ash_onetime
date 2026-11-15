@@ -63,6 +63,42 @@ defmodule AshOnetime.Delivery.PrivateKeyTest do
     send(receiver, :stop)
   end
 
+  @tag executing_only_private_key: true
+  test "the control: a private key written to ETS is found" do
+    table = :ets.new(__MODULE__, [:public])
+
+    try do
+      {_result, observed} =
+        observe(fn ->
+          {_public, secret} = :crypto.generate_key(:ecdh, :x25519)
+          :ets.insert(table, {:key, secret})
+        end)
+
+      assert {:ets, :insert, 2} in leaks(observed)
+      assert {:ets, table} in held_in_stores(observed.secrets)
+    after
+      :ets.delete(table)
+    end
+  end
+
+  @tag executing_only_private_key: true
+  test "the control: a private key written to persistent_term is found" do
+    key = {__MODULE__, make_ref()}
+
+    try do
+      {_result, observed} =
+        observe(fn ->
+          {_public, secret} = :crypto.generate_key(:ecdh, :x25519)
+          :persistent_term.put(key, secret)
+        end)
+
+      assert {:persistent_term, :put, 2} in leaks(observed)
+      assert {:persistent_term, key} in held_in_stores(observed.secrets)
+    after
+      :persistent_term.erase(key)
+    end
+  end
+
   # Inside Ash's frame the subject carries the reference and nothing else under the
   # delivery key, and the entry holds the public key only.
   defp assert_reference_only(subject) do
@@ -154,6 +190,27 @@ defmodule AshOnetime.Delivery.PrivateKeyTest do
         info != nil,
         contains_any?(info, secrets),
         do: pid
+  end
+
+  defp held_in_stores(secrets) do
+    ets =
+      for table <- :ets.all(),
+          rows = readable_rows(table),
+          contains_any?(rows, secrets),
+          do: {:ets, table}
+
+    persistent =
+      for {key, value} <- :persistent_term.get(),
+          contains_any?({key, value}, secrets),
+          do: {:persistent_term, key}
+
+    ets ++ persistent
+  end
+
+  defp readable_rows(table) do
+    :ets.tab2list(table)
+  rescue
+    ArgumentError -> []
   end
 
   defp contains_any?(term, secrets) do
