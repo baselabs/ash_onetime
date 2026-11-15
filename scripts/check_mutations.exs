@@ -167,7 +167,7 @@ defmodule AshOnetime.MutationCheck do
       mutated: "Enum.flat_map([], fn",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "doctor_runtime_mutation",
-      test_name: "live doctor refuses its cold owner-equivalent runtime role",
+      test_name: "live doctor refuses its cold runtime role's owner equivalence",
       assertion: "Expected exception Mix.Error"
     },
     "maintenance-effective-admin-predefined" => %{
