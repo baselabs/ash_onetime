@@ -44,6 +44,7 @@ defmodule AshOnetime.Delivery.PrivateKeyTest do
       assert observed.crossings != []
       assert leaks(observed) == []
       assert held_elsewhere(observed.secrets) == []
+      assert held_in_stores(observed.secrets) == []
     end
   end
 
@@ -74,6 +75,7 @@ defmodule AshOnetime.Delivery.PrivateKeyTest do
           :ets.insert(table, {:key, secret})
         end)
 
+      assert {:ets, :insert, 2, 4} in observed.call_formats
       assert {:ets, :insert, 2} in leaks(observed)
       assert {:ets, table} in held_in_stores(observed.secrets)
     after
@@ -92,6 +94,7 @@ defmodule AshOnetime.Delivery.PrivateKeyTest do
           :persistent_term.put(key, secret)
         end)
 
+      assert {:persistent_term, :put, 2, 4} in observed.call_formats
       assert {:persistent_term, :put, 2} in leaks(observed)
       assert {:persistent_term, key} in held_in_stores(observed.secrets)
     after
@@ -157,12 +160,19 @@ defmodule AshOnetime.Delivery.PrivateKeyTest do
         {:trace, _pid, :send_to_non_existing_process, message, to} -> [{{:send, to}, message}]
         {:trace, _pid, :spawn, child, mfa} -> [{{:spawn, child}, mfa}]
         {:trace, _pid, :spawned, parent, mfa} -> [{{:spawned, parent}, mfa}]
-        {:trace, _pid, :call, {:ets, function, _arity} = mfa, args} -> ets(function, mfa, args)
-        {:trace, _pid, :call, {:persistent_term, :put, 2} = mfa, args} -> [{mfa, args}]
+        {:trace, _pid, :call, {:ets, function, args}} ->
+          ets(function, {:ets, function, length(args)}, args)
+        {:trace, _pid, :call, {:persistent_term, :put, args}} ->
+          [{{:persistent_term, :put, length(args)}, args}]
         _other -> []
       end)
 
-    %{secrets: secrets, crossings: crossings}
+    # These are the formats the actual match specs above produced, without payloads.
+    call_formats = for event <- events,
+      is_tuple(event) and tuple_size(event) == 4,
+      {:trace, _pid, :call, {module, function, args}} = event,
+      do: {module, function, length(args), tuple_size(event)}
+    %{secrets: secrets, crossings: crossings, call_formats: call_formats}
   end
 
   @ets_writes [
