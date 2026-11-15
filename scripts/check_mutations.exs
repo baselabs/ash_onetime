@@ -287,11 +287,11 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "evt_trust_mutation",
       test_name: "trust and doctor audit ddl_command_start event code and its execution identity",
-      assertion: "assert error =~ trigger",
+      assertion: "assert error =~ event",
       required_failures:
         for event <- ["ddl_command_start", "login"] do
           {"trust and doctor audit #{event} event code and its execution identity",
-           "assert error =~ trigger"}
+           "assert error =~ event"}
         end
     },
     "M-evt-doctor" => %{
