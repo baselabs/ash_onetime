@@ -2,6 +2,17 @@ defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "M-doctor-fact-schema" => %{
+      path: "lib/mix/tasks/ash_onetime.doctor.ex",
+      original:
+        "    WHERE (n.nspname=$1 AND c.relname=ANY($2)) OR EXISTS (\n      SELECT 1 FROM pg_catalog.pg_trigger t\n      WHERE t.tgrelid=c.oid AND t.tgfoid=pg_catalog.to_regprocedure(pg_catalog.format('%I.ash_onetime_fact_append_only()',$1)))",
+      mutated:
+        "    WHERE n.nspname=$1 AND (c.relname=ANY($2) OR EXISTS (\n      SELECT 1 FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid\n      WHERE t.tgrelid=c.oid AND p.proname='ash_onetime_fact_append_only' AND p.pronamespace=n.oid))",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "fact_schema_mutation",
+      test_name: "trust refuses an ORIGIN fact trigger outside the install schema",
+      assertion: "assert doctor_refusal(c)"
+    },
     "M-complete-restore" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:
@@ -2760,6 +2771,7 @@ defmodule AshOnetime.MutationCheck do
   @groups %{
     "all" => Map.keys(@mutations),
     "defects-batch" => [
+      "M-doctor-fact-schema",
       "M-complete-restore",
       "M-replica-admit-nonce",
       "M-replica-lookup-claims-up",

@@ -384,14 +384,16 @@ defmodule AshOnetime.Store.MaintenanceTest do
     @tag hash_partitions: count
     test "legacy #{@branch} claims guard binds replica lookups with #{inspect(count)} partitions",
          c do
-      run_migration_roundtrip!(c, Generator.render_operation_hold_upgrade(Repo, []), @branch)
-      seed_guard_rows!(c)
-      install_shadow_lookups!(c)
-
+      # The downgrade correctly refuses a proof narrowed by forced RLS. This
+      # fixture exercises the DELETE guard directly, with RLS disabled throughout.
       sql!(
         c.owner_repo,
         "ALTER TABLE #{rel(c, "ash_onetime_idempotency_claims")} DISABLE ROW LEVEL SECURITY"
       )
+
+      run_migration_roundtrip!(c, Generator.render_operation_hold_upgrade(Repo, []), @branch)
+      seed_guard_rows!(c)
+      install_shadow_lookups!(c)
 
       assert {:error, %Postgrex.Error{postgres: %{pg_code: "23514"}}} =
                SQL.query(

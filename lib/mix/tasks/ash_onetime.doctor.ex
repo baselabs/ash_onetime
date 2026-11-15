@@ -306,9 +306,9 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   @trigger_modes_sql """
   WITH RECURSIVE relations(oid) AS (
     SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname=$1 AND (c.relname=ANY($2) OR EXISTS (
-      SELECT 1 FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid
-      WHERE t.tgrelid=c.oid AND p.proname='ash_onetime_fact_append_only' AND p.pronamespace=n.oid))
+    WHERE (n.nspname=$1 AND c.relname=ANY($2)) OR EXISTS (
+      SELECT 1 FROM pg_catalog.pg_trigger t
+      WHERE t.tgrelid=c.oid AND t.tgfoid=pg_catalog.to_regprocedure(pg_catalog.format('%I.ash_onetime_fact_append_only()',$1)))
     UNION SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN relations r ON r.oid=i.inhparent
   ) SELECT n.nspname,c.relname,t.tgname,t.tgenabled::text
   FROM relations r JOIN pg_catalog.pg_trigger t ON t.tgrelid=r.oid
