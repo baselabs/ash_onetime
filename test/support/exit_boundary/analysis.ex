@@ -6,25 +6,21 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
   # - `annotate/2` classifies every event (a total function: an event no class claims is
   #   `:unclaimed`) and gives it its frame stack and its region of the caller's run.
   # - `unclaimed/1` lists the events no class claims.
-  # - `emitted/3` is the X2 multiset: every claimed, non-pure event, normalized (terms to
-  #   their shape: binaries, numbers, pids, references, ports and closures to tags), with
-  #   the transport's repeated reads collapsed; the declared events of the executing-only
-  #   run are removed before it is compared with its twin.
+  # - `emitted/3` is the X2 multiset: every claimed, non-pure event, with semantic
+  #   values and multiplicities intact. Normalization names the fixture identities,
+  #   instrumentation clocks and transport framing that differ between the twins;
+  #   the declared events of the executing-only run are removed before comparison.
   # - `hits/3` is the search of every event for the canaries or the envelopes, outside the
   #   places each is allowed.
   #
   # Failures name event descriptors (class, module, function, arity or trace tag) and
   # counts only, never a term, so a value that leaked is never printed.
 
-  alias AshOnetime.Test.ExitBoundary.{Classifier, Root}
+  alias AshOnetime.Test.ExitBoundary.{Classifier, Normalization, Root}
 
   @delivery AshOnetime.Delivery
   @envelope AshOnetime.Delivery.Envelope
   @store AshOnetime.Store
-
-  # The modules of the caller's path into the action: `deliver/2` on the run, the harness
-  # call on both sides.
-  @entry [AshOnetime, @delivery, AshOnetime.Test.ExitBoundary.Pair, Root]
 
   @windows [
     {@delivery, :claim, 3},
@@ -59,7 +55,7 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
   def frames(host, callbacks) do
     @windows ++
       [{@envelope, :_, :_}, @readback, @boundary, @owner, @armed | @deliver] ++
-      Enum.map(host ++ callbacks, &{&1, :_, :_})
+      Enum.map(host ++ callbacks, &{&1, :_, :_}) ++ Normalization.frames()
   end
 
   defmodule Event do
@@ -116,7 +112,10 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
 
   defp frame_set(spec) do
     %{
-      exact: MapSet.new(@windows ++ [@readback, @boundary, @owner, @armed | @deliver]),
+      exact:
+        MapSet.new(
+          @windows ++ [@readback, @boundary, @owner, @armed | @deliver] ++ Normalization.frames()
+        ),
       modules: MapSet.new([@envelope | spec.host ++ spec.callbacks])
     }
   end
@@ -293,11 +292,10 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
     flushed = flushed_monitors(events)
 
     events
+    |> Normalization.formatting()
     |> Enum.reject(&(excluded?(&1, side, envelopes) or flushed?(&1, flushed)))
-    |> Enum.group_by(& &1.pid)
-    |> Enum.flat_map(fn {_pid, pid_events} ->
-      pid_events |> Enum.map(&item(&1, rename)) |> collapse()
-    end)
+    |> Normalization.events(rename)
+    |> Enum.map(&item(&1, rename))
     |> Enum.frequencies()
   end
 
@@ -336,6 +334,11 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
         candidates != [] do
       {class, descriptor, Enum.min_by(candidates, &length/1)}
     end
+    |> Enum.group_by(fn {class, descriptor, _} -> {class, descriptor} end)
+    |> Enum.map(fn {descriptor, rows} ->
+      {descriptor, rows |> Enum.flat_map(&elem(&1, 2)) |> Enum.uniq() |> Enum.take(8)}
+    end)
+    |> Enum.sort()
   end
 
   @protocol_tags [
@@ -368,14 +371,56 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
     :port,
     :fun,
     :bits,
+    :identity,
+    :database_clock,
+    :postgresql_message,
+    :cache_key_input,
+    :derived_hash,
+    :existing_claim,
+    :existing_record,
+    :generated_uuid,
+    :fixture_record,
+    :prepared_query_identity,
+    :pool_clock,
     :map,
     nil,
     true,
     false
   ]
+  @field_tags [
+                Ash.Changeset,
+                Ash.ActionInput,
+                AshOnetime.Resource.Protection,
+                AshOnetime.Response.Contract,
+                AshOnetime.Store.Claim,
+                AshOnetime.Store.Result,
+                AshOnetime.Cache.Entry,
+                Ecto.Schema.Metadata,
+                Postgrex.Protocol,
+                Postgrex.Query,
+                Ash.Resource.Actions.Create,
+                Ash.Resource.Actions.Update,
+                Ash.Resource.Actions.Destroy,
+                Ash.Resource.Actions.Action,
+                Spark.Dsl.Entity.Meta
+              ]
+              |> Enum.flat_map(&Map.keys(struct(&1)))
+              |> Kernel.++([
+                :duration,
+                :system_time,
+                :monotonic_time,
+                :query_time,
+                :decode_time,
+                :total_time,
+                :queue_time,
+                :idle_time
+              ])
+              |> Enum.uniq()
 
   defp skeleton(atom) when is_atom(atom) do
-    if atom in @protocol_tags or :code.is_loaded(atom) != false, do: atom, else: :atom
+    if atom in @protocol_tags or atom in @field_tags or :code.is_loaded(atom) != false,
+      do: atom,
+      else: :atom
   end
 
   # A stacktrace frame, as its shape keeps it, by its function: the location is the
@@ -389,6 +434,8 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
   defp skeleton(list) when is_list(list),
     do: list |> proper() |> Enum.reverse() |> Enum.map(&skeleton/1)
 
+  defp skeleton(binary) when is_binary(binary), do: {:bin, byte_size(binary)}
+  defp skeleton(number) when is_number(number), do: :num
   defp skeleton(other), do: other
 
   # A monitor that `demonitor(ref, [:flush])` removes after its process ended: whether the
@@ -510,47 +557,60 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
   defp rename({m, f, a}, rename), do: {Map.get(rename, m, m), f, a}
 
   @doc """
-  A term's shape: atoms kept (renamed), maps and structs by their normalized entries;
-  binaries, numbers, pids, references, ports and closures to tags. The subject's
-  delivery reference and build cell, in their exact shapes, are the declared context
-  additions and are dropped. A stacktrace keeps its frames inside the action: from the
-  first frame of `deliver/2` or of the harness's call outward, the run enters through
-  `deliver/2` and the twin through Ash directly, so those frames differ by construction.
+  A term's comparable representation: semantic binary and numeric values, map entries,
+  closure environments and frame arguments are retained. Runtime process/reference/port
+  identities become tags. Only the differences named in `Normalization` are normalized.
+  A stacktrace compares action frames and all entry-path argument lists independently
+  of the entry path's frame identities.
   """
   def shape(term, rename) when is_atom(term), do: Map.get(rename, term, term)
-  def shape(term, _rename) when is_number(term), do: :num
-  def shape(term, _rename) when is_binary(term), do: :bin
-  def shape(term, _rename) when is_bitstring(term), do: :bits
+  def shape(term, _rename) when is_number(term), do: term
+  def shape(term, rename) when is_binary(term), do: Normalization.binary(term, rename)
+  def shape(term, _rename) when is_bitstring(term), do: term
   def shape(term, _rename) when is_pid(term), do: :pid
   def shape(term, _rename) when is_reference(term), do: :ref
   def shape(term, _rename) when is_port(term), do: :port
-  def shape(term, _rename) when is_function(term), do: :fun
+
+  def shape(term, rename) when is_function(term) do
+    info = term |> :erlang.fun_info() |> Map.new() |> Normalization.function(rename)
+    {:fun, shape(info.module, rename), info.name, info.arity, shape(info.env, rename)}
+  end
 
   def shape(term, rename) when is_tuple(term),
-    do: term |> Tuple.to_list() |> shape(rename) |> List.to_tuple()
+    do: term |> Normalization.term(rename) |> Tuple.to_list() |> shape(rename) |> List.to_tuple()
 
   def shape([], _rename), do: []
 
   def shape([head | tail] = list, rename) do
     if stacktrace?(list) do
-      list
-      |> inside_action!()
-      |> Enum.reject(fn {module, _f, _a, _location} -> path_frame?(module) end)
-      |> Enum.map(&shape(&1, rename))
+      {path, action} =
+        Enum.split_with(list, fn {module, _, _, _} -> Normalization.path_frame?(module) end)
+
+      arguments = for {_, _, args, _} <- path, is_list(args), do: shape(args, rename)
+
+      frames =
+        Enum.map(action, fn {module, function, args, location} ->
+          {shape(module, rename), function, shape(args, rename), shape(location, rename)}
+        end)
+
+      {:stacktrace, frames, {:execution_path_arguments, arguments}}
     else
       [shape(head, rename) | elements(tail, rename)]
     end
   end
 
-  # The protection is the resource's declared configuration, and the declared difference
-  # between the withheld resource and its twin (its `executing_only` names, its producer,
-  # their source annotations): it is shaped as its module, as the resource names are
-  # renamed, and not compared.
-  def shape(%AshOnetime.Resource.Protection{}, _rename), do: AshOnetime.Resource.Protection
+  def shape(%AshOnetime.Resource.Protection{} = protection, rename) do
+    protection
+    |> Normalization.term(rename)
+    |> Map.delete(:__struct__)
+    |> Map.put(:__struct__, AshOnetime.Resource.Protection)
+    |> shape_map(rename)
+  end
 
-  def shape(%{} = map, rename) do
+  def shape(%{} = map, rename), do: shape_map(Normalization.term(map, rename), rename)
+
+  defp shape_map(map, rename) do
     map
-    |> drop_declared_context()
     |> Map.to_list()
     |> Enum.map(fn {k, v} -> {shape(k, rename), shape(v, rename)} end)
     |> Enum.sort()
@@ -560,7 +620,7 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
   @doc """
   Where two shapes first differ, as `{path, run, twin}`: the path of map keys and
   positions, and an outline of each side there (atoms and tags, sizes of compounds), or
-  `nil` when they are equal. Shapes carry no binaries or numbers.
+  `nil` when they are equal. Diagnostics redact semantic values from the shapes.
   """
   def divergence(run, twin), do: run |> divergences(twin) |> List.first()
 
@@ -580,9 +640,12 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
     if run_keys == twin_keys do
       run
       |> Enum.zip(twin)
-      |> Enum.flat_map(fn {{key, r}, {_key, t}} -> divergences(r, t, [key | path]) end)
+      |> Enum.flat_map(fn {{key, r}, {_key, t}} -> divergences(r, t, [skeleton(key) | path]) end)
     else
-      [{Enum.reverse(path), {:keys, run_keys -- twin_keys}, {:keys, twin_keys -- run_keys}}]
+      [
+        {Enum.reverse(path), {:keys, Enum.map(run_keys -- twin_keys, &skeleton/1)},
+         {:keys, Enum.map(twin_keys -- run_keys, &skeleton/1)}}
+      ]
     end
   end
 
@@ -621,7 +684,8 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
   defp outline({:map, entries}), do: {:map, length(entries)}
   defp outline(tuple) when is_tuple(tuple), do: {:tuple, tuple_size(tuple)}
   defp outline(list) when is_list(list), do: {:list, proper_length(list)}
-  defp outline(atom) when is_atom(atom), do: atom
+  defp outline(atom) when is_atom(atom), do: skeleton(atom)
+  defp outline(binary) when is_binary(binary), do: {:binary, byte_size(binary)}
   defp outline(_other), do: :term
 
   defp elements([head | tail], rename), do: [shape(head, rename) | elements(tail, rename)]
@@ -631,38 +695,10 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
   The depth a stacktrace is captured to while a run is observed. ExUnit captures 20
   frames; the withheld run passes through more package frames than its twin, so at 20 a
   frame inside the action falls off the end of one side only. Captured to the most the
-  runtime keeps, the trace reaches the entry frames on both sides, and both are cut at
-  the same place.
+  runtime keeps, the trace reaches the entry frames on both sides. Their identities
+  can differ, but every argument list is still compared.
   """
   def backtrace_depth, do: 64
-
-  # The frames inside the action: up to the first entry frame. A trace with no entry frame
-  # that fills the capture depth was cut by the runtime, not at the entry, and its two
-  # sides cannot be compared.
-  defp inside_action!(stacktrace) do
-    kept = Enum.take_while(stacktrace, fn {module, _f, _a, _location} -> module not in @entry end)
-
-    if length(kept) >= backtrace_depth() do
-      raise ExUnit.AssertionError,
-        message:
-          "a stacktrace filled the capture depth (#{length(kept)} frames) with no entry frame"
-    end
-
-    kept
-  end
-
-  # A stacktrace is the code path, not a value. The package's own frames (its changes and
-  # hooks, which the withheld run passes through and the twin does not) and Ash's entry
-  # module (whose frames are kept or tail-called away by route) differ by construction,
-  # so they are left out; the consumer's, Ash's internal and the data layer's frames stay.
-  defp path_frame?(Ash), do: true
-
-  defp path_frame?(module) do
-    name = Atom.to_string(module)
-
-    String.starts_with?(name, "Elixir.AshOnetime.") and
-      not String.starts_with?(name, "Elixir.AshOnetime.Test.")
-  end
 
   # Walked by hand: a list in a term can be improper.
   defp stacktrace?([]), do: true
@@ -673,36 +709,6 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
        do: stacktrace?(tail)
 
   defp stacktrace?(_other), do: false
-
-  defp drop_declared_context(map) do
-    map
-    |> drop_if(:ash_onetime_delivery, &match?(%{ref: ref} when byte_size(ref) == 16, &1))
-    |> drop_if(:ash_onetime_delivery_cell, &is_reference/1)
-  end
-
-  defp drop_if(map, key, exact?) do
-    case Map.fetch(map, key) do
-      {:ok, value} -> if exact?.(value), do: Map.delete(map, key), else: map
-      :error -> map
-    end
-  end
-
-  # Collapses a block of 1 to 4 items repeated back to back: one transport read and a
-  # split read differ only by such a repetition.
-  defp collapse(items) do
-    items
-    |> Enum.reduce([], fn item, acc -> dedupe([item | acc]) end)
-    |> Enum.reverse()
-  end
-
-  defp dedupe(acc) do
-    Enum.find_value(1..4, acc, fn size ->
-      {block, rest} = Enum.split(acc, size)
-
-      if length(block) == size and Enum.take(rest, size) == block,
-        do: dedupe(rest)
-    end)
-  end
 
   # ---------------------------------------------------------------------------------
   # The searches.

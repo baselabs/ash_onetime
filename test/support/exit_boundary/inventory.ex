@@ -13,23 +13,35 @@ defmodule AshOnetime.Test.ExitBoundary.Inventory do
   end
 
   @inventories Map.new(@releases, fn release ->
-    rows =
-      Path.join(__DIR__, "bif_inventory_#{release}.tsv")
-      |> File.read!()
-      |> String.split("\n", trim: true)
-      |> Enum.drop(1)
-      |> Enum.map(fn line ->
-        [module, function, arity, kind, source] = String.split(line, "\t")
-        atom = &(&1 |> String.trim("'") |> String.to_atom())
-        %{module: atom.(module), function: atom.(function), arity: String.to_integer(arity),
-          kind: kind, source: source}
-      end)
-    {release, rows}
-  end)
+                 rows =
+                   Path.join(__DIR__, "bif_inventory_#{release}.tsv")
+                   |> File.read!()
+                   |> String.split("\n", trim: true)
+                   |> Enum.drop(1)
+                   |> Enum.map(fn line ->
+                     [module, function, arity, kind, source] = String.split(line, "\t")
+                     atom = &(&1 |> String.trim("'") |> String.to_atom())
 
-  @runtime Path.join([List.to_string(:code.root_dir()), "releases",
-    List.to_string(:erlang.system_info(:otp_release)), "OTP_VERSION"])
-    |> File.read!() |> String.trim()
+                     %{
+                       module: atom.(module),
+                       function: atom.(function),
+                       arity: String.to_integer(arity),
+                       kind: kind,
+                       source: source
+                     }
+                   end)
+
+                 {release, rows}
+               end)
+
+  @runtime Path.join([
+             List.to_string(:code.root_dir()),
+             "releases",
+             List.to_string(:erlang.system_info(:otp_release)),
+             "OTP_VERSION"
+           ])
+           |> File.read!()
+           |> String.trim()
 
   def releases, do: @releases
 
@@ -51,6 +63,7 @@ defmodule AshOnetime.Test.ExitBoundary.Inventory do
   @doc "The running release's full version, from its OTP_VERSION file."
   def running_release do
     major = :erlang.system_info(:otp_release) |> List.to_string()
+
     [:code.root_dir() |> List.to_string(), "releases", major, "OTP_VERSION"]
     |> Path.join()
     |> File.read!()

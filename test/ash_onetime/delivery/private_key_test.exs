@@ -53,15 +53,18 @@ defmodule AshOnetime.Delivery.PrivateKeyTest do
     subject = builder(prefix, :create, unique_key("private-key-control")).()
     receiver = spawn(fn -> receive(do: (:stop -> :ok)) end)
 
-    {_result, observed} =
-      observe(fn ->
-        {_public, secret} = :crypto.generate_key(:ecdh, :x25519)
-        send(receiver, {:leak, secret})
-        AshOnetime.deliver(subject)
-      end)
+    try do
+      {_result, observed} =
+        observe(fn ->
+          {_public, secret} = :crypto.generate_key(:ecdh, :x25519)
+          send(receiver, {:leak, secret})
+          AshOnetime.deliver(subject)
+        end)
 
-    assert [{:send, ^receiver}] = leaks(observed)
-    send(receiver, :stop)
+      assert [{:send, ^receiver}] = leaks(observed)
+    after
+      send(receiver, :stop)
+    end
   end
 
   @tag executing_only_private_key: true
@@ -156,22 +159,35 @@ defmodule AshOnetime.Delivery.PrivateKeyTest do
 
     crossings =
       Enum.flat_map(events, fn
-        {:trace, _pid, :send, message, to} -> [{{:send, to}, message}]
-        {:trace, _pid, :send_to_non_existing_process, message, to} -> [{{:send, to}, message}]
-        {:trace, _pid, :spawn, child, mfa} -> [{{:spawn, child}, mfa}]
-        {:trace, _pid, :spawned, parent, mfa} -> [{{:spawned, parent}, mfa}]
+        {:trace, _pid, :send, message, to} ->
+          [{{:send, to}, message}]
+
+        {:trace, _pid, :send_to_non_existing_process, message, to} ->
+          [{{:send, to}, message}]
+
+        {:trace, _pid, :spawn, child, mfa} ->
+          [{{:spawn, child}, mfa}]
+
+        {:trace, _pid, :spawned, parent, mfa} ->
+          [{{:spawned, parent}, mfa}]
+
         {:trace, _pid, :call, {:ets, function, args}} ->
           ets(function, {:ets, function, length(args)}, args)
+
         {:trace, _pid, :call, {:persistent_term, :put, args}} ->
           [{{:persistent_term, :put, length(args)}, args}]
-        _other -> []
+
+        _other ->
+          []
       end)
 
     # These are the formats the actual match specs above produced, without payloads.
-    call_formats = for event <- events,
-      is_tuple(event) and tuple_size(event) == 4,
-      {:trace, _pid, :call, {module, function, args}} = event,
-      do: {module, function, length(args), tuple_size(event)}
+    call_formats =
+      for event <- events,
+          is_tuple(event) and tuple_size(event) == 4,
+          {:trace, _pid, :call, {module, function, args}} = event,
+          do: {module, function, length(args), tuple_size(event)}
+
     %{secrets: secrets, crossings: crossings, call_formats: call_formats}
   end
 

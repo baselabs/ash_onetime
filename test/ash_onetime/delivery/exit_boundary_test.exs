@@ -10,7 +10,7 @@ defmodule AshOnetime.Delivery.ExitBoundaryTest do
 
   import AshOnetime.Test.DeliveryCase, only: [error_code: 1]
 
-  alias AshOnetime.Test.ExitBoundary.{Faults, Pair}
+  alias AshOnetime.Test.ExitBoundary.{Faults, Normalization, Pair}
   alias AshOnetime.Test.ExitBoundary.Pair.Path
   alias AshOnetime.Test.ExternalPeer
 
@@ -52,10 +52,17 @@ defmodule AshOnetime.Delivery.ExitBoundaryTest do
       create_records_table!(prefix)
     end
 
-    peer = start_supervised!({Postgrex, ExternalPeer.database_options()})
+    peer =
+      start_supervised!(
+        {Postgrex, Keyword.put(ExternalPeer.database_options(), :idle_interval, 3_600_000)}
+      )
+
     # Unnamed statements: a named statement is prepared once per pooled connection, so the
     # round trips of a query would depend on which connection served it, not on the action.
-    {:ok, repo: start_unboxed_repo!(prepare: :unnamed), peer: peer}
+    # No idle ping can replace a pre-observation checkin clock during the trace.
+    repo = start_unboxed_repo!(prepare: :unnamed, idle_interval: 3_600_000)
+    Normalization.prepare(repo)
+    {:ok, repo: repo, peer: peer}
   end
 
   for {route, path} <- @routes, producer <- [:local, :external] do

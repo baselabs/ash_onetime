@@ -133,7 +133,7 @@ mis-categorize them; the per-code HTTP below overrides the `:invalid` class.
 | `:admission_request_invalid` | **500** | The admission request is internally invalid. |
 | `:admission_unavailable` | **503** | Admission is unavailable (fail-closed; retryable). |
 | `:telemetry_invalid` | **500** | A telemetry event was invalid (internal). |
-| `:executing_only_invalid` | **500** | The producer raised, threw, exited or returned values outside its contract; the action rolled back and no value exists. |
+| `:executing_only_invalid` | **500** | The producer or external callback raised, threw, exited or returned values outside its contract. No value is delivered and local transactional work rolls back. An external peer may already have committed; reconcile through external recovery. |
 | `:executing_only_lost` | **500** | The executing-only values cannot be delivered to this caller. Local transactional rollback undoes the local effect and claim, so a retry can execute and deliver a fresh value. An external peer may have committed before the local rollback; retry then recovers its existing effect with no value. An unavailable or uncertain completion read proves no absence: use external recovery to reconcile. A committed effect's lost value cannot be re-derived; revoke what it granted and reissue under a new key. |
 
 ### Store-fault and transport codes (5xx — override the class default)

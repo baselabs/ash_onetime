@@ -227,12 +227,15 @@ defmodule AshOnetime.Test.ExitBoundary.Classifier do
 
   def erlang_table(release \\ Inventory.release())
   def erlang_table("29.1.2"), do: @erlang_classes
-  def erlang_table("28.5"), do: Map.drop(@erlang_classes, [is_integer: 3, is_record: 1, exit_signal: 3])
+
+  def erlang_table("28.5"),
+    do: Map.drop(@erlang_classes, is_integer: 3, is_record: 1, exit_signal: 3)
 
   def erts_internal_table(release \\ Inventory.release()) do
     Inventory.bif_rows(release)
     @erts_internal_classes
   end
+
   def module_table, do: @module_classes
   def pure_modules, do: @pure_modules
   def traced_modules, do: [:erlang, :erts_internal | Map.keys(@module_classes)]
@@ -249,6 +252,7 @@ defmodule AshOnetime.Test.ExitBoundary.Classifier do
 
   def classify_mfa(module, function, arity, release) do
     Inventory.bif_rows(release)
+
     cond do
       class = Map.get(@overrides, {module, function, arity}) -> class
       class = Map.get(@module_classes, module) -> class

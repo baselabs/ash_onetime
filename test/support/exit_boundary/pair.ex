@@ -17,22 +17,12 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
   # Every failure names tables, descriptors and counts, never a term.
 
   alias AshOnetime.Test.ExitBoundary
-  alias AshOnetime.Test.ExitBoundary.{Analysis, Faults, Persisted}
+  alias AshOnetime.Test.ExitBoundary.{Analysis, Faults, Normalization, Persisted}
   alias AshOnetime.Test.ExitBoundary.{Codec, External, Hold, Producer, Recorder}
   alias AshOnetime.Test.ExitBoundary.{ResponseClassifier, Returned, ReturnedExternal, Withheld}
   alias AshOnetime.Test.Repo
 
   @callbacks [Codec, ResponseClassifier, Hold, Recorder]
-  @rename %{Withheld => Returned}
-  @text_renames %{inspect(Withheld) => inspect(Returned)}
-  @action_definitions [
-    Ash.Resource.Actions.Create,
-    Ash.Resource.Actions.Update,
-    Ash.Resource.Actions.Destroy,
-    Ash.Resource.Actions.Read,
-    Ash.Resource.Actions.Action
-  ]
-
   defmodule Path do
     @moduledoc false
     # `action` is the action of both resources; `external?` whether it runs an external
@@ -57,7 +47,7 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
 
   defmodule Observation do
     @moduledoc false
-    defstruct [:run, :delta, :prefix, :host, :canaries]
+    defstruct [:run, :delta, :prefix, :host, :canaries, :normalization]
   end
 
   @doc """
@@ -72,6 +62,7 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
 
     run = side(path, Withheld, context.run_prefix, context, canaries, prior)
     twin = side(path, Returned, context.twin_prefix, context, canaries, prior)
+    {run, twin} = Normalization.align(run, twin)
     %{run: run, twin: twin, path: path}
   end
 
@@ -83,6 +74,8 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
 
   defp side(path, resource, prefix, %{repo: repo, peer: peer}, canaries, prior) do
     record = if path.record, do: seed!(resource, prefix)
+
+    started = System.monotonic_time(:microsecond)
 
     if prior do
       prior.(%{
@@ -98,12 +91,15 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
     host = host(path, resource)
     before = Persisted.snapshot(prefix)
 
+    prepared = subject(path, resource, prefix, record)
+    runtime = Normalization.runtime(prefix)
+
     setup = fn ->
       Repo.put_dynamic_repo(repo)
       Faults.put_peer(peer)
       Faults.plant(canaries.short, canaries.long)
       Faults.put(path.fault)
-      subject(path, resource, prefix, record)
+      prepared
     end
 
     run =
@@ -111,7 +107,19 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
 
     delta = Persisted.delta(before, Persisted.snapshot(prefix))
 
-    %Observation{run: run, delta: delta, prefix: prefix, host: host, canaries: canaries}
+    normalization =
+      Normalization.new(prefix, resource, path, prepared, before, run.events, runtime)
+      |> Normalization.payloads(delta)
+      |> Map.put(:observed_elapsed, System.monotonic_time(:microsecond) - started)
+
+    %Observation{
+      run: run,
+      delta: delta,
+      prefix: prefix,
+      host: host,
+      canaries: canaries,
+      normalization: normalization
+    }
   end
 
   defp host(%Path{external?: true}, Withheld), do: [External]
@@ -211,7 +219,7 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
     contained!(run, :run)
     contained!(twin, :twin)
     x1!(run, twin)
-    x2!(run, twin)
+    x2!(run, twin, path.fault)
     # In a caller transaction the twin does nothing, so the results differ by construction.
     if is_nil(path.transaction), do: x3!(run, twin, path)
     delivery!(run, delivery)
@@ -233,7 +241,7 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
     end
 
     if emitted == :nothing do
-      case Analysis.emitted(run.run.events, %{host: run.host, package?: true}, @rename) do
+      case Analysis.emitted(run.run.events, %{host: run.host, package?: true}, run.normalization) do
         empty when map_size(empty) == 0 -> :ok
         events -> flunk!("the run emitted events outside its declared set", descriptors(events))
       end
@@ -289,8 +297,11 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
   end
 
   defp x1!(run, twin) do
-    run_delta = Persisted.normalize(run.delta, run.prefix, @text_renames)
-    twin_delta = Persisted.normalize(twin.delta, twin.prefix, %{})
+    run_delta =
+      Persisted.normalize(Normalization.term(run.delta, run.normalization), "<prefix>", %{})
+
+    twin_delta =
+      Persisted.normalize(Normalization.term(twin.delta, twin.normalization), "<prefix>", %{})
 
     case Persisted.difference(run_delta, twin_delta) do
       [] -> :ok
@@ -298,9 +309,12 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
     end
   end
 
-  defp x2!(run, twin) do
-    run_emitted = Analysis.emitted(run.run.events, %{host: run.host, package?: true}, @rename)
-    twin_emitted = Analysis.emitted(twin.run.events, %{host: twin.host, package?: false}, %{})
+  defp x2!(run, twin, fault) do
+    run_emitted =
+      Analysis.emitted(run.run.events, %{host: run.host, package?: true}, run.normalization)
+
+    twin_emitted =
+      Analysis.emitted(twin.run.events, %{host: twin.host, package?: false}, twin.normalization)
 
     case Analysis.emitted_difference(run_emitted, twin_emitted) do
       [] ->
@@ -309,18 +323,21 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
       difference ->
         flunk!(
           "X2: the emitted events differ",
-          {Analysis.emitted_divergences(run_emitted, twin_emitted), difference}
+          {fault, Analysis.emitted_divergences(run_emitted, twin_emitted),
+           Enum.frequencies_by(difference, fn {{class, descriptor, _}, _, _} ->
+             {class, descriptor}
+           end)}
         )
     end
   end
 
   defp x3!(run, twin, path) do
-    run_result = run.run.result |> without_delivery() |> result(run.prefix)
-    twin_result = twin.run.result |> as_delivered(path) |> result(twin.prefix)
+    run_result = run.run.result |> without_delivery()
+    twin_result = twin.run.result |> as_delivered(path)
 
     case Analysis.divergence(
-           Analysis.shape(run_result, @rename),
-           Analysis.shape(twin_result, %{})
+           Analysis.shape(run_result, run.normalization),
+           Analysis.shape(twin_result, twin.normalization)
          ) do
       nil -> :ok
       divergence -> flunk!("X3: the caller's results differ", divergence)
@@ -380,32 +397,6 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
 
   defp as_delivered(result, _path), do: result
 
-  # X3's normalization: the installation's name becomes `:prefix`; a stack trace (an
-  # error's record of where it was raised, which names the package's frames on one side
-  # only) becomes `:stacktrace`; and an action definition an error carries becomes its
-  # type and name. The definition is the resource's declaration, not something the run
-  # produced: the withheld action declares `executing_only` and its producer, the twin's
-  # does not, by construction. Everything else compares by shape.
-  defp result(%{__struct__: Splode.Stacktrace}, _prefix), do: :stacktrace
-
-  defp result(%{__struct__: struct, type: type, name: name}, _prefix)
-       when struct in @action_definitions,
-       do: {:action, type, name}
-
-  defp result(prefix, prefix), do: :prefix
-
-  defp result(%{__struct__: struct} = value, prefix) do
-    value |> Map.from_struct() |> result(prefix) |> Map.put(:__struct__, struct)
-  end
-
-  defp result(%{} = map, prefix), do: Map.new(map, fn {k, v} -> {k, result(v, prefix)} end)
-  defp result(list, prefix) when is_list(list), do: Enum.map(list, &result(&1, prefix))
-
-  defp result(tuple, prefix) when is_tuple(tuple),
-    do: tuple |> Tuple.to_list() |> result(prefix) |> List.to_tuple()
-
-  defp result(other, _prefix), do: other
-
   # A result's printable outline: its tags and struct names, never a value.
   defp outline({tag, _value}) when is_atom(tag), do: {tag, :_}
   defp outline({tag, value, _rest}) when is_atom(tag), do: {tag, outline(value), :_}
@@ -424,6 +415,6 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
   end
 
   defp flunk!(message, detail) do
-    raise ExUnit.AssertionError, message: "#{message}: #{inspect(detail, limit: 200)}"
+    raise ExUnit.AssertionError, message: "#{message}: #{inspect(detail, limit: :infinity)}"
   end
 end

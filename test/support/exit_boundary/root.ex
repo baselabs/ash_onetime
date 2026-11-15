@@ -2,7 +2,7 @@ defmodule AshOnetime.Test.ExitBoundary.Root do
   @moduledoc false
 
   # The caller of one observed run. It is spawned by the test, prepares everything that
-  # must not be observed (the frozen clock, the planted canaries, the subject) before the
+  # must not be observed (the planted canaries and the prepared subject) before the
   # collector arms it, then calls the boundary function. `invoke/2` is traced with
   # `exception_trace`: its call and its return mark the run, and everything the root does
   # after the return is the caller's own.

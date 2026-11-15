@@ -21,6 +21,12 @@ All notable changes to this project are documented in this file.
   producer, duplicate names, and an update or destroy with `require_atomic? true`. A generic
   action returning a resource stores the `fields` of the returned resource and replays it as
   a loaded record.
+- **Delivery review fixes.** Existing CRUD and generic response contracts retain their
+  frozen digests; only generic resource projections bind the returned resource. Exit-boundary
+  inventories cover OTP 28.5 and 29.1.2, and comparisons retain semantic values, settings,
+  frame arguments and event multiplicities. Key-custody controls cover real ETS and
+  persistent-term writes. Missing local completion does not prove an external effect
+  rolled back: recovery can find the committed peer effect without delivering a value.
 - **Response `fields` text.** The DSL documentation states that the first tracked caller
   also receives only the `fields` projection.
 

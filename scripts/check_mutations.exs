@@ -2864,6 +2864,59 @@ defmodule AshOnetime.MutationCheck do
                })
              end)
 
+  # Independent-review tripwires. These mutate one existing semantic value or
+  # multiplicity in the fixtures feeding the actual X1/X2/X3 comparators. The first,
+  # second and fourth use inverted canaries that evade the raw canary search.
+  @review_mutations %{
+    "review-existing-field" =>
+      {"overwrite an existing result field", ~s(run = %{twin | note: "existing note"}),
+       "run = %{twin | note: for(<<b <- secret>>, into: <<>>, do: <<255 - b>>)}",
+       "X3: an existing result field changed"},
+    "review-same-width-binary" =>
+      {"replace an opaque binary at the same width",
+       ~s[run = :crypto.hash(:sha256, "public payload")],
+       "run = for <<b <- secret>>, into: <<>>, do: <<255 - b>>",
+       "X1: a same-width opaque binary changed"},
+    "review-repeated-event" =>
+      {"repeat an existing event", "run = [event]", "run = [event, event]",
+       "X2: an existing event was repeated"},
+    "review-frame-argument" =>
+      {"retain a package frame argument", "run = [frame]",
+       "run = [put_elem(frame, 2, [for(<<b <- secret>>, into: <<>>, do: <<255 - b>>)])]",
+       "X3: a package frame argument changed"},
+    "review-protection-setting" =>
+      {"retain a protection setting", "run = %{twin | retention: 3600}",
+       "run = %{twin | retention: 3601}", "X2: a protection setting changed"}
+  }
+  @mutations Enum.reduce(@review_mutations, @mutations, fn {name,
+                                                            {test, original, mutated, assertion}},
+                                                           acc ->
+               Map.put(acc, name, %{
+                 path: "test/ash_onetime/delivery/exit_boundary_semantics_test.exs",
+                 original: original,
+                 mutated: mutated,
+                 test: "test/ash_onetime/delivery/exit_boundary_semantics_test.exs",
+                 tag: "exit_boundary_review",
+                 test_name: "review mutation: " <> test,
+                 assertion: assertion
+               })
+             end)
+  @mutations Map.put(@mutations, "external-rollback-readback", %{
+               path: "lib/ash_onetime/delivery.ex",
+               original: @m_open,
+               mutated: "        with :complete <- :complete,\n",
+               test: "test/ash_onetime/delivery/external_rollback_test.exs",
+               tag: "executing_only_external_rollback",
+               test_name:
+                 "create: external commit survives rollback and a success hook never delivers it",
+               assertion: "assert error_code(first) == :executing_only_lost",
+               required_failures:
+                 for route <- [:create, :update, :destroy, :soft_destroy, :generic] do
+                   {"#{route}: external commit survives rollback and a success hook never delivers it",
+                    "assert error_code(first) == :executing_only_lost"}
+                 end
+             })
+
   # `all` is computed from @mutations rather than hand-listed, which is what STRUCTURALLY prevents
   # the orphan class (a newly added mutation is in `all` by construction — CONTRIBUTING and the CI
   # release-checks job both run `-- all`). The self-test below is a REGRESSION GUARD, not present
@@ -2872,6 +2925,8 @@ defmodule AshOnetime.MutationCheck do
   # that once orphaned the ARCH mutations. The named subsets below stay for fast, focused local runs.
   @groups %{
     "all" => Map.keys(@mutations),
+    "exit-boundary-review" => Map.keys(@review_mutations),
+    "external-rollback" => ["external-rollback-readback"],
     "shipped-maintenance" => [
       "maintenance-upgrade-validation",
       "maintenance-upgrade-constraint-count",
