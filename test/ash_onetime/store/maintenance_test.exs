@@ -12,13 +12,16 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
   setup context do
     Sandbox.mode(Repo, :auto)
-    ClusterIsolation.assert_per_run_server!()
 
     if context[:shipped_release] do
       # A full high-modulus upgrade and restore can outlive the Sandbox default.
       # Keep fixture DDL committed and scope the longer ownership to this case.
       :ok = Sandbox.checkout(Repo, sandbox: false, ownership_timeout: 900_000)
     end
+
+    # Query only after explicit checkout: auto mode would otherwise claim ownership.
+    # The isolation proof still precedes every fixture role and cluster-wide grant.
+    ClusterIsolation.assert_per_run_server!()
 
     suffix = Ecto.UUID.generate() |> String.replace("-", "")
 
