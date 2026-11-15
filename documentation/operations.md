@@ -490,8 +490,28 @@ owner directly, through PUBLIC, or through role membership refuses cleanup and r
 with `:untrusted_dependency`. The check compares stored node trees without deparsing and
 runs after recursive SHARE UPDATE EXCLUSIVE locks on every package root. Runtime DML
 continues; inheritance, partition, and trigger DDL cannot enter between the check and work.
-The install revokes MAINTAIN, and each step audits effective privileges, including pg_maintain. Transient lock refusals remain
-separate from permanent prune refusals in the recorded facts.
+The install revokes MAINTAIN. Install, each maintenance step and status audit effective
+MAINTAIN on every package relation; TRIGGER, TRUNCATE and REFERENCES on the three roots;
+and SELECT, INSERT, UPDATE, DELETE, TRIGGER, TRUNCATE, REFERENCES and MAINTAIN on children
+and the ledger. Column SELECT, INSERT, UPDATE and REFERENCES count on owner-only relations;
+column REFERENCES counts on roots. The audit includes predefined read/write/maintenance
+roles, SET and ALTER SYSTEM on `session_replication_role`, membership in
+`pg_create_subscription`, and subscriptions in this database owned by untrusted roles.
+It refuses every non-predefined holder, even an unreachable NOLOGIN group, because a
+holder-owned proxy object can expose its privileges. Predefined roles count through any
+membership from a runtime, maintenance, current, session or LOGIN role, including ADMIN-only
+membership. Superusers and owner-equivalent roles remain the trusted-server boundary.
+
+On `:untrusted_dependency`, revoke the forbidden table, column or parameter grant from its
+holder, or remove the predefined-role membership path; revoke every path, including ADMIN.
+Remove or transfer an untrusted subscription to the trusted owner under the operator's
+normal change process; revoking `pg_create_subscription` alone does not remove it. SELECT
+remains refused: existing children do not guarantee the root's RLS flags and policies, even
+though forward roll copies them to new payload children. Replace broad backup read grants
+(such as `pg_read_all_data`) with SELECT on package parents and other required application
+relations, without grants on package children or the ledger. Check maintenance status again
+before resuming steps. Transient lock refusals remain separate from permanent prune refusals
+in the recorded facts. See [Security](security.md#maintenance-and-the-trusted-server).
 
 Package tables stay in the selected table schema. Routines live in the owner-owned schema
 `ash_onetime_` plus the first 48 lowercase hexadecimal characters of SHA-256 of the table

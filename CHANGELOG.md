@@ -4,16 +4,18 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
-- Maintenance's existing effective-authority audit now also refuses inherited and
-  SET-reachable forbidden table and column privileges, all privileges on owner-only
-  relations (including predefined read/write roles), and SET on `session_replication_role`.
-  Generated installs and maintenance upgrades carry the corrected routines; existing
-  installed routine bodies require an upgrade migration and are not changed by a package update.
+- Maintenance ships an effective-authority audit in 2.0.0. It refuses forbidden
+  table and column privileges held by any non-predefined role, and predefined
+  authority reachable through any membership, including ADMIN without INHERIT or
+  SET. It also refuses SET or ALTER SYSTEM on `session_replication_role`, membership
+  in `pg_create_subscription`, and database subscriptions with untrusted owners.
+  SELECT on owner-only relations remains refused because existing children do not
+  guarantee the root's RLS state and policies. Fresh installs and upgrades from
+  shipped releases embed this audit; maintenance has not previously shipped.
 
 - External replay and finalize claim loads use the protection's lock timeout and return
   `:request_in_progress` on contention. Each claim-lock statement restores the caller's
-  timeout before payload reads, callbacks or later writes. The Store `load` callback
-  now takes explicit lock options as its third argument.
+  timeout before payload reads, callbacks or later writes.
 
 - **Replay relationships.** Replay admission clears all pending relationship changes,
   including caller-managed relationships and belongs-to inputs, across create, update,

@@ -133,21 +133,37 @@ and every table or column privilege on owner-only relations, including the maint
 ledger and inheritance children. REFERENCES includes column grants. PostgreSQL's
 `has_table_privilege` and `has_any_column_privilege` also detect `pg_read_all_data`
 and `pg_write_all_data`, which do not need explicit relation ACL entries.
-The same audit refuses SET on `session_replication_role`, checked with
-`has_parameter_privilege`: replica mode could bypass deletion, operation-hold and FK guards.
-It checks inherited authority and SET-only paths from runtime, scheduled maintenance,
-current and session roles, and every LOGIN role, through plain group roles as well.
-Superusers (the trusted server), the owner, roles with USAGE or SET on the owner, and
-predefined-role catalog rows are excluded from this effective-authority audit; a login
-holding a predefined role still counts. The CREATE audit excludes superusers and roles
-that inherit the owner's privileges. Runtime and maintenance roles must hold
-no membership in the owner, whether through INHERIT or SET; every step checks that boundary.
+The same audit refuses SET or ALTER SYSTEM on `session_replication_role`, checked
+with `has_parameter_privilege`, and membership in `pg_create_subscription` through
+any membership edge. [Subscription apply workers run in replica mode](https://www.postgresql.org/docs/18/logical-replication-architecture.html),
+which bypasses ORIGIN-enabled deletion, operation-hold and RI triggers. Any subscription
+in the current database owned by an untrusted role is refused even after its creator's
+`pg_create_subscription` membership has been revoked; disabled, disconnected subscriptions
+count too.
 
-Generated migrations embed these routine bodies and pin their digests in the install
-manifest. Updating the package does not replace routines in an existing install. An
-installation that already ran the maintenance migration needs an upgrade migration to
-replace the routines and rebuild both manifests together. Replacing a body alone leaves
-the recorded digest stale, so maintenance status reports a definition mismatch.
+Every non-predefined role holding forbidden authority is refused, even if NOLOGIN and
+unreachable by any login: a holder-owned view or SECURITY DEFINER function granted to
+PUBLIC can expose that authority. PostgreSQL reserves the `pg_` prefix for predefined
+roles. Those roles count when reachable from runtime, scheduled maintenance, current or
+session roles, or any LOGIN role, through any membership (`MEMBER`), including ADMIN
+without INHERIT or SET. ADMIN-only members can grant themselves SET. Superusers (the
+trusted server), the owner, and roles with USAGE or SET on the owner are excluded from
+both holder and subject checks, including the subscription-owner check. The CREATE audit
+excludes superusers and roles that inherit the owner's privileges. Runtime and maintenance
+roles must hold no membership in the owner; every step checks that boundary.
+
+SELECT on owner-only relations remains a trust refusal, including `pg_read_all_data`.
+Forward roll copies the payload root's policies and RLS flags to newly created children.
+The install loop adds the maintenance policy to existing children, but does not copy all
+root policies or RLS flags, and relation shapes do not pin either to the root. A read-only
+grant therefore cannot safely be left to the explicit ACL status check alone. Scope backup
+grants to the package parents and other required application relations; revoke broad read
+membership or grants on package children and the ledger before maintenance can proceed.
+
+Maintenance first ships in 2.0.0. Fresh installs and maintenance upgrades from previously
+shipped releases embed these routine bodies and pin their digests in the install manifest.
+A package update alone never rewrites database routines. Function changes must rebuild
+both manifests together; replacing a body alone leaves its recorded digest stale.
 
 Function DDL takes no relation lock. A migrator acting as the owner can replace a package
 routine after its digest was checked. Relation locks cannot serialize that replacement;

@@ -124,7 +124,10 @@ BEGIN
   -- The policy refusal has its own closed error, including Table 1 row 5.
   policy_error := @routines@.ash_onetime_maintenance_policy_error();
   IF policy_error IS NOT NULL THEN RAISE EXCEPTION 'maintenance_blinded: %',policy_error; END IF;
-  -- R3a: inherited privileges and SET-reachable authority share one holder model.
+  -- R3a: every non-predefined holder is refused, even without a reachable
+  -- login: holder-owned views and SECURITY DEFINER routines can expose it.
+  -- Predefined roles count when any subject has membership, including ADMIN
+  -- without INHERIT or SET (an administrator can grant itself SET).
   -- Root DML is allowed; children and the maintenance ledger are owner-only,
   -- matching reset_acl. Replica mode would bypass the deletion and FK guards.
   WITH RECURSIVE scheduled(oid) AS (
@@ -135,7 +138,7 @@ BEGIN
       t NOT IN (@idempotency@::regclass,@nonce@::regclass,@payload@::regclass) AS owner_only
     FROM @routines@.ash_onetime_maintenance_relations() t
   ), holders AS MATERIALIZED (
-    SELECT holder.oid,
+    SELECT holder.oid,holder.rolname,
       CASE
         WHEN EXISTS (SELECT 1 FROM relations t WHERE has_table_privilege(holder.oid,t.oid,'MAINTAIN')) THEN 'MAINTAIN'
         WHEN EXISTS (SELECT 1 FROM relations t WHERE
@@ -144,22 +147,32 @@ BEGIN
               ELSE 'TRIGGER,TRUNCATE,REFERENCES' END)
           OR has_any_column_privilege(holder.oid,t.oid,
             CASE WHEN t.owner_only THEN 'SELECT,INSERT,UPDATE,REFERENCES' ELSE 'REFERENCES' END))) THEN 'relation'
-        WHEN has_parameter_privilege(holder.oid,'session_replication_role','SET') THEN 'session_replication_role'
+        WHEN has_parameter_privilege(holder.oid,'session_replication_role','SET, ALTER SYSTEM') THEN 'session_replication_role'
+        WHEN pg_has_role(holder.oid,'pg_create_subscription','MEMBER') THEN 'replication'
       END AS authority
     FROM pg_roles holder WHERE NOT holder.rolsuper AND holder.oid<>@owner@
       AND NOT pg_has_role(holder.oid,@owner@,'USAGE')
       AND NOT pg_has_role(holder.oid,@owner@,'SET')
-  ) SELECT holder.authority INTO authority_error FROM pg_roles r JOIN holders holder
-      ON (holder.oid=r.oid OR pg_has_role(r.oid,holder.oid,'SET'))
-    WHERE (r.rolcanlogin OR r.oid IN (SELECT oid FROM scheduled)
-      OR r.rolname=current_setting('role') OR r.rolname=session_user) AND NOT r.rolsuper AND r.oid<>@owner@ AND NOT pg_has_role(r.oid,@owner@,'USAGE')
-      AND NOT pg_has_role(r.oid,@owner@,'SET') AND left(r.rolname,3)<>'pg_'
-      AND holder.authority IS NOT NULL
-    ORDER BY CASE holder.authority WHEN 'MAINTAIN' THEN 0 ELSE 1 END LIMIT 1;
+  ) SELECT holder.authority INTO authority_error FROM holders holder
+    WHERE holder.authority IS NOT NULL AND (left(holder.rolname,3)<>'pg_' OR EXISTS (
+      SELECT 1 FROM pg_roles r WHERE pg_has_role(r.oid,holder.oid,'MEMBER')
+        AND (r.rolcanlogin OR r.oid IN (SELECT oid FROM scheduled)
+          OR r.rolname=current_setting('role') OR r.rolname=current_user OR r.rolname=session_user)
+        AND NOT r.rolsuper AND r.oid<>@owner@
+        AND NOT pg_has_role(r.oid,@owner@,'USAGE') AND NOT pg_has_role(r.oid,@owner@,'SET')
+    )) ORDER BY CASE holder.authority WHEN 'MAINTAIN' THEN 0 ELSE 1 END LIMIT 1;
   IF authority_error='MAINTAIN' THEN
     RAISE EXCEPTION 'untrusted_dependency: effective MAINTAIN privilege';
   ELSIF authority_error IS NOT NULL THEN
     RAISE EXCEPTION 'untrusted_dependency: effective % privilege',authority_error;
+  END IF;
+  -- Subscription ownership survives revocation of pg_create_subscription.
+  -- Apply workers run in replica mode, bypassing ORIGIN and RI triggers.
+  IF EXISTS (SELECT 1 FROM pg_subscription s JOIN pg_roles r ON r.oid=s.subowner
+    WHERE s.subdbid=(SELECT oid FROM pg_database WHERE datname=current_database())
+      AND NOT r.rolsuper AND r.oid<>@owner@
+      AND NOT pg_has_role(r.oid,@owner@,'USAGE') AND NOT pg_has_role(r.oid,@owner@,'SET')) THEN
+    RAISE EXCEPTION 'untrusted_dependency: effective subscription privilege';
   END IF;
 
 END

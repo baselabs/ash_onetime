@@ -57,6 +57,9 @@ ExUnit.start()
 defmodule AshOnetime.Test.ClusterIsolation do
   @moduledoc false
 
+  alias AshOnetime.Test.Repo
+  alias Ecto.Adapters.SQL
+
   def assert_per_run_server! do
     expected =
       case System.get_env("TEST_ENV_RUN") do
@@ -65,8 +68,8 @@ defmodule AshOnetime.Test.ClusterIsolation do
       end
 
     [[hostname]] =
-      Ecto.Adapters.SQL.query!(
-        AshOnetime.Test.Repo,
+      SQL.query!(
+        Repo,
         "SELECT pg_read_file('/etc/hostname')",
         []
       ).rows

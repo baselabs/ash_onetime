@@ -3,6 +3,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
   alias AshOnetime.Store.Postgres
   alias AshOnetime.Store.Result
+  alias AshOnetime.Test.ClusterIsolation
   alias AshOnetime.Test.Repo
   alias AshOnetime.Test.ShippedMigrations
   alias Ecto.Adapters.SQL
@@ -11,7 +12,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
   setup context do
     Sandbox.mode(Repo, :auto)
-    AshOnetime.Test.ClusterIsolation.assert_per_run_server!()
+    ClusterIsolation.assert_per_run_server!()
 
     if context[:shipped_release] do
       # A full high-modulus upgrade and restore can outlive the Sandbox default.
@@ -424,6 +425,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   @tag effective_review: true
+  @tag effective_cluster_isolation_mutation: true
   test "cluster grant isolation refuses an unproven server", _c do
     variables = ["TEST_ENV_RUN", "GITHUB_ACTIONS", "ASH_ONETIME_TEST_SERVER"]
     previous = Map.new(variables, &{&1, System.get_env(&1)})
@@ -432,13 +434,13 @@ defmodule AshOnetime.Store.MaintenanceTest do
       Enum.each(variables, &System.delete_env/1)
 
       assert_raise RuntimeError, ~r/cluster-wide grants require a proven per-run/, fn ->
-        AshOnetime.Test.ClusterIsolation.assert_per_run_server!()
+        ClusterIsolation.assert_per_run_server!()
       end
 
       System.put_env("TEST_ENV_RUN", "not-this-server")
 
       assert_raise RuntimeError, ~r/cluster-wide grants require a proven per-run/, fn ->
-        AshOnetime.Test.ClusterIsolation.assert_per_run_server!()
+        ClusterIsolation.assert_per_run_server!()
       end
     after
       Enum.each(previous, fn

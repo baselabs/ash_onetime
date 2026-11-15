@@ -2,6 +2,146 @@ defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "maintenance-effective-admin-predefined" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "pg_has_role(r.oid,holder.oid,'MEMBER')",
+      mutated: "pg_has_role(r.oid,holder.oid,'SET')",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_admin_authority_mutation",
+      test_name: "effective authority refuses ADMIN-only predefined membership",
+      assertion: "refute scalar("
+    },
+    "maintenance-effective-admin-group" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original:
+        "left(holder.rolname,3)<>'pg_' OR EXISTS (\n      SELECT 1 FROM pg_roles r WHERE pg_has_role(r.oid,holder.oid,'MEMBER')\n        AND (r.rolcanlogin OR r.oid IN (SELECT oid FROM scheduled)\n          OR r.rolname=current_setting('role') OR r.rolname=current_user OR r.rolname=session_user)\n        AND NOT r.rolsuper AND r.oid<>@owner@\n        AND NOT pg_has_role(r.oid,@owner@,'USAGE') AND NOT pg_has_role(r.oid,@owner@,'SET')\n",
+      mutated:
+        "false OR EXISTS (\n      SELECT 1 FROM pg_roles r WHERE pg_has_role(r.oid,holder.oid,'SET')\n        AND (r.rolcanlogin OR r.oid IN (SELECT oid FROM scheduled)\n          OR r.rolname=current_setting('role') OR r.rolname=current_user OR r.rolname=session_user)\n        AND NOT r.rolsuper AND r.oid<>@owner@\n        AND NOT pg_has_role(r.oid,@owner@,'USAGE') AND NOT pg_has_role(r.oid,@owner@,'SET')\n",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_admin_authority_mutation",
+      test_name: "effective authority refuses ADMIN-only group membership",
+      assertion: "refute scalar("
+    },
+    "maintenance-effective-unreachable-holder" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "left(holder.rolname,3)<>'pg_'",
+      mutated: "false",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_unreachable_authority_mutation",
+      test_name: "effective authority refuses an unreachable group holder",
+      assertion: "refute scalar("
+    },
+    "maintenance-effective-proxy-holder" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "left(holder.rolname,3)<>'pg_'",
+      mutated: "false",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_proxy_authority_mutation",
+      test_name:
+        "effective authority refuses an unreachable holder exposed through a PUBLIC view",
+      assertion: "refute scalar("
+    },
+    "maintenance-effective-subscription-role" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "WHEN pg_has_role(holder.oid,'pg_create_subscription','MEMBER')",
+      mutated: "WHEN false",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_subscription_role_mutation",
+      test_name: "effective authority refuses pg_create_subscription via inherit",
+      assertion: "refute scalar(",
+      required_failures: [
+        {"effective authority refuses pg_create_subscription via inherit", "refute scalar("},
+        {"effective authority refuses pg_create_subscription via admin", "refute scalar("}
+      ]
+    },
+    "maintenance-effective-subscription-owner" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "WHERE s.subdbid=(SELECT oid FROM pg_database WHERE datname=current_database())",
+      mutated:
+        "WHERE false AND s.subdbid=(SELECT oid FROM pg_database WHERE datname=current_database())",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_subscription_owner_mutation",
+      test_name: "effective authority refuses an existing untrusted subscription owner",
+      assertion: "refute scalar("
+    },
+    "maintenance-effective-alter-system" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "'session_replication_role','SET, ALTER SYSTEM'",
+      mutated: "'session_replication_role','SET'",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_alter_system_mutation",
+      test_name: "effective parameter authority refuses ALTER SYSTEM without SET",
+      assertion: "refute scalar("
+    },
+    "maintenance-effective-select-safety" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original:
+        "CASE WHEN t.owner_only THEN 'SELECT,INSERT,UPDATE,DELETE,TRIGGER,TRUNCATE,REFERENCES'\n              ELSE 'TRIGGER,TRUNCATE,REFERENCES' END)\n          OR has_any_column_privilege(holder.oid,t.oid,\n            CASE WHEN t.owner_only THEN 'SELECT,INSERT,UPDATE,REFERENCES' ELSE 'REFERENCES' END))) THEN 'relation'",
+      mutated:
+        "CASE WHEN t.owner_only THEN 'INSERT,UPDATE,DELETE,TRIGGER,TRUNCATE,REFERENCES'\n              ELSE 'TRIGGER,TRUNCATE,REFERENCES' END)\n          OR has_any_column_privilege(holder.oid,t.oid,\n            CASE WHEN t.owner_only THEN 'INSERT,UPDATE,REFERENCES' ELSE 'REFERENCES' END))) THEN 'relation'",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_select_safety_mutation",
+      test_name:
+        "SELECT stays refused because existing children do not share root RLS and policies",
+      assertion: "refute scalar("
+    },
+    "maintenance-effective-root-authority" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original:
+        "CASE WHEN t.owner_only THEN 'SELECT,INSERT,UPDATE,DELETE,TRIGGER,TRUNCATE,REFERENCES'\n              ELSE 'TRIGGER,TRUNCATE,REFERENCES' END)\n          OR has_any_column_privilege(holder.oid,t.oid,\n            CASE WHEN t.owner_only THEN 'SELECT,INSERT,UPDATE,REFERENCES' ELSE 'REFERENCES' END))) THEN 'relation'",
+      mutated:
+        "CASE WHEN t.owner_only THEN 'SELECT,INSERT,UPDATE,DELETE,TRIGGER,TRUNCATE,REFERENCES'\n              ELSE 'TRIGGER WITH GRANT OPTION,TRUNCATE WITH GRANT OPTION,REFERENCES WITH GRANT OPTION' END)\n          OR has_any_column_privilege(holder.oid,t.oid,\n            CASE WHEN t.owner_only THEN 'SELECT,INSERT,UPDATE,REFERENCES' ELSE 'REFERENCES WITH GRANT OPTION' END))) THEN 'relation'",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_root_authority_mutation",
+      test_name: "effective root authority refuses TRIGGER on ash_onetime_idempotency_claims",
+      assertion: "refute scalar(",
+      required_failures: [
+        {"effective root authority refuses TRIGGER on ash_onetime_idempotency_claims",
+         "refute scalar("},
+        {"effective root authority refuses TRUNCATE on ash_onetime_idempotency_claims",
+         "refute scalar("},
+        {"effective root authority refuses REFERENCES on ash_onetime_idempotency_claims",
+         "refute scalar("},
+        {"effective root authority refuses REFERENCES (id) on ash_onetime_idempotency_claims",
+         "refute scalar("},
+        {"effective root authority refuses TRIGGER on ash_onetime_nonce_claims",
+         "refute scalar("},
+        {"effective root authority refuses TRUNCATE on ash_onetime_nonce_claims",
+         "refute scalar("},
+        {"effective root authority refuses REFERENCES on ash_onetime_nonce_claims",
+         "refute scalar("},
+        {"effective root authority refuses REFERENCES (id) on ash_onetime_nonce_claims",
+         "refute scalar("},
+        {"effective root authority refuses TRIGGER on ash_onetime_response_payloads",
+         "refute scalar("},
+        {"effective root authority refuses TRUNCATE on ash_onetime_response_payloads",
+         "refute scalar("},
+        {"effective root authority refuses REFERENCES on ash_onetime_response_payloads",
+         "refute scalar("},
+        {"effective root authority refuses REFERENCES (claim_id) on ash_onetime_response_payloads",
+         "refute scalar("}
+      ]
+    },
+    "maintenance-effective-cluster-isolation" => %{
+      path: "test/test_helper.exs",
+      original: "unless is_binary(expected) and String.trim(hostname) == expected do",
+      mutated: "unless true do",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_cluster_isolation_mutation",
+      test_name: "cluster grant isolation refuses an unproven server",
+      assertion: "Expected exception RuntimeError"
+    },
+    "claim-load-payload-timeout-restore" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "           {:ok, loaded} <-\n             select_claim_under_timeout(\n               target,\n               claim,\n               nil,\n               Keyword.get(options, :lock_timeout_ms)\n             ),\n           {:ok, result} <- loaded_result(target, loaded) do\n        result",
+      mutated:
+        "           {:ok, previous} <- current_lock_timeout(target),\n           :ok <- arm_claim_lock_timeout(target, Keyword.get(options, :lock_timeout_ms)),\n           {:ok, loaded} <- select_claim(target, claim.strategy, logical_key(claim)),\n           {:ok, result} <- loaded_result(target, loaded) do\n        restore_lock_timeout(target, previous)\n        result",
+      test: "test/ash_onetime/store/postgres_test.exs",
+      tag: "claim_load_payload_restore_mutation",
+      test_name: "completed claim load restores the caller timeout before reading its payload",
+      assertion: "assert observed == [[\"7s\"]]"
+    },
     "maintenance-effective-column-authority" => %{
       path: "priv/templates/migrations/maintenance/trust.sql",
       original: "OR has_any_column_privilege(holder.oid,t.oid,",
@@ -35,7 +175,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "maintenance-effective-replication-authority" => %{
       path: "priv/templates/migrations/maintenance/trust.sql",
-      original: "WHEN has_parameter_privilege(holder.oid,'session_replication_role','SET')",
+      original:
+        "WHEN has_parameter_privilege(holder.oid,'session_replication_role','SET, ALTER SYSTEM')",
       mutated: "WHEN false",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "effective_replication_authority_mutation",
@@ -146,8 +287,9 @@ defmodule AshOnetime.MutationCheck do
     },
     "maintenance-set-maintain" => %{
       path: "priv/templates/migrations/maintenance/trust.sql",
-      original: "OR pg_has_role(r.oid,holder.oid,'SET')",
-      mutated: "OR false",
+      original:
+        "WHEN EXISTS (SELECT 1 FROM relations t WHERE has_table_privilege(holder.oid,t.oid,'MAINTAIN'))",
+      mutated: "WHEN false",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "review_set_maintain",
       test_name: "SET only MAINTAIN through pg_maintain refuses maintenance",
