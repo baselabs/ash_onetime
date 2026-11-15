@@ -1208,6 +1208,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   @tag rls_child_policy_copy_mutation: true
+  @tag effective_column_authority_mutation: true
   test "forward roll copies policies and flags and resets table and column ACLs", c do
     parent = rel(c, "ash_onetime_response_payloads")
     sql!(c.owner_repo, "ALTER TABLE #{parent} ENABLE ROW LEVEL SECURITY")
@@ -1250,17 +1251,28 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     sql!(c.owner_repo, "GRANT SELECT (claim_id) ON #{rel(c, name)} TO #{q(c.runtime)}")
 
-    assert scalar(
-             c.runtime_repo,
-             "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->>'acl'"
-           ) == "false"
+    try do
+      assert scalar(
+               c.runtime_repo,
+               "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->>'acl'"
+             ) == "false"
+
+      assert_refusal(
+        c,
+        "ash_onetime_roll_payload_partitions",
+        "24",
+        "untrusted_dependency: effective relation privilege"
+      )
+    after
+      sql!(c.owner_repo, "REVOKE SELECT (claim_id) ON #{rel(c, name)} FROM #{q(c.runtime)}")
+    end
 
     scalar(c.runtime_repo, "SELECT #{rel(c, "ash_onetime_roll_payload_partitions")}(24)")
 
     assert scalar(
              c.runtime_repo,
              "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->>'acl'"
-           ) == "false"
+           ) == "true"
   end
 
   test "fresh partitions are relative to migration execution", c do
@@ -2931,22 +2943,13 @@ defmodule AshOnetime.Store.MaintenanceTest do
     @order order
     @tag lock_order: true
     test "advisory barrier proves #{@order} and runtime DML concurrency", c do
-      {:ok, ddl_repo} = subject(c.runtime)
+      {:ok, ddl_repo} = subject(c.owner)
+      {:ok, dml_repo} = subject(c.runtime)
 
       sql!(
         c.runtime_repo,
         "CREATE FUNCTION #{rel(c, "race_trigger")}() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN PERFORM pg_advisory_lock(19283,42); PERFORM set_config(''ash_onetime.probe_role'',current_user,false); RETURN NEW; END'"
       )
-
-      for table <- [
-            "ash_onetime_idempotency_claims",
-            "ash_onetime_nonce_claims",
-            "ash_onetime_response_payloads",
-            "ash_onetime_response_payloads_default",
-            "ash_onetime_maintenance_runs"
-          ] do
-        sql!(c.owner_repo, "GRANT TRIGGER ON #{rel(c, table)} TO #{q(c.runtime)}")
-      end
 
       original =
         scalar(
@@ -3013,10 +3016,10 @@ defmodule AshOnetime.Store.MaintenanceTest do
                        )
             end
 
-            sql!(ddl_repo, "SET ash_onetime.tenant='own'")
+            sql!(dml_repo, "SET ash_onetime.tenant='own'")
 
             sql!(
-              ddl_repo,
+              dml_repo,
               "INSERT INTO #{rel(c, "ash_onetime_nonce_claims")} (id,logical_partition,operation_hash,scope_hash,key_hash,issued_at,verifier_id,admitted_at,retain_until,inserted_at) VALUES (gen_random_uuid(),'own',decode(repeat('01',32),'hex'),decode(repeat('02',32),'hex'),decode(repeat('03',32),'hex'),now(),'test',now(),now()+interval '1 day',now())"
             )
           else

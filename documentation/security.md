@@ -119,18 +119,35 @@ being built-in or owned by a superuser does not grant a routine blanket trust. C
 expressions must match the package's own DDL. Only the migration that just created the
 package tables captures their shapes. Every upgrade builds a fresh DDL reference, even
 if the old routines have been dropped. Unexpected shapes refuse maintenance with
-`:untrusted_dependency`; status and the live doctor report the refusal.
+`:untrusted_dependency`; maintenance status reports the refusal. The live doctor checks
+schema currency and held backlog; it does not invoke the maintenance trust audit.
 
 The PostgreSQL server and the migrator are trusted. Superuser event triggers, preloaded
 hooks, and backend libraries execute outside a relation closure. Autovacuum ANALYZE runs
 as the table owner outside maintenance steps. The package cannot stop the server from
-executing objects an owner or superuser installed. Install revokes runtime MAINTAIN and
-steps audit effective MAINTAIN with `has_table_privilege`, including `pg_maintain`.
-The audit also refuses SET-only paths from the runtime, maintenance or current role, or
-any LOGIN role, to a role holding MAINTAIN on a package relation.
-The CREATE and MAINTAIN audits exclude superusers (the trusted server) and roles that
-inherit the owner's privileges (owner-equivalent). Runtime and maintenance roles must hold
+executing objects an owner or superuser installed. Install revokes runtime MAINTAIN.
+Install, maintenance steps and status use one effective-authority audit
+over PostgreSQL roles. It refuses MAINTAIN on every package relation (including
+`pg_maintain`), TRIGGER, TRUNCATE and REFERENCES on claims, nonce and payload roots,
+and every table or column privilege on owner-only relations, including the maintenance
+ledger and inheritance children. REFERENCES includes column grants. PostgreSQL's
+`has_table_privilege` and `has_any_column_privilege` also detect `pg_read_all_data`
+and `pg_write_all_data`, which do not need explicit relation ACL entries.
+The same audit refuses SET on `session_replication_role`, checked with
+`has_parameter_privilege`: replica mode could bypass deletion, operation-hold and FK guards.
+It checks inherited authority and SET-only paths from runtime, scheduled maintenance,
+current and session roles, and every LOGIN role, through plain group roles as well.
+Superusers (the trusted server), the owner, roles with USAGE or SET on the owner, and
+predefined-role catalog rows are excluded from this effective-authority audit; a login
+holding a predefined role still counts. The CREATE audit excludes superusers and roles
+that inherit the owner's privileges. Runtime and maintenance roles must hold
 no membership in the owner, whether through INHERIT or SET; every step checks that boundary.
+
+Generated migrations embed these routine bodies and pin their digests in the install
+manifest. Updating the package does not replace routines in an existing install. An
+installation that already ran the maintenance migration needs an upgrade migration to
+replace the routines and rebuild both manifests together. Replacing a body alone leaves
+the recorded digest stale, so maintenance status reports a definition mismatch.
 
 Function DDL takes no relation lock. A migrator acting as the owner can replace a package
 routine after its digest was checked. Relation locks cannot serialize that replacement;

@@ -2,6 +2,51 @@ defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "maintenance-effective-column-authority" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "OR has_any_column_privilege(holder.oid,t.oid,",
+      mutated: "OR false AND has_any_column_privilege(holder.oid,t.oid,",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_column_authority_mutation",
+      test_name: "forward roll copies policies and flags and resets table and column ACLs",
+      assertion:
+        "assert {:error, %Postgrex.Error{postgres: %{pg_code: \"P0001\", message: message}}} ="
+    },
+    "maintenance-effective-relation-authority" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "WHEN EXISTS (SELECT 1 FROM relations t WHERE\n          (has_table_privilege",
+      mutated:
+        "WHEN EXISTS (SELECT 1 FROM relations t WHERE false AND\n          (has_table_privilege",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_relation_authority_mutation",
+      test_name: "effective owner-only authority refuses pg_write_all_data via inherit",
+      assertion: "refute scalar(",
+      required_failures:
+        for {predefined, membership} <- [
+              {"pg_write_all_data", :inherit},
+              {"pg_read_all_data", :inherit},
+              {"pg_write_all_data", :set},
+              {"pg_read_all_data", :set},
+              {"pg_write_all_data", :group}
+            ] do
+          {"effective owner-only authority refuses #{predefined} via #{membership}",
+           "refute scalar("}
+        end
+    },
+    "maintenance-effective-replication-authority" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "WHEN has_parameter_privilege(holder.oid,'session_replication_role','SET')",
+      mutated: "WHEN false",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_replication_authority_mutation",
+      test_name: "effective replication parameter authority refuses direct SET grant",
+      assertion: "refute scalar(",
+      required_failures:
+        for membership <- [:direct, :group] do
+          {"effective replication parameter authority refuses #{membership} SET grant",
+           "refute scalar("}
+        end
+    },
     "external-replay-lock-timeout" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original: "               nil,\n               Keyword.get(options, :lock_timeout_ms)",

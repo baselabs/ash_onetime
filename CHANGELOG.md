@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- Maintenance's existing effective-authority audit now also refuses inherited and
+  SET-reachable forbidden table and column privileges, all privileges on owner-only
+  relations (including predefined read/write roles), and SET on `session_replication_role`.
+  Generated installs and maintenance upgrades carry the corrected routines; existing
+  installed routine bodies require an upgrade migration and are not changed by a package update.
+
 - External replay and finalize claim loads use the protection's lock timeout and return
   `:request_in_progress` on contention. Each claim-lock statement restores the caller's
   timeout before payload reads, callbacks or later writes. The Store `load` callback
