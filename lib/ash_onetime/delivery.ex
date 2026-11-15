@@ -7,7 +7,7 @@ defmodule AshOnetime.Delivery do
     * `:executed` — this call executed the effect; `values` holds every declared
       `executing_only` value, exactly once.
     * `:replayed` — a stored completion for the same key and request was replayed;
-      `values` is empty. The value was delivered to the call that executed.
+      `values` is empty. An earlier call may have lost the value before delivery.
     * `:recovered` — an external effect's earlier execution was recovered; `values` is
       empty.
 

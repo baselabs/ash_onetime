@@ -160,8 +160,14 @@ can roll back after the value was returned, and a retry under the same key would
 deliver a second one. After Ash returns success, `deliver/2` reads the store's committed
 completion for its own claim, outside any transaction, and opens the value only when that
 completion exists. When it does not (for example, an `after_transaction` hook turned a
-rolled-back action into success), the call returns `:executing_only_lost` and the effect did
-not happen: a retry under the same key executes and delivers once.
+rolled-back action into success), the call returns `:executing_only_lost` with no value.
+For a local transactional effect, rollback also undoes the effect and its claim; a retry
+under the same key can execute and deliver a fresh value. An external peer may already
+have committed its effect before the local rollback. The committed processing claim then
+remains: a retry recovers the peer's existing effect with no value. An unavailable or
+uncertain completion read proves neither rollback nor absence of an external effect.
+Reconcile through the external-effect recovery protocol; a committed effect's lost value
+cannot be re-derived. Revoke what it granted and reissue under a new key.
 
 The proven limit: code in your own action pipeline that is handed the built changeset or
 input before the package's entry and outside the action's transaction (a

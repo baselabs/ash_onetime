@@ -67,11 +67,13 @@ defmodule AshOnetime do
   run in another process.
 
   An `:executed` value opens only after Ash returned and the store holds the committed
-  completion of this call's claim. When it does not (the action rolled back, even if a
-  hook reported success), the call returns `:executing_only_lost` and a retry under the
-  same key executes once. Any other doubt after the action ran also returns
-  `:executing_only_lost` with no value; a value lost after commit is lost for good
-  (revoke and reissue).
+  completion of this call's claim. A missing or uncertain completion returns
+  `:executing_only_lost` with no value, even if a later hook reported success. Local
+  transactional rollback undoes the local effect and claim, so a retry can execute and
+  deliver a fresh value. An external peer can commit before the local rollback; retry
+  then recovers the existing peer effect with no value. An unavailable completion read
+  proves no absence; reconcile through external recovery. A committed effect's lost
+  value cannot be re-derived: revoke what it granted and reissue under a new key.
   """
   @spec deliver(Ash.Changeset.t() | Ash.ActionInput.t(), keyword()) ::
           {:ok, term(), AshOnetime.Delivery.t()}

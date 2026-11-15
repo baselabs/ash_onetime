@@ -62,8 +62,12 @@ end
 ```
 
 `recover/3` never returns values. A recovered execution (the peer reports the effect done)
-delivers `:recovered` with none: the value went to a caller that is gone, so revoke it at the
-peer and reissue under a new key. When recovery proves absence and the effect executes, the
+delivers `:recovered` with none. The original call may never have delivered the value:
+the peer can commit before the local transaction rolls back, even when a later success
+hook hides that rollback. `deliver/2` then returns `:executing_only_lost`; retry recovers
+the existing peer effect with no value. A missing or uncertain local completion does not
+prove peer absence. Revoke the lost grant at the peer and reissue under a new key.
+When recovery proves absence and the effect executes, the
 new execution delivers `:executed` with its values. See
 [Idempotency](idempotency.md#values-only-the-executing-caller-receives) for the call and
 [Security](security.md#executing-only-values) for the guarantees.

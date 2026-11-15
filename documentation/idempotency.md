@@ -92,8 +92,11 @@ end
   `:executing_only_in_transaction` before anything runs, because a transaction it does not
   own could roll back after the value was returned.
 - A value opens only after the store holds the committed completion of this call's claim.
-  When it does not (the action rolled back, even if a hook reported success), the call
-  returns `:executing_only_lost` and a retry under the same key executes once.
+  A missing or uncertain completion returns `:executing_only_lost` with no value, even
+  if a hook reported success. Local transactional rollback undoes the local effect and
+  claim, so a retry can execute and deliver a fresh value. An external peer can commit
+  before the local rollback; retry then recovers the existing effect with no value.
+  An unavailable completion read proves no absence: reconcile through external recovery.
 - A value lost after its transaction committed is lost for good. No path re-derives it:
   revoke what it granted and reissue under a new key.
 
