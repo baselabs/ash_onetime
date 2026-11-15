@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- External completion and hold release restart retention using elapsed seconds across
+  daylight saving changes in any session `TimeZone`. Calendar interval addition could
+  shorten or lengthen the window by an hour. Release still preserves a later deadline.
 - External completion bounds payload INSERT and claims UPDATE with the protection's lock
   timeout, restores the caller's timeout after success, and returns `:request_in_progress`
   on contention while retaining the processing claim.

@@ -43,7 +43,14 @@ prefix are explicit. Schedule `AshOnetime.Oban.CleanupWorker` only if Oban is in
 
 A completed idempotency claim with `hold_reference` is retained regardless of `retain_until`.
 The caller must release it in the operation's settling transaction. If it never releases, the
-record and its payload are kept forever by design. Monitor:
+record and its payload are kept forever by design.
+
+External completion restarts retention from its statement time using the configured
+elapsed seconds. Hold release restarts the same elapsed window and preserves any later
+existing deadline. Both are independent of the connection's `TimeZone`, including daylight
+saving transitions; a configured day of 86,400 seconds remains 86,400 elapsed seconds.
+
+Monitor held operations:
 
 ```elixir
 AshOnetime.Store.held_backlog(target)

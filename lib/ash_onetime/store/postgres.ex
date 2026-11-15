@@ -328,7 +328,7 @@ defmodule AshOnetime.Store.Postgres do
     sql = """
     UPDATE #{relation(target, "ash_onetime_idempotency_claims")}
     SET hold_reference = NULL,
-        retain_until = GREATEST(retain_until, statement_timestamp() + (retain_until - admitted_at))
+        retain_until = GREATEST(retain_until, statement_timestamp() + extract(epoch FROM (retain_until - admitted_at)) * interval '1 second')
     WHERE logical_partition = $1 AND hold_reference = $2
     """
 
@@ -962,8 +962,11 @@ defmodule AshOnetime.Store.Postgres do
   defp update_complete(target, claim, partition_date, codec, digest, mode, hold_reference) do
     retention_update =
       case mode do
-        :database -> ""
-        :external -> ", retain_until = statement_timestamp() + (retain_until - admitted_at)"
+        :database ->
+          ""
+
+        :external ->
+          ", retain_until = statement_timestamp() + extract(epoch FROM (retain_until - admitted_at)) * interval '1 second'"
       end
 
     sql = """

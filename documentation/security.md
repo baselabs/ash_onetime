@@ -57,7 +57,10 @@ a resource at compile time — the scope must include `{:attribute, <tenant_attr
 needs no scope entry for isolation.)
 
 Retention and cleanup are security boundaries. Deleting a nonce while its acceptance window is
-still open can admit a replay. The acceptance window is evaluated on the application clock while
+still open can admit a replay. External completion and hold release restart retention in elapsed
+seconds, so a session's daylight saving transition cannot narrow the configured idempotency window.
+Hold release also preserves any later existing deadline.
+The acceptance window is evaluated on the application clock while
 cleanup eligibility is evaluated on the PostgreSQL clock, so a spent nonce is retained for a
 configurable clock-skew safety margin (`config :ash_onetime, :cleanup_clock_skew_margin_seconds`,
 default 1 second) beyond its retention horizon (`retain_for`, defaulting to `max_age`, plus

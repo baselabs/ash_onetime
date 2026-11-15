@@ -2,6 +2,39 @@ defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "M-dst-complete" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        ", retain_until = statement_timestamp() + extract(epoch FROM (retain_until - admitted_at)) * interval '1 second'",
+      mutated: ", retain_until = statement_timestamp() + (retain_until - admitted_at)",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "dst_complete_mutation",
+      test_name:
+        "external completion restarts exact elapsed retention across the next forward DST change",
+      assertion: "assert SQL.query!",
+      required_failures:
+        for direction <- ["forward", "backward"] do
+          {"external completion restarts exact elapsed retention across the next #{direction} DST change",
+           "assert SQL.query!"}
+        end
+    },
+    "M-dst-release" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "retain_until = GREATEST(retain_until, statement_timestamp() + extract(epoch FROM (retain_until - admitted_at)) * interval '1 second')",
+      mutated:
+        "retain_until = GREATEST(retain_until, statement_timestamp() + (retain_until - admitted_at))",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "dst_release_mutation",
+      test_name:
+        "hold release restarts exact elapsed retention across the next forward DST change",
+      assertion: "assert SQL.query!",
+      required_failures:
+        for direction <- ["forward", "backward"] do
+          {"hold release restarts exact elapsed retention across the next #{direction} DST change",
+           "assert SQL.query!"}
+        end
+    },
     "M-complete" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:
@@ -2640,6 +2673,8 @@ defmodule AshOnetime.MutationCheck do
   @groups %{
     "all" => Map.keys(@mutations),
     "defects-batch" => [
+      "M-dst-complete",
+      "M-dst-release",
       "M-complete",
       "M-firing-claims",
       "M-firing-nonce",
