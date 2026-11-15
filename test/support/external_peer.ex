@@ -122,10 +122,12 @@ defmodule AshOnetime.Test.ExternalPeer do
     end)
   end
 
+  # `options[:connection]` is a peer connection the caller owns (one opened outside an
+  # observed run, so the run starts no pool); without it each call opens and stops its own.
   def execute(prefix, operation_key, result, options \\ []) do
     encoded = :erlang.term_to_binary(result, [:deterministic])
 
-    with_connection(fn connection ->
+    with_connection(options, fn connection ->
       {:ok, stored} =
         Postgrex.transaction(connection, fn transaction ->
           execute_in_transaction(transaction, prefix, operation_key, encoded, options)
@@ -179,8 +181,8 @@ defmodule AshOnetime.Test.ExternalPeer do
     stored
   end
 
-  def recover(prefix, operation_key, disposition \\ :authoritative) do
-    with_connection(&recover_transaction(&1, prefix, operation_key, disposition))
+  def recover(prefix, operation_key, disposition \\ :authoritative, options \\ []) do
+    with_connection(options, &recover_transaction(&1, prefix, operation_key, disposition))
   end
 
   defp recover_transaction(connection, prefix, operation_key, disposition) do
@@ -255,6 +257,13 @@ defmodule AshOnetime.Test.ExternalPeer do
       %{rows: rows} = Postgrex.query!(connection, sql, [])
       rows
     end)
+  end
+
+  defp with_connection(options, callback) do
+    case Keyword.fetch(options, :connection) do
+      {:ok, connection} when is_pid(connection) -> callback.(connection)
+      :error -> with_connection(callback)
+    end
   end
 
   defp with_connection(callback) do

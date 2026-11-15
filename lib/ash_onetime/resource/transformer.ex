@@ -745,15 +745,16 @@ defmodule AshOnetime.Resource.Transformer do
   end
 
   # The resource whose record the action returns: this resource for a create, update or
-  # destroy; for a generic action, the resource its return type names (a bare resource
-  # module, or `:struct` with an `instance_of` resource). The DSL state stands in for
-  # this resource, which is still compiling.
-  defp record_source(%{action: %{type: :action} = action, dsl_state: dsl_state}) do
-    candidate =
-      case action.returns do
-        Ash.Type.Struct -> Keyword.get(action.constraints || [], :instance_of)
-        returns -> returns
-      end
+  # destroy; for a generic action, the persisted resource its `:struct` return names with
+  # `instance_of`. Ash takes a bare resource module as a return type only for an embedded
+  # resource (Ash.Resource defines the type only when embedded), and an embedded record
+  # is a value, not a persisted record: it is stored as a typed value and has no record
+  # source. The DSL state stands in for this resource, which is still compiling.
+  defp record_source(%{
+         action: %{type: :action, returns: Ash.Type.Struct} = action,
+         dsl_state: dsl_state
+       }) do
+    candidate = Keyword.get(action.constraints || [], :instance_of)
 
     cond do
       is_nil(candidate) or not is_atom(candidate) ->
@@ -762,8 +763,8 @@ defmodule AshOnetime.Resource.Transformer do
       candidate == Transformer.get_persisted(dsl_state, :module) ->
         {:ok, dsl_state}
 
-      match?({:module, _}, Code.ensure_compiled(candidate)) and
-          ResourceInfo.resource?(candidate) ->
+      compiled(candidate) == :ok and ResourceInfo.resource?(candidate) and
+          not ResourceInfo.embedded?(candidate) ->
         {:ok, candidate}
 
       true ->
@@ -771,7 +772,41 @@ defmodule AshOnetime.Resource.Transformer do
     end
   end
 
+  defp record_source(%{action: %{type: :action}}), do: :error
   defp record_source(%{dsl_state: dsl_state}), do: {:ok, dsl_state}
+
+  # The resource whose fields name the value the action returns (V2): the record source,
+  # or the embedded resource a generic action returns as a value, bare, as a `:struct`
+  # `instance_of`, or in an array. An embedded value is stored whole, so an executing-only
+  # name must not name its fields either.
+  defp returned_value_source(context) do
+    case record_source(context) do
+      {:ok, source} -> {:ok, source}
+      :error -> embedded_return(context.action)
+    end
+  end
+
+  defp embedded_return(%{type: :action, returns: returns, constraints: constraints}),
+    do: embedded_type(returns, constraints || [])
+
+  defp embedded_return(_action), do: :error
+
+  defp embedded_type({:array, type}, constraints),
+    do: embedded_type(type, Keyword.get(constraints, :items, []))
+
+  defp embedded_type(Ash.Type.Struct, constraints),
+    do: embedded_resource(Keyword.get(constraints, :instance_of))
+
+  defp embedded_type(type, _constraints), do: embedded_resource(type)
+
+  defp embedded_resource(module) when is_atom(module) and not is_nil(module) do
+    if compiled(module) == :ok and ResourceInfo.resource?(module) and
+         ResourceInfo.embedded?(module),
+       do: {:ok, module},
+       else: :error
+  end
+
+  defp embedded_resource(_module), do: :error
 
   # Executing-only values (§2.7.6): V1 to V5 and V7. V6 is withdrawn (§2.7.4).
   defp verify_executing_only(%{executing_only: []} = protection, context) do
@@ -879,7 +914,7 @@ defmodule AshOnetime.Resource.Transformer do
   defp response_fields(_protection), do: []
 
   defp record_field?(name, context) do
-    case record_source(context) do
+    case returned_value_source(context) do
       {:ok, source} ->
         Enum.any?(
           [
@@ -1141,22 +1176,29 @@ defmodule AshOnetime.Resource.Transformer do
 
   defp verify_nonce_around_callback(%Ash.Resource.Change{change: {module, opts}})
        when is_atom(module) and is_list(opts) do
-    if Code.ensure_loaded?(module) and function_exported?(module, :replay_capabilities, 1) do
-      with {:ok, capabilities} <- invoke_declaration(module, :replay_capabilities, [opts]),
-           :ok <- validate_nonce_around_capabilities(capabilities) do
-        :ok
-      else
-        {:error, message} when is_binary(message) -> {:error, "#{inspect(module)} #{message}"}
-        _invalid -> {:error, "#{inspect(module)} returned an invalid capability declaration"}
-      end
-    else
-      {:error,
-       "#{inspect(module)} must export replay_capabilities/1 to prove it adds no around-action boundary"}
+    with :ok <- compiled(module),
+         :ok <-
+           exported(
+             module,
+             :replay_capabilities,
+             "must export replay_capabilities/1 to prove it adds no around-action boundary"
+           ) do
+      verify_nonce_around_declaration(module, opts)
     end
   end
 
   defp verify_nonce_around_callback(_callback),
     do: {:error, "lifecycle callback cannot prove the sole around-action boundary"}
+
+  defp verify_nonce_around_declaration(module, opts) do
+    with {:ok, capabilities} <- invoke_declaration(module, :replay_capabilities, [opts]),
+         :ok <- validate_nonce_around_capabilities(capabilities) do
+      :ok
+    else
+      {:error, message} when is_binary(message) -> {:error, "#{inspect(module)} #{message}"}
+      _invalid -> {:error, "#{inspect(module)} returned an invalid capability declaration"}
+    end
+  end
 
   defp validate_nonce_around_capabilities(
          %{
@@ -1254,7 +1296,8 @@ defmodule AshOnetime.Resource.Transformer do
     do: {:error, "lifecycle callback is not module-based"}
 
   defp verify_custom_lifecycle(module, opts, suffix) do
-    if Code.ensure_loaded?(module) and function_exported?(module, :replay_safety, 1) do
+    with :ok <- compiled(module),
+         :ok <- exported(module, :replay_safety, "must export replay_safety/1#{suffix}") do
       case invoke_declaration(module, :replay_safety, [opts]) do
         {:ok, mode} when mode in [:pure, :replay_aware] ->
           verify_custom_capabilities(module, opts, mode)
@@ -1262,8 +1305,6 @@ defmodule AshOnetime.Resource.Transformer do
         _invalid ->
           {:error, "#{inspect(module)} returned an invalid replay safety declaration"}
       end
-    else
-      {:error, "#{inspect(module)} must export replay_safety/1#{suffix}"}
     end
   end
 
@@ -1476,18 +1517,24 @@ defmodule AshOnetime.Resource.Transformer do
   defp package_preparation?(_preparation), do: false
 
   defp ensure_callbacks(module, callbacks) when is_atom(module) do
-    # Code.ensure_compiled/1 triggers the module's compilation if it has not run yet
-    # (needed: callback modules — resolvers, codecs, verifiers — are often defined in the
-    # same compile unit as the protected resource and not yet compiled when this
-    # transformer runs). The cycle hazard (L10) is when the callback module transitively
-    # depends on the protected resource itself: ensure_compiled returns
-    # {:error, :nofile | :unavailable | :module_unavailable}, and the cycle case surfaces
-    # as the opaque "is not compiled" message. Distinguish the cycle/unavailable case
-    # (give the ordering guidance) from the genuine missing-module case, and only THEN
-    # check the callbacks are exported.
+    with :ok <- compiled(module), do: verify_exported_callbacks(module, callbacks)
+  end
+
+  defp ensure_callbacks(module, _callbacks), do: {:error, "#{inspect(module)} is not a module"}
+
+  # Every consumer module this transformer inspects (resolvers, codecs, verifiers,
+  # lifecycle callbacks) is resolved here, never with Code.ensure_loaded?/1. Callback
+  # modules are often defined in the same compile unit as the protected resource:
+  # Code.ensure_compiled/1 compiles one that has not run yet and loads one the compiler
+  # has just compiled, which Code.ensure_loaded?/1 reports as missing (`:nofile`), even
+  # when it was defined earlier in the same file. The cycle hazard (L10) is a callback
+  # module that transitively depends on the protected resource: ensure_compiled returns
+  # `:unavailable` or `:module_unavailable`, which gets the ordering guidance rather than
+  # the missing-module message.
+  defp compiled(module) do
     case Code.ensure_compiled(module) do
       {:module, ^module} ->
-        verify_exported_callbacks(module, callbacks)
+        :ok
 
       {:error, reason} when reason in [:unavailable, :module_unavailable] ->
         # A compile cycle: the callback module is being compiled RIGHT NOW (it
@@ -1503,7 +1550,12 @@ defmodule AshOnetime.Resource.Transformer do
     end
   end
 
-  defp ensure_callbacks(module, _callbacks), do: {:error, "#{inspect(module)} is not a module"}
+  # A one-argument declaration callback the module must export, after compiled/1 loaded it.
+  defp exported(module, name, message) do
+    if function_exported?(module, name, 1),
+      do: :ok,
+      else: {:error, "#{inspect(module)} #{message}"}
+  end
 
   defp missing_callbacks_message(module, missing),
     do: "#{inspect(module)} is missing callbacks #{inspect(missing)}"

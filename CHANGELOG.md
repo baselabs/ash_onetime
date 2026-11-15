@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- **Executing-only values.** An idempotency protection can declare `executing_only` names,
+  produced by an `AshOnetime.Producer` (`produce`) or returned by an external effect's
+  `execute/3` as `{:ok, peer_result, values}`. `AshOnetime.deliver/2` runs the action and
+  returns the values beside the Ash result in `%AshOnetime.Delivery{}`: `:executed` with every
+  value, `:replayed` or `:recovered` with none. The values are sealed when produced to a key
+  that exists only inside the `deliver/2` call, and never reach a row, the cache, a hold,
+  telemetry, logs, errors or a replay. A value opens only after the store holds the
+  committed completion of the call's claim. New refusals: `:executing_only_requires_call`
+  (the action was run without `deliver/2`), `:executing_only_in_transaction` (called inside
+  an open transaction), `:executing_only_refused` (a bulk subject, a subject not built for its
+  action, or a call Ash would run in another process); and failures
+  `:executing_only_invalid` (the producer broke its contract) and `:executing_only_lost` (the
+  value cannot be delivered). The verifier refuses a name also in `fields` or naming a field
+  of the returned resource, a strategy other than fail-closed idempotency, a missing
+  producer, duplicate names, and an update or destroy with `require_atomic? true`. A generic
+  action returning a resource stores the `fields` of the returned resource and replays it as
+  a loaded record.
+- **Response `fields` text.** The DSL documentation states that the first tracked caller
+  also receives only the `fields` projection.
+
 - **Replay relationships.** Replay admission clears all pending relationship changes,
   including caller-managed relationships and belongs-to inputs, across create, update,
   and destroy. A relationship change added later refuses with

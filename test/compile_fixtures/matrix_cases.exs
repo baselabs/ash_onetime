@@ -160,6 +160,112 @@ defmodule AshOnetime.CompileFixture.MatrixCases do
     {[actions: :nonce_non_around], crud_nonce()}
   end
 
+  # Executing-only values (§2.7.6, V1 to V5 and V7).
+  defp definition(:executing_only_nonce) do
+    {[], nonce(executing_only: [:secret], produce: CompileFixture.Producer)}
+  end
+
+  defp definition(:executing_only_untracked) do
+    {[], executing_only(on_definite_store_failure: :execute_untracked)}
+  end
+
+  defp definition(:executing_only_duplicate) do
+    {[], executing_only(executing_only: [:secret, :secret])}
+  end
+
+  defp definition(:executing_only_response_field) do
+    {[],
+     executing_only(
+       executing_only: [:amount],
+       response: {CompileFixture.Codec, [fields: [:amount], classify: CompileFixture.Classifier]}
+     )}
+  end
+
+  defp definition(:executing_only_attribute) do
+    {[], executing_only(executing_only: [:account_id])}
+  end
+
+  defp definition(:executing_only_relationship) do
+    {[attributes: :response_fields], executing_only(executing_only: [:owner])}
+  end
+
+  defp definition(:executing_only_returned_attribute) do
+    {[actions: :executing_only], executing_only_generic(:issue, executing_only: [:token])}
+  end
+
+  defp definition(:executing_only_returned_calculation) do
+    {[actions: :executing_only], executing_only_generic(:issue, executing_only: [:label])}
+  end
+
+  defp definition(:executing_only_embedded_attribute) do
+    {[actions: :executing_only], executing_only_generic(:stamp, executing_only: [:token])}
+  end
+
+  defp definition(:executing_only_embedded_struct_attribute) do
+    {[actions: :executing_only], executing_only_generic(:stamp_struct, executing_only: [:token])}
+  end
+
+  defp definition(:executing_only_atomic_update) do
+    {[actions: :executing_only], executing_only(action: :adjust)}
+  end
+
+  defp definition(:executing_only_atomic_destroy) do
+    {[actions: :executing_only],
+     executing_only(action: :remove, fingerprint: [arguments: [:note], attributes: []])}
+  end
+
+  defp definition(:executing_only_without_source) do
+    {[], executing_only(produce: nil)}
+  end
+
+  defp definition(:executing_only_missing_producer) do
+    {[], executing_only(produce: CompileFixture.MissingProducer)}
+  end
+
+  defp definition(:executing_only_produce_with_external) do
+    {[], executing_only(external_effect: CompileFixture.External)}
+  end
+
+  defp definition(:produce_without_executing_only) do
+    {[], idempotency(produce: CompileFixture.Producer)}
+  end
+
+  defp definition(:executing_only_local), do: {[], executing_only()}
+
+  defp definition(:executing_only_external) do
+    {[], executing_only(produce: nil, external_effect: CompileFixture.External)}
+  end
+
+  defp definition(:executing_only_returned_generic) do
+    {[actions: :executing_only], executing_only_generic(:issue, executing_only: [:secret])}
+  end
+
+  defp definition(:executing_only_embedded_generic) do
+    {[actions: :executing_only], executing_only_generic(:stamp, executing_only: [:secret])}
+  end
+
+  # §2.7.6: a generic action's response fields are validated against the persisted
+  # resource its `:struct` return names. Fields of the returned resource compile; fields
+  # of the action's own resource do not, and a CRUD action refuses the returned resource's
+  # fields. An embedded return is a value with no record source: it takes no fields.
+  defp definition(:returned_fields),
+    do:
+      {[actions: :executing_only, attributes: :response_fields], returned(:issue, [:id, :token])}
+
+  defp definition(:returned_action_field),
+    do: {[actions: :executing_only, attributes: :response_fields], returned(:issue, [:amount])}
+
+  defp definition(:returned_embedded_field),
+    do: {[actions: :executing_only], returned(:stamp, [:token])}
+
+  defp definition(:returned_embedded_struct_field),
+    do: {[actions: :executing_only], returned(:stamp_struct, [:token])}
+
+  defp definition(:crud_returned_field) do
+    opts = Keyword.put(response_opts(), :fields, [:token])
+    {[], idempotency(response: {CompileFixture.Codec, opts})}
+  end
+
   defp definition(:pure_notification_producer) do
     {[actions: :pure_notification], idempotency()}
   end
@@ -375,6 +481,30 @@ defmodule AshOnetime.CompileFixture.MatrixCases do
       action: :redeem,
       key: {:client, :proof},
       fingerprint: [arguments: [:proof], attributes: []]
+    )
+  end
+
+  # A valid local executing-only protection; `produce: nil` drops the producer.
+  defp executing_only(overrides \\ []) do
+    [executing_only: [:secret], produce: CompileFixture.Producer]
+    |> idempotency()
+    |> Keyword.merge(overrides)
+    |> Enum.reject(&match?({_option, nil}, &1))
+  end
+
+  defp executing_only_generic(action, overrides) do
+    executing_only(
+      [action: action, key: {:client, :proof}, fingerprint: [arguments: [:proof], attributes: []]] ++
+        overrides
+    )
+  end
+
+  defp returned(action, fields) do
+    idempotency(
+      action: action,
+      key: {:client, :proof},
+      fingerprint: [arguments: [:proof], attributes: []],
+      response: {CompileFixture.Codec, Keyword.put(response_opts(), :fields, fields)}
     )
   end
 

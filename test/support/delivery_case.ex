@@ -4,6 +4,7 @@ defmodule AshOnetime.Test.DeliveryCase do
   # Shared setup and subject builders for the executing-only delivery tests. Every test
   # runs the real `AshOnetime.deliver/2` against the real store in PostgreSQL.
 
+  alias Ash.Error.Invalid
   alias AshOnetime.Delivery
   alias AshOnetime.Test.DeliveryExamples.Resource
   alias AshOnetime.Test.Repo
@@ -14,17 +15,19 @@ defmodule AshOnetime.Test.DeliveryCase do
   def routes, do: @routes
 
   def install!(prefix) do
-    SQL.query!(
-      Repo,
-      """
-      CREATE TABLE IF NOT EXISTS "#{prefix}"."ash_onetime_delivery_examples" (
-        id uuid PRIMARY KEY,
-        amount bigint NOT NULL,
-        retired boolean NOT NULL DEFAULT false
+    for table <- ["ash_onetime_delivery_examples", "ash_onetime_delivery_guarded"] do
+      SQL.query!(
+        Repo,
+        """
+        CREATE TABLE IF NOT EXISTS "#{prefix}"."#{table}" (
+          id uuid PRIMARY KEY,
+          amount bigint NOT NULL,
+          retired boolean NOT NULL DEFAULT false
+        )
+        """,
+        []
       )
-      """,
-      []
-    )
+    end
 
     :ok
   end
@@ -77,7 +80,7 @@ defmodule AshOnetime.Test.DeliveryCase do
   """
   defmacro assert_at_most_one_value(results) do
     quote do
-      count = length(AshOnetime.Test.DeliveryCase.delivered(unquote(results)))
+      count = length(unquote(__MODULE__).delivered(unquote(results)))
 
       assert count <= 1,
              "#{count} executing-only values were delivered for one key"
@@ -123,35 +126,27 @@ defmodule AshOnetime.Test.DeliveryCase do
   a CRUD action through an around-action prepended outside the package's, a generic
   action through an after-action appended after the package's.
   """
-  def fail_after_completion(subject, flag) do
-    error = Ash.Error.Invalid.exception(errors: [])
+  def fail_after_completion(%Ash.Changeset{} = changeset, flag),
+    do: hook(changeset, :around_action, &fail_completed(&1, &2, flag), prepend?: true)
 
-    case subject do
-      %Ash.Changeset{} ->
-        hook(
-          subject,
-          :around_action,
-          fn changeset, callback ->
-            case callback.(changeset) do
-              {:ok, _result, _changeset, _instructions} = completed ->
-                if Process.delete(flag), do: {:error, error}, else: completed
+  def fail_after_completion(%Ash.ActionInput{} = input, flag) do
+    hook(
+      input,
+      :after_action,
+      fn _input, result ->
+        if Process.delete(flag), do: {:error, Invalid.exception(errors: [])}, else: {:ok, result}
+      end,
+      []
+    )
+  end
 
-              other ->
-                other
-            end
-          end,
-          prepend?: true
-        )
+  defp fail_completed(changeset, callback, flag) do
+    case callback.(changeset) do
+      {:ok, _result, _changeset, _instructions} = completed ->
+        if Process.delete(flag), do: {:error, Invalid.exception(errors: [])}, else: completed
 
-      %Ash.ActionInput{} ->
-        hook(
-          subject,
-          :after_action,
-          fn _input, result ->
-            if Process.delete(flag), do: {:error, error}, else: {:ok, result}
-          end,
-          []
-        )
+      other ->
+        other
     end
   end
 
@@ -162,7 +157,7 @@ defmodule AshOnetime.Test.DeliveryCase do
       :after_action,
       fn _changeset, result ->
         if Process.delete(flag),
-          do: {:error, Ash.Error.Invalid.exception(errors: [])},
+          do: {:error, Invalid.exception(errors: [])},
           else: {:ok, result}
       end,
       []

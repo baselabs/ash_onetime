@@ -222,6 +222,16 @@ defmodule AshOnetime.CompileFixture.Notifier do
   def notify(_notification), do: :ok
 end
 
+defmodule AshOnetime.CompileFixture.Producer do
+  @behaviour AshOnetime.Producer
+  @impl true
+  def produce(_subject, _context), do: {:ok, %{secret: :crypto.strong_rand_bytes(32)}}
+end
+
+defmodule AshOnetime.CompileFixture.MissingProducer do
+  def produce(_subject), do: {:ok, %{}}
+end
+
 defmodule AshOnetime.CompileFixture do
   alias Ash.Resource.Validation.Function, as: FunctionValidation
   alias AshOnetime.CompileFixture.Context, as: FixtureContext
@@ -688,6 +698,52 @@ defmodule AshOnetime.CompileFixture do
       actions do
         create :charge do
           accept []
+        end
+      end
+    end
+  end
+
+  # Executing-only verifier cases (§2.7.6): an update and a destroy left at Ash's default
+  # require_atomic? true (V7), and generic actions returning another resource in both
+  # return forms (V2).
+  defp actions_ast(:executing_only) do
+    quote do
+      actions do
+        create :charge do
+          argument :idempotency_key, :string
+          accept [:account_id, :amount]
+        end
+
+        update :adjust do
+          transaction? true
+          argument :idempotency_key, :string
+          accept [:account_id, :amount]
+        end
+
+        destroy :remove do
+          transaction? true
+          argument :idempotency_key, :string
+          argument :note, :string
+        end
+
+        action :issue, :struct do
+          constraints instance_of: AshOnetime.CompileFixture.Returned
+          argument :proof, :string
+          transaction? true
+          run AshOnetime.CompileFixture.Run
+        end
+
+        action :stamp, AshOnetime.CompileFixture.Stamp do
+          argument :proof, :string
+          transaction? true
+          run AshOnetime.CompileFixture.Run
+        end
+
+        action :stamp_struct, :struct do
+          constraints instance_of: AshOnetime.CompileFixture.Stamp
+          argument :proof, :string
+          transaction? true
+          run AshOnetime.CompileFixture.Run
         end
       end
     end

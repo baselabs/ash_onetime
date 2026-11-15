@@ -40,6 +40,34 @@ stub that merely records the request proves only that the package produced a sha
 conformance requires a live peer contract. External effects are idempotency-only because a
 nonce cannot safely recover or replay a response.
 
+## Values only the executing caller receives
+
+An external effect whose peer returns a value only the executing caller may see (a
+credential the peer issues once) declares it with `executing_only` and returns it from
+`execute/3` as `{:ok, peer_result, values}`. The package seals the values at once to the
+caller of `AshOnetime.deliver/2` and never stores them. Run the action through
+`deliver/2`:
+
+```elixir
+case AshOnetime.deliver(changeset) do
+  {:ok, record, %AshOnetime.Delivery{outcome: :executed, values: %{credential: credential}}} ->
+    show_once(record, credential)
+
+  {:ok, record, %AshOnetime.Delivery{outcome: outcome}} when outcome in [:replayed, :recovered] ->
+    already_issued(record)
+
+  {:error, error} ->
+    handle(error)
+end
+```
+
+`recover/3` never returns values. A recovered execution (the peer reports the effect done)
+delivers `:recovered` with none: the value went to a caller that is gone, so revoke it at the
+peer and reissue under a new key. When recovery proves absence and the effect executes, the
+new execution delivers `:executed` with its values. See
+[Idempotency](idempotency.md#values-only-the-executing-caller-receives) for the call and
+[Security](security.md#executing-only-values) for the guarantees.
+
 ## Concurrent retries: the pre-peer claim lock (normative)
 
 Before any peer call, the package takes the claim row `FOR UPDATE` in the caller's open

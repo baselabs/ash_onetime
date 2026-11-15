@@ -153,7 +153,10 @@ defmodule AshOnetime.Delivery.Envelope do
     info = @info <> context
     first = hmac(prk, info <> <<1>>)
     second = hmac(prk, first <> info <> <<2>>)
-    <<key::binary-size(@key_bytes), nonce::binary-size(@nonce_bytes), _::binary>> = first <> second
+
+    <<key::binary-size(@key_bytes), nonce::binary-size(@nonce_bytes), _::binary>> =
+      first <> second
+
     {key, nonce}
   end
 

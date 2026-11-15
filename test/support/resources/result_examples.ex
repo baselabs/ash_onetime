@@ -1,3 +1,29 @@
+defmodule AshOnetime.Test.ResultExamples.Receipt do
+  @moduledoc false
+
+  # The record a generic action of `Account` returns. Its fields differ from the action's
+  # resource, so a response projection is valid on exactly one of the two (§2.7.6).
+  use Ash.Resource, domain: nil, data_layer: Ash.DataLayer.Ets
+
+  attributes do
+    uuid_primary_key :id
+    attribute :token, :string, public?: true, allow_nil?: false
+    attribute :code, :string, public?: false
+  end
+end
+
+defmodule AshOnetime.Test.ResultExamples.Stamp do
+  @moduledoc false
+
+  # An embedded resource: the one resource module Ash takes as a bare return type. Its
+  # record is a value, stored through the typed path, never a returned record (§2.7.6).
+  use Ash.Resource, data_layer: :embedded
+
+  attributes do
+    attribute :token, :string, public?: true, allow_nil?: false
+  end
+end
+
 defmodule AshOnetime.Test.ResultExamples.Account do
   @moduledoc false
 
@@ -40,5 +66,20 @@ defmodule AshOnetime.Test.ResultExamples.Account do
     end
 
     action :nothing
+
+    action :receipt_struct, :struct do
+      constraints instance_of: AshOnetime.Test.ResultExamples.Receipt
+    end
+
+    action :maybe_receipt, :struct do
+      constraints instance_of: AshOnetime.Test.ResultExamples.Receipt
+      allow_nil? true
+    end
+
+    action :stamp, AshOnetime.Test.ResultExamples.Stamp
+
+    action :stamp_struct, :struct do
+      constraints instance_of: AshOnetime.Test.ResultExamples.Stamp
+    end
   end
 end

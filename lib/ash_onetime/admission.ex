@@ -754,6 +754,7 @@ defmodule AshOnetime.Admission do
          {:ok, replayed} <- replay(result, state, started) do
       emit_conflict(state, :complete)
       emit_admission(state, started, :admitted)
+
       replay_state = %{
         state
         | class: :replay,

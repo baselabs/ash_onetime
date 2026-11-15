@@ -33,7 +33,9 @@ defmodule AshOnetime.Delivery do
 
   @doc false
   @spec deliver(Ash.Changeset.t() | Ash.ActionInput.t(), keyword()) ::
-          {:ok, term(), t()} | {:ok, term(), [Ash.Notifier.Notification.t()], t()} | {:error, term()}
+          {:ok, term(), t()}
+          | {:ok, term(), [Ash.Notifier.Notification.t()], t()}
+          | {:error, term()}
   def deliver(subject, opts) when is_list(opts) do
     with {:ok, protection} <- protection(subject),
          :ok <- route(subject, opts),
@@ -48,25 +50,32 @@ defmodule AshOnetime.Delivery do
 
   # Rule 1: everything the entry needs lives in this process's dictionary under a hash of
   # the reference; the subject's context carries the reference only. The private key
-  # never leaves this frame.
+  # never leaves this process. This frame owns the entry: it arms it, runs the call, and
+  # erases it however the call ends. When the call raises, exits or throws, the erase is
+  # followed by raising the same term again from here, the one event this frame adds to
+  # what the caller receives from Ash.
   defp armed_call(subject, protection, cell, opts) do
     {public, secret} = :crypto.generate_key(:ecdh, :x25519)
     ref = :crypto.strong_rand_bytes(16)
     key = key(ref)
-    resource = subject.resource
-    action = subject.action.name
 
     try do
-      Process.put(key, {:armed, self(), resource, action, cell, public})
-
-      subject
-      |> put_reference(ref)
-      |> dispatch(opts)
-      |> normalize(subject.action.type, opts)
-      |> finish(fn -> open(key, ref, secret, public, protection, resource, action) end)
+      Process.put(key, {:armed, self(), subject.resource, subject.action.name, cell, public})
+      armed(subject, protection, {key, ref, secret, public}, opts)
     after
       Process.delete(key)
     end
+  end
+
+  defp armed(subject, protection, {key, ref, secret, public}, opts) do
+    resource = subject.resource
+    action = subject.action.name
+
+    subject
+    |> put_reference(ref)
+    |> dispatch(opts)
+    |> normalize(subject.action.type, opts)
+    |> finish(fn -> open(key, ref, secret, public, protection, resource, action) end)
   end
 
   defp dispatch(%Ash.Changeset{action: %{type: :create}} = changeset, opts),
@@ -173,7 +182,10 @@ defmodule AshOnetime.Delivery do
 
   # Ash takes its Task route exactly when all five hold (changeset.ex:4782-4796, :4864-4869;
   # process_helpers.ex:66-74): the four below, and no open transaction, which always holds
-  # here because an open transaction is refused first. Generic actions never take it.
+  # here because an open transaction is refused first. The transaction branch follows the
+  # action Ash runs, which is the changeset's own action struct (helpers.ex:277-287);
+  # `Ash.create/2`, `update/2` and `destroy/2` accept no `transaction?` option. Generic
+  # actions never take it.
   defp task_route?(%Ash.Changeset{} = changeset, opts) do
     resource = changeset.resource
     timeout = opts[:timeout] || changeset.timeout
@@ -233,7 +245,14 @@ defmodule AshOnetime.Delivery do
     end
   end
 
-  defp claim_entry({:armed, pid, resource, action, entry_cell, public}, key, ref, subject, cell, names) do
+  defp claim_entry(
+         {:armed, pid, resource, action, entry_cell, public},
+         key,
+         ref,
+         subject,
+         cell,
+         names
+       ) do
     if pid == self() and resource == subject.resource and action == subject.action.name and
          entry_cell == cell do
       inv = :crypto.strong_rand_bytes(16)
@@ -258,13 +277,10 @@ defmodule AshOnetime.Delivery do
       |> Map.reject(fn {_name, value} -> is_nil(value) end)
       |> Map.merge(%{resource: handle.resource, action: handle.action})
 
-    result =
-      case module.produce(subject, context) do
-        {:ok, values} -> seal(handle, values)
-        _other -> :error
-      end
-
-    if result == :ok, do: :ok, else: {:error, invalid()}
+    case module.produce(subject, context) do
+      {:ok, values} -> seal(handle, values)
+      _other -> {:error, invalid()}
+    end
   rescue
     _exception -> {:error, invalid()}
   catch
@@ -272,32 +288,38 @@ defmodule AshOnetime.Delivery do
   end
 
   @doc false
-  @spec seal(map(), term()) :: :ok | :error
-  def seal(%{key: key, ref: ref, inv: inv, names: names} = handle, values) when is_map(values) do
+  # Values outside the producer's contract are `:executing_only_invalid`. Well-formed values
+  # that cannot be sealed to this call's entry (the entry is no longer claimed by this
+  # invocation, or the envelope refuses its recipient key) can never reach this caller:
+  # `:executing_only_lost`. Either way the action fails and rolls back.
+  @spec seal(map(), term()) :: :ok | {:error, Error.t()}
+  def seal(%{names: names} = handle, values) when is_map(values) do
     with true <- map_size(values) == length(names),
-         {:ok, ordered} <- ordered_values(names, values),
-         {:claimed, ^inv, public} <- Process.get(key),
+         {:ok, ordered} <- ordered_values(names, values) do
+      seal_to_entry(handle, ordered)
+    else
+      _other -> {:error, invalid()}
+    end
+  end
+
+  def seal(_handle, _values), do: {:error, invalid()}
+
+  defp seal_to_entry(%{key: key, ref: ref, inv: inv} = handle, ordered) do
+    with {:claimed, ^inv, public} <- Process.get(key),
          context = Envelope.context(ref, inv, handle.resource, handle.action),
          {:ok, envelope} <- Envelope.seal(public, ordered, context) do
       Process.put(key, {:sealed, inv, envelope})
       :ok
     else
-      _other -> :error
+      _other -> {:error, lost()}
     end
   end
 
-  def seal(_handle, _values), do: :error
-
   defp ordered_values(names, values) do
     Enum.reduce_while(names, {:ok, []}, fn name, {:ok, ordered} ->
-      case Map.fetch(values, name) do
-        {:ok, value} when is_binary(value) ->
-          if byte_size(value) <= Envelope.max_value_bytes(),
-            do: {:cont, {:ok, [value | ordered]}},
-            else: {:halt, :error}
-
-        _other ->
-          {:halt, :error}
+      case deliverable(Map.fetch(values, name)) do
+        {:ok, value} -> {:cont, {:ok, [value | ordered]}}
+        :error -> {:halt, :error}
       end
     end)
     |> case do
@@ -305,6 +327,13 @@ defmodule AshOnetime.Delivery do
       :error -> :error
     end
   end
+
+  # A produced value is a binary within the envelope's per-value bound.
+  defp deliverable({:ok, value}) when is_binary(value) do
+    if byte_size(value) <= Envelope.max_value_bytes(), do: {:ok, value}, else: :error
+  end
+
+  defp deliverable(_other), do: :error
 
   @doc false
   # Complete (§2.7.3, step 4) for the CRUD entry, which holds its own handle. `state` is
@@ -333,12 +362,19 @@ defmodule AshOnetime.Delivery do
         Process.put(key, {:done, inv, :executed, envelope, {target, claim}})
         :ok
 
-      {{:sealed, ^inv, _envelope}, :replayed, _state} ->
-        Process.put(key, {:done, inv, :replayed, nil, nil})
-        :ok
-
+      # Only an executing admission produces, so a replay or a recovery completes an entry
+      # that was claimed and never sealed.
       {{:claimed, ^inv, _public}, outcome, _state} when outcome in [:replayed, :recovered] ->
         Process.put(key, {:done, inv, outcome, nil, nil})
+        :ok
+
+      # §2.7.5: an external execute sealed its values, then `finalize` found the claim
+      # completed and resolved to a replay. The completion that counts is the earlier one,
+      # so this call is a replay: the envelope is dropped and `:done` carries nil. Any other
+      # outcome on a sealed entry is lost.
+      # mutation sentinel: finalize-replay-drop
+      {{:sealed, ^inv, _envelope}, :replayed, _state} ->
+        Process.put(key, {:done, inv, :replayed, nil, nil})
         :ok
 
       _other ->

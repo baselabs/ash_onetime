@@ -173,7 +173,10 @@ your outer call replays with none. Code that runs inside the action's transactio
 check) cannot call `deliver/2`: it is refused as above.
 
 Outside the guarantees: the producer that creates the value, the caller after the return, and
-code with access to the running node. A value lost after its transaction committed is lost
+code with access to the running node. Live introspection of the VM (`Process.info/2` with
+`:backtrace`, a crash dump, a debugger, a heap read before the garbage collector reclaims
+it) can read any term of any process, the value included; this is the
+trusted-runtime boundary, and it stays open. A value lost after its transaction committed is lost
 for good: no path re-derives it, so the remedy is to revoke what it granted and reissue under
 a new key. Any other way to observe the value, or to receive it twice, is a defect: report it
 as a security issue.

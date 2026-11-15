@@ -2,14 +2,22 @@ defmodule AshOnetime.Test.DeliveryExamples.Producer do
   @moduledoc false
   @behaviour AshOnetime.Producer
 
-  # A fresh random value per execution. An observer, when set, receives only the fact of
-  # the call and the trusted context's keys, never the value.
+  alias AshOnetime.Test.DeliveryFacts.Observer
+
+  # A fresh random value per execution, or the canary a test planted so it can search
+  # every surface for it. An observer, when set, receives only the fact of the call and
+  # the trusted context's keys, never the value.
+  @canary {__MODULE__, :canary}
+
+  def plant(canary), do: Process.put(@canary, canary)
+
   @impl true
   def produce(_subject, context) do
     if observer = Process.get({__MODULE__, :observer}),
       do: send(observer, {:produced, self(), Map.keys(context) |> Enum.sort()})
 
-    {:ok, %{secret: :crypto.strong_rand_bytes(32)}}
+    Observer.note(:produced)
+    {:ok, %{secret: Process.get(@canary) || :crypto.strong_rand_bytes(32)}}
   end
 end
 
@@ -25,11 +33,13 @@ defmodule AshOnetime.Test.DeliveryExamples.OuterRun do
   @moduledoc false
   use Ash.Resource.Actions.Implementation
 
+  alias Ash.Error.Invalid
+
   # The outer action fails after its policy check ran, so Ash rolls back the transaction
   # the check ran in.
   @impl true
   def run(_input, _opts, _context),
-    do: {:error, Ash.Error.Invalid.exception(errors: [])}
+    do: {:error, Invalid.exception(errors: [])}
 end
 
 defmodule AshOnetime.Test.DeliveryExamples.NestedDeliverCheck do
@@ -62,6 +72,7 @@ defmodule AshOnetime.Test.DeliveryExamples.Domain do
   resources do
     resource AshOnetime.Test.DeliveryExamples.Resource
     resource AshOnetime.Test.DeliveryExamples.Outer
+    resource AshOnetime.Test.DeliveryGuarded.Resource
   end
 end
 

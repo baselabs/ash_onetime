@@ -39,12 +39,10 @@ defmodule AshOnetime.Test.StoreCase do
     installation
   end
 
-  def start_unboxed_repo! do
+  def start_unboxed_repo!(options \\ []) do
     {:ok, repo} =
       Repo.start_link(
-        name: nil,
-        pool: DBConnection.ConnectionPool,
-        pool_size: 10
+        Keyword.merge([name: nil, pool: DBConnection.ConnectionPool, pool_size: 10], options)
       )
 
     Process.unlink(repo)

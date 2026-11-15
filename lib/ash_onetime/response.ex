@@ -341,18 +341,18 @@ defmodule AshOnetime.Response do
   defp shape(_resource, _action, _fields, _trusted), do: {:error, "action type is unsupported"}
 
   @doc false
-  # The resource a generic action returns: a bare resource module, or `:struct` with an
-  # `instance_of` resource. `:error` for any other return.
+  # The persisted resource a generic action returns: `:struct` with an `instance_of`
+  # resource that is not embedded. `:error` for any other return. Ash takes a bare
+  # resource module as a return type only for an embedded resource, whose record is a
+  # value stored through the typed path, never a returned record.
   @spec returned_resource(map()) :: {:ok, module()} | :error
-  def returned_resource(%{type: :action, returns: returns} = action) when is_atom(returns) do
-    candidate =
-      if returns == Ash.Type.Struct,
-        do: Keyword.get(action.constraints || [], :instance_of),
-        else: returns
+  def returned_resource(%{type: :action, returns: Ash.Type.Struct} = action) do
+    candidate = Keyword.get(action.constraints || [], :instance_of)
 
-    if is_atom(candidate) and not is_nil(candidate) and ResourceInfo.resource?(candidate),
-      do: {:ok, candidate},
-      else: :error
+    if is_atom(candidate) and not is_nil(candidate) and ResourceInfo.resource?(candidate) and
+         not ResourceInfo.embedded?(candidate),
+       do: {:ok, candidate},
+       else: :error
   end
 
   def returned_resource(_action), do: :error
