@@ -282,6 +282,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
     test "replica mode refuses untrusted #{@kind} DELETE through its own guard", c do
       install_facts!(c)
       seed_guard_rows!(c)
+      grant_guard_dependencies!(c)
       sql!(Repo, "GRANT SET ON PARAMETER session_replication_role TO #{q(c.outsider)}")
       sql!(c.owner_repo, "GRANT SELECT, DELETE ON #{rel(c, @table)} TO #{q(c.outsider)}")
       sql!(c.owner_repo, "ALTER TABLE #{rel(c, @table)} DISABLE ROW LEVEL SECURITY")
@@ -305,6 +306,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
   test "replica admission is restricted and trusted DELETE leaves payload mirroring to apply",
        c do
     seed_guard_rows!(c)
+    grant_guard_dependencies!(c)
 
     sql!(
       Repo,
@@ -497,6 +499,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
     guard = rel(c, "ash_onetime_guard_idempotency_delete") <> "()"
     member = q(schema) <> ".f()"
     claims = rel(c, "ash_onetime_idempotency_claims")
+    grant_guard_dependencies!(c)
     sql!(Repo, "CREATE SCHEMA #{q(schema)} AUTHORIZATION #{q(c.outsider)}")
     sql!(Repo, "CREATE EXTENSION citext SCHEMA #{q(c.schema)}")
 
@@ -535,6 +538,61 @@ defmodule AshOnetime.Store.MaintenanceTest do
     after
       sql!(c.owner_repo, "ALTER FUNCTION #{guard} NO DEPENDS ON EXTENSION citext")
       sql!(Repo, "DROP EXTENSION IF EXISTS citext CASCADE")
+      sql!(Repo, "DROP SCHEMA IF EXISTS #{q(schema)} CASCADE")
+    end
+  end
+
+  @tag defects_batch: true
+  @tag oid_mutation: true
+  test "containment follows low-OID plpgsql extension members into their schema", c do
+    schema = "ao_language_#{System.unique_integer([:positive])}"
+    member = q(schema) <> ".f()"
+    guard = rel(c, "ash_onetime_guard_idempotency_delete") <> "()"
+    claims = rel(c, "ash_onetime_idempotency_claims")
+    grant_guard_dependencies!(c)
+    sql!(Repo, "CREATE SCHEMA #{q(schema)} AUTHORIZATION #{q(c.outsider)}")
+
+    try do
+      sql!(Repo, "CREATE FUNCTION #{member} RETURNS integer LANGUAGE sql AS 'SELECT 1'")
+      sql!(Repo, "ALTER FUNCTION #{member} OWNER TO #{q(c.owner)}")
+      sql!(Repo, "ALTER EXTENSION plpgsql ADD FUNCTION #{member}")
+
+      sql!(Repo, """
+      INSERT INTO #{claims}
+      (id,logical_partition,operation_hash,scope_hash,key_hash,fingerprint,state,admitted_at,retain_until,inserted_at)
+      VALUES (gen_random_uuid(),'unresolved',sha256('operation'),sha256('scope'),sha256('key'),sha256('body'),'processing',now(),now()+interval '1 day',now())
+      """)
+
+      sql!(c.owner_repo, "ALTER TABLE #{claims} DISABLE ROW LEVEL SECURITY")
+      sql!(c.owner_repo, "GRANT DELETE, SELECT ON #{claims} TO #{q(c.outsider)}")
+      error = trust_error(c)
+      assert error =~ "containment"
+      assert error =~ schema
+      assert error =~ c.outsider
+      sql!(c.outsider_repo, "BEGIN")
+
+      try do
+        sql!(c.outsider_repo, "DROP SCHEMA #{q(schema)} CASCADE")
+        refute scalar(c.outsider_repo, "SELECT to_regprocedure(#{literal(guard)}) IS NOT NULL")
+
+        assert sql!(c.outsider_repo, "DELETE FROM #{claims} WHERE logical_partition='unresolved'").num_rows ==
+                 1
+      after
+        sql!(c.outsider_repo, "ROLLBACK")
+      end
+
+      assert scalar(Repo, "SELECT count(*) FROM #{claims}") == 1
+      sql!(Repo, "ALTER EXTENSION plpgsql DROP FUNCTION #{member}")
+      assert trust?(c)
+    after
+      # DROP SCHEMA while it remains an extension member would remove plpgsql.
+      if scalar(
+           Repo,
+           "SELECT EXISTS (SELECT 1 FROM pg_depend WHERE classid='pg_proc'::regclass AND objid=to_regprocedure(#{literal(member)}) AND refclassid='pg_extension'::regclass AND deptype='e')"
+         ) do
+        sql!(Repo, "ALTER EXTENSION plpgsql DROP FUNCTION #{member}")
+      end
+
       sql!(Repo, "DROP SCHEMA IF EXISTS #{q(schema)} CASCADE")
     end
   end
@@ -642,12 +700,22 @@ defmodule AshOnetime.Store.MaintenanceTest do
   @tag doctor_runtime_mutation: true
   test "live doctor refuses its cold runtime role's owner equivalence", c do
     # Outside the maintainer tree: trust cannot identify this role as a runtime.
-    sql!(Repo, "GRANT #{q(c.owner)} TO #{q(c.outsider)} WITH INHERIT FALSE, SET TRUE")
+    sql!(Repo, "GRANT #{q(c.owner)} TO #{q(c.outsider)} WITH INHERIT TRUE, SET TRUE")
     {:ok, cold} = subject(c.outsider)
     assert trust?(c)
     output = doctor_refusal(%{c | runtime_repo: cold})
     assert output =~ c.outsider
     assert output =~ "owner-equivalent"
+  end
+
+  defp grant_guard_dependencies!(c) do
+    routines = Postgres.routine_schema(c.schema)
+    sql!(c.owner_repo, "GRANT USAGE ON SCHEMA #{q(routines)} TO #{q(c.outsider)}")
+
+    sql!(
+      c.owner_repo,
+      "GRANT EXECUTE ON FUNCTION #{q(routines)}.ash_onetime_cleanup_eligible(timestamptz) TO #{q(c.outsider)}"
+    )
   end
 
   defp install_facts!(c) do
