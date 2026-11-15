@@ -22,8 +22,7 @@ unless dedicated_target? do
   raise """
   DATABASE_URL must target the dedicated ash_onetime_test PostgreSQL on \
   127.0.0.1 under the postgres or ash_onetime user, on a non-default port; got: \
-  scheme #{inspect(scheme)}, user #{inspect(user)}, host #{inspect(host)}, \
-  port #{inspect(port)}, database #{inspect(path)} — see .env.example (PGPORT)
+  user #{inspect(user)}, host #{inspect(host)} — see .env.example (PGPORT)
   """
 end
 
