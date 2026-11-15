@@ -257,6 +257,72 @@ defmodule AshOnetime.Store.PostgresTest do
              end)
   end
 
+  @tag claim_load_payload_restore_mutation: true
+  test "completed claim load restores the caller timeout before reading its payload", %{
+    target: target,
+    prefix: prefix
+  } do
+    request = idempotency_request("payload-timeout-restore")
+    payload = "authoritative-payload"
+    completed = seed_completed_claim!(prefix, request, payload, :crypto.hash(:sha256, payload))
+
+    assert {:ok, :checked} =
+             Repo.transaction(fn ->
+               # Instrument the real payload SELECT without changing its rows. The function
+               # records the setting at the first read, so an early read cannot be hidden
+               # by a second read after restoration. All DDL rolls back with the sandbox.
+               SQL.query!(
+                 Repo,
+                 "ALTER TABLE #{relation(prefix, "ash_onetime_response_payloads")} RENAME TO payload_timeout_rows",
+                 []
+               )
+
+               SQL.query!(
+                 Repo,
+                 """
+                 CREATE FUNCTION #{relation(prefix, "observe_payload_timeout")}(payload bytea)
+                 RETURNS bytea LANGUAGE plpgsql AS $probe$
+                 BEGIN
+                   IF coalesce(current_setting('ash_onetime.payload_lock_timeout',true),'')='' THEN
+                     PERFORM set_config('ash_onetime.payload_lock_timeout',current_setting('lock_timeout'),true);
+                   END IF;
+                   RETURN payload;
+                 END $probe$
+                 """,
+                 []
+               )
+
+               SQL.query!(
+                 Repo,
+                 """
+                 CREATE VIEW #{relation(prefix, "ash_onetime_response_payloads")} AS
+                 SELECT logical_partition,partition_date,claim_id,
+                   #{relation(prefix, "observe_payload_timeout")}(encoded_response) AS encoded_response
+                 FROM #{relation(prefix, "payload_timeout_rows")}
+                 """,
+                 []
+               )
+
+               SQL.query!(Repo, "SET LOCAL ash_onetime.payload_lock_timeout = ''", [])
+               SQL.query!(Repo, "SET LOCAL lock_timeout = '7s'", [])
+
+               assert %Result{status: :complete, payload: ^payload} =
+                        Store.load(target, completed, lock_timeout_ms: 100)
+
+               observed =
+                 SQL.query!(
+                   Repo,
+                   "SELECT current_setting('ash_onetime.payload_lock_timeout')",
+                   []
+                 ).rows
+
+               assert observed == [["7s"]]
+               assert SQL.query!(Repo, "SHOW lock_timeout", []).rows == [["7s"]]
+               IO.puts("PAYLOAD_READ_TIMEOUT observed=7s claim_bound=100ms contention=false")
+               :checked
+             end)
+  end
+
   test "completion accepts the Task 2 hard response ceiling exactly", %{target: target} do
     request = idempotency_request("hard-response-ceiling")
     payload = :binary.copy(<<0xA5>>, 16_777_216)

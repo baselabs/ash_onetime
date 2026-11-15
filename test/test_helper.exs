@@ -21,8 +21,7 @@ dedicated_target? =
 unless dedicated_target? do
   raise """
   DATABASE_URL must target the dedicated ash_onetime_test PostgreSQL on \
-  127.0.0.1 under the postgres or ash_onetime user, on a non-default port; got: \
-  #{inspect(database_url)} — see .env.example (PGPORT)
+  127.0.0.1 under the postgres or ash_onetime user, on a non-default port; see .env.example (PGPORT)
   """
 end
 
@@ -47,3 +46,46 @@ Ecto.Migrator.run(
 Ecto.Adapters.SQL.Sandbox.mode(AshOnetime.Test.Repo, :manual)
 
 ExUnit.start()
+
+# Cluster-wide role/parameter grants can affect unrelated databases even when
+# DATABASE_URL names ash_onetime_test. A port or CI flag alone proves nothing.
+# Box runs provision an emptyDir PostgreSQL Pod named TEST_ENV_RUN-packages-pg;
+# the runner assigns TEST_ENV_RUN before starting it and deletes it on exit.
+# CI gives each job service a hostname containing its run, attempt and job/cell.
+# Read the hostname from the connected SERVER, not the client's environment.
+# Fail loudly before any cluster-wide grant if neither lifecycle can be proved.
+defmodule AshOnetime.Test.ClusterIsolation do
+  @moduledoc false
+
+  def assert_per_run_server! do
+    expected =
+      case System.get_env("TEST_ENV_RUN") do
+        run when is_binary(run) and run != "" -> run <> "-packages-pg"
+        _ -> ci_hostname()
+      end
+
+    [[hostname]] =
+      Ecto.Adapters.SQL.query!(
+        AshOnetime.Test.Repo,
+        "SELECT pg_read_file('/etc/hostname')",
+        []
+      ).rows
+
+    unless is_binary(expected) and String.trim(hostname) == expected do
+      raise "cluster-wide grants require a proven per-run PostgreSQL server (box run or CI job service)"
+    end
+
+    :ok
+  end
+
+  defp ci_hostname do
+    if System.get_env("GITHUB_ACTIONS") == "true" do
+      expected = System.get_env("ASH_ONETIME_TEST_SERVER")
+
+      prefix =
+        "ao-#{System.fetch_env!("GITHUB_RUN_ID")}-#{System.fetch_env!("GITHUB_RUN_ATTEMPT")}-"
+
+      if is_binary(expected) and String.starts_with?(expected, prefix), do: expected
+    end
+  end
+end

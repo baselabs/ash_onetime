@@ -11,6 +11,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
   setup context do
     Sandbox.mode(Repo, :auto)
+    AshOnetime.Test.ClusterIsolation.assert_per_run_server!()
 
     if context[:shipped_release] do
       # A full high-modulus upgrade and restore can outlive the Sandbox default.
@@ -419,6 +420,400 @@ defmodule AshOnetime.Store.MaintenanceTest do
           sql!(Repo, "DROP ROLE #{q(group)}")
         end
       end
+    end
+  end
+
+  @tag effective_review: true
+  test "cluster grant isolation refuses an unproven server", _c do
+    variables = ["TEST_ENV_RUN", "GITHUB_ACTIONS", "ASH_ONETIME_TEST_SERVER"]
+    previous = Map.new(variables, &{&1, System.get_env(&1)})
+
+    try do
+      Enum.each(variables, &System.delete_env/1)
+
+      assert_raise RuntimeError, ~r/cluster-wide grants require a proven per-run/, fn ->
+        AshOnetime.Test.ClusterIsolation.assert_per_run_server!()
+      end
+
+      System.put_env("TEST_ENV_RUN", "not-this-server")
+
+      assert_raise RuntimeError, ~r/cluster-wide grants require a proven per-run/, fn ->
+        AshOnetime.Test.ClusterIsolation.assert_per_run_server!()
+      end
+    after
+      Enum.each(previous, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
+    end
+  end
+
+  @tag effective_review: true
+  test "ADMIN-only membership can grant itself SET on PG18", c do
+    try do
+      sql!(
+        Repo,
+        "GRANT pg_write_all_data TO #{q(c.outsider)} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE"
+      )
+
+      {:ok, cold} = subject(c.outsider)
+      assert scalar(cold, "SELECT pg_has_role(current_user,'pg_write_all_data','MEMBER')")
+      refute scalar(cold, "SELECT pg_has_role(current_user,'pg_write_all_data','USAGE')")
+      refute scalar(cold, "SELECT pg_has_role(current_user,'pg_write_all_data','SET')")
+      sql!(cold, "GRANT pg_write_all_data TO #{q(c.outsider)} WITH SET TRUE")
+      assert scalar(cold, "SELECT pg_has_role(current_user,'pg_write_all_data','SET')")
+      IO.puts("PG18 ADMIN_SELF_GRANT set_before=false set_after=true")
+    after
+      sql!(Repo, "REVOKE pg_write_all_data FROM #{q(c.outsider)} CASCADE")
+    end
+  end
+
+  for holder <- [:predefined, :group] do
+    @holder holder
+    @tag effective_review: true
+    @tag effective_admin_authority_mutation: true
+    test "effective authority refuses ADMIN-only #{@holder} membership", c do
+      with_authority_group(fn group ->
+        holder = if @holder == :predefined, do: "pg_write_all_data", else: group
+
+        if @holder == :group do
+          sql!(
+            c.owner_repo,
+            "GRANT TRUNCATE ON #{rel(c, "ash_onetime_nonce_claims")} TO #{q(group)}"
+          )
+        end
+
+        try do
+          sql!(
+            Repo,
+            "GRANT #{q(holder)} TO #{q(c.outsider)} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE"
+          )
+
+          {:ok, cold} = subject(c.outsider)
+          assert scalar(cold, "SELECT pg_has_role(current_user,#{literal(holder)},'MEMBER')")
+          refute scalar(cold, "SELECT pg_has_role(current_user,#{literal(holder)},'USAGE')")
+          refute scalar(cold, "SELECT pg_has_role(current_user,#{literal(holder)},'SET')")
+
+          refute scalar(
+                   c.runtime_repo,
+                   "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'trust'"
+                 )
+
+          assert_refusal(
+            c,
+            "ash_onetime_cleanup_nonce",
+            "1",
+            "untrusted_dependency: effective relation privilege"
+          )
+        after
+          sql!(Repo, "REVOKE #{q(holder)} FROM #{q(c.outsider)} CASCADE")
+        end
+      end)
+    end
+  end
+
+  @tag effective_review: true
+  @tag effective_unreachable_authority_mutation: true
+  test "effective authority refuses an unreachable group holder", c do
+    with_authority_group(fn group ->
+      sql!(c.owner_repo, "GRANT TRUNCATE ON #{rel(c, "ash_onetime_nonce_claims")} TO #{q(group)}")
+      {:ok, cold} = subject(c.outsider)
+      refute scalar(cold, "SELECT pg_has_role(current_user,#{literal(group)},'MEMBER')")
+
+      assert scalar(
+               Repo,
+               "SELECT has_table_privilege(#{literal(group)},'#{rel(c, "ash_onetime_nonce_claims")}','TRUNCATE')"
+             )
+
+      refute scalar(
+               c.runtime_repo,
+               "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'trust'"
+             )
+
+      assert_refusal(
+        c,
+        "ash_onetime_cleanup_nonce",
+        "1",
+        "untrusted_dependency: effective relation privilege"
+      )
+    end)
+  end
+
+  @tag effective_review: true
+  @tag effective_proxy_authority_mutation: true
+  test "effective authority refuses an unreachable holder exposed through a PUBLIC view", c do
+    with_authority_group(fn group ->
+      sql!(
+        c.owner_repo,
+        "GRANT SELECT ON #{rel(c, "ash_onetime_maintenance_runs")} TO #{q(group)}"
+      )
+
+      sql!(Repo, "GRANT USAGE ON SCHEMA #{q(c.schema)} TO #{q(group)}")
+
+      sql!(
+        Repo,
+        "CREATE VIEW #{q(c.schema)}.authority_proxy WITH (security_invoker=false) AS SELECT step FROM #{rel(c, "ash_onetime_maintenance_runs")}"
+      )
+
+      sql!(Repo, "ALTER VIEW #{q(c.schema)}.authority_proxy OWNER TO #{q(group)}")
+
+      try do
+        sql!(Repo, "GRANT SELECT ON #{q(c.schema)}.authority_proxy TO PUBLIC")
+        {:ok, cold} = subject(c.outsider)
+        refute scalar(cold, "SELECT pg_has_role(current_user,#{literal(group)},'MEMBER')")
+
+        refute scalar(
+                 cold,
+                 "SELECT has_table_privilege(current_user,'#{rel(c, "ash_onetime_maintenance_runs")}','SELECT')"
+               )
+
+        assert scalar(cold, "SELECT count(*) FROM #{q(c.schema)}.authority_proxy") == 5
+
+        refute scalar(
+                 c.runtime_repo,
+                 "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'trust'"
+               )
+
+        assert_refusal(
+          c,
+          "ash_onetime_cleanup_nonce",
+          "1",
+          "untrusted_dependency: effective relation privilege"
+        )
+      after
+        sql!(Repo, "DROP VIEW #{q(c.schema)}.authority_proxy")
+      end
+    end)
+  end
+
+  for membership <- [:inherit, :admin] do
+    @membership membership
+    @tag effective_review: true
+    @tag effective_subscription_role_mutation: true
+    test "effective authority refuses pg_create_subscription via #{@membership}", c do
+      options =
+        if @membership == :admin,
+          do: "ADMIN TRUE, INHERIT FALSE, SET FALSE",
+          else: "INHERIT TRUE, SET TRUE"
+
+      try do
+        sql!(Repo, "GRANT pg_create_subscription TO #{q(c.outsider)} WITH #{options}")
+        {:ok, cold} = subject(c.outsider)
+        assert scalar(cold, "SELECT pg_has_role(current_user,'pg_create_subscription','MEMBER')")
+
+        refute scalar(
+                 c.runtime_repo,
+                 "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'trust'"
+               )
+
+        assert_refusal(
+          c,
+          "ash_onetime_cleanup_nonce",
+          "1",
+          "untrusted_dependency: effective replication privilege"
+        )
+      after
+        sql!(Repo, "REVOKE pg_create_subscription FROM #{q(c.outsider)} CASCADE")
+      end
+    end
+  end
+
+  @tag effective_review: true
+  @tag effective_subscription_owner_mutation: true
+  test "effective authority refuses an existing untrusted subscription owner", c do
+    subscription = "ao_subscription_#{System.unique_integer([:positive])}"
+    database = scalar(Repo, "SELECT current_database()")
+
+    try do
+      sql!(Repo, "GRANT pg_create_subscription TO #{q(c.outsider)}")
+      sql!(Repo, "GRANT CREATE ON DATABASE #{q(database)} TO #{q(c.outsider)}")
+      {:ok, cold} = subject(c.outsider)
+
+      sql!(
+        cold,
+        "CREATE SUBSCRIPTION #{q(subscription)} CONNECTION 'host=127.0.0.1 dbname=unused password=unused' PUBLICATION unused WITH (connect=false, enabled=false, create_slot=false, slot_name=NONE)"
+      )
+
+      sql!(Repo, "REVOKE pg_create_subscription FROM #{q(c.outsider)}")
+      sql!(Repo, "REVOKE CREATE ON DATABASE #{q(database)} FROM #{q(c.outsider)}")
+
+      assert scalar(
+               Repo,
+               "SELECT subowner=#{literal(c.outsider)}::regrole AND NOT subenabled AND subslotname IS NULL FROM pg_subscription WHERE subname=#{literal(subscription)}"
+             )
+
+      refute scalar(cold, "SELECT pg_has_role(current_user,'pg_create_subscription','MEMBER')")
+
+      refute scalar(
+               c.runtime_repo,
+               "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'trust'"
+             )
+
+      assert_refusal(
+        c,
+        "ash_onetime_cleanup_nonce",
+        "1",
+        "untrusted_dependency: effective subscription privilege"
+      )
+    after
+      sql!(Repo, "DROP SUBSCRIPTION IF EXISTS #{q(subscription)}")
+      sql!(Repo, "REVOKE pg_create_subscription FROM #{q(c.outsider)}")
+      sql!(Repo, "REVOKE CREATE ON DATABASE #{q(database)} FROM #{q(c.outsider)}")
+    end
+  end
+
+  @tag effective_review: true
+  @tag effective_alter_system_mutation: true
+  test "effective parameter authority refuses ALTER SYSTEM without SET", c do
+    try do
+      sql!(Repo, "GRANT ALTER SYSTEM ON PARAMETER session_replication_role TO #{q(c.outsider)}")
+      {:ok, cold} = subject(c.outsider)
+
+      refute scalar(
+               cold,
+               "SELECT has_parameter_privilege(current_user,'session_replication_role','SET')"
+             )
+
+      assert scalar(
+               cold,
+               "SELECT has_parameter_privilege(current_user,'session_replication_role','ALTER SYSTEM')"
+             )
+
+      assert scalar(
+               cold,
+               "SELECT has_parameter_privilege(current_user,'session_replication_role','SET, ALTER SYSTEM')"
+             )
+
+      IO.puts("PG18 PARAMETER_PRIVILEGES set=false alter_system=true combined=true")
+
+      refute scalar(
+               c.runtime_repo,
+               "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'trust'"
+             )
+
+      assert_refusal(
+        c,
+        "ash_onetime_cleanup_nonce",
+        "1",
+        "untrusted_dependency: effective session_replication_role privilege"
+      )
+    after
+      sql!(
+        Repo,
+        "REVOKE ALTER SYSTEM ON PARAMETER session_replication_role FROM #{q(c.outsider)}"
+      )
+    end
+  end
+
+  for {table, column} <- [
+        {"ash_onetime_idempotency_claims", "id"},
+        {"ash_onetime_nonce_claims", "id"},
+        {"ash_onetime_response_payloads", "claim_id"}
+      ],
+      privilege <- ["TRIGGER", "TRUNCATE", "REFERENCES", "REFERENCES (#{column})"] do
+    @table table
+    @column column
+    @privilege privilege
+    @tag effective_review: true
+    @tag effective_root_authority_mutation: true
+    test "effective root authority refuses #{@privilege} on #{@table}", c do
+      with_authority_group(fn group ->
+        sql!(c.owner_repo, "GRANT USAGE ON SCHEMA #{q(c.schema)} TO #{q(group)}")
+
+        sql!(
+          c.owner_repo,
+          "GRANT #{@privilege} ON #{rel(c, @table)} TO #{q(group)}"
+        )
+
+        sql!(Repo, "GRANT #{q(group)} TO #{q(c.outsider)} WITH INHERIT FALSE, SET TRUE")
+        {:ok, cold} = subject(c.outsider)
+
+        try do
+          sql!(cold, "SET ROLE #{q(group)}")
+
+          check =
+            if @privilege == "REFERENCES (#{@column})",
+              do:
+                "has_column_privilege(current_user,'#{rel(c, @table)}','#{@column}','REFERENCES')",
+              else: "has_table_privilege(current_user,'#{rel(c, @table)}',#{literal(@privilege)})"
+
+          assert scalar(cold, "SELECT #{check}")
+        after
+          sql!(cold, "RESET ROLE")
+        end
+
+        refute scalar(
+                 c.runtime_repo,
+                 "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'trust'"
+               )
+
+        assert_refusal(
+          c,
+          "ash_onetime_cleanup_nonce",
+          "1",
+          "untrusted_dependency: effective relation privilege"
+        )
+      end)
+    end
+  end
+
+  @tag hash_partitions: 4
+  @tag effective_review: true
+  @tag effective_select_safety_mutation: true
+  test "SELECT stays refused because existing children do not share root RLS and policies", c do
+    root = rel(c, "ash_onetime_nonce_claims")
+
+    [[child]] =
+      SQL.query!(
+        Repo,
+        "SELECT inhrelid::regclass::text FROM pg_inherits WHERE inhparent=$1::text::regclass LIMIT 1",
+        [root]
+      ).rows
+
+    assert SQL.query!(
+             Repo,
+             "SELECT relrowsecurity,relforcerowsecurity FROM pg_class WHERE oid=$1::text::regclass",
+             [root]
+           ).rows == [[true, true]]
+
+    assert SQL.query!(
+             Repo,
+             "SELECT relrowsecurity,relforcerowsecurity FROM pg_class WHERE oid=$1::text::regclass",
+             [child]
+           ).rows == [[false, false]]
+
+    assert scalar(
+             Repo,
+             "SELECT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid='#{root}'::regclass AND polname='runtime_tenant')"
+           )
+
+    refute scalar(
+             Repo,
+             "SELECT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid='#{child}'::regclass AND polname='runtime_tenant')"
+           )
+
+    IO.puts(
+      "PG18 CHILD_POLICY_PARITY existing_hash_child_rls=false root_rls=true runtime_policy_copied=false"
+    )
+
+    try do
+      sql!(Repo, "GRANT pg_read_all_data TO #{q(c.outsider)}")
+      {:ok, cold} = subject(c.outsider)
+      assert scalar(cold, "SELECT has_table_privilege(current_user,'#{child}','SELECT')")
+
+      refute scalar(
+               c.runtime_repo,
+               "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'trust'"
+             )
+
+      assert_refusal(
+        c,
+        "ash_onetime_cleanup_nonce",
+        "1",
+        "untrusted_dependency: effective relation privilege"
+      )
+    after
+      sql!(Repo, "REVOKE pg_read_all_data FROM #{q(c.outsider)}")
     end
   end
 
@@ -3924,6 +4319,18 @@ defmodule AshOnetime.Store.MaintenanceTest do
                    sql!(c.runtime_repo, "ROLLBACK")
                  end
                end)
+    end
+  end
+
+  defp with_authority_group(callback) do
+    group = "ao_authority_#{System.unique_integer([:positive])}"
+    sql!(Repo, "CREATE ROLE #{q(group)} NOLOGIN NOSUPERUSER NOBYPASSRLS")
+
+    try do
+      callback.(group)
+    after
+      sql!(Repo, "DROP OWNED BY #{q(group)}")
+      sql!(Repo, "DROP ROLE #{q(group)}")
     end
   end
 
