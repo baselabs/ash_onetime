@@ -159,10 +159,18 @@ defmodule AshOnetime.Store.Postgres do
       when is_list(options) do
     with_checkout(target, fn ->
       with :ok <- transaction_preconditions(target),
-           :ok <- validate_claim_lock_timeout(Keyword.get(options, :lock_timeout_ms)) do
-        lock_claim_under_timeout(target, claim, Keyword.get(options, :lock_timeout_ms))
+           :ok <- validate_claim_lock_timeout(Keyword.get(options, :lock_timeout_ms)),
+           {:ok, locked} <-
+             select_claim_under_timeout(
+               target,
+               claim,
+               claim.id,
+               Keyword.get(options, :lock_timeout_ms)
+             ) do
+        resolve_locked_claim(target, locked)
       else
         {:error, %Result{} = result} -> result
+        {:error, :missing} -> Result.failure(:store_invariant, :sent, :open)
       end
     end)
   end
@@ -177,21 +185,22 @@ defmodule AshOnetime.Store.Postgres do
   # wait — exactly the class of library-imposed bound ADR-0011 rejects. So: capture the
   # session's value, arm, lock, restore. On :lock_timeout the statement failure has
   # aborted the transaction — there is nothing to restore into.
-  defp lock_claim_under_timeout(target, claim, nil), do: lock_claim_row(target, claim)
+  defp select_claim_under_timeout(target, claim, claim_id, nil),
+    do: select_claim(target, claim.strategy, logical_key(claim), claim_id)
 
-  defp lock_claim_under_timeout(target, claim, lock_timeout_ms) do
+  defp select_claim_under_timeout(target, claim, claim_id, lock_timeout_ms) do
     with {:ok, previous} <- current_lock_timeout(target),
          :ok <- arm_claim_lock_timeout(target, lock_timeout_ms) do
-      case lock_claim_row(target, claim) do
-        %Result{reason: :lock_timeout} = result ->
+      case select_claim(target, claim.strategy, logical_key(claim), claim_id) do
+        {:error, %Result{reason: :lock_timeout}} = result ->
           result
 
-        %Result{} = result ->
+        result ->
           restore_lock_timeout(target, previous)
           result
       end
     else
-      {:error, %Result{} = result} -> result
+      {:error, %Result{}} = error -> error
     end
   end
 
@@ -206,17 +215,6 @@ defmodule AshOnetime.Store.Postgres do
   defp restore_lock_timeout(target, previous) do
     _ = dispatched_query(target, "SET LOCAL lock_timeout = '#{previous}'", [])
     :ok
-  end
-
-  # The id binds alongside the logical key so a row reaped and re-inserted between the
-  # worker's commit and this lock is detected (:missing, fail closed) rather than silently
-  # adopting a different generation's claim (ADR-0010).
-  defp lock_claim_row(target, claim) do
-    case select_claim(target, claim.strategy, logical_key(claim), claim.id) do
-      {:ok, locked} -> resolve_locked_claim(target, locked)
-      {:error, :missing} -> Result.failure(:store_invariant, :sent, :open)
-      {:error, %Result{} = result} -> result
-    end
   end
 
   defp resolve_locked_claim(target, locked) do
@@ -311,10 +309,17 @@ defmodule AshOnetime.Store.Postgres do
   defp validate_hold(reference), do: AshOnetime.Hold.validate_reference(reference)
 
   @impl AshOnetime.Store
-  def load(%Target{} = target, %Claim{} = claim) do
+  def load(%Target{} = target, %Claim{} = claim, options) when is_list(options) do
     with_checkout(target, fn ->
       with :ok <- transaction_preconditions(target),
-           {:ok, loaded} <- select_claim(target, claim.strategy, logical_key(claim)),
+           :ok <- validate_claim_lock_timeout(Keyword.get(options, :lock_timeout_ms)),
+           {:ok, loaded} <-
+             select_claim_under_timeout(
+               target,
+               claim,
+               nil,
+               Keyword.get(options, :lock_timeout_ms)
+             ),
            {:ok, result} <- loaded_result(target, loaded) do
         result
       else
@@ -324,7 +329,7 @@ defmodule AshOnetime.Store.Postgres do
     end)
   end
 
-  def load(_target, _claim),
+  def load(_target, _claim, _options),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
   @max_partition_drops 128

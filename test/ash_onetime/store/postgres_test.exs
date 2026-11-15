@@ -237,7 +237,24 @@ defmodule AshOnetime.Store.PostgresTest do
     assert complete.response_digest == digest
 
     assert {:ok, %Result{status: :complete, payload: <<>>}} =
-             Repo.transaction(fn -> Store.load(target, complete) end)
+             Repo.transaction(fn -> Store.load(target, complete, []) end)
+  end
+
+  @tag claim_load_restore_mutation: true
+  test "claim load restores the caller lock timeout before later statements", %{target: target} do
+    request = idempotency_request("load-timeout-restore")
+
+    assert {:ok, :checked} =
+             Repo.transaction(fn ->
+               %Result{claim: claim} = Store.claim(target, request)
+               SQL.query!(Repo, "SET LOCAL lock_timeout = '7s'", [])
+
+               assert %Result{status: :processing} =
+                        Store.load(target, claim, lock_timeout_ms: 100)
+
+               assert SQL.query!(Repo, "SHOW lock_timeout", []).rows == [["7s"]]
+               :checked
+             end)
   end
 
   test "completion accepts the Task 2 hard response ceiling exactly", %{target: target} do
@@ -295,7 +312,7 @@ defmodule AshOnetime.Store.PostgresTest do
     insert_payload!(prefix, ~D[2100-01-01], complete.id, "extra")
 
     assert {:ok, %Result{status: :complete, payload: ^payload}} =
-             Repo.transaction(fn -> Store.load(target, complete) end)
+             Repo.transaction(fn -> Store.load(target, complete, []) end)
   end
 
   # H1 mechanism proof (NOT a production tripwire): this test proves the partition-pruning
@@ -378,7 +395,7 @@ defmodule AshOnetime.Store.PostgresTest do
     assert complete.response_partition != nil
 
     assert {:ok, %Result{status: :complete, payload: ^payload}} =
-             Repo.transaction(fn -> Store.load(target, complete) end)
+             Repo.transaction(fn -> Store.load(target, complete, []) end)
   end
 
   test "idempotency requests accept only normalized bounded retention seconds" do
@@ -571,7 +588,7 @@ defmodule AshOnetime.Store.PostgresTest do
               reason: :store_invariant,
               admission_dispatch: :sent,
               transaction: :open
-            }} = Repo.transaction(fn -> Store.load(target, claim) end)
+            }} = Repo.transaction(fn -> Store.load(target, claim, []) end)
   end
 
   test "catalog has separated strategy columns and exact payload columns", %{prefix: prefix} do

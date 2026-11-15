@@ -110,11 +110,15 @@ defmodule AshOnetime.ExternalContentionTest do
     SQL.query!(
       Repo,
       "CREATE ROLE #{role} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '#{password}'",
-      [], log: false)
+      [],
+      log: false
+    )
 
     on_exit(fn ->
-      SQL.query!(Repo, "DROP OWNED BY #{role}", [])
-      SQL.query!(Repo, "DROP ROLE #{role}", [])
+      with_observer(fn admin ->
+        Postgrex.query!(admin, "DROP OWNED BY #{role}", [])
+        Postgrex.query!(admin, "DROP ROLE #{role}", [])
+      end)
     end)
 
     SQL.query!(Repo, ~s(GRANT USAGE ON SCHEMA "#{prefix}" TO #{role}), [])

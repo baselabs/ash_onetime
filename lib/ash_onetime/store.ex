@@ -12,7 +12,7 @@ defmodule AshOnetime.Store do
               Result.t()
   @callback complete_external(term(), Claim.t(), binary(), binary(), binary(), binary() | nil) ::
               Result.t()
-  @callback load(term(), Claim.t()) :: Result.t()
+  @callback load(term(), Claim.t(), keyword()) :: Result.t()
 
   @doc false
   @spec claim(term(), Claim.Request.t()) :: Result.t()
@@ -56,8 +56,8 @@ defmodule AshOnetime.Store do
     do: Postgres.complete_external(target, claim, codec, digest, payload, reference)
 
   @doc false
-  @spec load(term(), Claim.t()) :: Result.t()
-  def load(target, claim), do: Postgres.load(target, claim)
+  @spec load(term(), Claim.t(), keyword()) :: Result.t()
+  def load(target, claim, options), do: Postgres.load(target, claim, options)
 
   @type cleanup_counts :: %{
           idempotency: non_neg_integer(),

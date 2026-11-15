@@ -2,6 +2,24 @@ defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "external-replay-lock-timeout" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "               nil,\n               Keyword.get(options, :lock_timeout_ms)",
+      mutated: "               nil,\n               nil",
+      test: "test/ash_onetime/external_contention_test.exs",
+      tag: "external_replay_lock_timeout_mutation",
+      test_name: "immediate replay bounds its first claim lock and reports request in progress",
+      assertion: "assert_receive {:external_done, ^caller,"
+    },
+    "claim-load-timeout-restore" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "          restore_lock_timeout(target, previous)",
+      mutated: "          restore_lock_timeout(target, to_string(byte_size(previous)) <> \"ms\")",
+      test: "test/ash_onetime/store/postgres_test.exs",
+      tag: "claim_load_restore_mutation",
+      test_name: "claim load restores the caller lock timeout before later statements",
+      assertion: "assert SQL.query!(Repo, \"SHOW lock_timeout\", []).rows == [[\"7s\"]]"
+    },
     "replay-callback-error-rollback" => %{
       path: "lib/ash_onetime/change.ex",
       original: "Ash.DataLayer.rollback(changeset.resource, callback_error)",

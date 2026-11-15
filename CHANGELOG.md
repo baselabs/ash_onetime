@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- External replay and finalize claim loads use the protection's lock timeout and return
+  `:request_in_progress` on contention. Each claim-lock statement restores the caller's
+  timeout before payload reads, callbacks or later writes. The Store `load` callback
+  now takes explicit lock options as its third argument.
+
 - **Replay relationships.** Replay admission clears all pending relationship changes,
   including caller-managed relationships and belongs-to inputs, across create, update,
   and destroy. A relationship change added later refuses with

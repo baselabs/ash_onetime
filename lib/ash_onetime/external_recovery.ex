@@ -211,15 +211,7 @@ defmodule AshOnetime.ExternalRecovery do
   end
 
   defp finalize(state, subject, protection, peer_result, started) do
-    loaded = Store.load(state.target, state.claim)
-
-    case Admission.resolve(
-           loaded,
-           state,
-           protection,
-           started,
-           :locked_external_finalize
-         ) do
+    case resolve_finalization_claim(state, protection, started) do
       {:execute, locked_state} ->
         emit(locked_state, started, :finalize_locked)
 
@@ -239,13 +231,7 @@ defmodule AshOnetime.ExternalRecovery do
   end
 
   defp lock_replay(state, protection, started) do
-    case Admission.resolve(
-           Store.load(state.target, state.claim),
-           state,
-           protection,
-           started,
-           :locked_external_finalize
-         ) do
+    case resolve_finalization_claim(state, protection, started) do
       {:replay, replayed, replay_state} ->
         emit(replay_state, started, :replayed)
         {:replay, replayed, replay_state}
@@ -255,6 +241,17 @@ defmodule AshOnetime.ExternalRecovery do
 
       _other ->
         unavailable()
+    end
+  end
+
+  defp resolve_finalization_claim(state, protection, started) do
+    case Store.load(state.target, state.claim, claim_lock_options(protection)) do
+      %Result{status: :failure, reason: :lock_timeout} ->
+        emit_claim_lock_conflict(state)
+        {:error, Error.new(:request_in_progress, "a request for this key is already processing")}
+
+      %Result{} = loaded ->
+        Admission.resolve(loaded, state, protection, started, :locked_external_finalize)
     end
   end
 

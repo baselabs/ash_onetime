@@ -124,7 +124,7 @@ defmodule AshOnetime.Store.UncertaintyTest do
     )
 
     assert {:ok, %Result{status: :failure, reason: :corrupt_payload}} =
-             Repo.transaction(fn -> Store.load(target, claim) end)
+             Repo.transaction(fn -> Store.load(target, claim, []) end)
   end
 
   @tag operation_hash_select_mutation: true
@@ -154,7 +154,7 @@ defmodule AshOnetime.Store.UncertaintyTest do
     assert collision.operation_hash == request_a.operation_hash
 
     assert {:ok, %Result{status: :processing, claim: loaded_a}} =
-             Repo.transaction(fn -> Store.load(target, claim_a) end)
+             Repo.transaction(fn -> Store.load(target, claim_a, []) end)
 
     assert loaded_a.operation_hash == request_a.operation_hash
   end

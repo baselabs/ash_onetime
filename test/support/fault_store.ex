@@ -49,7 +49,7 @@ defmodule AshOnetime.Test.FaultStore do
     do: result!(:complete_external, [target, claim, codec, digest, payload, reference])
 
   @impl AshOnetime.Store
-  def load(target, claim), do: result!(:load, [target, claim])
+  def load(target, claim, options), do: result!(:load, [target, claim, options])
 
   defp result!(operation, arguments) do
     case Process.get(@handler_key) do

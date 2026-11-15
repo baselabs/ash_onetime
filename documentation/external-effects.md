@@ -42,6 +42,11 @@ nonce cannot safely recover or replay a response.
 
 ## Concurrent retries: the pre-peer claim lock (normative)
 
+Every external claim-lock statement uses `external_lock_timeout_ms`, including the
+immediate replay load and the finalize load. A lock timeout emits a processing conflict
+and returns `:request_in_progress`. The package restores the caller's previous lock timeout
+after each successful lock statement, before reading the payload or running consumer work.
+
 Before any peer call, the package takes the claim row `FOR UPDATE` in the caller's open
 transaction — a **pre-peer claim lock** with a bounded wait (`external_lock_timeout_ms`,
 default 2000, ceiling 25000; ADR-0010). A same-key retry that arrives while the original is
