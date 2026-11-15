@@ -58,13 +58,29 @@ defmodule AshOnetime.MutationCheck do
     "M-replica-admit" => %{
       path: "priv/templates/migrations/maintenance/guard_idempotency.sql",
       original:
-        "    AND pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid=TG_RELID), 'SET')",
+        "    AND pg_catalog.pg_has_role(current_user, (SELECT relowner FROM pg_catalog.pg_class WHERE oid=TG_RELID), 'SET')",
       mutated: "    AND true",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "replica_admit_mutation",
       test_name:
         "replica admission is restricted and trusted DELETE leaves payload mirroring to apply",
       assertion: "assert {:error, %Postgrex.Error"
+    },
+    "M-replica-lookup" => %{
+      path: "priv/templates/migrations/operation_hold.exs",
+      original:
+        "    CREATE OR REPLACE FUNCTION \#{q(\"ash_onetime_guard_nonce_delete\")}()\n    RETURNS trigger LANGUAGE plpgsql AS $guard$\n    BEGIN\n      IF pg_catalog.current_setting('session_replication_role') = 'replica'\n        AND pg_catalog.pg_has_role(current_user, (SELECT relowner FROM pg_catalog.pg_class WHERE oid=TG_RELID), 'SET') THEN",
+      mutated:
+        "    CREATE OR REPLACE FUNCTION \#{q(\"ash_onetime_guard_nonce_delete\")}()\n    RETURNS trigger LANGUAGE plpgsql AS $guard$\n    BEGIN\n      IF current_setting('session_replication_role') = 'replica'\n        AND pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid=TG_RELID), 'SET') THEN",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "firing_upgrade_mutation",
+      test_name: "operation hold upgrade enables every trigger by function with nil partitions",
+      assertion: "assert {:error, %Postgrex.Error",
+      required_failures:
+        for count <- ["nil", "4"] do
+          {"operation hold upgrade enables every trigger by function with #{count} partitions",
+           "assert {:error, %Postgrex.Error"}
+        end
     },
     "M-firing-upgrade" => %{
       path: "priv/templates/migrations/operation_hold.exs",
@@ -1616,7 +1632,7 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_prune_lock_mutation",
       test_name: "a parent reader bounds prune and insert waits without a child lock deadlock",
-      assertion: "Task.await(prune_task, 3_000)"
+      assertion: "Task.await(prune_task, 4_000)"
     },
     "rls-prune-pass-budget" => %{
       path: "priv/templates/migrations/maintenance/prune.sql",
@@ -2629,6 +2645,7 @@ defmodule AshOnetime.MutationCheck do
       "M-firing-nonce",
       "M-firing-fact",
       "M-replica-admit",
+      "M-replica-lookup",
       "M-firing-upgrade",
       "M-contain",
       "M-holder",

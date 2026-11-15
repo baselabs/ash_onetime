@@ -2,8 +2,8 @@ DECLARE
   payload_count bigint;
   reap_before text;
 BEGIN
-  IF current_setting('session_replication_role') = 'replica'
-    AND pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid=TG_RELID), 'SET') THEN
+  IF pg_catalog.current_setting('session_replication_role') = 'replica'
+    AND pg_catalog.pg_has_role(current_user, (SELECT relowner FROM pg_catalog.pg_class WHERE oid=TG_RELID), 'SET') THEN
     RETURN OLD;
   END IF;
   IF OLD.hold_reference IS NOT NULL THEN

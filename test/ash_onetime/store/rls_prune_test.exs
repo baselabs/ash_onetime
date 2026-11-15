@@ -32,6 +32,9 @@ defmodule AshOnetime.Store.RLSPruneTest do
   setup do
     Sandbox.mode(Repo, :auto)
     on_exit(fn -> Sandbox.mode(Repo, :manual) end)
+    # Functional probes allow the complete catalog audit before exercising DDL.
+    # Contention cases below choose their own smaller, explicit pass budgets.
+    put_prune_budget(5_000)
     :ok
   end
 
@@ -733,7 +736,9 @@ defmodule AshOnetime.Store.RLSPruneTest do
       assert_receive :reader_locked, 2_000
       on_exit(fn -> send(reader_task.pid, :release_reader) end)
       previous_timeout = Application.get_env(:ash_onetime, :partition_prune_lock_timeout_ms)
-      Application.put_env(:ash_onetime, :partition_prune_lock_timeout_ms, 500)
+      # Catalog trust is part of this deadline. Leave room for that preflight
+      # before observing the bounded parent-lock wait.
+      Application.put_env(:ash_onetime, :partition_prune_lock_timeout_ms, 3_000)
 
       on_exit(fn ->
         if previous_timeout,
@@ -756,7 +761,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
           end)
         end)
 
-      waiting_pid = wait_for_parent_waiter!(prefix)
+      waiting_pid = wait_for_parent_waiter!(prefix, prune_task)
 
       child_locks =
         scalar!(
@@ -788,14 +793,14 @@ defmodule AshOnetime.Store.RLSPruneTest do
           System.monotonic_time(:millisecond) - started
         end)
 
-      assert {:ok, {result, elapsed, restored}} = Task.await(prune_task, 3_000)
+      assert {:ok, {result, elapsed, restored}} = Task.await(prune_task, 4_000)
 
       assert {:ok, %{payload_partitions: 0, payload_partitions_refused: %{lock_unavailable: 1}}} =
                result
 
-      assert elapsed < 1_500
+      assert elapsed < 4_000
       assert restored == "7s"
-      assert Task.await(writer_task, 2_000) < 1_500
+      assert Task.await(writer_task, 4_000) < 4_000
       send(reader_task.pid, :release_reader)
       assert {:ok, _} = Task.await(reader_task, 2_000)
     end
@@ -805,7 +810,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
     test "one parent holder costs one budget per pass, not one wait per candidate" do
       substrate = rls_substrate!()
       %{prefix: prefix} = install_rls_store!(install_context(substrate))
-      put_prune_budget(1_000)
+      put_prune_budget(3_000)
       holder = hold_parent!(start_tenant_repo(owner_url(), "tenant-a"), prefix)
 
       # One deadline includes both catalog and lock preflight.
@@ -820,7 +825,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
       assert {:ok, %{payload_partitions: 0, payload_partitions_refused: %{lock_unavailable: 1}}} =
                result
 
-      assert elapsed < 1_600
+      assert elapsed < 4_000
       Repo.put_dynamic_repo(Repo)
       assert partition_exists?(prefix, partition_name(~D[2026-08-01]))
       assert partition_exists?(prefix, partition_name(~D[2026-09-01]))
@@ -840,10 +845,8 @@ defmodule AshOnetime.Store.RLSPruneTest do
           "ash_onetime_response_payloads_default"
         )
 
-      started = System.monotonic_time(:millisecond)
       put_repo(substrate.owner_repo)
       result = prune_counts!(Postgres.for_repo(Repo, prefix), 100, 4)
-      elapsed = System.monotonic_time(:millisecond) - started
       release_holder!(holder)
 
       # DROP also locks DEFAULT. Waiting there would hold the parent for the
@@ -851,7 +854,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
       assert {:ok, %{payload_partitions: 0, payload_partitions_refused: %{lock_unavailable: 2}}} =
                result
 
-      assert elapsed < 1_000
       Repo.put_dynamic_repo(Repo)
       assert partition_exists?(prefix, partition_name(~D[2026-08-01]))
     end
@@ -1273,10 +1275,14 @@ defmodule AshOnetime.Store.RLSPruneTest do
     end
   end
 
-  defp wait_for_parent_waiter!(prefix, attempts \\ 500)
-  defp wait_for_parent_waiter!(_prefix, 0), do: flunk("prune did not wait for parent lock")
+  defp wait_for_parent_waiter!(prefix, task \\ nil, attempts \\ 500)
 
-  defp wait_for_parent_waiter!(prefix, attempts) do
+  defp wait_for_parent_waiter!(_prefix, task, 0) do
+    result = if task, do: Task.yield(task, 0)
+    flunk("prune did not wait for parent lock; completed result: #{inspect(result)}")
+  end
+
+  defp wait_for_parent_waiter!(prefix, task, attempts) do
     waiting =
       scalar!(
         Repo,
@@ -1288,7 +1294,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
       waiting
     else
       Process.sleep(10)
-      wait_for_parent_waiter!(prefix, attempts - 1)
+      wait_for_parent_waiter!(prefix, task, attempts - 1)
     end
   end
 

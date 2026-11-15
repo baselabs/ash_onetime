@@ -11,7 +11,9 @@ All notable changes to this project are documented in this file.
   partitions. The mandatory operation-hold upgrade updates existing and renamed fact
   triggers by function identity. Trusted replica writers bypass DELETE guards without
   repeating payload deletion; other writers keep the origin rules and fact triggers refuse
-  every mutation. Trust refuses other firing modes and the live doctor names each trigger.
+  every mutation. Catalog-qualified authority checks also protect legacy invoker guards
+  from writer search-path shadowing. Trust refuses other firing modes and the live doctor
+  names each trigger.
 - Maintenance audits containment through every dependency, internal part and extension
   member, without an OID cutoff, and checks all containing schemas and accepted owners'
   holders. Trust and the live doctor refuse event triggers with untrusted function owners
