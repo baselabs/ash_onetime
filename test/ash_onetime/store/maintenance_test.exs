@@ -266,6 +266,229 @@ defmodule AshOnetime.Store.MaintenanceTest do
     }
   end
 
+  for direction <- [:forward, :backward] do
+    @direction direction
+    @tag defects_batch: true
+    @tag d_dst: true
+    @tag dst_complete_mutation: true
+    test "external completion restarts exact elapsed retention across the next #{@direction} DST change",
+         c do
+      {zone, seconds} = dst_window!(c, @direction)
+      install_dst_observer!(c)
+
+      claim =
+        dst_transaction(c, zone, fn target ->
+          assert %Result{status: :execute, claim: claim} =
+                   Postgres.claim(target, dst_request("external", seconds))
+
+          claim
+        end)
+
+      dst_transaction(c, zone, fn target ->
+        assert %Result{status: :complete} =
+                 Postgres.complete_external(
+                   target,
+                   claim,
+                   "test",
+                   :crypto.hash(:sha256, "response"),
+                   "response"
+                 )
+
+        assert_dst_restart(c, claim.id, zone, seconds)
+      end)
+    end
+
+    @tag defects_batch: true
+    @tag d_dst: true
+    @tag dst_release_mutation: true
+    test "hold release restarts exact elapsed retention across the next #{@direction} DST change",
+         c do
+      {zone, seconds} = dst_window!(c, @direction)
+      install_dst_observer!(c)
+      claim = dst_held_claim!(c, zone, seconds, "restart")
+
+      # The store has no database clock seam. Admission and completion above use
+      # the real API and clock. The cold trusted owner ages this fixture by two
+      # hours, preserving its configured elapsed window, so GREATEST cannot mask
+      # a spring-forward restart that is one hour short.
+      SQL.query!(
+        c.owner_repo,
+        """
+        UPDATE #{rel(c, "ash_onetime_idempotency_claims")}
+        SET admitted_at = admitted_at - interval '7200 seconds',
+            inserted_at = inserted_at - interval '7200 seconds',
+            retain_until = retain_until - interval '7200 seconds'
+        WHERE id = $1::uuid
+        """,
+        [Ecto.UUID.dump!(claim.id)]
+      )
+
+      dst_transaction(c, zone, fn target ->
+        assert {:ok, 1} = Postgres.release(target, "restart")
+        assert_dst_restart(c, claim.id, zone, seconds)
+      end)
+
+      # The restart must also preserve a deadline already later than the new
+      # elapsed window. Give a second fixture two hours of extra headroom.
+      later = dst_held_claim!(c, zone, seconds, "later")
+
+      SQL.query!(
+        c.owner_repo,
+        """
+        UPDATE #{rel(c, "ash_onetime_idempotency_claims")}
+        SET admitted_at = admitted_at + interval '7200 seconds',
+            inserted_at = inserted_at + interval '7200 seconds',
+            retain_until = retain_until + interval '7200 seconds'
+        WHERE id = $1::uuid
+        """,
+        [Ecto.UUID.dump!(later.id)]
+      )
+
+      dst_transaction(c, zone, fn target ->
+        assert {:ok, 1} = Postgres.release(target, "later")
+
+        assert SQL.query!(
+                 c.runtime_repo,
+                 """
+                 SELECT old_deadline = new_deadline, zone, writer
+                 FROM #{q(c.schema)}.dst_observations
+                 WHERE claim_id = $1::uuid AND old_hold = 'later' AND new_hold IS NULL
+                 """,
+                 [Ecto.UUID.dump!(later.id)]
+               ).rows == [[true, zone, c.runtime]]
+      end)
+    end
+  end
+
+  defp dst_window!(c, direction) do
+    # Use PostgreSQL's current tzdata and real clock. The northern and southern
+    # candidates have opposite next transitions throughout the year. Sample in
+    # elapsed days, then end two days after the first change, before the second.
+    rows =
+      sql!(c.runtime_repo, """
+      WITH samples AS (
+        SELECT zone, day,
+          EXTRACT(EPOCH FROM (
+            (instant AT TIME ZONE zone) - (instant AT TIME ZONE 'UTC')
+          ))::integer AS utc_offset
+        FROM (VALUES ('America/New_York'), ('Australia/Sydney'),
+                     ('America/Santiago'), ('Pacific/Auckland')) AS zones(zone)
+        CROSS JOIN generate_series(0, 400) AS days(day)
+        CROSS JOIN LATERAL (
+          SELECT statement_timestamp() + day * interval '86400 seconds' AS instant
+        ) AS instants
+      ), offsets AS (
+        SELECT *, utc_offset - lag(utc_offset) OVER (PARTITION BY zone ORDER BY day) AS change
+        FROM samples
+      ), transitions AS (
+        SELECT *, row_number() OVER (PARTITION BY zone ORDER BY day) AS ordinal,
+          lead(day) OVER (PARTITION BY zone ORDER BY day) AS following_day
+        FROM offsets WHERE change <> 0
+      )
+      SELECT zone, (day + 2) * 86400, change
+      FROM transitions
+      WHERE ordinal = 1 AND day + 2 < following_day AND abs(change) = 3600
+      ORDER BY zone
+      """).rows
+
+    assert Enum.any?(rows, fn [_, _, change] -> change == 3600 end),
+           "PostgreSQL tzdata supplied no upcoming forward DST window: #{inspect(rows)}"
+
+    assert Enum.any?(rows, fn [_, _, change] -> change == -3600 end),
+           "PostgreSQL tzdata supplied no upcoming backward DST window: #{inspect(rows)}"
+
+    change = if direction == :forward, do: 3600, else: -3600
+    [zone, seconds, ^change] = Enum.find(rows, fn [_, _, delta] -> delta == change end)
+    {zone, seconds}
+  end
+
+  defp install_dst_observer!(c) do
+    sql!(c.owner_repo, """
+    CREATE POLICY dst_owner_fixture ON #{rel(c, "ash_onetime_idempotency_claims")}
+    TO #{q(c.owner)} USING (true) WITH CHECK (true)
+    """)
+
+    sql!(c.owner_repo, """
+    CREATE TABLE #{q(c.schema)}.dst_observations (
+      claim_id uuid, old_deadline timestamptz, new_deadline timestamptz,
+      statement_time timestamptz, old_hold text, new_hold text, zone text, writer name
+    )
+    """)
+
+    # Observe the actual UPDATE's statement time without changing its SQL or its
+    # result. This invoker trigger neither supplies nor overrides a clock.
+    sql!(c.owner_repo, """
+    CREATE FUNCTION #{q(c.schema)}.observe_dst_update() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      INSERT INTO #{q(c.schema)}.dst_observations VALUES (
+        NEW.id, OLD.retain_until, NEW.retain_until, statement_timestamp(),
+        OLD.hold_reference, NEW.hold_reference, current_setting('TimeZone'), current_user
+      );
+      RETURN NEW;
+    END
+    $$
+    """)
+
+    sql!(c.owner_repo, """
+    CREATE TRIGGER observe_dst_update AFTER UPDATE
+    ON #{rel(c, "ash_onetime_idempotency_claims")}
+    FOR EACH ROW EXECUTE FUNCTION #{q(c.schema)}.observe_dst_update()
+    """)
+  end
+
+  defp dst_transaction(c, zone, callback) do
+    previous = Repo.put_dynamic_repo(c.runtime_repo)
+
+    try do
+      assert {:ok, result} =
+               Repo.transaction(fn ->
+                 SQL.query!(c.runtime_repo, "SELECT set_config('TimeZone', $1, true)", [zone])
+                 sql!(c.runtime_repo, "SET LOCAL ash_onetime.tenant = 'global'")
+                 callback.(Postgres.for_repo(Repo, c.schema))
+               end)
+
+      result
+    after
+      Repo.put_dynamic_repo(previous)
+    end
+  end
+
+  defp dst_request(label, seconds),
+    do: AshOnetime.Test.StoreCase.idempotency_request("dst-" <> label, retention_seconds: seconds)
+
+  defp dst_held_claim!(c, zone, seconds, reference) do
+    dst_transaction(c, zone, fn target ->
+      assert %Result{status: :execute, claim: claim} =
+               Postgres.claim(target, dst_request(reference, seconds))
+
+      assert %Result{status: :complete} =
+               Postgres.complete(
+                 target,
+                 claim,
+                 "test",
+                 :crypto.hash(:sha256, "response"),
+                 "response",
+                 reference
+               )
+
+      claim
+    end)
+  end
+
+  defp assert_dst_restart(c, id, zone, seconds) do
+    assert SQL.query!(
+             c.runtime_repo,
+             """
+             SELECT (EXTRACT(EPOCH FROM (new_deadline - statement_time)) * 1000000)::bigint,
+                    new_deadline >= old_deadline, zone, writer
+             FROM #{q(c.schema)}.dst_observations
+             WHERE claim_id = $1::uuid AND writer = current_user
+               AND new_hold IS NULL
+             """,
+             [Ecto.UUID.dump!(id)]
+           ).rows == [[seconds * 1_000_000, true, zone, c.runtime]]
+  end
+
   for count <- [nil, 4] do
     @tag defects_batch: true
     @tag firing_fresh: true
