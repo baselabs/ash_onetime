@@ -121,8 +121,9 @@ The BEFORE DELETE guard refuses held claims with SQLSTATE `23514`, including DEL
 table owner and a superuser, before checking retention or payload cardinality. Cleanup and the
 DEFAULT drain exclude held rows before invoking it; reap selects processing rows only.
 
-Like the existing retention guard, this is a DELETE trigger: it does **not** stop `TRUNCATE`,
-`DROP`, a privileged user disabling the trigger, or a superuser setting
-`session_replication_role = replica`. These operations bypass its protection. Holds are a
+The claims and nonce DELETE guards fire ALWAYS. In replica mode they admit only a writer
+that can SET ROLE to the relation owner; other writers face the full origin rules. Fact
+append-only triggers still refuse mutations, including by trusted replica writers.
+The guards do **not** stop `TRUNCATE`, `DROP`, or a privileged user disabling them. Holds are a
 PostgreSQL-authoritative application invariant within that boundary, not protection against
 administrative destruction.

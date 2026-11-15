@@ -4,9 +4,11 @@ defmodule AshOnetime.Store.MaintenanceTest do
   alias AshOnetime.Store.Postgres
   alias AshOnetime.Store.Result
   alias AshOnetime.Test.ClusterIsolation
+  alias AshOnetime.Test.DSTWindow
   alias AshOnetime.Test.ExternalPeer
   alias AshOnetime.Test.Repo
   alias AshOnetime.Test.ShippedMigrations
+  alias AshOnetime.Test.StoreCase
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
   alias Mix.Tasks.AshOnetime.Doctor
@@ -266,6 +268,214 @@ defmodule AshOnetime.Store.MaintenanceTest do
     }
   end
 
+  @tag defects_batch: true
+  @tag complete_restore_mutation: true
+  test "non-aborting completion errors restore the timeout before rollback on the same connection",
+       c do
+    previous = Repo.put_dynamic_repo(c.runtime_repo)
+
+    try do
+      for site <- [:payload, :claim] do
+        assert {:ok, claim} =
+                 Repo.transaction(fn ->
+                   sql!(c.runtime_repo, "SET LOCAL ash_onetime.tenant = 'global'")
+                   target = Postgres.for_repo(Repo, c.schema)
+
+                   assert %Result{status: :admitted, claim: claim} =
+                            Postgres.claim(target, dst_request("restore-#{site}", 3600))
+
+                   if site == :payload do
+                     assert %Result{status: :complete} =
+                              Postgres.complete(
+                                target,
+                                claim,
+                                "test",
+                                :crypto.hash(:sha256, "response"),
+                                "response"
+                              )
+                   end
+
+                   claim
+                 end)
+
+        # An existing payload makes INSERT return zero rows. A stale logical
+        # key makes UPDATE return zero rows after its successful payload INSERT.
+        claim =
+          if site == :claim, do: %{claim | key_hash: :crypto.hash(:sha256, "stale")}, else: claim
+
+        assert {:error, %Result{reason: :store_invariant}} =
+                 Repo.transaction(fn ->
+                   sql!(c.runtime_repo, "SET LOCAL ash_onetime.tenant = 'global'")
+                   sql!(c.runtime_repo, "SET LOCAL lock_timeout = '7s'")
+                   backend = scalar(c.runtime_repo, "SELECT pg_backend_pid()")
+
+                   try do
+                     Postgres.complete_external(
+                       Postgres.for_repo(Repo, c.schema),
+                       claim,
+                       "test",
+                       :crypto.hash(:sha256, "response"),
+                       "response"
+                     )
+                   catch
+                     :throw,
+                     {DBConnection, _reference, %Result{reason: :store_invariant}} = rollback ->
+                       assert scalar(c.runtime_repo, "SELECT pg_backend_pid()") == backend
+                       assert scalar(c.runtime_repo, "SHOW lock_timeout") == "7s"
+                       throw(rollback)
+                   end
+                 end)
+      end
+    after
+      Repo.put_dynamic_repo(previous)
+    end
+  end
+
+  @tag defects_batch: true
+  @tag fact_schema_mutation: true
+  test "trust refuses an ORIGIN fact trigger outside the install schema", c do
+    install_facts!(c)
+    schema = move_fact_table!(c)
+    assert trust?(c)
+
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{q(schema)}.audit_facts ENABLE TRIGGER audit_facts_append_only"
+    )
+
+    assert trust_error(c) =~ "fact trigger firing mode"
+    assert doctor_refusal(c) =~ "audit_facts_append_only"
+
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{q(schema)}.audit_facts ENABLE ALWAYS TRIGGER audit_facts_append_only"
+    )
+
+    assert trust?(c)
+  end
+
+  @tag defects_batch: true
+  @tag legacy_install: true
+  @tag firing_upgrade_mutation: true
+  @tag fact_upgrade_schema_mutation: true
+  test "operation hold upgrade enables fact triggers outside the install schema", c do
+    install_facts!(c)
+    schema = move_fact_table!(c)
+
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{q(schema)}.audit_facts ENABLE TRIGGER audit_facts_append_only"
+    )
+
+    migrate_source!(c.owner_repo, c.schema, Generator.render_operation_hold_upgrade(Repo, []))
+
+    assert scalar(
+             c.owner_repo,
+             "SELECT tgenabled::text FROM pg_trigger WHERE tgrelid='#{q(schema)}.audit_facts'::regclass AND tgname='audit_facts_append_only'"
+           ) == "A"
+  end
+
+  for branch <- [:up, :down], count <- [nil, 4] do
+    @branch branch
+    @tag defects_batch: true
+    @tag legacy_install: true
+    @tag firing_upgrade_mutation: true
+    @tag replica_lookup_legacy_mutation: true
+    @tag hash_partitions: count
+    test "legacy #{@branch} claims guard binds replica lookups with #{inspect(count)} partitions",
+         c do
+      run_migration_roundtrip!(c, Generator.render_operation_hold_upgrade(Repo, []), @branch)
+      seed_guard_rows!(c)
+      install_shadow_lookups!(c)
+
+      sql!(
+        c.owner_repo,
+        "ALTER TABLE #{rel(c, "ash_onetime_idempotency_claims")} DISABLE ROW LEVEL SECURITY"
+      )
+
+      assert {:error, %Postgrex.Error{postgres: %{pg_code: "23514"}}} =
+               SQL.query(
+                 c.runtime_repo,
+                 "DELETE FROM #{rel(c, "ash_onetime_idempotency_claims")}",
+                 []
+               )
+    end
+  end
+
+  for count <- [nil, 4] do
+    @tag defects_batch: true
+    @tag legacy_install: true
+    @tag firing_down_mutation: true
+    @tag hash_partitions: count
+    test "maintenance down restores ALWAYS guards with #{inspect(count)} partitions", c do
+      run_migration_roundtrip!(
+        c,
+        Generator.render_maintenance_upgrade(Repo,
+          prefix: c.schema,
+          maintenance_role: c.maintainer
+        ),
+        :down
+      )
+
+      assert Enum.all?(package_triggers(c), fn [_, _, enabled] -> enabled == "A" end)
+    end
+  end
+
+  defp move_fact_table!(c) do
+    schema = c.schema <> "_facts"
+    on_exit(fn -> sql!(Repo, "DROP SCHEMA IF EXISTS #{q(schema)} CASCADE") end)
+    sql!(c.owner_repo, "CREATE SCHEMA #{q(schema)}")
+    sql!(c.owner_repo, "ALTER TABLE #{rel(c, "audit_facts")} SET SCHEMA #{q(schema)}")
+    schema
+  end
+
+  defp install_shadow_lookups!(c) do
+    sql!(
+      c.runtime_repo,
+      "CREATE FUNCTION #{q(c.schema)}.current_setting(text) RETURNS text LANGUAGE sql AS 'SELECT ''replica''::text'"
+    )
+
+    sql!(
+      c.runtime_repo,
+      "CREATE FUNCTION #{q(c.schema)}.pg_has_role(name,oid,text) RETURNS boolean LANGUAGE sql AS 'SELECT true'"
+    )
+
+    sql!(c.runtime_repo, "SET search_path=#{q(c.schema)},pg_catalog")
+
+    assert scalar(c.runtime_repo, "SELECT pg_catalog.current_setting('session_replication_role')") ==
+             "origin"
+
+    refute scalar(
+             c.runtime_repo,
+             "SELECT pg_catalog.pg_has_role(current_user,#{literal(c.owner)},'SET')"
+           )
+  end
+
+  defp run_migration_roundtrip!(c, source, direction) do
+    module = Module.concat(__MODULE__, "Roundtrip#{System.unique_integer([:positive])}")
+
+    source =
+      Regex.replace(~r/defmodule \S+ do/, source, "defmodule #{inspect(module)} do",
+        global: false
+      )
+
+    Code.compile_string(source)
+    previous = Repo.put_dynamic_repo(c.owner_repo)
+    version = 20_261_113_000_001 + System.unique_integer([:positive, :monotonic])
+
+    try do
+      assert :ok = Ecto.Migrator.up(Repo, version, module, prefix: c.schema, log: false)
+
+      if direction == :down do
+        assert :ok = Ecto.Migrator.down(Repo, version, module, prefix: c.schema, log: false)
+      end
+    after
+      Repo.put_dynamic_repo(previous)
+      :code.purge(module)
+      :code.delete(module)
+    end
+  end
+
   for direction <- [:forward, :backward] do
     @direction direction
     @tag defects_batch: true
@@ -278,7 +488,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
       claim =
         dst_transaction(c, zone, fn target ->
-          assert %Result{status: :execute, claim: claim} =
+          assert %Result{status: :admitted, claim: claim} =
                    Postgres.claim(target, dst_request("external", seconds))
 
           claim
@@ -361,44 +571,41 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   defp dst_window!(c, direction) do
-    # Use PostgreSQL's current tzdata and real clock. The northern and southern
-    # candidates have opposite next transitions throughout the year. Sample in
-    # elapsed days, then end two days after the first change, before the second.
+    today = scalar(c.runtime_repo, "SELECT (statement_timestamp() AT TIME ZONE 'UTC')::date")
+    {zone, seconds} = DSTWindow.build(today, direction)
+
+    # Ask the real server to verify the generated POSIX rules. Both mirrored
+    # zones change four days from today and change back twelve days from today.
+    # The six-day retention window must cross exactly one change, all year.
     rows =
-      sql!(c.runtime_repo, """
-      WITH samples AS (
-        SELECT zone, day,
-          EXTRACT(EPOCH FROM (
-            (instant AT TIME ZONE zone) - (instant AT TIME ZONE 'UTC')
-          ))::integer AS utc_offset
-        FROM (VALUES ('America/New_York'), ('Australia/Sydney'),
-                     ('America/Santiago'), ('Pacific/Auckland')) AS zones(zone)
-        CROSS JOIN generate_series(0, 400) AS days(day)
-        CROSS JOIN LATERAL (
-          SELECT statement_timestamp() + day * interval '86400 seconds' AS instant
-        ) AS instants
-      ), offsets AS (
-        SELECT *, utc_offset - lag(utc_offset) OVER (PARTITION BY zone ORDER BY day) AS change
-        FROM samples
-      ), transitions AS (
-        SELECT *, row_number() OVER (PARTITION BY zone ORDER BY day) AS ordinal,
-          lead(day) OVER (PARTITION BY zone ORDER BY day) AS following_day
-        FROM offsets WHERE change <> 0
-      )
-      SELECT zone, (day + 2) * 86400, change
-      FROM transitions
-      WHERE ordinal = 1 AND day + 2 < following_day AND abs(change) = 3600
-      ORDER BY zone
-      """).rows
-
-    assert Enum.any?(rows, fn [_, _, change] -> change == 3600 end),
-           "PostgreSQL tzdata supplied no upcoming forward DST window: #{inspect(rows)}"
-
-    assert Enum.any?(rows, fn [_, _, change] -> change == -3600 end),
-           "PostgreSQL tzdata supplied no upcoming backward DST window: #{inspect(rows)}"
+      SQL.query!(
+        c.runtime_repo,
+        """
+        WITH samples AS (
+          SELECT hour,
+            EXTRACT(EPOCH FROM (
+              (instant AT TIME ZONE $1) - (instant AT TIME ZONE 'UTC')
+            ))::integer AS utc_offset
+          FROM generate_series(0, 14 * 24) AS hours(hour)
+          CROSS JOIN LATERAL (
+            SELECT statement_timestamp() + hour * interval '3600 seconds' AS instant
+          ) AS instants
+        ), offsets AS (
+          SELECT *, utc_offset - lag(utc_offset) OVER (ORDER BY hour) AS change
+          FROM samples
+        )
+        SELECT hour * 3600, change FROM offsets WHERE change <> 0 ORDER BY hour
+        """,
+        [zone]
+      ).rows
 
     change = if direction == :forward, do: 3600, else: -3600
-    [zone, seconds, ^change] = Enum.find(rows, fn [_, _, delta] -> delta == change end)
+
+    assert [[first, ^change], [second, opposite]] = rows,
+           "PostgreSQL supplied no matching POSIX transitions for #{zone}: #{inspect(rows)}"
+
+    assert opposite == -change
+    assert first < seconds and seconds < second
     {zone, seconds}
   end
 
@@ -454,11 +661,11 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   defp dst_request(label, seconds),
-    do: AshOnetime.Test.StoreCase.idempotency_request("dst-" <> label, retention_seconds: seconds)
+    do: StoreCase.idempotency_request("dst-" <> label, retention_seconds: seconds)
 
   defp dst_held_claim!(c, zone, seconds, reference) do
     dst_transaction(c, zone, fn target ->
-      assert %Result{status: :execute, claim: claim} =
+      assert %Result{status: :admitted, claim: claim} =
                Postgres.claim(target, dst_request(reference, seconds))
 
       assert %Result{status: :complete} =

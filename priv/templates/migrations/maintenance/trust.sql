@@ -136,6 +136,13 @@ BEGIN
   -- Containment follows deletion dependencies to a fixpoint. Whole-object
   -- addresses include column dependencies. No OID cutoff: unpinned initdb
   -- objects (including plpgsql) and every containing schema are checked.
+  -- Roots include consumer-added indexes, constraints and triggers: their
+  -- expressions and functions can execute during maintenance writes.
+  -- pg_attrdef is not a root: shape.sql authenticates every column's normalized
+  -- adbin, including all partitions and the ledger, before owner work runs.
+  -- maintenance-shape-default proves a consumer default refuses before execution.
+  -- Runtime ledger INSERTs supply every defaulted column; roll relocates SELECT *
+  -- into a partition it just created. Maintenance does perform these INSERTs.
   FOR containment_object IN
   WITH RECURSIVE package_relations AS MATERIALIZED (
     SELECT @routines@.ash_onetime_maintenance_relations() AS oid
@@ -202,9 +209,8 @@ BEGIN
   END LOOP;
   -- End containment.
 
-  IF EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
-    WHERE c.relnamespace=to_regnamespace(@schema_name@)
-      AND t.tgfoid=to_regprocedure(format('%I.ash_onetime_fact_append_only()',@schema_name@)) AND t.tgenabled<>'A') THEN
+  IF EXISTS (SELECT 1 FROM pg_trigger t
+    WHERE t.tgfoid=to_regprocedure(format('%I.ash_onetime_fact_append_only()',@schema_name@)) AND t.tgenabled<>'A') THEN
     RAISE EXCEPTION 'untrusted_dependency: fact trigger firing mode';
   END IF;
 
@@ -235,7 +241,8 @@ BEGIN
   -- Predefined roles count when any subject has membership, including ADMIN
   -- without INHERIT or SET (an administrator can grant itself SET).
   -- Root DML is allowed; children and the maintenance ledger are owner-only,
-  -- matching reset_acl. Replica mode would bypass the deletion and FK guards.
+  -- matching reset_acl. Replica mode bypasses ORIGIN and RI triggers; package
+  -- ALWAYS guards still enforce their owner-SET admission and origin rules.
   WITH RECURSIVE scheduled(oid) AS (
     SELECT @maintenance@::oid WHERE @maintenance@<>@owner@
     UNION SELECT m.member FROM scheduled s JOIN pg_auth_members m ON m.roleid=s.oid WHERE m.member<>@owner@

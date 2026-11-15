@@ -140,8 +140,8 @@ defmodule <%= inspect(module) %> do
       SELECT n.nspname,c.relname,t.tgname FROM pg_catalog.pg_trigger t
       JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
       JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname=$1 AND t.tgfoid=pg_catalog.to_regprocedure($2)
-      """, [prefix() || "public", q("ash_onetime_fact_append_only") <> "()"]).rows do
+      WHERE t.tgfoid=pg_catalog.to_regprocedure($1)
+      """, [q("ash_onetime_fact_append_only") <> "()"]).rows do
       execute("ALTER TABLE #{qi(schema)}.#{qi(table)} ENABLE ALWAYS TRIGGER #{qi(trigger)}")
     end
   end

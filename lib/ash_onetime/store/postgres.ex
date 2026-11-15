@@ -731,7 +731,8 @@ defmodule AshOnetime.Store.Postgres do
     with {:ok, previous_timeout} <- current_lock_timeout(target),
          :ok <- arm_claim_lock_timeout(target, lock_timeout_ms) do
       case statement.() do
-        {:error, %Result{}} = error ->
+        {:error, %Result{transaction: transaction}} = error
+        when transaction in [:rolled_back, :unknown] ->
           error
 
         result ->

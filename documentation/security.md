@@ -91,14 +91,16 @@ its settling transaction; an unreleased hold retains the claim and payload forev
 Use references unique within the installation's logical partition (a UUID is suitable).
 References do not replace caller authorization or row-security policies: release touches only
 rows visible to the caller's role. Monitor the held backlog and the live doctor for leaks.
-The DELETE guard refuses held claims even for an owner or superuser, but does not stop
-TRUNCATE, DROP, or a superuser's `session_replication_role = replica`. See
+The DELETE guards fire ALWAYS and refuse held claims in origin mode even for an owner
+or superuser. In replica mode they admit only a writer that can SET ROLE to the relation
+owner; other writers face the full origin rules. Fact triggers still refuse mutations.
+The guards do not stop TRUNCATE, DROP, or a privileged role disabling them. See
 [Operation holds](idempotency.md#keep-an-open-operations-record) for the complete contract.
 
 External completion arms the protection's `external_lock_timeout_ms` for each package
 payload INSERT and claims UPDATE. A `55P03` lock timeout rolls completion back and returns
-`:request_in_progress`, retaining the committed processing claim for recovery. Each successful
-statement restores the previous `lock_timeout` using SET LOCAL. Consumer changes to
+`:request_in_progress`, retaining the committed processing claim for recovery. Successful statements and non-aborting error results restore the previous
+`lock_timeout` using SET LOCAL. Consumer changes to
 `lock_timeout` or `statement_timeout`, whether through function SET clauses, `set_config`
 or SET statements, are outside the trust model. The restore ends a transaction-local
 `lock_timeout` change made inside that statement. It masks a session-level change until the
@@ -135,8 +137,21 @@ if the old routines have been dropped. Unexpected shapes refuse maintenance with
 schema currency, trigger firing modes, event-trigger ownership, runtime identity and held
 backlog; it does not invoke the maintenance trust audit.
 
-Containment starts with every package relation and partition, its indexes, constraints,
-triggers and package policies, package routines and the routine schema. It follows every
+Containment starts with every package relation and partition, every index, constraint and
+trigger on them (including consumer-added objects), package policies, package routines and
+the routine schema. Consumer trigger functions and index or constraint expressions can run
+during maintenance writes and therefore belong to its attack surface.
+
+Column defaults (`pg_attrdef`) are not containment roots because shape authentication pins
+every package column's normalized default expression before owner code runs. This covers
+claims, nonces, payload parents and partitions, and `ash_onetime_maintenance_runs`; a
+consumer-added or changed default is refused. See [shape.sql](../priv/templates/migrations/maintenance/shape.sql)
+and the `maintenance-shape-default` mutation's “Table 1 row 6: default refuses before owner
+code runs” regression. Maintenance does INSERT: its runtime ledger upserts supply every
+defaulted column (`installed_at` has no default), and roll's relocation uses `SELECT *` into
+a partition created in that same step. Installation uses defaults under the trusted migrator.
+
+Containment follows every
 outgoing dependency, every internal part, and every member of each reached extension until
 no more objects are found. Both extension membership and `DEPENDS ON EXTENSION` reach the
 extension. There is no OID cutoff: the language dependency reaches the unpinned `plpgsql`

@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- External completion restores the caller's lock timeout after non-aborting invariant
+  errors as well as successful writes. Trust and the operation-hold upgrade find fact
+  triggers in every schema by function identity. The security guide explains consumer
+  objects in the containment roots and authenticated column defaults.
 - External completion and hold release restart retention using elapsed seconds across
   daylight saving changes in any session `TimeZone`. Calendar interval addition could
   shorten or lengthen the window by an hour. Release still preserves a later deadline.

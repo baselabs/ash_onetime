@@ -2,6 +2,93 @@ defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "M-complete-restore" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "case statement.() do\n        {:error, %Result{transaction: transaction}} = error\n        when transaction in [:rolled_back, :unknown] ->",
+      mutated: "case statement.() do\n        {:error, %Result{}} = error ->",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "complete_restore_mutation",
+      test_name:
+        "non-aborting completion errors restore the timeout before rollback on the same connection",
+      assertion: "assert scalar(c.runtime_repo, \"SHOW lock_timeout\") == \"7s\""
+    },
+    "M-replica-admit-nonce" => %{
+      path: "priv/templates/migrations/maintenance/guard_nonce.sql",
+      original:
+        "    AND pg_catalog.pg_has_role(current_user, (SELECT relowner FROM pg_catalog.pg_class WHERE oid=TG_RELID), 'SET')",
+      mutated: "    AND true",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "firing_nonce_mutation",
+      test_name: "replica mode refuses untrusted nonce DELETE through its own guard",
+      assertion: "assert {:error, %Postgrex.Error"
+    },
+    "M-replica-lookup-claims-up" => %{
+      path: "priv/templates/migrations/operation_hold.exs",
+      original:
+        "  defp install_hold_functions do\n    execute(\"\"\"\n    CREATE OR REPLACE FUNCTION \#{q(\"ash_onetime_guard_idempotency_delete\")}()\n    RETURNS trigger\n    LANGUAGE plpgsql\n    AS $guard$\n    DECLARE\n      payload_count integer;\n      reap_before text;\n    BEGIN\n      IF pg_catalog.current_setting('session_replication_role') = 'replica'\n        AND pg_catalog.pg_has_role(current_user, (SELECT relowner FROM pg_catalog.pg_class WHERE oid=TG_RELID), 'SET') THEN",
+      mutated:
+        "  defp install_hold_functions do\n    execute(\"\"\"\n    CREATE OR REPLACE FUNCTION \#{q(\"ash_onetime_guard_idempotency_delete\")}()\n    RETURNS trigger\n    LANGUAGE plpgsql\n    AS $guard$\n    DECLARE\n      payload_count integer;\n      reap_before text;\n    BEGIN\n      IF current_setting('session_replication_role') = 'replica'\n        AND pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid=TG_RELID), 'SET') THEN",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "replica_lookup_legacy_mutation",
+      test_name: "legacy up claims guard binds replica lookups with nil partitions",
+      assertion: "assert {:error, %Postgrex.Error"
+    },
+    "M-replica-lookup-claims-down" => %{
+      path: "priv/templates/migrations/operation_hold.exs",
+      original:
+        "  defp install_previous_functions do\n    execute(\"\"\"\n    CREATE OR REPLACE FUNCTION \#{q(\"ash_onetime_guard_idempotency_delete\")}()\n    RETURNS trigger\n    LANGUAGE plpgsql\n    AS $guard$\n    DECLARE\n      payload_count integer;\n      reap_before text;\n    BEGIN\n      IF pg_catalog.current_setting('session_replication_role') = 'replica'\n        AND pg_catalog.pg_has_role(current_user, (SELECT relowner FROM pg_catalog.pg_class WHERE oid=TG_RELID), 'SET') THEN",
+      mutated:
+        "  defp install_previous_functions do\n    execute(\"\"\"\n    CREATE OR REPLACE FUNCTION \#{q(\"ash_onetime_guard_idempotency_delete\")}()\n    RETURNS trigger\n    LANGUAGE plpgsql\n    AS $guard$\n    DECLARE\n      payload_count integer;\n      reap_before text;\n    BEGIN\n      IF current_setting('session_replication_role') = 'replica'\n        AND pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid=TG_RELID), 'SET') THEN",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "replica_lookup_legacy_mutation",
+      test_name: "legacy down claims guard binds replica lookups with nil partitions",
+      assertion: "assert {:error, %Postgrex.Error"
+    },
+    "M-firing-down-claims" => %{
+      path: "priv/templates/migrations/maintenance.exs",
+      original:
+        "      EXECUTE format('ALTER TABLE %s ENABLE ALWAYS TRIGGER ash_onetime_idempotency_delete_guard',\#{maintenance_literal(q(\"ash_onetime_idempotency_claims\"))}::regclass);",
+      mutated:
+        "      EXECUTE format('ALTER TABLE %s ENABLE TRIGGER ash_onetime_idempotency_delete_guard',\#{maintenance_literal(q(\"ash_onetime_idempotency_claims\"))}::regclass);",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "firing_down_mutation",
+      test_name: "maintenance down restores ALWAYS guards with nil partitions",
+      assertion: "assert Enum.all?"
+    },
+    "M-firing-down-nonce" => %{
+      path: "priv/templates/migrations/maintenance.exs",
+      original:
+        "      EXECUTE format('ALTER TABLE %s ENABLE ALWAYS TRIGGER ash_onetime_nonce_delete_guard',\#{maintenance_literal(q(\"ash_onetime_nonce_claims\"))}::regclass);",
+      mutated:
+        "      EXECUTE format('ALTER TABLE %s ENABLE TRIGGER ash_onetime_nonce_delete_guard',\#{maintenance_literal(q(\"ash_onetime_nonce_claims\"))}::regclass);",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "firing_down_mutation",
+      test_name: "maintenance down restores ALWAYS guards with nil partitions",
+      assertion: "assert Enum.all?"
+    },
+    "M-fact-schema" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original:
+        "  IF EXISTS (SELECT 1 FROM pg_trigger t\n    WHERE t.tgfoid=to_regprocedure(format('%I.ash_onetime_fact_append_only()',@schema_name@)) AND t.tgenabled<>'A') THEN",
+      mutated:
+        "  IF EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid\n    WHERE c.relnamespace=to_regnamespace(@schema_name@)\n      AND t.tgfoid=to_regprocedure(format('%I.ash_onetime_fact_append_only()',@schema_name@)) AND t.tgenabled<>'A') THEN",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "fact_schema_mutation",
+      test_name: "trust refuses an ORIGIN fact trigger outside the install schema",
+      assertion: "assert trust_error(c) =~ \"fact trigger firing mode\""
+    },
+    "M-fact-upgrade-schema" => %{
+      path: "priv/templates/migrations/operation_hold.exs",
+      original:
+        "      WHERE t.tgfoid=pg_catalog.to_regprocedure($1)\n      \"\"\", [q(\"ash_onetime_fact_append_only\") <> \"()\"]).rows do",
+      mutated:
+        "      WHERE n.nspname=$1 AND t.tgfoid=pg_catalog.to_regprocedure($2)\n      \"\"\", [prefix() || \"public\", q(\"ash_onetime_fact_append_only\") <> \"()\"]).rows do",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "fact_upgrade_schema_mutation",
+      test_name: "operation hold upgrade enables fact triggers outside the install schema",
+      assertion: "assert scalar("
+    },
     "M-dst-complete" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:
@@ -2673,6 +2760,14 @@ defmodule AshOnetime.MutationCheck do
   @groups %{
     "all" => Map.keys(@mutations),
     "defects-batch" => [
+      "M-complete-restore",
+      "M-replica-admit-nonce",
+      "M-replica-lookup-claims-up",
+      "M-replica-lookup-claims-down",
+      "M-firing-down-claims",
+      "M-firing-down-nonce",
+      "M-fact-schema",
+      "M-fact-upgrade-schema",
       "M-dst-complete",
       "M-dst-release",
       "M-complete",
