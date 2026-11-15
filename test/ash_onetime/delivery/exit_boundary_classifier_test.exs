@@ -14,8 +14,15 @@ defmodule AshOnetime.Delivery.ExitBoundaryClassifierTest do
     assert Inventory.running_release() == Inventory.release()
   end
 
-  test "the inventory has every bif.tab declaration" do
-    assert length(Inventory.bif_rows()) == 550
+  test "the inventory has every bif.tab declaration for both supported releases" do
+    assert length(Inventory.bif_rows("28.5")) == 542
+    assert length(Inventory.bif_rows("29.1.2")) == 553
+  end
+
+  test "an uninventoried runtime fails loudly" do
+    assert_raise ArgumentError, ~r/no exit-boundary inventory for OTP/, fn ->
+      Inventory.bif_rows("29.1.3")
+    end
   end
 
   test "every bif.tab declaration is claimed by a class or listed as pure" do
