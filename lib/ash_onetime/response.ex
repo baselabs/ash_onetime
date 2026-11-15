@@ -406,7 +406,6 @@ defmodule AshOnetime.Response do
       base
       |> Map.take([
         :resource,
-        :record_resource,
         :action_name,
         :action_type,
         :kind,
@@ -419,10 +418,18 @@ defmodule AshOnetime.Response do
         :codec,
         :codec_opts
       ])
+      |> bind_returned_resource(base)
       |> :erlang.term_to_binary([:deterministic])
 
     :crypto.hash(:sha256, descriptor)
   end
+
+  # Existing result modes retain the frozen descriptor byte for byte. Only the new
+  # generic resource projection binds a resource separate from the action resource.
+  defp bind_returned_resource(descriptor, %{result_mode: {:resource, :returned}} = base),
+    do: Map.put(descriptor, :record_resource, base.record_resource)
+
+  defp bind_returned_resource(descriptor, _base), do: descriptor
 
   defp binding(raw_tag, contract_digest) do
     @binding_prefix <> raw_tag <> ":" <> Base.url_encode64(contract_digest, padding: false)
