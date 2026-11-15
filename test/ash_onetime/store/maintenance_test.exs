@@ -289,6 +289,139 @@ defmodule AshOnetime.Store.MaintenanceTest do
     end
   end
 
+  @tag effective_authority_clean: true
+  test "a clean install passes the effective authority audit", c do
+    assert scalar(
+             c.runtime_repo,
+             "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'trust'"
+           )
+
+    assert scalar(c.runtime_repo, "SELECT #{rel(c, "ash_onetime_cleanup_nonce")}(1)") == 0
+  end
+
+  for {predefined, privilege, membership} <- [
+        {"pg_write_all_data", "UPDATE", :inherit},
+        {"pg_read_all_data", "SELECT", :inherit},
+        {"pg_write_all_data", "UPDATE", :set},
+        {"pg_read_all_data", "SELECT", :set},
+        {"pg_write_all_data", "UPDATE", :group}
+      ] do
+    @predefined predefined
+    @privilege privilege
+    @membership membership
+    @tag effective_relation_authority_mutation: true
+    test "effective owner-only authority refuses #{@predefined} via #{@membership}", c do
+      group = "ao_authority_#{System.unique_integer([:positive])}"
+      holder = if @membership == :group, do: group, else: @predefined
+
+      options =
+        if @membership == :inherit, do: "INHERIT TRUE, SET TRUE", else: "INHERIT FALSE, SET TRUE"
+
+      if @membership == :group do
+        sql!(Repo, "CREATE ROLE #{q(group)} NOLOGIN NOSUPERUSER NOBYPASSRLS")
+      end
+
+      try do
+        if @membership == :group do
+          sql!(Repo, "GRANT #{@predefined} TO #{q(group)} WITH INHERIT FALSE, SET TRUE")
+        end
+
+        sql!(Repo, "GRANT #{q(holder)} TO #{q(c.outsider)} WITH #{options}")
+        {:ok, cold} = subject(c.outsider)
+        assert scalar(cold, "SELECT pg_has_role(current_user,#{literal(@predefined)},'SET')")
+
+        try do
+          # SET-only paths do not inherit the privilege. Verify the reachable holder
+          # really has it on a cold connection, then return to the login subject.
+          sql!(cold, "SET ROLE #{@predefined}")
+
+          assert scalar(
+                   cold,
+                   "SELECT has_table_privilege(current_user,'#{rel(c, "ash_onetime_maintenance_runs")}',#{literal(@privilege)})"
+                 )
+        after
+          sql!(cold, "RESET ROLE")
+        end
+
+        refute scalar(
+                 c.runtime_repo,
+                 "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'trust'"
+               )
+
+        assert_refusal(
+          c,
+          "ash_onetime_cleanup_nonce",
+          "1",
+          "untrusted_dependency: effective relation privilege"
+        )
+      after
+        sql!(Repo, "REVOKE #{q(holder)} FROM #{q(c.outsider)}")
+
+        if @membership == :group do
+          sql!(Repo, "REVOKE #{@predefined} FROM #{q(group)}")
+          sql!(Repo, "DROP ROLE #{q(group)}")
+        end
+      end
+    end
+  end
+
+  for membership <- [:direct, :group] do
+    @membership membership
+    @tag effective_replication_authority_mutation: true
+    test "effective replication parameter authority refuses #{@membership} SET grant", c do
+      group = "ao_replica_#{System.unique_integer([:positive])}"
+      holder = if @membership == :group, do: group, else: c.outsider
+
+      if @membership == :group do
+        sql!(Repo, "CREATE ROLE #{q(group)} NOLOGIN NOSUPERUSER NOBYPASSRLS")
+      end
+
+      try do
+        sql!(Repo, "GRANT SET ON PARAMETER session_replication_role TO #{q(holder)}")
+
+        if @membership == :group do
+          sql!(Repo, "GRANT #{q(group)} TO #{q(c.outsider)} WITH INHERIT FALSE, SET TRUE")
+        end
+
+        {:ok, cold} = subject(c.outsider)
+
+        try do
+          sql!(cold, "SET ROLE #{q(holder)}")
+
+          assert scalar(
+                   cold,
+                   "SELECT has_parameter_privilege(current_user,'session_replication_role','SET')"
+                 )
+
+          sql!(cold, "SET session_replication_role = replica")
+          assert scalar(cold, "SHOW session_replication_role") == "replica"
+        after
+          sql!(cold, "SET session_replication_role = origin")
+          sql!(cold, "RESET ROLE")
+        end
+
+        refute scalar(
+                 c.runtime_repo,
+                 "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'trust'"
+               )
+
+        assert_refusal(
+          c,
+          "ash_onetime_cleanup_nonce",
+          "1",
+          "untrusted_dependency: effective session_replication_role privilege"
+        )
+      after
+        sql!(Repo, "REVOKE SET ON PARAMETER session_replication_role FROM #{q(holder)}")
+
+        if @membership == :group do
+          sql!(Repo, "REVOKE #{q(group)} FROM #{q(c.outsider)}")
+          sql!(Repo, "DROP ROLE #{q(group)}")
+        end
+      end
+    end
+  end
+
   @tag review_set_maintain: true
   @tag review_inactive_runtime: true
   test "inactive NOLOGIN runtime member with SET only MAINTAIN refuses maintenance", c do
