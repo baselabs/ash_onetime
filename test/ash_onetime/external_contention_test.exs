@@ -16,6 +16,49 @@ defmodule AshOnetime.ExternalContentionTest do
     {:ok, external_repo: start_unboxed_repo!()}
   end
 
+  @tag defects_batch: true
+  @tag complete_mutation: true
+  test "external completion bounds its payload insert and reports request in progress", context do
+    parent = self()
+
+    with_observer(fn holder ->
+      Postgrex.query!(holder, "BEGIN", [])
+
+      try do
+        Postgrex.query!(
+          holder,
+          ~s(LOCK TABLE "#{context.prefix}".ash_onetime_response_payloads IN ACCESS EXCLUSIVE MODE),
+          []
+        )
+
+        {caller, monitor} =
+          start_monitored_worker(fn ->
+            send(parent, {:completion_done, self(), run_quick_lock(context, "completion-bound")})
+          end)
+
+        assert_receive {:completion_done, ^caller,
+                        {:error,
+                         %Ash.Error.Invalid{
+                           errors: [%AshOnetime.Error{code: :request_in_progress}]
+                         }}},
+                       2_000
+
+        assert_receive {:DOWN, ^monitor, :process, ^caller, :normal}, 1_000
+
+        [["execute", operation_key]] = ExternalPeer.calls(context.prefix)
+
+        assert %{rows: [["processing"]]} =
+                 Postgrex.query!(
+                   holder,
+                   ~s|SELECT state FROM "#{context.prefix}".ash_onetime_idempotency_claims WHERE id=$1|,
+                   [Ecto.UUID.dump!(operation_key)]
+                 )
+      after
+        Postgrex.query!(holder, "ROLLBACK", [])
+      end
+    end)
+  end
+
   @tag external_replay_lock_timeout_mutation: true
   test "immediate replay bounds its first claim lock and reports request in progress", context do
     assert {:ok, _result} = run_quick_lock(context, "replay-lock-bound")

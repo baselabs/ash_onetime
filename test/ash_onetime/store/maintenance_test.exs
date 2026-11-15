@@ -258,6 +258,580 @@ defmodule AshOnetime.Store.MaintenanceTest do
     }
   end
 
+  for count <- [nil, 4] do
+    @tag defects_batch: true
+    @tag firing_fresh: true
+    @tag hash_partitions: count
+    test "fresh package triggers fire ALWAYS with #{inspect(count)} hash partitions", c do
+      install_facts!(c)
+      rows = package_triggers(c)
+      assert length(rows) == if(unquote(count), do: 11, else: 3)
+      assert Enum.all?(rows, fn [_table, _trigger, mode] -> mode == "A" end)
+    end
+  end
+
+  for {kind, table} <- [
+        {:claims, "ash_onetime_idempotency_claims"},
+        {:nonce, "ash_onetime_nonce_claims"},
+        {:fact, "audit_facts"}
+      ] do
+    @kind kind
+    @table table
+    @tag defects_batch: true
+    @tag [{String.to_atom("firing_#{kind}_mutation"), true}]
+    test "replica mode refuses untrusted #{@kind} DELETE through its own guard", c do
+      install_facts!(c)
+      seed_guard_rows!(c)
+      sql!(Repo, "GRANT SET ON PARAMETER session_replication_role TO #{q(c.outsider)}")
+      sql!(c.owner_repo, "GRANT SELECT, DELETE ON #{rel(c, @table)} TO #{q(c.outsider)}")
+      sql!(c.owner_repo, "ALTER TABLE #{rel(c, @table)} DISABLE ROW LEVEL SECURITY")
+      {:ok, cold} = subject(c.outsider)
+      sql!(cold, "SET session_replication_role=replica")
+
+      try do
+        assert {:error, %Postgrex.Error{postgres: %{pg_code: "23514"}}} =
+                 SQL.query(cold, "DELETE FROM #{rel(c, @table)}", [])
+
+        assert scalar(Repo, "SELECT count(*) FROM #{rel(c, @table)}") == 1
+      after
+        sql!(cold, "SET session_replication_role=origin")
+        sql!(Repo, "REVOKE SET ON PARAMETER session_replication_role FROM #{q(c.outsider)}")
+      end
+    end
+  end
+
+  @tag defects_batch: true
+  @tag replica_admit_mutation: true
+  test "replica admission is restricted and trusted DELETE leaves payload mirroring to apply",
+       c do
+    seed_guard_rows!(c)
+
+    sql!(
+      Repo,
+      "GRANT SET ON PARAMETER session_replication_role TO #{q(c.outsider)}, #{q(c.migrator)}"
+    )
+
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{rel(c, "ash_onetime_idempotency_claims")} DISABLE ROW LEVEL SECURITY"
+    )
+
+    sql!(
+      c.owner_repo,
+      "GRANT SELECT, DELETE ON #{rel(c, "ash_onetime_idempotency_claims")} TO #{q(c.outsider)}"
+    )
+
+    {:ok, cold} = subject(c.outsider)
+    {:ok, trusted} = subject(c.migrator)
+
+    try do
+      sql!(cold, "SET session_replication_role=replica")
+
+      assert {:error, %Postgrex.Error{postgres: %{pg_code: "23514"}}} =
+               SQL.query(cold, "DELETE FROM #{rel(c, "ash_onetime_idempotency_claims")}", [])
+
+      sql!(trusted, "SET session_replication_role=replica")
+
+      assert sql!(trusted, "DELETE FROM #{rel(c, "ash_onetime_idempotency_claims")}").num_rows ==
+               1
+
+      assert scalar(Repo, "SELECT count(*) FROM #{rel(c, "ash_onetime_response_payloads")}") == 1
+      assert sql!(trusted, "DELETE FROM #{rel(c, "ash_onetime_nonce_claims")}").num_rows == 1
+    after
+      sql!(cold, "SET session_replication_role=origin")
+      sql!(trusted, "SET session_replication_role=origin")
+
+      sql!(
+        Repo,
+        "REVOKE SET ON PARAMETER session_replication_role FROM #{q(c.outsider)}, #{q(c.migrator)}"
+      )
+    end
+  end
+
+  @tag defects_batch: true
+  test "trust refuses ORIGIN guards and doctor names every non-ALWAYS package trigger", c do
+    install_facts!(c)
+
+    for [table, trigger, _mode] <- package_triggers(c) do
+      sql!(c.owner_repo, "ALTER TABLE #{q(c.schema)}.#{q(table)} ENABLE TRIGGER #{q(trigger)}")
+    end
+
+    refute trust?(c)
+    output = doctor_refusal(c)
+
+    for [table, trigger, _mode] <- package_triggers(c) do
+      assert output =~ table
+      assert output =~ trigger
+    end
+  end
+
+  for count <- [nil, 4] do
+    @tag defects_batch: true
+    @tag firing_upgrade_mutation: true
+    @tag legacy_install: true
+    @tag hash_partitions: count
+    test "operation hold upgrade enables every trigger by function with #{inspect(count)} partitions",
+         c do
+      install_facts!(c)
+      # The upgrade must discover fact triggers by tgfoid, including renamed triggers.
+      sql!(
+        c.owner_repo,
+        "ALTER TRIGGER audit_facts_append_only ON #{rel(c, "audit_facts")} RENAME TO renamed_guard"
+      )
+
+      for [table, trigger, _] <- package_triggers(c) do
+        sql!(c.owner_repo, "ALTER TABLE #{q(c.schema)}.#{q(table)} ENABLE TRIGGER #{q(trigger)}")
+      end
+
+      migrate_source!(c.owner_repo, c.schema, Generator.render_operation_hold_upgrade(Repo, []))
+      rows = package_triggers(c)
+      assert Enum.all?(rows, fn [_table, _trigger, mode] -> mode == "A" end)
+      assert Enum.any?(rows, fn [_, trigger, _] -> trigger == "renamed_guard" end)
+    end
+  end
+
+  @tag defects_batch: true
+  @tag contain_mutation: true
+  test "containment refuses an untrusted table schema owner with a real cascade control", c do
+    seed_guard_rows!(c)
+    sql!(Repo, "ALTER SCHEMA #{q(c.schema)} OWNER TO #{q(c.outsider)}")
+    sql!(Repo, "GRANT USAGE, CREATE ON SCHEMA #{q(c.schema)} TO #{q(c.owner)}")
+    error = trust_error(c)
+    assert error =~ "containment"
+    assert error =~ c.schema
+    assert error =~ c.outsider
+
+    rollback_control(
+      c.outsider_repo,
+      "DROP SCHEMA #{q(c.schema)} CASCADE",
+      rel(c, "ash_onetime_idempotency_claims")
+    )
+
+    sql!(Repo, "ALTER SCHEMA #{q(c.schema)} OWNER TO #{q(c.owner)}")
+    assert trust?(c)
+  end
+
+  for membership <- [:inherit, :admin] do
+    @membership membership
+    @tag defects_batch: true
+    @tag holder_mutation: true
+    test "containment refuses a superuser schema owner's #{@membership} holder", c do
+      owner = "ao_structural_#{System.unique_integer([:positive])}"
+      sql!(Repo, "CREATE ROLE #{q(owner)} SUPERUSER NOLOGIN")
+
+      try do
+        sql!(Repo, "ALTER SCHEMA #{q(c.schema)} OWNER TO #{q(owner)}")
+        sql!(Repo, "GRANT USAGE, CREATE ON SCHEMA #{q(c.schema)} TO #{q(c.owner)}")
+
+        options =
+          if @membership == :inherit,
+            do: "INHERIT TRUE, SET FALSE, ADMIN FALSE",
+            else: "INHERIT FALSE, SET FALSE, ADMIN TRUE"
+
+        sql!(Repo, "GRANT #{q(owner)} TO #{q(c.outsider)} WITH #{options}")
+        {:ok, cold} = subject(c.outsider)
+        refute scalar(cold, "SELECT rolsuper FROM pg_roles WHERE rolname=current_user")
+        error = trust_error(c)
+        assert error =~ "holder"
+        assert error =~ owner
+        assert error =~ c.outsider
+        assert error =~ c.schema
+
+        if @membership == :inherit do
+          rollback_control(
+            cold,
+            "DROP TABLE #{rel(c, "ash_onetime_idempotency_claims")} CASCADE",
+            rel(c, "ash_onetime_idempotency_claims")
+          )
+        end
+
+        sql!(Repo, "REVOKE #{q(owner)} FROM #{q(c.outsider)}")
+        assert trust?(c)
+      after
+        sql!(Repo, "ALTER SCHEMA #{q(c.schema)} OWNER TO #{q(c.owner)}")
+        sql!(Repo, "DROP ROLE #{q(owner)}")
+      end
+    end
+  end
+
+  @tag defects_batch: true
+  @tag internal_mutation: true
+  test "containment follows internal row types into extension membership", c do
+    seed_guard_rows!(c)
+    database = scalar(Repo, "SELECT current_database()")
+    sql!(Repo, "GRANT CREATE ON DATABASE #{q(database)} TO #{q(c.outsider)}")
+    sql!(Repo, "GRANT CREATE ON SCHEMA #{q(c.schema)} TO #{q(c.outsider)}")
+
+    try do
+      sql!(c.outsider_repo, "CREATE EXTENSION citext SCHEMA #{q(c.schema)}")
+      sql!(Repo, "REVOKE CREATE ON DATABASE #{q(database)} FROM #{q(c.outsider)}")
+      sql!(Repo, "ALTER EXTENSION citext ADD TYPE #{rel(c, "ash_onetime_idempotency_claims")}")
+      error = trust_error(c)
+      assert error =~ "containment"
+      assert error =~ "citext"
+      assert error =~ c.outsider
+
+      rollback_control(
+        c.outsider_repo,
+        "DROP EXTENSION citext CASCADE",
+        rel(c, "ash_onetime_idempotency_claims")
+      )
+
+      sql!(Repo, "ALTER EXTENSION citext DROP TYPE #{rel(c, "ash_onetime_idempotency_claims")}")
+      assert trust?(c)
+      signature = rel(c, "ash_onetime_cleanup_eligible") <> "(timestamptz)"
+      sql!(c.owner_repo, "ALTER FUNCTION #{signature} DEPENDS ON EXTENSION citext")
+      assert trust_error(c) =~ "citext"
+      sql!(c.owner_repo, "ALTER FUNCTION #{signature} NO DEPENDS ON EXTENSION citext")
+      assert trust?(c)
+    after
+      sql!(Repo, "DROP EXTENSION IF EXISTS citext CASCADE")
+      sql!(Repo, "REVOKE CREATE ON DATABASE #{q(database)} FROM #{q(c.outsider)}")
+    end
+  end
+
+  @tag defects_batch: true
+  @tag extmember_mutation: true
+  test "containment follows extension members into their untrusted schema", c do
+    schema = "ao_member_#{System.unique_integer([:positive])}"
+    guard = rel(c, "ash_onetime_guard_idempotency_delete") <> "()"
+    member = q(schema) <> ".f()"
+    claims = rel(c, "ash_onetime_idempotency_claims")
+    sql!(Repo, "CREATE SCHEMA #{q(schema)} AUTHORIZATION #{q(c.outsider)}")
+    sql!(Repo, "CREATE EXTENSION citext SCHEMA #{q(c.schema)}")
+
+    try do
+      sql!(Repo, "CREATE FUNCTION #{member} RETURNS integer LANGUAGE sql AS 'SELECT 1'")
+      sql!(Repo, "ALTER FUNCTION #{member} OWNER TO #{q(c.owner)}")
+      sql!(Repo, "ALTER EXTENSION citext ADD FUNCTION #{member}")
+      sql!(c.owner_repo, "ALTER FUNCTION #{guard} DEPENDS ON EXTENSION citext")
+
+      sql!(
+        Repo,
+        "INSERT INTO #{claims} (id,logical_partition,operation_hash,scope_hash,key_hash,fingerprint,state,admitted_at,retain_until,inserted_at) VALUES (gen_random_uuid(),'unresolved',sha256('operation'),sha256('scope'),sha256('key'),sha256('body'),'processing',now(),now()+interval '1 day',now())"
+      )
+
+      sql!(c.owner_repo, "ALTER TABLE #{claims} DISABLE ROW LEVEL SECURITY")
+      sql!(c.owner_repo, "GRANT DELETE, SELECT ON #{claims} TO #{q(c.outsider)}")
+      error = trust_error(c)
+      assert error =~ "containment"
+      assert error =~ schema
+      assert error =~ c.outsider
+      sql!(c.outsider_repo, "BEGIN")
+
+      try do
+        sql!(c.outsider_repo, "DROP SCHEMA #{q(schema)} CASCADE")
+        refute scalar(c.outsider_repo, "SELECT to_regprocedure(#{literal(guard)}) IS NOT NULL")
+
+        assert sql!(c.outsider_repo, "DELETE FROM #{claims} WHERE logical_partition='unresolved'").num_rows ==
+                 1
+      after
+        sql!(c.outsider_repo, "ROLLBACK")
+      end
+
+      assert scalar(Repo, "SELECT count(*) FROM #{claims}") == 1
+      sql!(Repo, "ALTER EXTENSION citext DROP FUNCTION #{member}")
+      assert trust?(c)
+    after
+      sql!(c.owner_repo, "ALTER FUNCTION #{guard} NO DEPENDS ON EXTENSION citext")
+      sql!(Repo, "DROP EXTENSION IF EXISTS citext CASCADE")
+      sql!(Repo, "DROP SCHEMA IF EXISTS #{q(schema)} CASCADE")
+    end
+  end
+
+  @tag defects_batch: true
+  test "public containment checks database ownership and every database owner holder", c do
+    with_public_install(c, fn public ->
+      # pg_database_owner is implicit; no grant to that predefined role is made.
+      sql!(Repo, "ALTER DATABASE #{q(public.database)} OWNER TO #{q(c.outsider)}")
+      error = trust_error(public)
+      assert error =~ "pg_database_owner"
+      assert error =~ c.outsider
+      sql!(Repo, "ALTER DATABASE #{q(public.database)} OWNER TO #{q(c.owner)}")
+      assert trust?(public)
+      structural = "ao_database_#{System.unique_integer([:positive])}"
+      sql!(Repo, "CREATE ROLE #{q(structural)} SUPERUSER NOLOGIN")
+
+      try do
+        sql!(Repo, "ALTER DATABASE #{q(public.database)} OWNER TO #{q(structural)}")
+        sql!(Repo, "GRANT #{q(structural)} TO #{q(c.outsider)} WITH INHERIT TRUE, SET FALSE")
+        error = trust_error(public)
+        assert error =~ "holder"
+        assert error =~ "pg_database_owner"
+        assert error =~ structural
+        assert error =~ c.outsider
+        sql!(Repo, "REVOKE #{q(structural)} FROM #{q(c.outsider)}")
+        assert trust?(public)
+      after
+        sql!(Repo, "ALTER DATABASE #{q(public.database)} OWNER TO #{q(c.owner)}")
+        sql!(Repo, "DROP ROLE #{q(structural)}")
+      end
+    end)
+  end
+
+  for event <- ["ddl_command_start", "login"] do
+    @event event
+    @tag defects_batch: true
+    @tag evt_trust_mutation: true
+    @tag evt_doctor_mutation: true
+    test "trust and doctor audit #{@event} event code and its execution identity", c do
+      event = "ao_event_#{System.unique_integer([:positive])}"
+      function = rel(c, "event_code")
+      sql!(Repo, "GRANT CREATE ON SCHEMA #{q(c.schema)} TO #{q(c.outsider)}")
+
+      sql!(
+        Repo,
+        "CREATE FUNCTION #{function}() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN END'"
+      )
+
+      sql!(Repo, "ALTER FUNCTION #{function}() OWNER TO #{q(c.outsider)}")
+      sql!(Repo, "CREATE EVENT TRIGGER #{q(event)} ON #{@event} EXECUTE FUNCTION #{function}()")
+
+      try do
+        for mode <- ["ENABLE", "DISABLE"] do
+          sql!(Repo, "ALTER EVENT TRIGGER #{q(event)} #{mode}")
+          error = trust_error(c)
+          assert error =~ event
+          assert error =~ "event_code"
+          assert error =~ c.outsider
+          output = doctor_refusal(c)
+          assert output =~ event
+          assert output =~ "event_code"
+          assert output =~ c.outsider
+        end
+
+        sql!(
+          c.outsider_repo,
+          "CREATE OR REPLACE FUNCTION #{function}() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN RAISE NOTICE ''event identity %'', current_user; END'"
+        )
+
+        sql!(Repo, "ALTER EVENT TRIGGER #{q(event)} ENABLE")
+        notices = event_notices(c, @event)
+        expected = if @event == "login", do: c.runtime, else: c.migrator
+        assert notices =~ "event identity #{expected}"
+        superuser = scalar(Repo, "SELECT current_user")
+        sql!(Repo, "ALTER FUNCTION #{function}() OWNER TO #{q(superuser)}")
+        assert trust?(c)
+        assert doctor_ok?(c)
+      after
+        sql!(Repo, "DROP EVENT TRIGGER IF EXISTS #{q(event)}")
+        sql!(Repo, "DROP FUNCTION IF EXISTS #{function}()")
+      end
+    end
+  end
+
+  for membership <- [
+        "INHERIT FALSE, SET TRUE, ADMIN FALSE",
+        "INHERIT FALSE, SET FALSE, ADMIN TRUE"
+      ] do
+    @membership membership
+    @tag defects_batch: true
+    test "maintenance owner equivalence refuses #{membership}", c do
+      sql!(Repo, "GRANT #{q(c.owner)} TO #{q(c.maintainer)} WITH #{@membership}")
+
+      assert_refusal(
+        c,
+        "ash_onetime_cleanup_nonce",
+        "1",
+        "untrusted_dependency: runtime or maintenance owner membership"
+      )
+    end
+  end
+
+  @tag defects_batch: true
+  @tag doctor_runtime_mutation: true
+  test "live doctor refuses its cold runtime role's owner equivalence", c do
+    # Outside the maintainer tree: trust cannot identify this role as a runtime.
+    sql!(Repo, "GRANT #{q(c.owner)} TO #{q(c.outsider)} WITH INHERIT FALSE, SET TRUE")
+    {:ok, cold} = subject(c.outsider)
+    assert trust?(c)
+    output = doctor_refusal(%{c | runtime_repo: cold})
+    assert output =~ c.outsider
+    assert output =~ "owner-equivalent"
+  end
+
+  defp install_facts!(c) do
+    migrate_source!(
+      c.owner_repo,
+      c.schema,
+      Generator.render_fact_tables(Repo, fact_tables: ["audit_facts"])
+    )
+  end
+
+  defp package_triggers(c) do
+    SQL.query!(
+      Repo,
+      """
+      SELECT r.relname,t.tgname,t.tgenabled::text FROM pg_trigger t
+      JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid
+      WHERE r.relnamespace=to_regnamespace($1::text) AND p.proname IN
+        ('ash_onetime_guard_idempotency_delete','ash_onetime_guard_nonce_delete','ash_onetime_fact_append_only')
+      ORDER BY r.relname,t.tgname
+      """,
+      [c.schema]
+    ).rows
+  end
+
+  defp seed_guard_rows!(c) do
+    sql!(Repo, """
+    WITH claim AS (
+      INSERT INTO #{rel(c, "ash_onetime_idempotency_claims")}
+      (id,logical_partition,operation_hash,scope_hash,key_hash,fingerprint,state,response_partition,response_codec,response_digest,admitted_at,retain_until,inserted_at)
+      VALUES (gen_random_uuid(),'guard',sha256('operation'),sha256('scope'),sha256('key'),sha256('body'),'complete',current_date,'test',sha256('response'),now(),now()+interval '1 day',now()) RETURNING id
+    ) INSERT INTO #{rel(c, "ash_onetime_response_payloads")} VALUES ('guard',current_date,(SELECT id FROM claim),decode('beef','hex'))
+    """)
+
+    sql!(
+      Repo,
+      "INSERT INTO #{rel(c, "ash_onetime_nonce_claims")} (id,logical_partition,operation_hash,scope_hash,key_hash,issued_at,verifier_id,admitted_at,retain_until,inserted_at) VALUES (gen_random_uuid(),'guard',sha256('operation'),sha256('scope'),sha256('key'),now(),'test',now(),now()+interval '1 day',now())"
+    )
+
+    if scalar(Repo, "SELECT to_regclass(#{literal(q(c.schema) <> ".audit_facts")}) IS NOT NULL") do
+      sql!(
+        c.owner_repo,
+        "INSERT INTO #{rel(c, "audit_facts")} (tenant,type,tags) VALUES ('guard','test',ARRAY['test'])"
+      )
+    end
+  end
+
+  defp trust?(c),
+    do:
+      scalar(
+        c.runtime_repo,
+        "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->'checks'->'trust'"
+      )
+
+  defp trust_error(c),
+    do:
+      scalar(
+        c.runtime_repo,
+        "SELECT #{rel(c, "ash_onetime_maintenance_status")}()->>'trust_error'"
+      ) || "accepted"
+
+  defp rollback_control(repo, ddl, table) do
+    sql!(repo, "BEGIN")
+
+    try do
+      sql!(repo, ddl)
+      refute scalar(repo, "SELECT to_regclass(#{literal(table)}) IS NOT NULL")
+    after
+      sql!(repo, "ROLLBACK")
+    end
+
+    assert scalar(repo, "SELECT to_regclass(#{literal(table)}) IS NOT NULL")
+  end
+
+  defp doctor_refusal(c) do
+    previous = Repo.put_dynamic_repo(c.runtime_repo)
+
+    try do
+      ExUnit.CaptureIO.capture_io(:stderr, fn ->
+        assert_raise Mix.Error, ~r/check\(s\) failed/, fn ->
+          Mix.Tasks.AshOnetime.Doctor.run([
+            "--repo",
+            inspect(Repo),
+            "--prefix",
+            c.schema,
+            "--live"
+          ])
+        end
+      end)
+    after
+      Repo.put_dynamic_repo(previous)
+    end
+  end
+
+  defp doctor_ok?(c) do
+    previous = Repo.put_dynamic_repo(c.runtime_repo)
+
+    try do
+      Mix.Tasks.AshOnetime.Doctor.run(["--repo", inspect(Repo), "--prefix", c.schema, "--live"]) ==
+        :ok
+    after
+      Repo.put_dynamic_repo(previous)
+    end
+  end
+
+  defp event_notices(c, event) do
+    {login, password} =
+      Process.get(
+        {__MODULE__, :credential, if(event == "login", do: c.runtime, else: c.migrator)}
+      )
+
+    options = AshOnetime.Test.ExternalPeer.database_options()
+
+    ddl =
+      if event == "login",
+        do: "SELECT 1",
+        else: "CREATE TABLE #{rel(c, "event_control")}(id integer)"
+
+    {output, 0} =
+      System.cmd(postgres_tool!("psql"), ["-X", "-w", "-v", "ON_ERROR_STOP=1", "-c", ddl],
+        env: [
+          {"PGHOST", options[:hostname]},
+          {"PGPORT", to_string(options[:port])},
+          {"PGDATABASE", options[:database]},
+          {"PGUSER", login},
+          {"PGPASSWORD", password}
+        ],
+        stderr_to_stdout: true
+      )
+
+    output
+  end
+
+  defp with_public_install(c, callback) do
+    database = "ash_onetime_containment_#{System.unique_integer([:positive])}"
+    sql!(Repo, "CREATE DATABASE #{q(database)}")
+    repos = []
+    Process.put({__MODULE__, :public_repos}, repos)
+
+    try do
+      for {key, role} <- [owner_repo: c.owner, runtime_repo: c.runtime] do
+        {login, password} = Process.get({__MODULE__, :credential, role})
+
+        url =
+          System.fetch_env!("DATABASE_URL")
+          |> URI.parse()
+          |> Map.put(:path, "/" <> database)
+          |> Map.put(:userinfo, login <> ":" <> password)
+          |> URI.to_string()
+
+        {:ok, repo} =
+          Repo.start_link(
+            name: nil,
+            url: url,
+            pool: DBConnection.ConnectionPool,
+            pool_size: 2,
+            after_connect: fn conn -> Postgrex.query!(conn, "SET ROLE #{q(role)}", []) end
+          )
+
+        Process.unlink(repo)
+
+        Process.put({__MODULE__, :public_repos}, [
+          {key, repo} | Process.get({__MODULE__, :public_repos})
+        ])
+      end
+
+      public =
+        Map.merge(c, Map.new(Process.get({__MODULE__, :public_repos})))
+        |> Map.merge(%{schema: "public", database: database})
+
+      sql!(Repo, "ALTER DATABASE #{q(database)} OWNER TO #{q(c.owner)}")
+
+      migrate_source!(
+        public.owner_repo,
+        "public",
+        Generator.render(Repo, maintenance_role: c.maintainer)
+      )
+
+      callback.(public)
+    after
+      for {_key, repo} <- Process.delete({__MODULE__, :public_repos}), do: GenServer.stop(repo)
+      sql!(Repo, "DROP DATABASE IF EXISTS #{q(database)} WITH (FORCE)")
+    end
+  end
+
   for grant <- [:outsider, :grant_option, :table_schema_name] do
     @grant grant
     @tag review_acl: true
@@ -4433,7 +5007,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     schema =
       if routine? and
-           scalar(Repo, "SELECT to_regnamespace(#{literal(routine_schema)}) IS NOT NULL"),
+           scalar(c.owner_repo, "SELECT to_regnamespace(#{literal(routine_schema)}) IS NOT NULL"),
          do: routine_schema,
          else: c.schema
 

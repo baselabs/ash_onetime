@@ -8,6 +8,91 @@ defmodule AshOnetime.Store.PostgresTest do
     {:ok, prefix: installation.schema}
   end
 
+  @tag defects_batch: true
+  @tag complete_mutation: true
+  @tag unboxed: true
+  test "external completion bounds its claim update and retains the committed claim", %{
+    target: target,
+    prefix: prefix
+  } do
+    assert {:ok, %Result{claim: claim}} =
+             Repo.transaction(fn ->
+               Store.claim(target, idempotency_request("completion-lock"))
+             end)
+
+    {:ok, holder} = Postgrex.start_link(AshOnetime.Test.ExternalPeer.database_options())
+
+    try do
+      Postgrex.query!(holder, "BEGIN", [])
+
+      Postgrex.query!(
+        holder,
+        ~s(SELECT id FROM "#{prefix}".ash_onetime_idempotency_claims WHERE id=$1 FOR UPDATE),
+        [Ecto.UUID.dump!(claim.id)]
+      )
+
+      repo = start_unboxed_repo!()
+      parent = self()
+
+      {worker, monitor} =
+        start_monitored_worker(fn ->
+          previous = Repo.put_dynamic_repo(repo)
+
+          result =
+            Repo.transaction(fn ->
+              Store.complete_external(
+                Postgres.for_repo(Repo, prefix),
+                claim,
+                "test",
+                hash("response"),
+                "response"
+              )
+            end)
+
+          Repo.put_dynamic_repo(previous)
+          send(parent, {:completed, self(), result})
+        end)
+
+      assert_receive {:completed, ^worker,
+                      {:error, %AshOnetime.Error{code: :request_in_progress}}},
+                     3_000
+
+      assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 1_000
+
+      assert Postgrex.query!(
+               holder,
+               ~s(SELECT state FROM "#{prefix}".ash_onetime_idempotency_claims WHERE id=$1),
+               [Ecto.UUID.dump!(claim.id)]
+             ).rows == [["processing"]]
+
+      assert Postgrex.query!(
+               holder,
+               ~s|SELECT count(*) FROM "#{prefix}".ash_onetime_response_payloads WHERE claim_id=$1|,
+               [Ecto.UUID.dump!(claim.id)]
+             ).rows == [[0]]
+    after
+      Postgrex.query!(holder, "ROLLBACK", [])
+      GenServer.stop(holder)
+    end
+  end
+
+  @tag defects_batch: true
+  test "successful external completion restores the caller lock timeout", %{target: target} do
+    assert {:ok, %Result{status: :complete}} =
+             Repo.transaction(fn ->
+               %Result{claim: claim} =
+                 Store.claim(target, idempotency_request("completion-restore"))
+
+               SQL.query!(Repo, "SET LOCAL lock_timeout = '7s'", [])
+
+               result =
+                 Store.complete_external(target, claim, "test", hash("response"), "response")
+
+               assert SQL.query!(Repo, "SHOW lock_timeout", []).rows == [["7s"]]
+               result
+             end)
+  end
+
   test "idempotency admission collides on the full logical key", %{target: target} do
     request = idempotency_request("idempotency-collision")
 
