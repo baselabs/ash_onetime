@@ -36,7 +36,8 @@ defmodule AshOnetime.Admission do
       :contract,
       :hold,
       :cache,
-      :replayed
+      :replayed,
+      :external_lock_timeout_ms
     ]
 
     @type t :: %__MODULE__{
@@ -50,6 +51,7 @@ defmodule AshOnetime.Admission do
             contract: AshOnetime.Response.Contract.t() | nil,
             hold: module() | nil,
             cache: AshOnetime.Cache.Config.t() | nil,
+            external_lock_timeout_ms: pos_integer() | nil,
             replayed: term()
           }
   end
@@ -252,6 +254,10 @@ defmodule AshOnetime.Admission do
   rescue
     _exception -> {:error, Error.new(:response_completion_failed, "response completion failed")}
   catch
+    :throw, {DBConnection, connection_reference, _reason} = rollback
+    when is_reference(connection_reference) ->
+      throw(rollback)
+
     _kind, _reason ->
       {:error, Error.new(:response_completion_failed, "response completion failed")}
   end
@@ -298,7 +304,8 @@ defmodule AshOnetime.Admission do
       encoded.codec,
       encoded.digest,
       encoded.payload,
-      reference
+      reference,
+      lock_timeout_ms: state.external_lock_timeout_ms || 2_000
     )
   end
 
@@ -405,6 +412,7 @@ defmodule AshOnetime.Admission do
          request: request,
          target: target,
          contract: contract,
+         external_lock_timeout_ms: protection.external_lock_timeout_ms,
          hold: protection.hold,
          cache: Cache.config(protection.limits)
        }}

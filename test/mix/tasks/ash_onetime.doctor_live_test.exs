@@ -22,7 +22,7 @@ defmodule Mix.Tasks.AshOnetime.DoctorLiveTest do
 
     output =
       capture_io(fn ->
-        RealConnection.with_connection(fn ->
+        Migration.with_runtime_connection(schema, fn ->
           assert :ok =
                    Doctor.run(["--repo", "AshOnetime.Test.Repo", "--live", "--prefix", schema])
         end)

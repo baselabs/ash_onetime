@@ -59,6 +59,8 @@ defmodule <%= inspect(module) %> do
       BEFORE UPDATE OR DELETE ON #{q(table)}
       FOR EACH ROW EXECUTE FUNCTION #{q("ash_onetime_fact_append_only")}()
       """)
+
+      execute("ALTER TABLE #{q(table)} ENABLE ALWAYS TRIGGER #{quote_identifier(table <> "_append_only")}")
     end
   end
 

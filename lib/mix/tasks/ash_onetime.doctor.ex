@@ -25,6 +25,9 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
     `ash_onetime_response_payloads` partitioned table and its `_default` partition, the three
     cleanup/reap functions (by name and arity), the two delete-guard triggers, and the
     operation-hold column, validated CHECK, partial indexes, and function definitions.
+    Also checks ALWAYS firing on package triggers, including fact tables and partitions,
+    event-trigger function ownership and holders, and refuses owner-equivalent runtime
+    roles. Run the live doctor once for each runtime role using its own connection.
     Prints the held backlog and oldest admission age; when row security applies to this
     role, labels the figures as visible rows rather than an installation total.
 
@@ -41,7 +44,6 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   use Mix.Task
 
   alias AshOnetime.Store
-  alias AshOnetime.Store.Postgres
   alias AshOnetime.Store.Postgres
   alias Ecto.Adapters.SQL
 
@@ -301,6 +303,46 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
     AND c.relname = ANY($2)
   """
 
+  @trigger_modes_sql """
+  WITH RECURSIVE relations(oid) AS (
+    SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname=$1 AND (c.relname=ANY($2) OR EXISTS (
+      SELECT 1 FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid
+      WHERE t.tgrelid=c.oid AND p.proname='ash_onetime_fact_append_only' AND p.pronamespace=n.oid))
+    UNION SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN relations r ON r.oid=i.inhparent
+  ) SELECT n.nspname,c.relname,t.tgname,t.tgenabled::text
+  FROM relations r JOIN pg_catalog.pg_trigger t ON t.tgrelid=r.oid
+  JOIN pg_catalog.pg_class c ON c.oid=r.oid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+  JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid
+  WHERE p.proname=ANY($3) AND p.pronamespace IN (pg_catalog.to_regnamespace($1),pg_catalog.to_regnamespace($4))
+    AND t.tgenabled<>'A' ORDER BY n.nspname,c.relname,t.tgname
+  """
+
+  @runtime_owner_sql """
+  SELECT current_user,pg_catalog.pg_has_role(current_user,c.relowner,'MEMBER')
+    OR pg_catalog.pg_has_role(current_user,c.relowner,'MEMBER WITH ADMIN OPTION')
+  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+  WHERE n.nspname=$1 AND c.relname='ash_onetime_response_payloads'
+  """
+
+  @event_owner_sql """
+  SELECT e.evtname,p.oid::regprocedure::text,r.rolname,holder.rolname
+  FROM pg_catalog.pg_event_trigger e JOIN pg_catalog.pg_proc p ON p.oid=e.evtfoid
+  JOIN pg_catalog.pg_roles r ON r.oid=p.proowner
+  CROSS JOIN pg_catalog.pg_database db JOIN pg_catalog.pg_roles dbowner ON dbowner.oid=db.datdba
+  CROSS JOIN pg_catalog.pg_class package JOIN pg_catalog.pg_namespace n ON n.oid=package.relnamespace
+  LEFT JOIN LATERAL (
+    SELECT h.rolname FROM pg_catalog.pg_roles h
+    WHERE pg_catalog.pg_has_role(h.oid,CASE WHEN r.rolname='pg_database_owner' THEN db.datdba ELSE r.oid END,'MEMBER')
+      AND NOT h.rolsuper AND NOT pg_catalog.pg_has_role(h.oid,package.relowner,'MEMBER')
+    ORDER BY h.rolname LIMIT 1
+  ) holder ON r.oid<>package.relowner
+  WHERE db.datname=current_database() AND n.nspname=$1 AND package.relname='ash_onetime_response_payloads'
+    AND (NOT (r.oid=package.relowner OR r.rolsuper OR
+      (r.rolname='pg_database_owner' AND (db.datdba=package.relowner OR dbowner.rolsuper)))
+      OR holder.rolname IS NOT NULL) ORDER BY e.evtname
+  """
+
   @operation_hold_sql """
   SELECT EXISTS (
     SELECT 1 FROM pg_catalog.pg_class c
@@ -368,7 +410,7 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
 
     with :ok <- ensure_repo_started(repo),
          {:ok, facts} <- live_schema_facts(repo, schema) do
-      status = render_schema_verdicts(schema_status(facts), schema)
+      status = render_schema_verdicts(schema_status(facts) ++ authority_status(facts), schema)
       if status == :ok, do: check_held_backlog(repo, schema), else: status
     else
       {:error, reason} -> live_query_failure(repo, reason)
@@ -402,6 +444,28 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
     end)
   end
 
+  defp authority_status(facts) do
+    firing =
+      Enum.map(facts.trigger_modes, fn [schema, table, trigger, mode] ->
+        {:fail,
+         "package trigger #{schema}.#{table}.#{trigger} has firing mode #{mode}; use ALTER TABLE ... ENABLE ALWAYS TRIGGER #{trigger}"}
+      end)
+
+    events =
+      Enum.map(facts.event_owners, fn [trigger, function, owner, holder] ->
+        {:fail,
+         "event trigger #{trigger}, function #{function}, owner #{owner}, holder #{holder || "none"} is untrusted"}
+      end)
+
+    runtime =
+      Enum.flat_map(facts.runtime_owner, fn
+        [role, true] -> [{:fail, "runtime role #{role} is owner-equivalent to the package owner"}]
+        [_role, false] -> []
+      end)
+
+    firing ++ events ++ runtime
+  end
+
   defp live_schema_facts(repo, schema) do
     with {:ok, columns} <- query(repo, @logical_partition_sql, [schema, @authority_tables]),
          {:ok, payload} <- query(repo, @payload_table_sql, [schema]),
@@ -412,6 +476,19 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
              Enum.map(@expected_functions, &elem(&1, 0))
            ]),
          {:ok, triggers} <- query(repo, @trigger_sql, [schema, @claim_tables]),
+         {:ok, trigger_modes} <-
+           query(repo, @trigger_modes_sql, [
+             schema,
+             @claim_tables,
+             [
+               "ash_onetime_guard_idempotency_delete",
+               "ash_onetime_guard_nonce_delete",
+               "ash_onetime_fact_append_only"
+             ],
+             Postgres.routine_schema(schema)
+           ]),
+         {:ok, runtime_owner} <- query(repo, @runtime_owner_sql, [schema]),
+         {:ok, event_owners} <- query(repo, @event_owner_sql, [schema]),
          {:ok, hold} <-
            query(repo, @operation_hold_sql, [
              schema,
@@ -424,7 +501,10 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
          default_partition: default.num_rows == 1,
          functions: Enum.map(functions.rows, &List.to_tuple/1),
          triggers: Enum.map(triggers.rows, &hd/1),
-         operation_hold: hold.rows == [[true]]
+         operation_hold: hold.rows == [[true]],
+         trigger_modes: trigger_modes.rows,
+         runtime_owner: runtime_owner.rows,
+         event_owners: event_owners.rows
        }}
     end
   end

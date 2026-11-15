@@ -180,9 +180,9 @@ defmodule AshOnetime.Store.Postgres do
 
   # The lock_timeout GUC must bound ONLY the claim lock: SET LOCAL lasts to the end of the
   # caller's transaction, and everything after the lock runs on the same connection — the
-  # adapter's own callbacks, the action body, and the finalize writes. Leaving it armed
-  # would cap the adapter's contended writes (and finalize's payload insert) at the lock
-  # wait — exactly the class of library-imposed bound ADR-0011 rejects. So: capture the
+  # adapter's own callbacks and the action body. External completion arms each of its
+  # own writes separately. Leaving this armed would cap the adapter's contended writes
+  # at the claim lock wait, contrary to ADR-0011. So: capture the
   # session's value, arm, lock, restore. On :lock_timeout the statement failure has
   # aborted the transaction — there is nothing to restore into.
   defp select_claim_under_timeout(target, claim, claim_id, nil),
@@ -248,19 +248,52 @@ defmodule AshOnetime.Store.Postgres do
     do: complete_external(target, claim, codec, digest, encoded_response, nil)
 
   @impl AshOnetime.Store
+  def complete_external(target, claim, codec, digest, encoded_response, hold_reference),
+    do: complete_external(target, claim, codec, digest, encoded_response, hold_reference, [])
+
+  @impl AshOnetime.Store
   def complete_external(
         %Target{} = target,
         %Claim{strategy: :idempotency} = claim,
         codec,
         digest,
         encoded_response,
-        hold_reference
-      ) do
-    complete_mode(target, claim, codec, digest, encoded_response, :external, hold_reference)
+        hold_reference,
+        options
+      )
+      when is_list(options) do
+    lock_timeout_ms = Keyword.get(options, :lock_timeout_ms, 2_000)
+
+    with_checkout(target, fn ->
+      with :ok <- transaction_preconditions(target),
+           :ok <- validate_hold(hold_reference),
+           :ok <- validate_claim_lock_timeout(lock_timeout_ms) do
+        complete_transaction(
+          target,
+          claim,
+          codec,
+          digest,
+          encoded_response,
+          {:external, lock_timeout_ms},
+          hold_reference
+        )
+      else
+        {:error, %Result{} = result} -> result
+        {:error, _error} -> Result.failure(:invalid_request, :not_started, :open)
+      end
+    end)
   end
 
-  def complete_external(_target, _claim, _codec, _digest, _encoded_response, _hold_reference),
-    do: Result.failure(:invalid_request, :not_started, :not_applicable)
+  def complete_external(
+        _target,
+        _claim,
+        _codec,
+        _digest,
+        _encoded_response,
+        _hold_reference,
+        _options
+      ),
+      do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
   defp complete_mode(target, claim, codec, digest, payload, mode, hold_reference) do
     with_checkout(target, fn ->
@@ -654,17 +687,57 @@ defmodule AshOnetime.Store.Postgres do
 
   defp complete_transaction(target, claim, codec, digest, encoded_response, mode, hold_reference) do
     with :ok <- validate_completion(codec, digest, encoded_response),
-         {:ok, partition_date} <- database_date(target, mode),
-         :ok <- insert_payload(target, partition_date, claim.id, encoded_response),
+         {:ok, partition_date} <- database_date(target, completion_mode(mode)),
+         :ok <-
+           completion_statement(target, mode, fn ->
+             insert_payload(target, partition_date, claim.id, encoded_response)
+           end),
          {:ok, completed} <-
-           update_complete(target, claim, partition_date, codec, digest, mode, hold_reference) do
+           completion_statement(target, mode, fn ->
+             update_complete(
+               target,
+               claim,
+               partition_date,
+               codec,
+               digest,
+               completion_mode(mode),
+               hold_reference
+             )
+           end) do
       Result.success(:complete, claim: completed, payload: encoded_response)
     else
+      {:error, %Result{reason: :lock_timeout}} when is_tuple(mode) ->
+        target.repo_module.rollback(
+          AshOnetime.Error.new(
+            :request_in_progress,
+            "a request for this key is already processing"
+          )
+        )
+
       {:error, %Result{} = result} ->
         rollback_completion(target, result)
 
       {:error, reason} ->
         rollback_completion(target, Result.failure(reason, :not_started, :rolled_back))
+    end
+  end
+
+  defp completion_mode({:external, _timeout}), do: :external
+  defp completion_mode(mode), do: mode
+
+  defp completion_statement(_target, :database, statement), do: statement.()
+
+  defp completion_statement(target, {:external, lock_timeout_ms}, statement) do
+    with {:ok, previous_timeout} <- current_lock_timeout(target),
+         :ok <- arm_claim_lock_timeout(target, lock_timeout_ms) do
+      case statement.() do
+        {:error, %Result{}} = error ->
+          error
+
+        result ->
+          restore_lock_timeout(target, previous_timeout)
+          result
+      end
     end
   end
 

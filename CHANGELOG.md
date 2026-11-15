@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- External completion bounds payload INSERT and claims UPDATE with the protection's lock
+  timeout, restores the caller's timeout after success, and returns `:request_in_progress`
+  on contention while retaining the processing claim.
+- Claims and nonce DELETE guards and fact append-only triggers fire ALWAYS on parents and
+  partitions. The mandatory operation-hold upgrade updates existing and renamed fact
+  triggers by function identity. Trusted replica writers bypass DELETE guards without
+  repeating payload deletion; other writers keep the origin rules and fact triggers refuse
+  every mutation. Trust refuses other firing modes and the live doctor names each trigger.
+- Maintenance audits containment through every dependency, internal part and extension
+  member, without an OID cutoff, and checks all containing schemas and accepted owners'
+  holders. Trust and the live doctor refuse event triggers with untrusted function owners
+  or holders, including disabled and login triggers. The live doctor also refuses
+  owner-equivalent runtime roles; run it for each runtime role after migration or restore.
+  The security guide states the extension-script and DROP DATABASE trust boundaries.
+
 - Maintenance ships an effective-authority audit in 2.0.0. It refuses forbidden
   table and column privileges held by any non-predefined role, and predefined
   authority reachable through any membership, including ADMIN without INHERIT or

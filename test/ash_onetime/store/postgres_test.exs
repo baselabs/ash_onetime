@@ -1,6 +1,8 @@
 defmodule AshOnetime.Store.PostgresTest do
   use AshOnetime.Test.StoreCase, async: false
 
+  alias AshOnetime.Test.ExternalPeer
+
   @moduletag :store
 
   setup_all do
@@ -20,7 +22,7 @@ defmodule AshOnetime.Store.PostgresTest do
                Store.claim(target, idempotency_request("completion-lock"))
              end)
 
-    {:ok, holder} = Postgrex.start_link(AshOnetime.Test.ExternalPeer.database_options())
+    {:ok, holder} = Postgrex.start_link(ExternalPeer.database_options())
 
     try do
       Postgrex.query!(holder, "BEGIN", [])
@@ -53,25 +55,38 @@ defmodule AshOnetime.Store.PostgresTest do
           send(parent, {:completed, self(), result})
         end)
 
-      assert_receive {:completed, ^worker,
-                      {:error, %AshOnetime.Error{code: :request_in_progress}}},
-                     3_000
+      try do
+        assert_receive {:completed, ^worker,
+                        {:error, %AshOnetime.Error{code: :request_in_progress}}},
+                       3_000
 
-      assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 1_000
+        assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 1_000
 
-      assert Postgrex.query!(
-               holder,
-               ~s(SELECT state FROM "#{prefix}".ash_onetime_idempotency_claims WHERE id=$1),
-               [Ecto.UUID.dump!(claim.id)]
-             ).rows == [["processing"]]
+        assert Postgrex.query!(
+                 holder,
+                 ~s(SELECT state FROM "#{prefix}".ash_onetime_idempotency_claims WHERE id=$1),
+                 [Ecto.UUID.dump!(claim.id)]
+               ).rows == [["processing"]]
 
-      assert Postgrex.query!(
-               holder,
-               ~s|SELECT count(*) FROM "#{prefix}".ash_onetime_response_payloads WHERE claim_id=$1|,
-               [Ecto.UUID.dump!(claim.id)]
-             ).rows == [[0]]
+        assert Postgrex.query!(
+                 holder,
+                 ~s|SELECT count(*) FROM "#{prefix}".ash_onetime_response_payloads WHERE claim_id=$1|,
+                 [Ecto.UUID.dump!(claim.id)]
+               ).rows == [[0]]
+      after
+        Process.exit(worker, :kill)
+      end
     after
       Postgrex.query!(holder, "ROLLBACK", [])
+      Postgrex.query!(holder, "SET session_replication_role=replica", [])
+
+      Postgrex.query!(
+        holder,
+        ~s|DELETE FROM "#{prefix}".ash_onetime_idempotency_claims WHERE id=$1|,
+        [Ecto.UUID.dump!(claim.id)]
+      )
+
+      Postgrex.query!(holder, "SET session_replication_role=origin", [])
       GenServer.stop(holder)
     end
   end

@@ -3,6 +3,8 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
   alias AshOnetime.Store.Postgres
   alias AshOnetime.Store.Result
+  alias AshOnetime.Test.ExternalPeer
+  alias Mix.Tasks.AshOnetime.Doctor
   alias AshOnetime.Test.ClusterIsolation
   alias AshOnetime.Test.Repo
   alias AshOnetime.Test.ShippedMigrations
@@ -206,6 +208,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
         )
       end
 
+      if context[:legacy_install] && !context[:firing_upgrade_mutation] do
+        # Mandatory unreleased operation-hold upgrade precedes maintenance.
+        # Keep shipped sources frozen and exercise the current migration.
+        migrate_source!(owner_repo, schema, Generator.render_operation_hold_upgrade(Repo, []))
+      end
+
       for table <- [
             "ash_onetime_idempotency_claims",
             "ash_onetime_nonce_claims",
@@ -321,6 +329,11 @@ defmodule AshOnetime.Store.MaintenanceTest do
     sql!(
       c.owner_repo,
       "GRANT SELECT, DELETE ON #{rel(c, "ash_onetime_idempotency_claims")} TO #{q(c.outsider)}"
+    )
+
+    sql!(
+      c.owner_repo,
+      "ALTER TABLE #{rel(c, "ash_onetime_nonce_claims")} DISABLE ROW LEVEL SECURITY"
     )
 
     {:ok, cold} = subject(c.outsider)
@@ -499,7 +512,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
     guard = rel(c, "ash_onetime_guard_idempotency_delete") <> "()"
     member = q(schema) <> ".f()"
     claims = rel(c, "ash_onetime_idempotency_claims")
-    grant_guard_dependencies!(c)
+
+    sql!(
+      c.owner_repo,
+      "GRANT USAGE ON SCHEMA #{q(Postgres.routine_schema(c.schema))} TO #{q(c.outsider)}"
+    )
+
     sql!(Repo, "CREATE SCHEMA #{q(schema)} AUTHORIZATION #{q(c.outsider)}")
     sql!(Repo, "CREATE EXTENSION citext SCHEMA #{q(c.schema)}")
 
@@ -549,7 +567,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
     member = q(schema) <> ".f()"
     guard = rel(c, "ash_onetime_guard_idempotency_delete") <> "()"
     claims = rel(c, "ash_onetime_idempotency_claims")
-    grant_guard_dependencies!(c)
+
+    sql!(
+      c.owner_repo,
+      "GRANT USAGE ON SCHEMA #{q(Postgres.routine_schema(c.schema))} TO #{q(c.outsider)}"
+    )
+
     sql!(Repo, "CREATE SCHEMA #{q(schema)} AUTHORIZATION #{q(c.outsider)}")
 
     try do
@@ -795,7 +818,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
     try do
       ExUnit.CaptureIO.capture_io(:stderr, fn ->
         assert_raise Mix.Error, ~r/check\(s\) failed/, fn ->
-          Mix.Tasks.AshOnetime.Doctor.run([
+          Doctor.run([
             "--repo",
             inspect(Repo),
             "--prefix",
@@ -813,7 +836,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
     previous = Repo.put_dynamic_repo(c.runtime_repo)
 
     try do
-      Mix.Tasks.AshOnetime.Doctor.run(["--repo", inspect(Repo), "--prefix", c.schema, "--live"]) ==
+      Doctor.run(["--repo", inspect(Repo), "--prefix", c.schema, "--live"]) ==
         :ok
     after
       Repo.put_dynamic_repo(previous)
@@ -826,7 +849,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
         {__MODULE__, :credential, if(event == "login", do: c.runtime, else: c.migrator)}
       )
 
-    options = AshOnetime.Test.ExternalPeer.database_options()
+    options = ExternalPeer.database_options()
 
     ddl =
       if event == "login",

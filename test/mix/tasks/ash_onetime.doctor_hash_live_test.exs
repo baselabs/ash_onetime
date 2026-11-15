@@ -9,7 +9,7 @@ defmodule Mix.Tasks.AshOnetime.DoctorHashLiveTest do
 
   use ExUnit.Case, async: false
 
-  alias AshOnetime.Test.{Migration, RealConnection}
+  alias AshOnetime.Test.Migration
   alias Mix.Tasks.AshOnetime.Doctor
 
   setup_all do
@@ -23,7 +23,7 @@ defmodule Mix.Tasks.AshOnetime.DoctorHashLiveTest do
 
     output =
       capture_io(fn ->
-        RealConnection.with_connection(fn ->
+        Migration.with_runtime_connection(schema, fn ->
           assert :ok =
                    Doctor.run(["--repo", "AshOnetime.Test.Repo", "--live", "--prefix", schema])
         end)

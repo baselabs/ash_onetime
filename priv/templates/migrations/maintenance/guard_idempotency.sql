@@ -2,6 +2,10 @@ DECLARE
   payload_count bigint;
   reap_before text;
 BEGIN
+  IF current_setting('session_replication_role') = 'replica'
+    AND pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid=TG_RELID), 'SET') THEN
+    RETURN OLD;
+  END IF;
   IF OLD.hold_reference IS NOT NULL THEN
     RAISE EXCEPTION 'held idempotency claim cannot be deleted; release its operation hold first' USING ERRCODE = '23514';
   END IF;

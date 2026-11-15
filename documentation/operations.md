@@ -52,7 +52,11 @@ AshOnetime.Store.held_backlog(target)
 
 The age is measured from the oldest held claim's admission; no held claims means `nil`.
 `mix ash_onetime.doctor --repo MyApp.Repo --live` prints the same figures and verifies the
-operation-hold column, validated CHECK, partial indexes, and guard/cleanup definitions. With
+operation-hold column, validated CHECK, partial indexes, guard/cleanup definitions and ALWAYS
+firing modes on package triggers, including fact tables and partitions. Run it once for each
+runtime role using that role's database connection; it refuses owner-equivalent runtime roles
+and names them. It also names every event trigger with an untrusted function owner or holder,
+even when disabled. With
 row security applying to its current role (row security enabled and FORCE or a non-owner,
 without superuser/BYPASSRLS), it explicitly labels them **rows visible to this role, not an
 installation total**. The Store read likewise observes only visible rows. Use a maintenance
@@ -60,8 +64,10 @@ role with the appropriate policy when an installation-wide view is needed.
 
 Cleanup and the DEFAULT drain exclude held rows; reap never selects complete rows. The
 BEFORE DELETE guard stops ordinary DELETEs even by an owner or superuser with SQLSTATE `23514`.
-It does not stop TRUNCATE, DROP, disabled triggers, or a superuser's
-`session_replication_role = replica`. No additional guards are installed for those operations.
+Claims and nonce DELETE guards fire ALWAYS. In replica mode a writer able to SET to the
+relation owner may delete at once, leaving payload deletion to logical apply; all other
+writers still face the origin rules. Fact append-only triggers always refuse mutations.
+TRUNCATE, DROP and disabled triggers remain outside these guards.
 The payload prune retains an occupied month even when its held claim's deadline is long past.
 
 Existing installations need the [operation-hold upgrade](upgrading.md#v1100--operation-holds-november-13-2026).
@@ -407,6 +413,22 @@ not a pool-sizing issue. If it is `:unknown`, inspect the worker's exit reason i
 job or application logs; that class names an unspecified dispatch failure a pool raise will
 not fix.
 
+### Trigger modes during restore
+
+A full `pg_dump` restore preserves ENABLE ALWAYS (`tgenabled = 'A'`) on parents and
+partitions. A data-only restore with `--disable-triggers` leaves triggers at ORIGIN (`'O'`):
+trust refuses that installation and the live doctor names every affected package trigger,
+including fact triggers. Restore the mode on each parent with:
+
+```sql
+ALTER TABLE schema_name.table_name ENABLE ALWAYS TRIGGER trigger_name;
+```
+
+The supported data-only restore uses a trusted role able to SET to each package relation's
+owner, with `PGOPTIONS='-c session_replication_role=replica'`, without `--disable-triggers`.
+The claims and nonce guards then admit apply without repeating payload deletion. Fact tables
+remain append-only. Run the live doctor once for each runtime role after restore.
+
 ### restore-from-backup — a database restore has rewound admission state
 
 **Symptom.** This runbook is preventive: read it BEFORE restoring a backup (PITR or snapshot)
@@ -502,6 +524,20 @@ holder-owned proxy object can expose its privileges. Predefined roles count thro
 membership from a runtime, maintenance, current, session or LOGIN role, including ADMIN-only
 membership. Superusers and owner-equivalent roles remain the trusted-server boundary.
 
+The containment audit follows all dependencies, internal parts and extension members to a
+fixpoint, including the low-OID `plpgsql` extension and every containing schema (`public`
+and `pg_catalog` included). Accepted owners are the package owner, superusers and
+`pg_database_owner` with an accepted database owner. Every holder of another accepted owner
+must be a superuser or a member of the package owner. Refusals name the object, owner and
+holder. Transfer an offending schema or dependency to an accepted owner, or revoke every
+untrusted membership path before resuming. `DROP DATABASE` is outside this boundary.
+Every database event trigger, including disabled triggers, has its function ownership and
+holders checked by trust and the live doctor; transfer an untrusted function to an accepted
+owner before maintenance. Extension install and update scripts are server code that the
+server administrator installs. Depending on the control file they run as the bootstrap
+superuser or as the installing role. Either way they are outside the trust model, like
+superusers.
+
 On `:untrusted_dependency`, revoke the forbidden table, column or parameter grant from its
 holder, or remove the predefined-role membership path; revoke every path, including ADMIN.
 Remove or transfer an untrusted subscription to the trusted owner under the operator's
@@ -521,6 +557,11 @@ revokes PUBLIC CREATE, grants USAGE to the maintenance role, and each step audit
 CREATE under the trusted-owner/server boundary described in [Security](security.md).
 Publish package tables without row filters. A non-NULL publication row filter refuses the
 step with `:untrusted_dependency`; publication membership without a filter is supported.
+
+External completion arms the protection's `external_lock_timeout_ms` separately for its
+payload INSERT and claims UPDATE, restoring the caller's previous `lock_timeout` after each
+successful statement. SQLSTATE `55P03` returns `:request_in_progress` and rolls completion
+back while retaining the committed processing claim for recovery.
 
 Store maintenance calls each run in a transaction with a separate
 `SET LOCAL statement_timeout` statement before the function call. Configure

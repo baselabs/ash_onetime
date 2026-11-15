@@ -2,6 +2,174 @@ defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "M-complete" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "  defp completion_statement(target, {:external, lock_timeout_ms}, statement) do\n    with {:ok, previous_timeout} <- current_lock_timeout(target),\n         :ok <- arm_claim_lock_timeout(target, lock_timeout_ms) do",
+      mutated:
+        "  defp completion_statement(target, {:external, _lock_timeout_ms}, statement) do\n    with {:ok, previous_timeout} <- current_lock_timeout(target) do",
+      test: [
+        "test/ash_onetime/store/postgres_test.exs",
+        "test/ash_onetime/external_contention_test.exs"
+      ],
+      tag: "complete_mutation",
+      test_name: "external completion bounds its claim update and retains the committed claim",
+      assertion: "assert_receive",
+      required_failures: [
+        {"external completion bounds its claim update and retains the committed claim",
+         "assert_receive"},
+        {"external completion bounds its payload insert and reports request in progress",
+         "assert_receive"}
+      ]
+    },
+    "M-firing-claims" => %{
+      path: "priv/templates/migrations/maintenance_helpers.exs",
+      original:
+        "      EXECUTE format('ALTER TABLE %I.ash_onetime_idempotency_claims ENABLE ALWAYS TRIGGER ash_onetime_idempotency_delete_guard',install_schema);",
+      mutated:
+        "      EXECUTE format('ALTER TABLE %I.ash_onetime_idempotency_claims ENABLE TRIGGER ash_onetime_idempotency_delete_guard',install_schema);",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "firing_claims_mutation",
+      test_name: "replica mode refuses untrusted claims DELETE through its own guard",
+      assertion: "assert {:error, %Postgrex.Error"
+    },
+    "M-firing-nonce" => %{
+      path: "priv/templates/migrations/maintenance_helpers.exs",
+      original:
+        "      EXECUTE format('ALTER TABLE %I.ash_onetime_nonce_claims ENABLE ALWAYS TRIGGER ash_onetime_nonce_delete_guard',install_schema);",
+      mutated:
+        "      EXECUTE format('ALTER TABLE %I.ash_onetime_nonce_claims ENABLE TRIGGER ash_onetime_nonce_delete_guard',install_schema);",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "firing_nonce_mutation",
+      test_name: "replica mode refuses untrusted nonce DELETE through its own guard",
+      assertion: "assert {:error, %Postgrex.Error"
+    },
+    "M-firing-fact" => %{
+      path: "priv/templates/migrations/fact_tables.exs",
+      original:
+        "      execute(\"ALTER TABLE \#{q(table)} ENABLE ALWAYS TRIGGER \#{quote_identifier(table <> \"_append_only\")}\")",
+      mutated:
+        "      execute(\"ALTER TABLE \#{q(table)} ENABLE TRIGGER \#{quote_identifier(table <> \"_append_only\")}\")",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "firing_fact_mutation",
+      test_name: "replica mode refuses untrusted fact DELETE through its own guard",
+      assertion: "assert {:error, %Postgrex.Error"
+    },
+    "M-replica-admit" => %{
+      path: "priv/templates/migrations/maintenance/guard_idempotency.sql",
+      original:
+        "    AND pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid=TG_RELID), 'SET')",
+      mutated: "    AND true",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "replica_admit_mutation",
+      test_name:
+        "replica admission is restricted and trusted DELETE leaves payload mirroring to apply",
+      assertion: "assert {:error, %Postgrex.Error"
+    },
+    "M-firing-upgrade" => %{
+      path: "priv/templates/migrations/operation_hold.exs",
+      original:
+        "    execute(\"ALTER TABLE \#{q(\"ash_onetime_nonce_claims\")} ENABLE ALWAYS TRIGGER ash_onetime_nonce_delete_guard\")",
+      mutated:
+        "    execute(\"ALTER TABLE \#{q(\"ash_onetime_nonce_claims\")} ENABLE TRIGGER ash_onetime_nonce_delete_guard\")",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "firing_upgrade_mutation",
+      test_name: "operation hold upgrade enables every trigger by function with nil partitions",
+      assertion: "assert Enum.all?",
+      required_failures:
+        for count <- ["nil", "4"] do
+          {"operation hold upgrade enables every trigger by function with #{count} partitions",
+           "assert Enum.all?"}
+        end
+    },
+    "M-contain" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original:
+        "  ) SELECT classid,objid,identity FROM objects\n    UNION SELECT 'pg_namespace'::regclass,n.oid,'schema ' || quote_ident(n.nspname)\n      FROM objects o JOIN pg_namespace n ON n.nspname=o.schema\n    ORDER BY 1,2\n",
+      mutated: "  ) SELECT classid,objid,identity FROM objects WHERE false\n",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "contain_mutation",
+      test_name:
+        "containment refuses an untrusted table schema owner with a real cascade control",
+      assertion: "assert error =~ \"containment\""
+    },
+    "M-holder" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original:
+        "    IF object_owner<>@owner@ THEN\n      SELECT r.rolname INTO holder_name FROM pg_roles r\n      WHERE pg_has_role(r.oid,authority_owner,'MEMBER') AND NOT r.rolsuper\n        AND NOT pg_has_role(r.oid,@owner@,'MEMBER') ORDER BY r.rolname LIMIT 1;\n      IF FOUND THEN\n        RAISE EXCEPTION 'untrusted_dependency: containment object %, owner %, authority owner %, holder %',\n          containment_object.identity,owner_name,pg_get_userbyid(authority_owner),holder_name;\n      END IF;\n    END IF;\n",
+      mutated: "",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "holder_mutation",
+      test_name: "containment refuses a superuser schema owner's inherit holder",
+      assertion: "assert error =~ \"holder\""
+    },
+    "M-internal" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original:
+        "      UNION SELECT d.classid,d.objid FROM pg_depend d WHERE d.refclassid=c.classid AND d.refobjid=c.objid AND d.deptype='i'\n",
+      mutated: "",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "internal_mutation",
+      test_name: "containment follows internal row types into extension membership",
+      assertion: "assert error =~ \"containment\""
+    },
+    "M-extmember" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original:
+        "      UNION SELECT d.classid,d.objid FROM pg_depend d WHERE c.classid='pg_extension'::regclass AND d.refclassid=c.classid AND d.refobjid=c.objid AND d.deptype='e'\n",
+      mutated: "",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "extmember_mutation",
+      test_name: "containment follows extension members into their untrusted schema",
+      assertion: "assert error =~ \"containment\""
+    },
+    "M-oid" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original: "    ) next\n",
+      mutated: "    ) next WHERE next.objid>=16384 OR next.classid='pg_namespace'::regclass\n",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "oid_mutation",
+      test_name: "containment follows low-OID plpgsql extension members into their schema",
+      assertion: "assert error =~ \"containment\""
+    },
+    "M-evt-trust" => %{
+      path: "priv/templates/migrations/maintenance/trust.sql",
+      original:
+        "  -- Event-trigger code runs under DDL and login identities, even outside the\n  -- relation graph. Disabled triggers remain an authority held by their owner.\n  SELECT e.evtname,p.oid::regprocedure AS function_name,r.rolname AS owner_name,\n    holder.rolname AS holder INTO ownership_error\n  FROM pg_event_trigger e JOIN pg_proc p ON p.oid=e.evtfoid JOIN pg_roles r ON r.oid=p.proowner\n  CROSS JOIN pg_database db JOIN pg_roles dbowner ON dbowner.oid=db.datdba\n  LEFT JOIN LATERAL (\n    SELECT h.rolname FROM pg_roles h\n    WHERE pg_has_role(h.oid,CASE WHEN r.rolname='pg_database_owner' THEN db.datdba ELSE r.oid END,'MEMBER')\n      AND NOT h.rolsuper AND NOT pg_has_role(h.oid,@owner@,'MEMBER')\n    ORDER BY h.rolname LIMIT 1\n  ) holder ON r.oid<>@owner@\n  WHERE db.datname=current_database() AND (\n    NOT (r.oid=@owner@ OR r.rolsuper OR (r.rolname='pg_database_owner' AND (db.datdba=@owner@ OR dbowner.rolsuper)))\n    OR holder.rolname IS NOT NULL)\n  ORDER BY e.evtname LIMIT 1;\n  IF FOUND THEN\n    RAISE EXCEPTION 'untrusted_dependency: event trigger %, function %, owner %, holder %',\n      ownership_error.evtname,ownership_error.function_name,ownership_error.owner_name,ownership_error.holder;\n  END IF;\n  -- End event-trigger ownership.\n",
+      mutated: "",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "evt_trust_mutation",
+      test_name: "event trigger ddl_command_start ownership is checked even when disabled",
+      assertion: "assert error =~ trigger",
+      required_failures:
+        for event <- ["ddl_command_start", "login"] do
+          {"event trigger #{event} ownership is checked even when disabled",
+           "assert error =~ trigger"}
+        end
+    },
+    "M-evt-doctor" => %{
+      path: "lib/mix/tasks/ash_onetime.doctor.ex",
+      original: "Enum.map(facts.event_owners, fn",
+      mutated: "Enum.map([], fn",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "evt_doctor_mutation",
+      test_name: "event trigger ddl_command_start ownership is checked even when disabled",
+      assertion: "Expected exception Mix.Error",
+      required_failures:
+        for event <- ["ddl_command_start", "login"] do
+          {"event trigger #{event} ownership is checked even when disabled",
+           "Expected exception Mix.Error"}
+        end
+    },
+    "M-doctor-runtime" => %{
+      path: "lib/mix/tasks/ash_onetime.doctor.ex",
+      original: "Enum.flat_map(facts.runtime_owner, fn",
+      mutated: "Enum.flat_map([], fn",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "doctor_runtime_mutation",
+      test_name: "live doctor refuses its cold owner-equivalent runtime role",
+      assertion: "Expected exception Mix.Error"
+    },
     "maintenance-effective-admin-predefined" => %{
       path: "priv/templates/migrations/maintenance/trust.sql",
       original: "pg_has_role(r.oid,holder.oid,'MEMBER')",
@@ -2455,6 +2623,22 @@ defmodule AshOnetime.MutationCheck do
   # that once orphaned the ARCH mutations. The named subsets below stay for fast, focused local runs.
   @groups %{
     "all" => Map.keys(@mutations),
+    "defects-batch" => [
+      "M-complete",
+      "M-firing-claims",
+      "M-firing-nonce",
+      "M-firing-fact",
+      "M-replica-admit",
+      "M-firing-upgrade",
+      "M-contain",
+      "M-holder",
+      "M-internal",
+      "M-extmember",
+      "M-oid",
+      "M-evt-trust",
+      "M-evt-doctor",
+      "M-doctor-runtime"
+    ],
     "shipped-maintenance" => [
       "maintenance-upgrade-validation",
       "maintenance-upgrade-constraint-count",
@@ -2790,7 +2974,7 @@ defmodule AshOnetime.MutationCheck do
 
     System.cmd(
       "mix",
-      ["test", "--force", mutation.test, "--only", mutation.tag, "--seed", "0"],
+      ["test", "--force"] ++ List.wrap(mutation.test) ++ ["--only", mutation.tag, "--seed", "0"],
       env: env,
       stderr_to_stdout: true
     )

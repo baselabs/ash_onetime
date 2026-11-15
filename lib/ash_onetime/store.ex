@@ -12,6 +12,16 @@ defmodule AshOnetime.Store do
               Result.t()
   @callback complete_external(term(), Claim.t(), binary(), binary(), binary(), binary() | nil) ::
               Result.t()
+  @callback complete_external(
+              term(),
+              Claim.t(),
+              binary(),
+              binary(),
+              binary(),
+              binary() | nil,
+              keyword()
+            ) ::
+              Result.t()
   @callback load(term(), Claim.t(), keyword()) :: Result.t()
 
   @doc false
@@ -54,6 +64,19 @@ defmodule AshOnetime.Store do
           Result.t()
   def complete_external(target, claim, codec, digest, payload, reference),
     do: Postgres.complete_external(target, claim, codec, digest, payload, reference)
+
+  @doc false
+  @spec complete_external(
+          term(),
+          Claim.t(),
+          binary(),
+          binary(),
+          binary(),
+          binary() | nil,
+          keyword()
+        ) :: Result.t()
+  def complete_external(target, claim, codec, digest, payload, reference, options),
+    do: Postgres.complete_external(target, claim, codec, digest, payload, reference, options)
 
   @doc false
   @spec load(term(), Claim.t(), keyword()) :: Result.t()

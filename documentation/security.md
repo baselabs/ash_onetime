@@ -120,10 +120,36 @@ expressions must match the package's own DDL. Only the migration that just creat
 package tables captures their shapes. Every upgrade builds a fresh DDL reference, even
 if the old routines have been dropped. Unexpected shapes refuse maintenance with
 `:untrusted_dependency`; maintenance status reports the refusal. The live doctor checks
-schema currency and held backlog; it does not invoke the maintenance trust audit.
+schema currency, trigger firing modes, event-trigger ownership, runtime identity and held
+backlog; it does not invoke the maintenance trust audit.
 
-The PostgreSQL server and the migrator are trusted. Superuser event triggers, preloaded
-hooks, and backend libraries execute outside a relation closure. Autovacuum ANALYZE runs
+Containment starts with every package relation and partition, its indexes, constraints,
+triggers and package policies, package routines and the routine schema. It follows every
+outgoing dependency, every internal part, and every member of each reached extension until
+no more objects are found. Both extension membership and `DEPENDS ON EXTENSION` reach the
+extension. There is no OID cutoff: the language dependency reaches the unpinned `plpgsql`
+extension, its handlers and their schemas. Every containing schema is checked, including
+`public` and `pg_catalog`. An untrusted schema owner can remove objects it does not own
+through `DROP SCHEMA ... CASCADE`.
+
+Every reached owner must be the package owner, a superuser, or `pg_database_owner` when the
+database owner is the package owner or a superuser. For each accepted owner other than the
+package owner, every role with MEMBER reach to it must be a superuser or a member of the
+package owner. This includes INHERIT-only, SET-only and ADMIN-only membership and the actual
+database owner behind `pg_database_owner`. Refusals name the object, owner and offending
+holder. `DROP DATABASE` is outside this containment boundary, like superuser actions.
+
+Every database event trigger, enabled or disabled, is also checked: its function must have
+an accepted owner and holders under these same rules. Trust and the live doctor name the
+trigger, function and owner on refusal. DDL and login event-trigger functions execute under
+the invoking identity, so an untrusted function owner could replace its body and borrow the
+migrator's or maintenance role's authority.
+
+The PostgreSQL server and the migrator are trusted. Trusted event triggers, preloaded
+hooks, and backend libraries execute outside a relation closure. Extension install and update
+scripts are server code that the server administrator installs. Depending on the control file
+they run as the bootstrap superuser or as the installing role. Either way they are outside the
+trust model, like superusers. Autovacuum ANALYZE runs
 as the table owner outside maintenance steps. The package cannot stop the server from
 executing objects an owner or superuser installed. Install revokes runtime MAINTAIN.
 Install, maintenance steps and status use one effective-authority audit
@@ -136,7 +162,12 @@ and `pg_write_all_data`, which do not need explicit relation ACL entries.
 The same audit refuses SET or ALTER SYSTEM on `session_replication_role`, checked
 with `has_parameter_privilege`, and membership in `pg_create_subscription` through
 any membership edge. [Subscription apply workers run in replica mode](https://www.postgresql.org/docs/18/logical-replication-architecture.html),
-which bypasses ORIGIN-enabled deletion, operation-hold and RI triggers. Any subscription
+which bypasses ORIGIN-enabled triggers. Package claims and nonce DELETE guards and every
+fact append-only trigger use ENABLE ALWAYS, including partition clones. Trust refuses any
+other firing mode. In replica mode only, a DELETE guard admits a writer able to SET to the
+relation owner (including the owner and superusers), before deleting any payload; logical
+apply mirrors the publisher's payload deletion itself. Every other writer gets the full
+origin rules. Fact triggers always refuse mutation, including by a trusted replica writer. Any subscription
 in the current database owned by an untrusted role is refused even after its creator's
 `pg_create_subscription` membership has been revoked; disabled, disconnected subscriptions
 count too.
@@ -150,7 +181,9 @@ without INHERIT or SET. ADMIN-only members can grant themselves SET. Superusers 
 trusted server), the owner, and roles with USAGE or SET on the owner are excluded from
 both holder and subject checks, including the subscription-owner check. The CREATE audit
 excludes superusers and roles that inherit the owner's privileges. Runtime and maintenance
-roles must hold no membership in the owner; every step checks that boundary.
+roles must hold no membership in the owner; every step checks that boundary. Run the live
+doctor once for each runtime role; it refuses the owner or any role with MEMBER or ADMIN
+authority on the package owner, naming the role.
 
 SELECT on owner-only relations remains a trust refusal, including `pg_read_all_data`.
 Forward roll copies the payload root's policies and RLS flags to newly created children.

@@ -14,6 +14,16 @@ minor whose public capabilities you use and review this page on each minor bump:
 {:ash_onetime, "~> 1.10.0"}
 ```
 
+The mandatory operation-hold migration now replaces the nonce guard as well and switches
+claims and nonce DELETE guards and all fact append-only triggers to ENABLE ALWAYS. It
+finds fact triggers by their function identity, including renamed triggers. Apply this
+unreleased migration before the maintenance upgrade; previously generated migrations must
+be regenerated from the current template. Parent changes recurse to existing partitions;
+new partitions inherit the parent's firing mode. Run the live doctor once for each runtime
+role after migrating, using its own connection. It names non-ALWAYS triggers, untrusted
+event-trigger functions and owner-equivalent runtime roles. See
+[restore trigger modes](operations.md#trigger-modes-during-restore).
+
 ## v1.10.0 — Operation holds (November 13, 2026)
 
 Existing installations must generate and apply the operation-hold migration before deploying

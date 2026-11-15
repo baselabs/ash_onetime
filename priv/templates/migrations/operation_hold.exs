@@ -26,6 +26,7 @@ defmodule <%= inspect(module) %> do
     build_index(@hold, "logical_partition, hold_reference", "hold_reference IS NOT NULL")
     drop_index(@full)
     install_hold_functions()
+    enable_always_triggers()
   end
 
   def down do
@@ -116,6 +117,35 @@ defmodule <%= inspect(module) %> do
   end
   defp qi(name), do: ~s("#{String.replace(name, "\"", "\"\"")}")
 
+  defp enable_always_triggers do
+    execute("""
+    CREATE OR REPLACE FUNCTION #{q("ash_onetime_guard_nonce_delete")}()
+    RETURNS trigger LANGUAGE plpgsql AS $guard$
+    BEGIN
+      IF current_setting('session_replication_role') = 'replica'
+        AND pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid=TG_RELID), 'SET') THEN
+        RETURN OLD;
+      END IF;
+      IF NOT #{q("ash_onetime_cleanup_eligible")}(OLD.retain_until) THEN
+        RAISE EXCEPTION 'nonce claim is inside its retention horizon' USING ERRCODE = '23514';
+      END IF;
+      RETURN OLD;
+    END
+    $guard$
+    """)
+    execute("ALTER TABLE #{q(@claims)} ENABLE ALWAYS TRIGGER ash_onetime_idempotency_delete_guard")
+    execute("ALTER TABLE #{q("ash_onetime_nonce_claims")} ENABLE ALWAYS TRIGGER ash_onetime_nonce_delete_guard")
+    flush()
+    for [schema, table, trigger] <- query!("""
+      SELECT n.nspname,c.relname,t.tgname FROM pg_catalog.pg_trigger t
+      JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
+      JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname=$1 AND t.tgfoid=pg_catalog.to_regprocedure($2)
+      """, [prefix() || "public", q("ash_onetime_fact_append_only") <> "()"]).rows do
+      execute("ALTER TABLE #{qi(schema)}.#{qi(table)} ENABLE ALWAYS TRIGGER #{qi(trigger)}")
+    end
+  end
+
   defp install_hold_functions do
     execute("""
     CREATE OR REPLACE FUNCTION #{q("ash_onetime_guard_idempotency_delete")}()
@@ -126,6 +156,10 @@ defmodule <%= inspect(module) %> do
       payload_count integer;
       reap_before text;
     BEGIN
+      IF current_setting('session_replication_role') = 'replica'
+        AND pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid=TG_RELID), 'SET') THEN
+        RETURN OLD;
+      END IF;
       IF OLD.hold_reference IS NOT NULL THEN
         RAISE EXCEPTION 'held idempotency claim cannot be deleted; release its operation hold first'
           USING ERRCODE = '23514';
@@ -233,6 +267,10 @@ defmodule <%= inspect(module) %> do
       payload_count integer;
       reap_before text;
     BEGIN
+      IF current_setting('session_replication_role') = 'replica'
+        AND pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid=TG_RELID), 'SET') THEN
+        RETURN OLD;
+      END IF;
       IF OLD.state = 'processing' THEN
         -- Processing rows are recovery points. They are deletable only inside a sanctioned reap:
         -- the reaper arms the ash_onetime.reap_before session variable, and even then only a row
