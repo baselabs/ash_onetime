@@ -133,7 +133,7 @@ defmodule AshOnetime.CompileFixturesTest do
        "protected action exposes reserved verification inputs: [:verification_state]", 8},
     "reserved_attribute_unaccepted_key.exs" =>
       {:charge, :action, "protected resource declares a reserved verification attribute: [:key]",
-       12},
+       8},
     "missing_key_reference.exs" =>
       {:charge, :key, "references missing arguments [:missing_key] or attributes []", 9},
     "missing_external_reference.exs" =>
