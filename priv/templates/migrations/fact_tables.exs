@@ -4,9 +4,7 @@ defmodule <%= inspect(module) %> do
   # Context-boundary fact tables: append-only, monotonic seq from a per-table
   # identity, tags with a GIN index, tenant-scoped. DDL is owned by this
   # template and the library validates rows before insert; the CHECKs and the
-  # append-only trigger are the database-side backstop. When editing DDL here,
-  # regenerate and format the committed test-support migration so both stay
-  # identical.
+  # append-only trigger enforce integrity. Regenerate the test-support migration when DDL changes.
   def up do
     execute("""
     CREATE FUNCTION #{q("ash_onetime_fact_tags_valid")}(candidate_tags text[])

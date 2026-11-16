@@ -111,11 +111,7 @@ defmodule AshOnetime.Resource.NonceRetentionTest do
         protection = Info.protection(resource, :redeem)
         assert protection.commit == commit
         assert {:ok, prepared} = Admission.prepare(subject, protection, %{})
-        # Inject only time at the prepared-request boundary. The resource's DSL,
-        # verifier, locator and retain_for all come through real Admission.prepare.
         state = %{prepared | request: %{prepared.request | clock: SharedClock}}
-        # Exercise the real Ash action dispatch, including claim_committed for
-        # independent protection. Only the late replay needs a moved store clock.
         assert {:ok, _record} = Ash.create(subject)
 
         assert {:ok, deadline} =

@@ -36,8 +36,6 @@ defmodule AshOnetime.TelemetryTest do
 
     on_exit(fn -> :telemetry.detach(handler) end)
 
-    # Telemetry handlers are global and run in the emitting process. A concurrent
-    # caller must not supply the event this test uses to verify its own emission.
     assert :ok =
              Task.async(fn ->
                Telemetry.admission(1, :idempotency, Resource, :charge, :admitted)
@@ -91,10 +89,6 @@ defmodule AshOnetime.TelemetryTest do
   end
 
   test "store_uncertainty distinguishes worker timeout from disconnect and unknown dispatch" do
-    # ROADMAP H11: the committed-claim worker's 30s timeout must surface as a distinct
-    # result_class (:worker_timeout) so an operator can triage it as pool/lock contention
-    # rather than a network partition (:disconnected) or an unspecified dispatch failure
-    # (:unknown). Each class is an accepted closed-class atom; the three are distinct.
     assert :ok = Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :worker_timeout)
     assert :ok = Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :disconnected)
     assert :ok = Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :unknown)
@@ -196,9 +190,6 @@ defmodule AshOnetime.TelemetryTest do
   end
 
   describe "default metrics handler (H21)" do
-    # ROADMAP H21: the library emits but attaches nothing — a fresh consumer sees nothing
-    # until they hand-roll a handler. attach/1 is the opt-in helper.
-
     test "attach/0 routes events as downstream :metric events with normalized measurements" do
       # Attach a SECOND handler on the :metric suffix to observe what the default router emits.
       observer = "h21-observer-#{System.unique_integer([:positive])}"
@@ -290,10 +281,6 @@ defmodule AshOnetime.TelemetryTest do
     end
 
     test "attach/0 leaves no closed event unattached — the full 13-event surface is covered" do
-      # The coverage contract itself (D3: "all 13 events, no silent drops") as a gate: after
-      # attach/0, every closed event name has the default handler registered. The next event
-      # emitted outside emit/6 and missed in the attach list reds here instead of dropping
-      # silently. @events is the 12 admission/business events; the diagnosis event rides with it.
       default = "h21-coverage-#{System.unique_integer([:positive])}"
       assert :ok = Telemetry.attach(name: default)
       on_exit(fn -> Telemetry.detach(name: default) end)
@@ -355,8 +342,6 @@ defmodule AshOnetime.TelemetryTest do
     refute function_exported?(Telemetry, :untracked_execution, 1)
   end
 
-  # Scope by emitter process, never by metadata: malformed emissions from this
-  # test still reach its assertions, while other async callers remain independent.
   defp send_if_owner(owner, message) do
     if self() == owner, do: send(owner, message)
   end

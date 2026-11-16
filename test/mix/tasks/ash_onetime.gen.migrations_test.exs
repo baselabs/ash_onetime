@@ -172,8 +172,6 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
     run_generator(plain, [])
     assert Path.wildcard(Path.join(plain, "*_ash_onetime_rls_prune.exs")) == []
 
-    # The retired flags are invalid arguments now (the prune decides as the
-    # table owner; no role or function migration exists to generate).
     for extra <- [
           ["--rls-prune"],
           ["--rls-prune", "--app-role", "my_app"],

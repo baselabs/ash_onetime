@@ -65,8 +65,6 @@ defmodule AshOnetime.Oban.ReapWorkerTest do
   end
 
   test "backoff is bounded and jittered so transient failures retry within minutes" do
-    # ROADMAP H20: bounded linear+jitter backoff in [30,120]s — spaced DDL-class retries
-    # with a wide jitter (ADR-0005).
     for attempt <- 1..3 do
       backoff = ReapWorker.backoff(%Oban.Job{attempt: attempt})
       assert is_integer(backoff)
@@ -75,13 +73,10 @@ defmodule AshOnetime.Oban.ReapWorkerTest do
     end
   end
 
-  # L5 (behavioral): a reaper whose DELETE is blocked by a contended table lock surfaces as
-  # {:error, {:reap_failed, :lock_unavailable}} — the worker embeds the Store Result.reason so
-  # Oban's job error carries the distinguishable cause past exhaustion, not an opaque
-  # :reap_failed. An ACCESS EXCLUSIVE lock held on the claims table in a separate connection
-  # blocks the reap routine's lock step, which gives up under the routine's own lock_timeout
-  # (a session lock_timeout does not reach inside it) and surfaces as :lock_unavailable.
-  # with_contention releases the holder on every path (incl. an assertion failure).
+  # Contended reaping returns {:error, {:reap_failed, :lock_unavailable}}.
+  # The Store reason must survive in the Oban job error.
+  # A separate real connection holds the conflicting claims-table lock.
+  # The contention helper releases the holder on every path.
   @tag unboxed: true
   test "worker surfaces :lock_unavailable from a contended reap (L5 behavioral)", %{
     prefix: prefix

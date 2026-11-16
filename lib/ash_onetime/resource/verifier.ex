@@ -64,20 +64,10 @@ defmodule AshOnetime.Resource.Verifier do
     )
   end
 
-  # Defense-in-depth: the transformer's `required/2` already asserts strategy/scope/key
-  # presence and shape. The verifier runs after the transformer and re-asserts the same
-  # AGENTS.md load-bearing invariants ("every protected action declares :idempotency or
-  # :one_time_nonce; no default strategy; scope explicit; missing scope is an error; key
-  # required") so a future transformer regression that drops a check is caught here rather
-  # than letting a malformed protection through to runtime.
-  #
-  # Exposed as a @doc false public function so the defense-in-depth discrimination can be
-  # pinned directly. The transformer short-circuits malformed protections before the verifier
-  # sees them, so compile-fixture coverage never reaches these reject arms — driving
-  # verify_required_shape/2 with hand-built %Protection{} structs is the only way to prove a
-  # future transformer regression is caught here. Pure validator (returns :ok | {:error,
-  # DslError}); no caller-context invariant, so the public callable cannot bypass a safety
-  # property. Mirrors the bounded_callback_context/1 test seam.
+  # Recheck explicit strategy, nonempty scope, and key after transformation.
+  # Malformed protections must fail compilation even if a transformer check regresses.
+  # This pure validator returns :ok or a DslError.
+  # It cannot grant admission or supply trusted runtime facts.
   @doc false
   def verify_required_shape(dsl_state, protections) do
     Enum.reduce_while(protections, :ok, fn protection, :ok ->

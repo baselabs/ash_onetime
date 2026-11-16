@@ -66,14 +66,10 @@ defmodule AshOnetime.Test.ExternalEffectSupport do
   end
 
   def recover(operation_key, subject) do
-    # A LYING :absent — the adversarial-absence worst case (ROADMAP H10). The peer's
-    # authoritative recover would return the stored effect or a true :absent; this mode
-    # returns :absent REGARDLESS of peer state, modeling an adapter that fails to prove
-    # absence. The library trusts :absent as authoritative proof and re-executes, so a
-    # peer that already recorded the effect gets a SECOND effect — the double-spend that is the
-    # adapter's fault, not the library's. This is inherent to the design (ADR-0001: the
-    # idempotency guarantee reduces to adapter honesty); the defense is the normative
-    # requirement on the adapter, not a library-side guard.
+    # This mode lies about absence regardless of peer state.
+    # The library trusts :absent and re-executes under the operation key.
+    # The adapter must prove absence; the peer must enforce key idempotency.
+    # A correct peer absorbs redundant execution.
     if mode() == :lying_absent do
       :absent
     else
@@ -121,11 +117,9 @@ defmodule AshOnetime.Test.ExternalEffectSupport do
   defp fault(:exit_execute, _prefix, _operation_key, _subject), do: exit(:test_execute_failure)
   defp fault(:invalid_execute, _prefix, _operation_key, _subject), do: :invalid
 
-  # Reports whether the callback is executing inside the caller's open transaction:
-  # evaluated in the caller's process against the dynamic repo Ash opened the action
-  # transaction on, before any peer call. Also captures the caller's backend pid (from
-  # inside the same checked-out connection) so the observer can read that backend's
-  # pg_stat_activity state while the callback is paused.
+  # Observe the caller's open transaction from inside the callback before any peer call.
+  # Capture the backend pid on the same checked-out dynamic-repo connection.
+  # An observer can then inspect its transaction state while the callback is paused.
   defp pause_execute_probe(prefix, operation_key, subject, observer, reference) do
     in_transaction = Repo.in_transaction?()
     backend_pid = backend_pid!()

@@ -8,8 +8,6 @@ defmodule AshOnetime.ErrorTest do
     test "AshOnetime.Error is recognized as an Ash error" do
       error = Error.new(:nonce_already_used, "nonce was already used")
 
-      # RED today: AshOnetime.Error is a bare defexception, so ash_error? is false.
-      # GREEN: use Splode.Error makes splode_error?/0 true, so Ash.Error.ash_error?/1 true.
       assert Ash.Error.ash_error?(error) == true
     end
 
@@ -18,10 +16,6 @@ defmodule AshOnetime.ErrorTest do
 
       wrapped = Ash.Error.to_ash_error(error)
 
-      # A single Splode leaf error is returned directly by to_ash_error (not wrapped in a
-      # class) — Splode returns the leaf when there is exactly one non-class error. Either
-      # way the class is :invalid and the code survives. RED today: it became an
-      # Ash.Error.Unknown.UnknownError with class :unknown and no :code field (code lost).
       assert wrapped.class == :invalid
 
       # The leaf carrying the code is either the wrapped result itself (single-error case)
@@ -35,8 +29,6 @@ defmodule AshOnetime.ErrorTest do
 
       wrapped = Ash.Error.to_ash_error(error)
 
-      # The public accessor recovers the code from whatever Ash hands the caller — whether
-      # the leaf is returned directly or wrapped in a class. RED today: code lost entirely.
       assert Error.code(wrapped) == :key_reused_with_different_request
     end
 
@@ -53,10 +45,6 @@ defmodule AshOnetime.ErrorTest do
       assert :nonce_already_used in codes
       assert :request_in_progress in codes
 
-      # The wrapper-recovery branch of code/1 (the %{errors: errors} clause) must recover a
-      # code when handed the class wrapper directly — not only when handed the leaves. This
-      # is the path a caller hits when Ash hands back an Ash.Error.Invalid from a multi-error
-      # failure. (Without this assertion the wrapper branch is untested — gate-integrity finding.)
       assert Error.code(wrapped) in [:nonce_already_used, :request_in_progress]
     end
   end

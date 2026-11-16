@@ -58,10 +58,10 @@
   primitive-return action, or unprotected). Treat `nil` as "cannot tell," not as "fresh." See
   [Replay](documentation/replay.md).
 
-- Under FORCE row-level security, run partition maintenance as the table owner (the prune
-  decides inside a per-partition savepoint and needs no role or function). A non-owner
-  driver keeps every partition — `payload_partitions_kept` in the cleanup counts — while
-  claim cleanup keeps working; see [Operations](documentation/operations.md#row-level-security).
+- Apply the maintenance upgrade and call its owner-owned routines through the declared
+  maintenance role. Keep runtime roles separate from the owner and scope non-package policies
+  to runtime roles. The prune proves unfiltered emptiness inside a per-child subtransaction;
+  trust or policy failures refuse maintenance. See [Operations](documentation/operations.md#row-level-security).
 - Treat `:context_changed` as a retry signal, not an error: re-read the context with
   `AshOnetime.Boundary.read/3`, decide again, and append with the fresh cutoff. Map it
   like other client-input-family failures (409-class), never as a 500.

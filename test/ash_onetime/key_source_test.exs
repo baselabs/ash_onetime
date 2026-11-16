@@ -2,10 +2,6 @@ defmodule AshOnetime.KeySourceTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  # ROADMAP H32: key_source.normalize/1 enforces 5 security-relevant invariants on the key
-  # (non-empty, <=16 sources, no nesting, unique, valid tags). The iff-property below covers
-  # all five through one generator so a regression in any invariant surfaces directly.
-
   alias AshOnetime.KeySource
 
   @max_sources 16
@@ -65,7 +61,6 @@ defmodule AshOnetime.KeySourceTest do
       case KeySource.normalize(sources) do
         {:ok, returned} ->
           assert expected_ok?
-          # a successful normalize returns the list verbatim, never reordered/filtered
           assert returned == sources
 
         {:error, message} ->

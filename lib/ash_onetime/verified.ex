@@ -16,8 +16,7 @@ defmodule AshOnetime.Verified do
 
   # The verifier-id byte bound the store and admission hold a Verified to.
   # The literal appears at four sites (here, AshOnetime.Store.Claim's
-  # @max_verifier_id_bytes, and two literals in AshOnetime.Admission); the
-  # drift tripwire in verified_test.exs pins all four to one value. No key
+  # @max_verifier_id_bytes, and two admission literals); verified_test pins all four. No key
   # byte cap exists because the key bound is per-action configuration in
   # admission, not a property of the type.
   @max_verifier_id_bytes 128

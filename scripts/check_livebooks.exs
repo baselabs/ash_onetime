@@ -81,8 +81,6 @@ defmodule AshOnetime.LivebookCheck do
         line = source |> binary_part(0, offset) |> String.split("\n") |> length()
         quoted = Code.string_to_quoted!(code, file: path, line: line)
 
-        # Only bootstrap selection changes in candidate mode. The actual notebook
-        # cells, bindings, modules, database calls and result assertions execute.
         quoted = if number == 1 and mode == "--local", do: local_package(quoted), else: quoted
         {value, binding, environment} = Code.eval_quoted_with_env(quoted, binding, environment)
         Process.put(:livebook_binding, binding)

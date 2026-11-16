@@ -1,18 +1,9 @@
 defmodule AshOnetime.MixAshPinValidationTest do
-  # Ticket #13: the ASH_ONETIME_ASH_VERSION pin branch in mix.exs ash_requirement/0
-  # must fail closed at project-config evaluation time when the pinned value is not a
-  # version inside the published range [3.37.2, 4.0.0). A publish with an invalid pin
-  # exported would otherwise freeze a wrong "==" requirement into the hex package
-  # silently. This drives the REAL surface — a mix invocation with the variable set,
-  # exactly how a mis-pinned publish or CI cell hits it — rather than calling the
-  # private function.
-  #
-  # `mix compile --no-deps-check` is the trigger: --no-deps-check keeps a lock/pin
-  # MISMATCH from failing the command on its own (pre-fix, a sub-floor pin exits 0 —
-  # the observable RED), while config evaluation happens before dependency checking,
-  # so the guard's raise fires first when present. The requirement STRING for valid
-  # pins is proven by the CI matrix cells resolving against the committed lock, not
-  # re-asserted here.
+  # ASH_ONETIME_ASH_VERSION must be a plain release in [3.37.2, 4.0.0).
+  # Reject invalid pins during project configuration before they reach package metadata.
+  # Invoke Mix with the variable set to exercise the actual public entry point.
+  # --no-deps-check prevents lock mismatch from supplying an unrelated failure.
+  # The guard must fail before dependency resolution.
   use ExUnit.Case, async: false
 
   @pin_var "ASH_ONETIME_ASH_VERSION"

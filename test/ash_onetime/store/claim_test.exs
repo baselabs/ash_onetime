@@ -1,11 +1,6 @@
 defmodule AshOnetime.Store.ClaimTest do
   use ExUnit.Case, async: true
 
-  # ROADMAP H32: structural tests for the Claim/Claim.Request structs. These are the
-  # authoritative admission records; a field-shape regression should surface directly, not via
-  # an integration test. The @enforce_keys contract (the security-relevant fields that must
-  # be present at construction) is the load-bearing invariant.
-
   alias AshOnetime.Store.Claim
   alias AshOnetime.Store.Claim.Request
 

@@ -220,7 +220,6 @@ defmodule AshOnetime.TransactionAdmissionTest do
 
     assert {:ok, _uuid} = Ecto.UUID.cast(claim_id)
 
-    # The returned UUID IS the stored claim's id (the durable address).
     assert {:ok, %{rows: [[count]]}} =
              Repo.query(
                "SELECT COUNT(*) FROM \"" <>

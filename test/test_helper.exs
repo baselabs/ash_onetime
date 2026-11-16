@@ -1,12 +1,8 @@
-# Fail closed against a wrong database target: the harness may only ever run
-# against the dedicated loopback instance. The PORT is deliberately flexible —
-# each machine picks a collision-free port via .env (PGPORT), and CI pins
-# 18841 — but every other dimension is fixed: the ecto scheme, the loopback
-# host, the dedicated database name and the dedicated instance's `postgres`
-# user. A shared server's login is refused: development and test databases
-# never live on a server that also carries released databases. The default
-# port 5432 is refused: a default-port listener is a shared local instance,
-# not the dedicated one.
+# Tests require a dedicated loopback PostgreSQL instance.
+# DATABASE_URL must use ecto, 127.0.0.1, postgres, and the dedicated test database.
+# PGPORT may vary by machine, but the default port 5432 is refused.
+# Never point tests at a server carrying unrelated databases.
+# The URL guard validates the target shape, not other server contents.
 database_url = System.fetch_env!("DATABASE_URL")
 
 %URI{scheme: scheme, userinfo: userinfo, host: host, port: port, path: path} =
@@ -29,11 +25,6 @@ end
 {:ok, _supervisor} = AshOnetime.Test.Application.start(:normal, [])
 AshOnetime.Test.Migration.assert_isolated_database!()
 
-# Install the AshPostgres SQL helper functions the test repo declares in
-# installed_extensions/0, from the committed codegen output under
-# test/support/priv, as every consumer's own extension migration does. In
-# :auto mode the migration commits before the per-test sandbox transactions.
-# The path is explicit: Ecto would resolve the repo's priv under _build.
 Ecto.Adapters.SQL.Sandbox.mode(AshOnetime.Test.Repo, :auto)
 
 Ecto.Migrator.run(

@@ -1315,15 +1315,10 @@ defmodule AshOnetime.Resource.Transformer do
   defp package_preparation?(_preparation), do: false
 
   defp ensure_callbacks(module, callbacks) when is_atom(module) do
-    # Code.ensure_compiled/1 triggers the module's compilation if it has not run yet
-    # (needed: callback modules — resolvers, codecs, verifiers — are often defined in the
-    # same compile unit as the protected resource and not yet compiled when this
-    # transformer runs). The cycle hazard (L10) is when the callback module transitively
-    # depends on the protected resource itself: ensure_compiled returns
-    # {:error, :nofile | :unavailable | :module_unavailable}, and the cycle case surfaces
-    # as the opaque "is not compiled" message. Distinguish the cycle/unavailable case
-    # (give the ordering guidance) from the genuine missing-module case, and only THEN
-    # check the callbacks are exported.
+    # Callback modules may share a compile unit with the resource and need ensure_compiled/1.
+    # A callback depending on that resource can create a compilation cycle.
+    # Distinguish unavailable/cyclic modules from missing modules in the diagnostic,
+    # then check that the required callbacks are exported.
     case Code.ensure_compiled(module) do
       {:module, ^module} ->
         verify_exported_callbacks(module, callbacks)

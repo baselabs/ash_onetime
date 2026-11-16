@@ -821,12 +821,10 @@ defmodule AshOnetime.ActionTransactionTest do
        %{
          prefix: prefix
        } do
-    # Inject a cross-partition payload row inside the Ash caller transaction via a
-    # trigger on claim INSERT, so the real Store.complete/5 hits its 1-payload
-    # cardinality guard (update_complete) and returns store_invariant. Unlike the
-    # FaultStore mock, this drives real PostgreSQL rollback through Ash.run_action
-    # -> Admission.complete -> Store.complete, unwinding the authoritative claim,
-    # both payload rows, and the CRUD business record together.
+    # Insert a cross-partition payload through a claim-INSERT trigger.
+    # Completion must reject duplicate payloads with store_invariant.
+    # The real Ash transaction must roll back the claim, both payload rows,
+    # and the CRUD business record together.
     SQL.query!(
       Repo,
       """
@@ -871,12 +869,9 @@ defmodule AshOnetime.ActionTransactionTest do
                |> Ash.Changeset.set_tenant(prefix)
                |> Ash.create()
 
-      # Pin the code the completion invariant surfaces to the caller (P1-2): an unrelated
-      # failure that also rolled everything back to zero must not satisfy this test for the
-      # wrong reason. Through the full Ash pipeline the store's `store_invariant` is caught as
-      # the Ecto rollback unwinds and normalized to `:response_completion_failed`
-      # (admission.ex:139/142) — the store-level tests see the raw `:store_invariant`. This
-      # pins the true caller contract and proves the typed code survives the pipeline (ARCH-1).
+      # Completion failure must preserve the caller-visible :response_completion_failed code.
+      # The store returns :store_invariant; the Ash rollback normalizes it.
+      # An unrelated rollback must not satisfy this assertion.
       assert AshOnetime.Error.code(error) == :response_completion_failed
 
       assert table_count(prefix, "ash_onetime_action_examples") == 0
@@ -1078,13 +1073,9 @@ defmodule AshOnetime.ActionTransactionTest do
     assert table_count(prefix, "ash_onetime_response_payloads") == 0
   end
 
-  # M1 (closeout fix): the bounded callback context is EXACTLY %{resource:, action:}. The
-  # prior admission_test pin (module_info(:functions) absence) was vacuous. This asserts the
-  # production bounded_callback_context/1 (the function the three call sites — scope :439,
-  # verify :521, mint :552 — pass to their callbacks) returns exactly %{resource:, action:}
-  # for a real ActionInput. No DB, no Ash action machinery → deterministic under full-suite
-  # load. A regression that re-forwards caller context (actor/tenant/keys/now) into the
-  # bounded context fails this test.
+  # The bounded callback context contains exactly resource and action.
+  # Caller-supplied actor, tenant, keys, and clock facts must not pass through.
+  # Exercise the production context function with a real ActionInput.
   @tag bounded_callback_context_contract: true
   test "the bounded callback context carries exactly resource and action (M1)" do
     subject = Ash.ActionInput.for_action(Resource, :consume, %{value: 1, proof: "m1-direct"})

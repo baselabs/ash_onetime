@@ -1,15 +1,4 @@
 defmodule AshOnetime.ScopeTest do
-  @moduledoc """
-  Unit coverage for the closed scope algebra (`AshOnetime.Scope`).
-
-  `normalize/1` is the compile-time gate that decides whether a declared scope is admissible;
-  `references/1` drives which action inputs a scope binds. Both were only touched indirectly
-  before (via `resource_test.exs` and the compile fixtures), so the accept edges — the exact
-  16-component limit and the `{:tenant,_}`/`{:argument,_}` forms — and `references/1`'s behavior
-  were unproven. Scope-hash collision isolation is inherited from `AshOnetime.Fingerprint`'s
-  canonical+SHA-256 injectivity (propertied in `fingerprint_test.exs`) and the claim-identity
-  `scope-identity` mutation; this file locks the pure algebra that feeds it.
-  """
   use ExUnit.Case, async: true
   use ExUnitProperties
 
@@ -92,7 +81,6 @@ defmodule AshOnetime.ScopeTest do
       case Scope.normalize(components) do
         {:ok, returned} ->
           assert expected_ok?
-          # a successful normalize returns the list verbatim, never a reordered/filtered one
           assert returned == components
 
         {:error, message} ->

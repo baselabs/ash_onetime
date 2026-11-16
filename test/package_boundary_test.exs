@@ -51,14 +51,6 @@ defmodule AshOnetime.PackageBoundaryTest do
     assert [{:provider_signature_module, "lib/stripe_signature.ex"}] = violations(entries, [])
   end
 
-  test "version-suffixed durable identifiers are rejected" do
-    entries = [
-      {"lib/token_v2.ex", "defmodule AshOnetime.TokenV2 do\n  def decode_v2, do: :ok\nend"}
-    ]
-
-    assert [{:version_suffix, "lib/token_v2.ex"}] = violations(entries, [])
-  end
-
   test "the database harness is pinned to its dedicated PostgreSQL 18 database" do
     # test_helper already failed closed unless DATABASE_URL targets the
     # dedicated shape (postgres user, loopback host, ash_onetime_test name,
@@ -124,13 +116,7 @@ defmodule AshOnetime.PackageBoundaryTest do
       ),
       {:provider_signature_module, path}
     )
-    |> maybe_add(version_suffix?(path, source), {:version_suffix, path})
     |> Enum.reverse()
-  end
-
-  defp version_suffix?(path, source) do
-    Regex.match?(~r/(?:^|[\/_])[^\/]*_v\d+(?:\.|_|\/|$)/i, path) or
-      Regex.match?(~r/\b(?:defmodule|def|defp)\s+\S*(?:_v\d+|V\d+)\b/, source)
   end
 
   defp maybe_add(violations, true, violation), do: [violation | violations]

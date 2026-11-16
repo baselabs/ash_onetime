@@ -136,13 +136,9 @@ defmodule AshOnetime.CacheTest do
     assert :ok = None.delete(key)
   end
 
-  # L7: the cache key uses length-prefixed framing so a future variable-length component
-  # cannot create a concatenation ambiguity. Today all components are fixed 32-byte SHA-256
-  # outputs, so there is no ambiguity to remove — this is defense-in-depth, tested here with
-  # synthetic variable-length inputs that WOULD collide under naive concat. This drives the
-  # PRODUCTION Cache.key/1 directly (exposed @doc false) rather than mirroring its framing
-  # locally, so a production framing regression (dropped length prefix) fails here against
-  # the real function, not a replica.
+  # Length-prefixed cache keys must distinguish ambiguous concatenations.
+  # Use variable-length components to exercise the framing guarantee.
+  # Call the production Cache.key/1 implementation.
   @tag cache_key_framing: true
   test "length-prefixed framing distinguishes inputs naive concat would collide" do
     # Two claims whose component lists (operation_hash/scope_hash/key_hash) concatenate
@@ -150,9 +146,6 @@ defmodule AshOnetime.CacheTest do
     claim_a = cache_key_claim("ab", "cd", "ef")
     claim_b = cache_key_claim("a", "bcd", "ef")
 
-    # Sanity: naive concat of the production component lists collides (the premise).
-    # Components are ["ash_onetime-cache", logical_partition, operation_hash, scope_hash,
-    # key_hash]. Both claims use the same global partition here.
     naive_a = IO.iodata_to_binary(["ash_onetime-cache", "global", "ab", "cd", "ef"])
     naive_b = IO.iodata_to_binary(["ash_onetime-cache", "global", "a", "bcd", "ef"])
     assert naive_a == naive_b

@@ -127,8 +127,6 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
           Doctor.run(["--repo", "AshOnetime.Test.Repo"])
         end)
 
-      # Oban is loaded in the test env; the advisory names the three queues regardless of
-      # whether they're configured (found → OK; missing → WARN; no config → WARN naming them).
       assert output =~ "ash_onetime_cleanup"
       assert output =~ "ash_onetime_reap"
       assert output =~ "ash_onetime_partitions"

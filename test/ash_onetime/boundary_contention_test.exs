@@ -1,11 +1,4 @@
 defmodule AshOnetime.BoundaryContentionTest do
-  @moduledoc """
-  Concurrency proofs for the context boundary on real PostgreSQL connections
-  (no sandbox): an overlapping context admits exactly one append per read epoch
-  with no phantom admission, a writer on tags held by an open transaction
-  blocks, disjoint contexts never block each other, and writers of one context
-  commit in seq order.
-  """
   use ExUnit.Case, async: false
 
   alias AshOnetime.Boundary
@@ -15,8 +8,6 @@ defmodule AshOnetime.BoundaryContentionTest do
   @writers 12
   @max_retries 40
 
-  # Wall-clock time keeps tenants unique across test-RUN restarts; the unique
-  # integer keeps them unique within one run.
   defp unique_tenant(prefix),
     do: "#{prefix}-#{System.system_time()}-#{System.unique_integer([:positive])}"
 

@@ -61,7 +61,6 @@ defmodule AshOnetime.DSTWindowCheck do
     end
   end
 
-  # An independent interpreter of the two rule forms the builder emits.
   defp rule_date("J" <> rule, year) do
     {day, "/0"} = Integer.parse(rule)
     leap_day = if Calendar.ISO.leap_year?(year) and day >= 60, do: 1, else: 0

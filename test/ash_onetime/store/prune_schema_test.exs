@@ -106,8 +106,7 @@ defmodule AshOnetime.Store.PruneSchemaTest do
 
   defp run_sql_migration!(source, name, prefix) do
     module = Module.concat(__MODULE__, name)
-    # The sandbox shares one connection; the migrator's advisory/table lock
-    # would hold it while its task requests it. Keep the native DDL transaction.
+
     source =
       source
       |> String.replace(inspect(Repo) <> ".Migrations." <> name, inspect(module))

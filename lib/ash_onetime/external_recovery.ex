@@ -92,13 +92,10 @@ defmodule AshOnetime.ExternalRecovery do
 
   defp continue(_decision, _subject, _protection, _context, _started), do: unavailable()
 
-  # ADR-0010 pre-peer claim lock: before ANY peer call, take the claim row FOR UPDATE in the
-  # caller's open transaction with a bounded wait, then re-resolve. A same-key retry now
-  # either waits out the original and replays its completed result, or fails with
-  # :request_in_progress — it can no longer execute concurrently under one operation key.
-  # A claim that completed while this caller was blocked resolves to a replay (the full-row
-  # lock result routes through the same finalize-mode resolver); a reaped-and-reinserted row
-  # is missing under the id bind and fails closed.
+  # Before any peer call, lock the claim in the caller transaction with a bounded wait.
+  # Re-resolve the full locator: processing proceeds, complete replays, and missing fails closed.
+  # A contended same-key retry returns :request_in_progress.
+  # The claim-id binding rejects a reaped-and-reinserted row (ADR 0010).
   defp lock_for_peer(state, protection, started) do
     case Store.lock_for_effect(state.target, state.claim, claim_lock_options(protection)) do
       %Result{status: :failure, reason: :lock_timeout} ->

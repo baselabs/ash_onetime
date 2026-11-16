@@ -1,23 +1,11 @@
 defmodule AshOnetime.ReplayFenceTest do
   @moduledoc """
-  Tripwires for the independent-commit DPoP replay fence (ADR-0003, RFC 9449 §11.1).
+  Independent nonce admission fails closed, commits before the body, and remains
+  unreapable within its retention window. The key comes from trusted verified facts.
+  Failure-survival coverage is in `nonce_rollback_gap_test.exs`.
 
-  Each test names the property it pins. The fence's defining property — "the spend survives
-  action-body failure" — is pinned in `nonce_rollback_gap_test.exs`; these tests pin the
-  surrounding safety properties: fail-closed on store unavailability, the burn-marker being
-  unreapable inside its window, the fence keying on the verified proof, and the commit happening
-  before the body runs.
-
-  All fence-path tests run against an UNBOXED repo (`start_unboxed_repo!`) because
-  `claim_committed` spawns a worker process on its own connection — the mechanism that makes the
-  independent commit real — and a spawned process cannot share the test sandbox's owned
-  transaction (the same constraint `external_recovery_test.exs` already satisfies). Because the
-  unboxed repo is not sandboxed, claims persist across tests; tests use unique proofs and assert
-  on the observable admit/reject behavior (the real contract) rather than total row counts.
-
-  The `key_hash` stored in the table is a canonical-Fingerprint hash of the verified-proof
-  descriptor (not a raw `sha256(proof)`), so tests that need to target a specific marker capture
-  its `key_hash` from the DB after the first admit rather than reconstructing it.
+  Use separate real connections for independent commits and unique proofs per test.
+  Capture stored key hashes rather than reconstructing the canonical fingerprint.
   """
 
   use AshOnetime.Test.StoreCase, async: false
@@ -99,9 +87,6 @@ defmodule AshOnetime.ReplayFenceTest do
       assert {:error, first} = run_fence(repo, prefix, proof_a, 1)
       assert AshOnetime.Error.code(first) == :downstream_failed
 
-      # A DIFFERENT proof (different key_hash) is a fresh attempt — admits and the body runs
-      # (and fails). If the fence keyed on (operation, scope) only, this would collide and
-      # return :nonce_already_used.
       assert {:error, second} = run_fence(repo, prefix, proof_b, 2)
       assert AshOnetime.Error.code(second) == :downstream_failed
 
@@ -194,11 +179,9 @@ defmodule AshOnetime.ReplayFenceTest do
     @tag replay_fence: true
     test "the same proof admits independently in two tenants (no cross-tenant bleed)",
          %{prefix: prefix, fence_repo: repo, migration_module: module} do
-      # Two tenants = two prefixes (context-multitenancy physical-schema isolation). The same
-      # proof in each admits independently — the fence keys on (operation, scope, key) and the
-      # scope/tenant differs. No collision across tenants. Second prefix via Ecto.Migrator.up
-      # with a bumped version (the tenant_prefix_test.exs pattern, since install_generated! can
-      # only run once per test module).
+      # Context-multitenant prefixes isolate the same proof.
+      # Each tenant must admit independently.
+      # The fence locator includes operation, scope, and key within its prefix.
       other_prefix = "ash_onetime_test_#{Ecto.UUID.generate() |> String.replace("-", "")}"
       other_version = 9_999_999_999
 
@@ -269,9 +252,6 @@ defmodule AshOnetime.ReplayFenceTest do
 
       assert value == 42
 
-      # No response payload was persisted — the fence marker is a one-way spend, not a stored
-      # response. (The idempotency response_payloads table is the persistence surface
-      # complete_external would write; 0 rows proves the mapping is :nonce, not :external_execute.)
       %{rows: [[0]]} =
         SQL.query!(
           repo,
@@ -316,11 +296,6 @@ defmodule AshOnetime.ReplayFenceTest do
       assert {:error, _} = run_fence(repo, prefix, proof, 1)
       key_hash = capture_key_hash(repo, prefix, proof)
 
-      # Force the marker to be cleanup-eligible by back-dating retain_until, admitted_at,
-      # inserted_at, AND issued_at past the window, following the established
-      # window_cleanup_test.exs SQL-manipulation pattern. All four timestamp fields must move
-      # together so the CHECKs (retain_until > admitted_at, retain_until > issued_at) hold;
-      # back-dating only retain_until on a just-admitted row violates them.
       SQL.query!(
         repo,
         """
@@ -343,7 +318,6 @@ defmodule AshOnetime.ReplayFenceTest do
       # THIS proof's marker is gone.
       assert count_claims_by_key(repo, prefix, key_hash) == 0
 
-      # Window expired → a fresh attempt with the same proof re-admits (and the body fails again).
       assert {:error, retry} = run_fence(repo, prefix, proof, 1)
       assert AshOnetime.Error.code(retry) == :downstream_failed
     end
@@ -397,10 +371,6 @@ defmodule AshOnetime.ReplayFenceTest do
     end
   end
 
-  # Captures the key_hash of the fence marker for `proof`. The key_hash is a canonical-
-  # Fingerprint hash (not raw sha256), so it must be read from the DB rather than reconstructed.
-  # Select the fence-scope marker inserted in the last 2 seconds — tests use unique proofs and
-  # run sequentially (async: false), so the just-inserted marker is the latest in its scope.
   defp capture_key_hash(repo, prefix, _proof) do
     %{rows: [[key_hash]]} =
       SQL.query!(

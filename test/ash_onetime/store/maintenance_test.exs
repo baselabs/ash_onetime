@@ -18,13 +18,9 @@ defmodule AshOnetime.Store.MaintenanceTest do
     Sandbox.mode(Repo, :auto)
 
     if context[:shipped_release] do
-      # A full high-modulus upgrade and restore can outlive the Sandbox default.
-      # Keep fixture DDL committed and scope the longer ownership to this case.
       :ok = Sandbox.checkout(Repo, sandbox: false, ownership_timeout: 900_000)
     end
 
-    # Query only after explicit checkout: auto mode would otherwise claim ownership.
-    # The isolation proof still precedes every fixture role and cluster-wide grant.
     ClusterIsolation.assert_per_run_server!()
 
     suffix = Ecto.UUID.generate() |> String.replace("-", "")
@@ -211,8 +207,6 @@ defmodule AshOnetime.Store.MaintenanceTest do
       end
 
       if context[:legacy_install] && !context[:firing_upgrade_mutation] do
-        # Mandatory unreleased operation-hold upgrade precedes maintenance.
-        # Keep shipped sources frozen and exercise the current migration.
         migrate_source!(owner_repo, schema, Generator.render_operation_hold_upgrade(Repo, []))
       end
 
@@ -519,10 +513,6 @@ defmodule AshOnetime.Store.MaintenanceTest do
       install_dst_observer!(c)
       claim = dst_held_claim!(c, zone, seconds, "restart")
 
-      # The store has no database clock seam. Admission and completion above use
-      # the real API and clock. The cold trusted owner ages this fixture by two
-      # hours, preserving its configured elapsed window, so GREATEST cannot mask
-      # a spring-forward restart that is one hour short.
       SQL.query!(
         c.owner_repo,
         """
@@ -540,8 +530,6 @@ defmodule AshOnetime.Store.MaintenanceTest do
         assert_dst_restart(c, claim.id, zone, seconds)
       end)
 
-      # The restart must also preserve a deadline already later than the new
-      # elapsed window. Give a second fixture two hours of extra headroom.
       later = dst_held_claim!(c, zone, seconds, "later")
 
       SQL.query!(
@@ -576,9 +564,6 @@ defmodule AshOnetime.Store.MaintenanceTest do
     today = scalar(c.runtime_repo, "SELECT (statement_timestamp() AT TIME ZONE 'UTC')::date")
     {zone, seconds} = DSTWindow.build(today, direction)
 
-    # Ask the real server to verify the generated POSIX rules. Both mirrored
-    # zones change four days from today and change back twelve days from today.
-    # The six-day retention window must cross exactly one change, all year.
     rows =
       SQL.query!(
         c.runtime_repo,
@@ -1088,7 +1073,6 @@ defmodule AshOnetime.Store.MaintenanceTest do
   @tag defects_batch: true
   test "public containment checks database ownership and every database owner holder", c do
     with_public_install(c, fn public ->
-      # pg_database_owner is implicit; no grant to that predefined role is made.
       sql!(Repo, "ALTER DATABASE #{q(public.database)} OWNER TO #{q(c.outsider)}")
       error = trust_error(public)
       assert error =~ "pg_database_owner"
@@ -3317,8 +3301,6 @@ defmodule AshOnetime.Store.MaintenanceTest do
   test "concurrent compound Store cleanup completes without a deadlock", c do
     {:ok, second_repo} = subject(c.runtime)
 
-    # An expired candidate forces the old compound transaction to upgrade its
-    # payload lock while its peer still holds the cleanup locks.
     child = rel(c, "concurrent_past")
 
     sql!(
@@ -4004,7 +3986,6 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   defp assert_reference_shapes(c) do
-    # Use R1's same-server fresh-install reference for every root and child.
     expected = scalar(c.owner_repo, "SELECT #{rel(c, "ash_onetime_maintenance_shapes")}()")
 
     rows =
@@ -4103,8 +4084,6 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   defp reseal_fixture_routine(c, signature) do
-    # Owner-only fault injection updates the fixture's expected digest too, so
-    # concurrency tests reach the lock barrier rather than the tamper refusal.
     name = signature |> String.split("(") |> hd()
 
     [old, new] =
@@ -4730,7 +4709,6 @@ defmodule AshOnetime.Store.MaintenanceTest do
     assert normalize.(located) == normalize.(tree)
   end
 
-  # Pin each field independently when PostgreSQL requires coupled catalog edits.
   defp compared_field(shape, kind) do
     {section, field} =
       case kind do
@@ -4781,9 +4759,6 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     dependency_ddl(c, kind)
 
-    # An immutable fixture may have been folded while the owner installed it.
-    # Session advisory locks survive transaction rollback, so an invocation
-    # during refused maintenance cannot be hidden by rollback.
     sql!(c.owner_repo, "SELECT pg_advisory_unlock_all()")
   end
 
@@ -4854,7 +4829,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
     probe = rel(c, "probe")
 
     sql!(c.owner_repo, "DROP INDEX #{rel(c, "ash_onetime_nonce_claims_retain_until_index")}")
-    # Expression keys require indkey=0; the field proof isolates indexprs from that change.
+
     sql!(
       c.owner_repo,
       "CREATE INDEX ash_onetime_nonce_claims_retain_until_index ON #{claims} ((CASE WHEN #{probe}() THEN retain_until ELSE retain_until END))"
@@ -5110,7 +5085,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
     )
 
     sql!(c.owner_repo, "DROP INDEX #{rel(c, "ash_onetime_nonce_claims_retain_until_index")}")
-    # An access method requires its own opclass; assert the AM field independently too.
+
     sql!(
       c.owner_repo,
       "CREATE INDEX ash_onetime_nonce_claims_retain_until_index ON #{claims} USING #{q(am)}(retain_until)"

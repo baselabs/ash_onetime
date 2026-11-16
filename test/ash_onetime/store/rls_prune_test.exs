@@ -1,20 +1,11 @@
 defmodule AshOnetime.Store.RLSPruneTest do
   @moduledoc """
-  The payload-partition prune under FORCE row-level security, on real PostgreSQL.
+  Payload pruning decides DROP as the table owner inside a per-child savepoint.
+  Lock, recheck OID/parent/owner/heap shape, remove FORCE locally, and count with
+  row_security disabled: the result must be unfiltered or fail closed.
 
-  The prune decides DROP as the table owner inside a per-partition savepoint: an
-  exclusive lock, an OID re-check (plain heap child of this schema's payload
-  parent, owned by the driver), an uncommitted NO FORCE, and a count with
-  row_security disabled. An owner of an un-FORCEd relation is exempt before the
-  row_security check, so the count is unfiltered or errors — whatever policies
-  exist. No role, function, or superuser is involved.
-
-  A superuser bypasses RLS, so the owner-driven cells run on a non-superuser
-  CREATEROLE owner (tier 2 below), created by a superuser bootstrap
-  connection (CI's containerized postgres, or an ephemeral area
-  run with ASH_ONETIME_RLS_PRUNE_TESTS=1) and is skipped with instructions
-  otherwise. Tier 1 (the fail-closed-keeps-cleanup and isolation-refusal
-  cells) needs only the shared instance's own non-superuser role.
+  Owner-driven tests use a non-superuser owner created by the isolated superuser
+  bootstrap; ASH_ONETIME_RLS_PRUNE_TESTS=1 requires that substrate.
   """
 
   use ExUnit.Case, async: false
@@ -26,9 +17,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: GenerateMigrations
 
-  # Every test builds and drops its own schema and roles, so the suite runs
-  # with the pool in auto mode (the migrator spawns its own processes, which
-  # cannot check out a sandbox-owned connection).
   setup do
     Sandbox.mode(Repo, :auto)
     on_exit(fn -> Sandbox.mode(Repo, :manual) end)
@@ -40,11 +28,9 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
   @tenant_setting "ash_onetime.tenant"
 
-  # The matrix bootstrap installs event triggers and postgres_fdw, requiring
-  # superuser: CI (its containerized postgres sets ASH_ONETIME_RLS_PRUNE_TESTS=1)
-  # and an ephemeral area run with the variable exported; the shared dev
-  # instance leaves the tier skipped with instructions. A run that sets the
-  # variable on a substrate that cannot deliver fails loudly in rls_substrate!/1.
+  # Event triggers and postgres_fdw require an isolated superuser bootstrap.
+  # ASH_ONETIME_RLS_PRUNE_TESTS=1 enables these tests and requires that substrate.
+  # An insufficient enabled substrate must fail explicitly.
   @rls_prune_tier if System.get_env("ASH_ONETIME_RLS_PRUNE_TESTS") == "1",
                     do: [],
                     else: [
@@ -94,9 +80,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
     end
   end
 
-  # Ecto.Adapters.SQL.query(Repo, ...) uses that registered pool literally;
-  # it does not follow Repo.put_dynamic_repo/1. Fixtures that select an owner
-  # must address its PID, just as the store's dispatched_query does.
   defp query_repo(Repo), do: Repo.get_dynamic_repo()
   defp query_repo(repo), do: repo
 
@@ -137,10 +120,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
     repo
   end
 
-  # ------------------------------------------------------------------
-  # Tier 1 — shared-instance cells
-  # ------------------------------------------------------------------
-
   @tag rls_partition_kept_mutation: true
   @tag rls_prune_unforce_mutation: true
   @tag rls_prune_count_mutation: true
@@ -166,10 +145,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
     put_repo(tenant_a)
 
-    # On the shared instance the tenant session IS the table owner, so this is
-    # the owner-driven prune under a tenant context: the empty August sibling
-    # drops, tenant B's occupied partition is kept with FORCE restored, and
-    # the eligible claim is deleted in the same run (the F2 shape).
     result = Postgres.cleanup(Postgres.for_repo(Repo, prefix), 100, 4)
 
     Repo.put_dynamic_repo(Repo)
@@ -207,10 +182,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
     partition = partition_name(~D[2026-09-01])
     insert_payload!(prefix, partition, "tenant-b", ~D[2026-09-15])
 
-    # A stale REPEATABLE READ snapshot would read a partition empty even after
-    # a row committed while the prune's lock waited (the F1 race the design
-    # probe demonstrated live), so cleanup must refuse like every claim path.
-    # The session-level default puts cleanup's own BEGIN at REPEATABLE READ.
     rr_repo = start_rr_repo(base_url(tier1))
     put_repo(rr_repo)
 
@@ -224,10 +195,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
     tier1_takedown(tier1)
   end
 
-  # Tier 1 runs on the shared instance's own non-superuser role when it can,
-  # and through a freshly created owner role when the main connection is a
-  # superuser (CI, ephemeral area runs) — a superuser would bypass RLS and
-  # make both tests pass falsely.
   defp tier1_substrate! do
     if role_privileges().superuser? do
       substrate = rls_substrate!()
@@ -379,7 +346,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
       refute partition_exists?(prefix, empty_partition)
       assert partition_exists?(prefix, occupied_partition)
-      # The rollback-to-savepoint restored FORCE on the kept partition.
       assert force_flagged?(prefix, occupied_partition)
     end
 
@@ -629,8 +595,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
       Repo.put_dynamic_repo(Repo)
 
-      # Both past partitions were installed empty; both are kept under the
-      # DDL block, and FORCE was restored on each by the savepoint rollback.
       assert partition_exists?(prefix, empty_partition)
       assert partition_exists?(prefix, partition_name(~D[2026-08-01]))
       assert force_flagged?(prefix, empty_partition)
@@ -707,7 +671,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
       parent = self()
       reader = start_tenant_repo(owner_url(), "tenant-a")
       writer = start_tenant_repo(app_url(), "tenant-b")
-      # Keep the reader until explicitly released: no sleep decides the ordering.
+
       reader_task =
         Task.async(fn ->
           Repo.put_dynamic_repo(reader)
@@ -1470,8 +1434,6 @@ defmodule AshOnetime.Store.RLSPruneTest do
     end
   end
 
-  # The migrating role owns its schema (as in a real consumer install). The
-  # shared instance's own role creates its schema directly.
   defp provision_schema!(_context, Repo, prefix) do
     query!(Repo, ~s{CREATE SCHEMA "#{prefix}"}, [])
   end

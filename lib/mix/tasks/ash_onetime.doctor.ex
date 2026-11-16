@@ -51,8 +51,6 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
 
   @switches [repo: :string, prefix: :string, live: :boolean]
 
-  # Mirrors mix.exs ash_requirement/0 and ADR 0004: EEF-CVE-2026-96581 sets the
-  # 3.37.2 floor. Update the consumer requirement and this runtime check together.
   @ash_floor Version.parse!("3.37.2")
 
   # The three required Oban queues (authoritative source: the three `use Oban.Worker, queue:`
@@ -417,12 +415,10 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
     end
   end
 
-  # The pure verdict seam, mirroring floor_status/oban_queue_status: the catalog facts are
-  # gathered by live_schema_facts/2 against the database; THIS function decides pass/fail
-  # from them, so every stale-schema shape is directly testable without a live connection.
-  # A missing item is FAIL, never WARN: a schema that is not current for the running
-  # package is the exact silent 3am failure mode (--store_invariant at first admission)
-  # this check exists to catch at upgrade time.
+  # Evaluate catalog facts gathered by live_schema_facts/2.
+  # A missing schema item is FAIL, never WARN.
+  # The installed schema must match the running package
+  # before admission can rely on its database invariants.
   @doc false
   @spec schema_status(map()) :: [{:ok | :fail, String.t()}]
   def schema_status(facts) do

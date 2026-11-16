@@ -81,11 +81,9 @@ defmodule AshOnetime.Codec.ResourceTest do
   end
 
   test "the unified limits map carries response keys to the contract and selects out protect-only keys" do
-    # After ARCH-8 collapses the dual limits surface, a single protect-level `limits` carries the
-    # union vocabulary. admission.ex forwards it wholesale into trusted[:limits]. The response
-    # contract must SELECT the response-relevant subset (max_response_*), SUCCEED (the
-    # protect-only keys are not typos — they're valid protect bounds), and carry the declared
-    # response values through to the contract + structural map.
+    # Protect-level limits include both response and protect-only keys.
+    # Response contracts must select response keys and accept known protect-only keys.
+    # Declared response values must survive into the structural limits.
     response = %AshOnetime.Resource.Response{
       codec: Resource,
       fields: [:id, :name, :amount],
@@ -96,7 +94,6 @@ defmodule AshOnetime.Codec.ResourceTest do
     trusted = %{limits: [max_response_bytes: 100, max_response_depth: 8, max_key_bytes: 4096]}
 
     assert {:ok, contract} = Response.contract(Account, :create_account, response, trusted)
-    # Response keys flow with their declared values (single source = Codec.hard_limits/0).
     assert AshOnetime.Codec.max_bytes(contract) == 100
     structural = AshOnetime.Codec.structural_limits(contract)
     assert structural.max_response_depth == 8
@@ -107,12 +104,9 @@ defmodule AshOnetime.Codec.ResourceTest do
 
   @tag structural_limits_map_take_mutation: true
   test "structural_limits ignores non-response keys even on an un-normalized contract" do
-    # structural_limits/1 is documented safe to call on an un-normalized map (codec.ex) — its
-    # Map.take over Codec.hard_limits/0 keys is the defense that keeps a protect-only key (or any
-    # non-response key) out of the response structural computation when a direct caller hands it a
-    # contract carrying the full union. This pins that Map.take (plan-review F4 / the single-source
-    # guard): removing it lets max_key_bytes leak into the structural map. RED before the mutation
-    # restoration: if Map.take becomes a passthrough, this test fails.
+    # structural_limits/1 accepts unnormalized maps.
+    # Only Codec.hard_limits/0 keys may reach the structural computation.
+    # Protect-only keys must be excluded.
     unnormalized = %{limits: %{max_response_bytes: 100, max_key_bytes: 4096, bogus: 1}}
 
     structural = AshOnetime.Codec.structural_limits(unnormalized)

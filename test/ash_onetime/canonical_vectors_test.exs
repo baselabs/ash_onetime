@@ -1,6 +1,4 @@
 defmodule AshOnetime.CanonicalVectorsTest do
-  # The shipped format 1 vectors were authored by an implementation independent of this
-  # package. Each vector is checked against the real encoder, fingerprint and decoder.
   use ExUnit.Case, async: true
 
   alias AshOnetime.Canonical

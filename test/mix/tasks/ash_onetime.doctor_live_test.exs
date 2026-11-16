@@ -1,11 +1,4 @@
 defmodule Mix.Tasks.AshOnetime.DoctorLiveTest do
-  @moduledoc """
-  Live schema-currency coverage for `mix ash_onetime.doctor --live`: the full check path
-  (repo start tolerance, catalog queries, verdict rendering, exit behavior) against a real
-  installed schema, plus the discriminating direction — a schema WITHOUT the install must
-  FAIL, which is the upgrade-without-migrating failure mode the check exists to catch.
-  """
-
   use ExUnit.Case, async: false
 
   alias AshOnetime.Test.{Migration, RealConnection}

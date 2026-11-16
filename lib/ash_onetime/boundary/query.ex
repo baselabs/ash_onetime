@@ -12,22 +12,10 @@ defmodule AshOnetime.Boundary.Query do
   alone — is refused.
   """
 
-  # Validation and SQL compilation for context-boundary queries: a boolean
-  # expression over tags and types. Validation enforces three properties:
-  #
-  #   * bounds — node count, tag-leaf count, and depth stay inside package
-  #     ceilings, so a query can never ask for an unbounded number of advisory
-  #     locks or an unboundedly deep predicate;
-  #   * bounded leaves — every tag and type is a 1..255-byte UTF-8 binary
-  #     without NUL bytes;
-  #   * tag-anchoring (soundness) — every fact the query can match carries at
-  #     least one tag the query names. This is what makes the lock set cover
-  #     the context: any concurrent writer whose fact matches the query must
-  #     lock one of those named tags (writers lock every tag their query names
-  #     and every tag their facts carry), so the check and append serialize
-  #     against exactly the writers that could change the context. A query
-  #     naming no tag — or whose matches could be satisfied by a type branch
-  #     or a negation alone — is refused.
+  # Queries have bounded node count, tag count, depth, and UTF-8 leaves.
+  # Every matching fact must carry a tag named by the query.
+  # Writers lock query tags and fact tags, covering all context-changing writes.
+  # Queries satisfiable by an unanchored type or negation are refused.
 
   @max_nodes 64
   @max_tag_leaves 32

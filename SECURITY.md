@@ -6,25 +6,12 @@ until a maintainer confirms disclosure is safe.
 
 ## Supported versions
 
-| Release line | Bug fixes | Security fixes |
-| --- | --- | --- |
-| Pre-1.0: latest published minor (the `0.7.x` line — superseded by 1.0.0; upgrade) | No | No — upgrade to 1.x |
-| Pre-1.0: older minors | No | No — upgrade to the latest minor |
-| From 1.0.0: latest minor | Yes | Yes |
-| From 1.0.0: previous minor | Security-driven only | Yes — backported patch releases |
+The latest and previous 1.x minors receive security fixes; only the latest receives general
+bug fixes. Older minors and pre-1.0 releases are unsupported: upgrade to a supported line.
 
-From 1.0.0 the security window covers the latest two minors. The window may widen
-(announced as a docs change) and never silently narrows — a narrowing is announced one
-minor ahead in the release notes.
-
-Support is fixed at advisory intake, not recalculated to discard work when a new minor ships.
-If the latest and previous lines are supported when an advisory arrives, both retain their
-patch obligations even when the latest-line fix is released as a new security-driven minor.
-For the October 6, 2026 dependency-floor intake, 1.4.x and 1.3.x were those two lines;
-their dependency-floor patches are
-[1.4.2](https://hex.pm/packages/ash_onetime/1.4.2) and
-[1.3.4](https://hex.pm/packages/ash_onetime/1.3.4). Applications staying on either feature
-line can update its patch version rather than move to 1.5.0.
+The window may widen. Any narrowing is announced one minor ahead in release notes.
+Support is fixed at advisory intake: both supported lines retain their patch obligations
+even if the fix ships as a new security-driven minor.
 
 ## Fix and disclosure policy
 

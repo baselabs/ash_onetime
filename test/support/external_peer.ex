@@ -4,12 +4,9 @@ defmodule AshOnetime.Test.ExternalPeer do
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
 
-  # The observer sessions must land on the SAME dedicated instance the Repo
-  # uses — derive host/port/credentials from the Repo's configured URL at
-  # runtime instead of pinning a port that no longer has a single value
-  # (each machine picks its collision-free PGPORT via .env; CI pins 18841).
-  # `database` is overridable for the mutation battery's alternate-database
-  # observer runs (ASH_ONETIME_EXPECTED_TEST_DATABASE).
+  # Observer sessions use the Repo's configured host, port, and credentials.
+  # They must reach the same dedicated PostgreSQL instance.
+  # ASH_ONETIME_EXPECTED_TEST_DATABASE may select an alternate test database.
   def database_options(database \\ nil) do
     %URI{host: host, port: port, userinfo: userinfo, path: path} =
       URI.parse(Application.fetch_env!(:ash_onetime, Repo)[:url])
@@ -206,8 +203,6 @@ defmodule AshOnetime.Test.ExternalPeer do
       :authoritative ->
         load_operation(transaction, prefix, operation_key)
 
-      # A well-formed peer recovery that DIVERGES from what execute stored, used to prove that
-      # finalize binds the recover result (the peer is authoritative for external effects).
       :divergent ->
         {:ok, 9_999}
     end

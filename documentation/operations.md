@@ -54,6 +54,7 @@ Monitor held operations:
 
 ```elixir
 AshOnetime.Store.held_backlog(target)
+
 # {:ok, %{held_count: count, oldest_age_seconds: seconds_or_nil}}
 ```
 
@@ -451,8 +452,9 @@ the store no longer knows those keys were spent. What that means per strategy:
 - **Idempotency:** a key whose effect completed after the restore point executes FRESH on
   retry — the restored store has no claim, and the retry's fingerprint matches (it is the
   same request), so it admits rather than conflicts. The protected effect can fire twice.
-  Where an `external_effect` adapter is deployed, its `recover/3` protocol observes the peer
-  state on the retry; otherwise this is business-level reconciliation.
+  An external retry with a lost claim gets a new claim UUID and peer operation key, then
+  executes as fresh. Recovery under that new key cannot discover the prior effect;
+  business-level reconciliation must use application logs and peer records.
 - **Cross-system disagreement:** external systems (payment providers, webhook targets)
   remember effects the restored store has forgotten. The application's own logs and the
   peers' records for the post-restore-point period are the source of truth for what actually
@@ -471,9 +473,9 @@ restore point is in scope for reconciliation.
    restore point are replayable by an adversary (not just a retrying client), block their
    redemption at the edge until the windows close. Minutes of fencing, not hours.
 3. Reconcile external effects: for every post-restore-point effect, confirm against the peer
-   whether it happened. Idempotency retries with an `external_effect` adapter perform this
-   automatically via the recover protocol; adapters without it (or unprotected actions) need
-   business reconciliation.
+   whether it happened using a business identity that survives the restore. The recover
+   protocol helps only while the original claim and its operation key survive. A restored-away
+   claim receives a new key on retry, so the library cannot reconcile it automatically.
 4. Roll the partition window forward: the restored (older) `ash_onetime_response_payloads`
    partition set may have a lapsed forward window — new payloads would route to `_default`
    and never drop. Run `mix ash_onetime.roll_partitions --repo MyApp.Repo` after the restore
@@ -496,7 +498,7 @@ owner can `DROP TABLE` anyway, so the owner uses its own exemption, scoped to a
 subtransaction no other session can observe. Per past-retention partition it takes the
 DROP's own `ACCESS EXCLUSIVE` lock on the parent first, then the child and the `_default`
 partition without waiting, re-verifies by OID that the relation is a plain-heap
-child of the schema's payload parent owned by the driver, applies an uncommitted
+child of the schema's payload parent owned by the routine owner, applies an uncommitted
 `ALTER TABLE … NO FORCE ROW LEVEL SECURITY`, refuses if FORCE is still on (a DDL hook
 can reapply it), and probes emptiness with `EXISTS` while `row_security` is disabled.
 `row_security=off` is armed before the ALTER and remains a required fail-closed defense
@@ -615,10 +617,10 @@ Operational notes:
   schedules) both hold the parent's row lock from claim deletion, so both requesting the DROP
   lock would deadlock. The prune takes a transaction-scoped advisory key on the parent's OID just
   before locking; a cleanup that finds it taken stops its partition pass and still commits its
-  claim cleanup. Non-owner drivers never take the key.
+  claim cleanup. The owner-owned routine takes the key on behalf of authorized callers.
 - **Successful drops hold their locks until the transaction ends**, and the advisory key with
-  them. `Store.cleanup` commits right after the pass; if you call it inside your own
-  transaction, commit promptly.
+  them. `Store.cleanup` owns and commits its transaction after the pass, and refuses nested
+  calls. Direct routine callers must commit promptly.
 - **Why empty months stay attached.** Ordinary short transactions never starve the prune: once
   its lock request is queued, new work queues behind it. Only a lock holder that outlasts the
   budget does, such as a session idle in a transaction, a long report, or a backup. Under
@@ -641,10 +643,9 @@ Operational notes:
   its lock, so a row committed while the lock waits would be invisible to the count;
   cleanup refuses with `:unsupported_isolation` like every claim path.
 - **`roll_partitions` copies the parent's ENABLE/FORCE row-security settings and full
-  policy set onto every partition it creates.** Children are directly queryable by name
-  (a runtime role with default privileges holds SELECT on everything the owner creates),
-  so the copied policies are what keep a direct child read tenant-scoped. The store's own
-  writes go through the parent, whose policies govern.
+  policy set onto every partition it creates.** The maintenance upgrade also makes child
+  ACLs owner-only and audits effective table and column privileges. Runtime DML uses
+  the parent, whose policies govern; granting runtime access to children is refused.
 - **Children that already exist when you enable RLS must be brought in line once** —
   the copy runs at creation, not retroactively. Include this in the same migration that
   enables RLS on the parent (the `_default` partition and the install-time months
@@ -688,7 +689,6 @@ Operational notes:
   every partition (reason `:ddl_blocked`) without failing cleanup. A hook reapplying FORCE
   similarly refuses with `:force_reapplied`.
 
-
 ## Key rotation
 
 Token verification resolves material by the signed key identifier. Add a new key before
@@ -700,11 +700,9 @@ The supported runtime is Elixir `~> 1.20` (verified on 1.20.5; this admits later
 and excludes 2.0 or newer) and Erlang/OTP 28 or 29 with Ash `>= 3.37.2 and < 4.0.0`,
 AshPostgres `~> 2.15 and >= 2.15.2`, and PostgreSQL 18 (the version the project's test harness and release
 checks run on). The optional installer HTTP closure is constrained to Mint
-`~> 1.10 and >= 1.10.2`. The SQL surface itself needs PostgreSQL 11 or newer — declarative
-hash/range partitioning with default partitions, `SELECT ... FOR UPDATE SKIP LOCKED`, and
-`pg_advisory_xact_lock(bigint)` are all 11+ features — but nothing below 18 is exercised by
-this project's CI: treat older servers as unverified, and report (or CI-pin) the version you
-run before relying on one. Release checks include the full suite, mutation matrix, executable
+`~> 1.10 and >= 1.10.2`. The generated maintenance SQL needs PostgreSQL 17 or newer
+for its `MAINTAIN` privilege checks and revocations. Nothing below 18 is exercised by
+this project's CI; treat PostgreSQL 17 as unverified. Release checks include the full suite, mutation matrix, executable
 Livebooks against PostgreSQL, warnings-as-errors documentation, exact Hex archive inspection,
 and an unpacked zero-configuration consumer, all run on the runtime pinned in `.tool-versions`;
 see [CONTRIBUTING](../CONTRIBUTING.md).

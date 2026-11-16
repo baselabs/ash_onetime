@@ -1346,7 +1346,6 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/scope_test.exs",
       tag: "scope_uniqueness_mutation",
       test_name: "rejects duplicate components",
-      # ExUnit renders the keyword-list scope in shorthand in the failed-assertion source.
       assertion: "Scope.normalize(static: \"x\", attribute: :a, static: \"x\")"
     },
     "ed25519-verify-honored" => %{
@@ -1376,10 +1375,6 @@ defmodule AshOnetime.MutationCheck do
       test_name: "verify re-validates the decoded body's key_id bound before the signature",
       assertion: "Token.verify(encoded, Local, verify_options())"
     },
-    # secure-equal-truncate was RETIRED: the full-length constant-time compare moved into
-    # the :crypto.hash_equals/2 NIF when secure_equal/2 became a one-line wrapper, so the
-    # property is no longer expressible as an Elixir-source mutation. The behavior test
-    # (secure_equal_full_length_mutation in hmac_test.exs) stays as a green-only check.
     "secure-equal-length" => %{
       path: "lib/ash_onetime/signer/hmac.ex",
       original:
@@ -1390,11 +1385,6 @@ defmodule AshOnetime.MutationCheck do
       test_name: "invalid trusted keys and signature sizes fail closed",
       assertion: "HMAC.verify(\"message\", <<0>>, same_service(@rfc_key))"
     },
-    # signature-compare was RETIRED alongside secure-equal-truncate: it mutated the
-    # hand-rolled XOR-reduce's final `Kernel.==(0)`, which is gone now that secure_equal/2
-    # delegates to :crypto.hash_equals/2. The constant-time-compare property it pinned lives
-    # in the NIF; the system-level behavior test (signature_compare_mutation in
-    # package_consumer_test.exs) stays as a green-only check.
     "token-identifier-bound" => %{
       path: "lib/ash_onetime/token.ex",
       original: "  @max_identifier_bytes 128",
@@ -1712,8 +1702,6 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/store/rls_prune_test.exs",
       tag: "rls_error_to_kept_mutation",
       test_name: "an event trigger blocking ALTER TABLE keeps partitions and fails nothing",
-      # Re-raising escapes the prune before its result is matched, so the mutant's
-      # signature is the event trigger's error surfacing from the prune call.
       assertion: "(raise_exception) DDL blocked"
     },
     "payload-partition-count" => %{
@@ -2430,10 +2418,6 @@ defmodule AshOnetime.MutationCheck do
     },
     "partition-pruning-predicate" => %{
       path: "lib/ash_onetime/store/postgres.ex",
-      # Span both the SQL predicate AND the param list so the mutant is a coherent pre-fix
-      # query (one placeholder, one param). Editing only the SQL line would leave two params
-      # bound to one placeholder, failing on param-count (`:dispatched_unknown`) rather than
-      # on the scan-cardinality the predicate exists to prevent -- a vacuous mutation.
       original:
         "    WHERE logical_partition = $1 AND claim_id = $2::uuid AND partition_date = $3\n    \"\"\"\n\n    case dispatched_query(target, sql, [\n           claim.logical_partition,\n           dump_uuid(claim.id),\n           claim.response_partition\n         ]) do",
       mutated:
@@ -2452,9 +2436,6 @@ defmodule AshOnetime.MutationCheck do
       tag: "completion_invariant_rollback_mutation",
       test_name:
         "a real completion invariant rolls back claim, payload, and effect through the Ash pipeline",
-      # The mutation makes the poisoned completion succeed, so the `{:error, error} = Ash.create`
-      # match is the assertion that goes RED; ExUnit prints its source, which carries this unique
-      # input needle. (The follow-on :store_invariant code assertion never executes under RED.)
       assertion: "charge_input(account_id, 10, \"poisoned-completion\")"
     },
     "reserved-input" => %{
@@ -2762,12 +2743,6 @@ defmodule AshOnetime.MutationCheck do
                })
              end)
 
-  # `all` is computed from @mutations rather than hand-listed, which is what STRUCTURALLY prevents
-  # the orphan class (a newly added mutation is in `all` by construction — CONTRIBUTING and the CI
-  # release-checks job both run `-- all`). The self-test below is a REGRESSION GUARD, not present
-  # coverage: while `all` is `Map.keys(@mutations)` it can never fire, but it trips the moment a
-  # future change reverts `all` to a hand-list that drops a registered mutation — the exact drift
-  # that once orphaned the ARCH mutations. The named subsets below stay for fast, focused local runs.
   @groups %{
     "all" => Map.keys(@mutations),
     "defects-batch" => [
@@ -2896,9 +2871,6 @@ defmodule AshOnetime.MutationCheck do
         System.halt(1)
     end
 
-    # Regression guard (see @groups): tautological while `all` is Map.keys(@mutations), but it
-    # trips if a future change reverts `all` to a hand-list that drops a registered mutation —
-    # the drift that once orphaned three ARCH mutations from every runnable command.
     grouped = @groups |> Map.values() |> List.flatten() |> MapSet.new()
     orphaned = @registered |> MapSet.difference(grouped) |> MapSet.to_list() |> Enum.sort()
 
@@ -3016,7 +2988,6 @@ defmodule AshOnetime.MutationCheck do
     IO.puts(red_output)
 
     if red_status == 0 do
-      # A run that executed nothing (its tier skipped or excluded) proves nothing either way.
       unless Regex.match?(~r/Result: [1-9][0-9]* passed/, red_output) do
         raise "mutation #{name} ran no owned test: it was skipped or excluded on this substrate"
       end

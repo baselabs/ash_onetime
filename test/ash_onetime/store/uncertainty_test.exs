@@ -179,13 +179,9 @@ defmodule AshOnetime.Store.UncertaintyTest do
     assert Enum.count(failures, &(&1.admission_dispatch == :not_started)) == 1
   end
 
-  # L6: a raise inside committed_claim_transaction emits [:ash_onetime, :uncertain_exception]
-  # (with the exception CLASS, not the struct) before collapsing to :dispatched_unknown. The
-  # prior telemetry_test exercised Telemetry.uncertain_exception/2 as an API unit; this drives
-  # the rescue through the PUBLIC claim_committed/2 entry so the spawn + rescue + telemetry
-  # wiring is exercised end-to-end. The fault is injected via a stub repo whose
-  # get_dynamic_repo/0 raises (with_dynamic_repo/2 calls it first inside the spawned worker),
-  # so committed_claim_transaction's rescue catches it, emits, and collapses.
+  # A committed-claim exception emits :uncertain_exception before :dispatched_unknown.
+  # Metadata carries only the exception module atom, never the exception value.
+  # Exercise the public claim_committed/2 rescue path.
   @tag committed_claim_rescue_telemetry: true
   test "committed_claim_transaction rescue emits uncertain_exception via claim_committed/2" do
     handler = "ash-onetime-committed-rescue-#{System.unique_integer([:positive])}"

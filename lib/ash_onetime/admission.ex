@@ -8,13 +8,10 @@ defmodule AshOnetime.Admission do
   @private_state :ash_onetime_admission
   @private_replay :ash_onetime_replay
 
-  # Compile-time gate mirroring Token's @allow_clock_override: default OFF in every build
-  # environment; the ash_onetime test suite opts in via config/test.exs. The prior
-  # test-env-only Mix gate was deployment-fragile — a consumer building deps with a test
-  # MIX_ENV shipped the Process-dictionary store redirect live, where any process could
-  # substitute the authoritative admission store by name. Application.compile_env
-  # default-off removes that: the seam (and the private store/0 redirect it feeds) exists
-  # only in builds that explicitly configure it, regardless of build environment.
+  # Admission-store overrides are disabled by default in every build environment.
+  # Only an explicit compile-time allow_admission_override setting enables them.
+  # The setting is frozen at build time; MIX_ENV alone cannot grant a redirect.
+  # The test configuration opts in.
   @allow_admission_override Application.compile_env(
                               :ash_onetime,
                               :allow_admission_override,
@@ -179,13 +176,8 @@ defmodule AshOnetime.Admission do
   def prepare(_subject, _protection, _trusted_context),
     do: {:error, Error.new(:admission_unavailable, "keyed-effect admission is unavailable")}
 
-  # Shared reservation dispatch + helpers for the two runtime entry points (Change for
-  # create/update/destroy, GenericAction for generic actions). Previously duplicated
-  # near-verbatim in both modules (each carried the same mutation-sentinel-acknowledged
-  # copies); hoisted here so the two cannot drift. `trusted_context/1` bounds caller
-  # context to the keys the reservation paths actually consume (ExternalRecovery reads
-  # actor/tenant); it is NOT the bounded_callback_context (that is the verifier/mint/scope
-  # callback surface, which is resource/action only — see bounded_callback_context/1).
+  # Reservation context is limited to actor and tenant for external recovery.
+  # Verifier, mint, and scope callbacks receive only resource and action.
 
   @doc false
   def dispatch_reservation(subject, protection, trusted) do
@@ -1189,10 +1181,6 @@ defmodule AshOnetime.Admission do
 
   defp bounded_binary(_value, _maximum), do: :error
 
-  # Exposed as @doc false public seams for direct unit coverage of the stripping contract
-  # (mirrors bounded_callback_context/1): the nonce request's verified/clock stripping and
-  # the nonce claim's verifier_id stripping are pure functions, but reaching them through
-  # reserve/3 requires a live authoritative store.
   @doc false
   def sanitize_request(%Claim.Request{strategy: :one_time_nonce} = request),
     do: %{request | verified: nil, clock: nil}

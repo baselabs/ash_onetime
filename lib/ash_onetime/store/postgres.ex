@@ -178,13 +178,10 @@ defmodule AshOnetime.Store.Postgres do
   def lock_for_effect(_target, _claim, _options),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
-  # The lock_timeout GUC must bound ONLY the claim lock: SET LOCAL lasts to the end of the
-  # caller's transaction, and everything after the lock runs on the same connection — the
-  # adapter's own callbacks and the action body. External completion arms each of its
-  # own writes separately. Leaving this armed would cap the adapter's contended writes
-  # at the claim lock wait, contrary to ADR-0011. So: capture the
-  # session's value, arm, lock, restore. On :lock_timeout the statement failure has
-  # aborted the transaction — there is nothing to restore into.
+  # Bound only the claim-lock wait, not callbacks or the action body.
+  # Capture lock_timeout, arm it, acquire the lock, then restore the prior value.
+  # External completion bounds each write separately (ADR 0011).
+  # A lock timeout aborts the transaction, so no restoration is possible there.
   defp select_claim_under_timeout(target, claim, claim_id, nil),
     do: select_claim(target, claim.strategy, logical_key(claim), claim_id)
 
@@ -1003,20 +1000,10 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   defp load_payload(target, claim) do
-    # The `partition_date` predicate prunes the range-partitioned payload table to the
-    # single monthly child holding this claim's response (the PK is
-    # `(partition_date, claim_id)`), turning the replay read into a point lookup instead
-    # of a scan of every monthly partition. `claim.response_partition` is non-nil for a
-    # `:complete` idempotency claim by the write-path invariant (`update_complete/5` sets
-    # it atomically with `state = 'complete'`).
-    #
-    # The `partition_date == claim.response_partition` guard below is now logically dead on
-    # the authoritative path (the WHERE binds `partition_date` to `claim.response_partition`,
-    # so any returned row satisfies it by construction) and is retained as defense-in-depth.
-    # Note: a stale/corrupted claim struct whose `response_partition` disagrees with the
-    # stored row is NOT caught by this guard — it is caught by the no-row fallthrough below
-    # (a mismatched `response_partition` makes the WHERE match nothing → `num_rows: 0` →
-    # `:corrupt_payload`). Do not remove the guard expecting it to perform that detection.
+    # Read only claim.response_partition for a point lookup in the monthly payload child.
+    # Completion sets response_partition atomically with the complete state.
+    # A stale locator matching no row returns :corrupt_payload.
+    # Cross-partition payload uniqueness is enforced on the write path.
     sql = """
     SELECT partition_date, encoded_response
     FROM #{relation(target, "ash_onetime_response_payloads")}
@@ -1113,12 +1100,10 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  # Bounds a claim-lock wait: a positive integer at or below @max_claim_lock_timeout, or
-  # nil (no arming — the nonce fence path). The ceiling sits 5s below the committed-claim
-  # worker kill so the LOCK timeout — not the worker kill — decides a contended wait
-  # (ADR-0010). Returns a typed failure rather than raising: the raise would be swallowed
-  # by the surrounding rescue/catch layers and surface as an ambiguous store failure.
-  # Unreachable from the DSL, which bounds the same range at compile time.
+  # Claim-lock waits accept nil or 1..25_000 milliseconds.
+  # Nil leaves the nonce fence path unarmed.
+  # The ceiling leaves headroom below the committed-claim worker timeout.
+  # Invalid input returns a typed failure rather than raising through rescue layers.
   defp validate_claim_lock_timeout(nil), do: :ok
 
   defp validate_claim_lock_timeout(lock_timeout_ms)
@@ -1463,12 +1448,10 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  # Constant-time digest equality, size-guarded, mirroring Admission.fixed_digest_equal?/2
-  # and Cache.fixed_equal?/2 — the store's digest comparisons follow the same convention as
-  # every other comparison site in the library. Neither call site compares attacker-secret
-  # material today (a digest of the payload returned to the key holder; a caller-supplied
-  # digest validated against its own payload); the unification removes the plain-==
-  # precedent so a future secret-adjacent comparison cannot copy it.
+  # Use constant-time, size-guarded digest equality.
+  # Admission and cache comparisons follow the same rule.
+  # The size guard rejects malformed digests before comparison.
+  # Keep the rule consistent at every comparison site.
   defp fixed_digest_equal?(left, right)
        when is_binary(left) and byte_size(left) == 32 and is_binary(right) and
               byte_size(right) == 32,
@@ -1538,9 +1521,8 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   defp classify_query_error(%Postgrex.Error{postgres: %{code: :insufficient_privilege}}) do
-    # The owner-savepoint prune maps its own privilege failures (a non-owner
-    # driver's lock, a DDL block) to kept partitions before classification;
-    # what reaches here is an ordinary privilege failure on a store query.
+    # Per-child prune failures become kept/refused outcomes inside the owner-owned routine.
+    # A privilege failure reaching this classifier is an ordinary store-query failure.
     Result.failure(:store_invariant, :sent, :rolled_back)
   end
 

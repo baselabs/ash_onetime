@@ -1,18 +1,11 @@
 defmodule AshOnetime.ReplayMetadataTest do
   @moduledoc """
-  ARCH-2 — caller-visible replayed-vs-fresh signal.
+  Caller-visible replay metadata is tri-state after the Ash action returns:
 
-  A protected action's result carries `__metadata__[:ash_onetime][:replayed]` so a caller
-  can distinguish a fresh execution (201) from a stored replay (200 + Idempotent-Replayed)
-  AFTER `Ash.create/2` / `Ash.run_action/2` returns. The signal is tri-state:
-
-    true  — tracked replay (stored result returned)
-    false — tracked fresh execution
-    nil   — carrier absent (:untracked execution, OR primitive-return action, OR unprotected)
-
-  `:untracked` executions carry NO `:ash_onetime` metadata (preserving ADR 0001's
-  untracked-transparency goal), so `replayed?/1` returns `nil` there — indistinguishable
-  from a primitive return.
+  * true: a stored replay;
+  * false: a tracked fresh execution;
+  * nil: untracked, primitive-return, or unprotected execution.
+  Untracked execution carries no ash_onetime metadata.
   """
   use AshOnetime.Test.StoreCase, async: false
 
@@ -84,8 +77,6 @@ defmodule AshOnetime.ReplayMetadataTest do
 
       assert replayed.id == fresh.id
 
-      # RED today: no :ash_onetime metadata is ever stamped.
-      # GREEN: fresh execution -> replayed == false; retry (replay) -> replayed == true.
       assert AshOnetime.replayed?(fresh) == false
       assert AshOnetime.replayed?(replayed) == true
 

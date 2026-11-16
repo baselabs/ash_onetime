@@ -253,13 +253,10 @@ defmodule AshOnetime.ExternalContentionTest do
 
     assert_receive {:external_pause, ^reference, :before_execute, operation_key, ^first}, 30_000
 
-    # The first caller holds the ADR-0010 pre-peer claim lock: taken in its open
-    # transaction before the peer call, still held while paused here. Before the lock,
-    # a same-key retry in this window truthfully recovered :absent and executed under
-    # the SAME operation key (two concurrent executes, one key — the observed race that
-    # motivated the lock; see the overlap test below). With the lock, the retry's
-    # committed-claim worker blocks on the claims row, times out at the configured wait,
-    # and the retry is refused with the local path's concurrent-retry semantic.
+    # The first caller holds the pre-peer claim lock in its open transaction.
+    # A same-key retry must wait on that claim rather than reach the peer.
+    # A bounded lock timeout returns the concurrent-retry error.
+    # Only the admitted caller executes the peer operation.
     {second, second_monitor} =
       start_monitored_worker(fn ->
         send(parent, {:external_done, self(), run_quick_lock(context, "unguarded-window")})
@@ -283,8 +280,6 @@ defmodule AshOnetime.ExternalContentionTest do
     assert_receive {:external_done, ^first, {:ok, _first_result}}, 30_000
     assert_receive {:DOWN, ^first_monitor, :process, ^first, :normal}, 30_000
 
-    # Exactly one execute reached the peer: the lock serialized the retry away before any
-    # peer call. One operation, one effect, one local effect, one stored payload.
     calls = ExternalPeer.calls(context.prefix)
     assert Enum.count(calls, fn [kind, _key] -> kind == "execute" end) == 1
     assert Enum.uniq(Enum.map(calls, &List.last/1)) == [operation_key]
@@ -304,12 +299,9 @@ defmodule AshOnetime.ExternalContentionTest do
         send(parent, {:external_done, self(), run_unguarded(context, "execution-environment")})
       end)
 
-    # The probe reports the caller's own transaction state from inside the callback —
-    # the action transaction is open on the caller's connection while the adapter
-    # executes — and hands over the caller's backend pid. Reading that backend's
-    # pg_stat_activity row from the observer while the callback is paused shows the
-    # operational consequence directly: the backend sits 'idle in transaction' for as
-    # long as the (here, paused; in production, unbounded) adapter call runs.
+    # The callback runs inside the caller's open transaction.
+    # Its backend pid lets the observer inspect pg_stat_activity while paused.
+    # A peer wait leaves that backend idle in transaction.
     assert_receive {:external_pause, ^reference, :execute_probe, _operation_key, ^caller, true,
                     backend_pid},
                    30_000
@@ -353,9 +345,6 @@ defmodule AshOnetime.ExternalContentionTest do
         send(parent, {:external_done, self(), run_quick_lock(context, "held-execute")})
       end)
 
-    # The retry blocks on the CLAIMS row (the pre-peer lock), not the peer's key row —
-    # the lock moved the serialization ahead of the peer call — then times out at the
-    # configured wait and is refused.
     assert {_pid, blockers, query} = wait_for_blocked_query(context.prefix)
     assert blockers != []
     assert String.contains?(String.downcase(query), "ash_onetime_idempotency_claims")

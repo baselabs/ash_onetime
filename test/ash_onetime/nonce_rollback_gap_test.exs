@@ -1,27 +1,11 @@
 defmodule AshOnetime.NonceRollbackGapTest do
   @moduledoc """
-  Pins the two nonce commit-boundary behaviors:
+  Nonce commit boundaries:
 
-  1. DEFAULT (`commit: :with_action`, the rollback gap) — a nonce spend commits inside the
-     protected action's transaction, so a failure in the action body rolls the nonce claim back
-     and the same proof is re-admitted on retry. This is the CORRECT behavior for a single-use
-     authenticator whose retry bears a fresh proof: the spend lives and dies with the effect.
-
-  2. FENCE (`commit: :independent`, ADR-0003 DPoP replay fence) — a nonce spend commits in its
-     own transaction BEFORE the action body runs, so a body failure leaves the proof spent for
-     the acceptance window. A retry with the same proof is rejected with `:nonce_already_used`
-     (RFC 9449 §11.1 request-attempt scope).
-
-  The gap trace (why the default rolls back): the transactional admission hook -> admission.ex
-  Store.claim -> postgres.ex plain INSERT on the action's transaction. No inner commit. CRUD
-  admits in change.ex around_action; generic actions admit in generic_action.ex before_action.
-  The fence trace uses that same hook -> admission.ex reserve_committed -> Store.claim_committed
-  -> postgres.ex worker process commits in its own transaction before the body runs.
-
-  The fence test runs against an UNBOXED repo (`start_unboxed_repo!`) because `claim_committed`
-  spawns a worker process on its own connection (the mechanism that makes the independent commit
-  real), and a spawned process cannot share the test sandbox's owned transaction — the same
-  constraint the external-recovery tests already satisfy (`external_recovery_test.exs`).
+  With `commit: :with_action`, body failure rolls back the spend and permits retry.
+  With `commit: :independent`, the spend commits before the body and survives failure.
+  Reuse then returns `:nonce_already_used` throughout the acceptance window.
+  Independent admission uses a separate real connection outside the test sandbox.
   """
 
   use AshOnetime.Test.StoreCase, async: false
@@ -53,8 +37,6 @@ defmodule AshOnetime.NonceRollbackGapTest do
     @tag nonce_rollback_gap: true
     test "a nonce spend rolls back when the action body fails — the proof is re-admitted (DEFAULT)",
          %{prefix: prefix} do
-      # A unique proof per run (the schema is shared with the unboxed fence describe block below,
-      # whose markers persist; this test's own rollback leaves no new row regardless).
       proof = "dpop-proof-default-#{System.unique_integer([:positive])}"
 
       # Count the committed markers BEFORE the spend (baseline; may include fence-test leftovers).
@@ -77,8 +59,6 @@ defmodule AshOnetime.NonceRollbackGapTest do
 
       assert after_count == before_count
 
-      # Second attempt with the SAME proof: re-admitted (the body runs again) — the default
-      # behavior for a single-use authenticator whose retry bears a fresh proof.
       assert {:error, second_error} =
                Charge
                |> Ash.ActionInput.for_action(:redeem_fail, %{value: 1, proof: proof})
@@ -115,11 +95,9 @@ defmodule AshOnetime.NonceRollbackGapTest do
 
       assert AshOnetime.Error.code(first_error) == :downstream_failed
 
-      # Second attempt with the SAME proof: REJECTED with :nonce_already_used.
-      # This is the inversion of the default behavior — the proof is spent for the window.
-      # (The count-of-1 assertion lives in replay_fence_test.exs's "survives body kill" test,
-      # which captures the marker's key_hash from the DB; here the retry-rejection is the
-      # deterministic contract the mutation sentinel targets.)
+      # The same proof must be refused with :nonce_already_used.
+      # Independent admission keeps it spent after body failure.
+      # A failed action cannot reopen the acceptance window.
       assert {:error, second_error} = run_fence(repo, prefix, proof, 1)
 
       assert AshOnetime.Error.code(second_error) == :nonce_already_used

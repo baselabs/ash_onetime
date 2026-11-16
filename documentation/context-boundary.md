@@ -12,7 +12,8 @@ if the schedule did not move".
 
 ## The shape
 
-A resource opts in by naming an append-only fact table. Each fact carries a monotonic
+An AshPostgres resource opts in by naming an append-only fact table with a validated,
+non-reserved identifier. Each fact carries a monotonic
 `seq` (from a per-table identity), a `type`, and a `tags` array (GIN-indexed); every
 call is scoped by an explicit `:tenant`, and the fact table is append-only by trigger.
 
@@ -40,7 +41,8 @@ mix ash_onetime.gen.migrations --repo MyApp.Repo --fact-tables refund_facts
 ## Read, decide, append
 
 `read/3` returns the facts a query matches plus the cutoff — the highest matching `seq`
-the caller saw:
+the caller saw. Facts are newest-first; the cutoff covers the entire match even when
+a page limit restricts the returned facts:
 
 ```elixir
 {:ok, %{facts: facts, cutoff: cutoff}} =

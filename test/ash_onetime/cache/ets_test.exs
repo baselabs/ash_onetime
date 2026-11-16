@@ -36,12 +36,6 @@ defmodule AshOnetime.Cache.EtsTest do
   end
 
   describe "TTL expiry" do
-    # :ets has no native TTL; the adapter stores a monotonic deadline (in seconds) and get/1
-    # rejects (and lazily deletes) expired entries. Deterministic proof, no settling sleep:
-    # freshness is pinned by a long-TTL put/get round-trip (put must compute a FUTURE
-    # deadline for get to return the entry), and expiry by overwriting the row's deadline
-    # with a past monotonic value through the adapter's public table — get then exercises
-    # its reject-and-delete branch regardless of wall-clock timing.
     test "an entry past its TTL is rejected and lazily deleted" do
       entry = %Entry{claim_id: Ecto.UUID.generate(), payload: "expiring"}
       assert :ok = Ets.put("ttl-fresh-key", entry, 60)
@@ -49,7 +43,6 @@ defmodule AshOnetime.Cache.EtsTest do
       # Fresh: put computed a future deadline, so the entry is returned whole.
       assert {:ok, ^entry} = Ets.get("ttl-fresh-key")
 
-      # Expired: a deadline already in the past.
       expired_key = "ttl-expired-key"
       assert :ok = Ets.put(expired_key, entry, 60)
       :ets.insert(AshOnetime.Cache.Ets, {expired_key, entry, System.monotonic_time(:second) - 1})

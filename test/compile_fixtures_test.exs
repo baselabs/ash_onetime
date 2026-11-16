@@ -365,10 +365,6 @@ defmodule AshOnetime.CompileFixturesTest do
   @runner ~S"""
   [fixture, expected] = System.argv()
   expected = Module.concat([expected])
-  # Ash >= 3.33 requires an explicit string-length counting mode at resource compile
-  # time; this fresh VM does not read config/test.exs, so mirror its codepoints mode.
-  # Starting Mix keeps the transformer's compiling_dependency?/0 (which reads
-  # Mix.Project.config/0) from crashing on a dead Mix.ProjectStack in this Mix-less VM.
   Mix.start()
   Application.put_env(:ash, :default_string_length_count, :codepoints)
   Code.require_file(Path.join(Path.dirname(fixture), "support.exs"))
@@ -409,10 +405,6 @@ defmodule AshOnetime.CompileFixturesTest do
 
   @matrix_runner ~S"""
   [case_name] = System.argv()
-  # Ash >= 3.33 requires an explicit string-length counting mode at resource compile
-  # time; this fresh VM does not read config/test.exs, so mirror its codepoints mode.
-  # Starting Mix keeps the transformer's compiling_dependency?/0 (which reads
-  # Mix.Project.config/0) from crashing on a dead Mix.ProjectStack in this Mix-less VM.
   Mix.start()
   Application.put_env(:ash, :default_string_length_count, :codepoints)
   fixture_dir = Path.expand("test/compile_fixtures")
@@ -486,8 +478,6 @@ defmodule AshOnetime.CompileFixturesTest do
   end
 
   for {case_name, {action, option, message}} <- @matrix_expectations do
-    # Each real compiler process keeps its own ExUnit deadline. Mutation groups
-    # reuse these exact-error tests rather than repeat several VMs in one test.
     if case_name in [
          :local_around_action,
          :global_around_action,

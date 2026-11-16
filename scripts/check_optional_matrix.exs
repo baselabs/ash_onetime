@@ -1,13 +1,9 @@
 defmodule AshOnetime.OptionalMatrix do
   @moduledoc false
 
-  # The expected map is the module-presence contract (which optional integrations
-  # compile); the resolved-version assertions below additionally observe that the
-  # resolved versions are at or above the security floors. Version resolution alone
-  # cannot prove ash_onetime's requirements CAUSE that — the newest release in each
-  # range is already patched — so the conflict cases below pin advised versions
-  # exactly and assert resolution FAILS: that failure can only come from
-  # ash_onetime's own requirements intersecting the pin to nothing (ADR 0004).
+  # Optional integrations compile only when their dependencies are present.
+  # Resolved versions must meet the security floors.
+  # Exact vulnerable pins must fail resolution against this package (ADR 0004).
   @cases [
     {"none", [], %{plug: false, oban: false, igniter: false}},
     {"plug", [{:plug, "~> 1.20"}], %{plug: true, oban: false, igniter: false}},
@@ -31,8 +27,6 @@ defmodule AshOnetime.OptionalMatrix do
     {"ash-sql-0.8.5-conflict", {:ash_sql, "== 0.8.5"}}
   ]
 
-  # The generated .app's runtime applications: the runtime:true deps plus the
-  # :crypto/:logger extra applications and the always-present VM applications.
   @owned_applications [
     :ash,
     :ash_postgres,
@@ -144,8 +138,6 @@ defmodule AshOnetime.OptionalMatrix do
     expected = #{inspect(Map.put(expected, :cache, true))}
     if actual != expected, do: raise("optional module mismatch: \#{inspect(actual)}")
 
-    # Exact allowlist: proves the instrument sees the list (kernel et al. are always
-    # present) and catches any new dependency leaking into the runtime closure.
     applications = Application.spec(:ash_onetime, :applications) |> Enum.sort()
     if applications != #{inspect(@owned_applications)} do
       raise("ash_onetime runtime applications drifted: \#{inspect(applications)}")
