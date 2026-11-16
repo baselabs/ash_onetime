@@ -2,11 +2,11 @@
 # against the dedicated loopback instance. The PORT is deliberately flexible —
 # each machine picks a collision-free port via .env (PGPORT), and CI pins
 # 18841 — but every other dimension is fixed: the ecto scheme, the loopback
-# host, and the dedicated database name. The user is the dedicated instance's
-# `postgres` or the `ash_onetime` role a shared server reserves for this
-# library (that role can reach only its own ash_onetime_* databases). The
-# default port 5432 is refused: a default-port listener is a shared local
-# instance, not the dedicated one.
+# host, the dedicated database name and the dedicated instance's `postgres`
+# user. A shared server's login is refused: development and test databases
+# never live on a server that also carries released databases. The default
+# port 5432 is refused: a default-port listener is a shared local instance,
+# not the dedicated one.
 database_url = System.fetch_env!("DATABASE_URL")
 
 %URI{scheme: scheme, userinfo: userinfo, host: host, port: port, path: path} =
@@ -15,13 +15,13 @@ database_url = System.fetch_env!("DATABASE_URL")
 [user | _] = String.split(userinfo || "", ":")
 
 dedicated_target? =
-  scheme == "ecto" and user in ["postgres", "ash_onetime"] and host == "127.0.0.1" and
+  scheme == "ecto" and user == "postgres" and host == "127.0.0.1" and
     path == "/ash_onetime_test" and is_integer(port) and port != 5432
 
 unless dedicated_target? do
   raise """
   DATABASE_URL must target the dedicated ash_onetime_test PostgreSQL on \
-  127.0.0.1 under the postgres or ash_onetime user, on a non-default port; got: \
+  127.0.0.1 under the postgres user, on a non-default port; got: \
   user #{inspect(user)}, host #{inspect(host)} — see .env.example (PGPORT)
   """
 end
