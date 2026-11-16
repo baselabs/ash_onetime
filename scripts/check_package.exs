@@ -1,3 +1,5 @@
+Code.require_file("reference_projects.exs", __DIR__)
+
 defmodule AshOnetime.PackageCheck do
   @moduledoc false
 
@@ -18,7 +20,6 @@ defmodule AshOnetime.PackageCheck do
     "documentation/dsls/DSL-AshOnetime.Resource.md"
   ]
   @forbidden_prefixes [".forge/", ".git/", "_build/", "config/", "deps/", "scripts/", "test/"]
-  @reference_projects ~r/\b(?:ash_age|ash_webhook_it|bounded_authority(?:_protocol)?)\b/i
   @secret_literal ~r/\b(?:api[_-]?key|password|private[_-]?key|secret)\s*[:=]\s*["'][^"']+["']/i
   @provider_crypto ~r/defmodule\s+\S*(?:Stripe|GitHub|Slack|Twilio)\S*(?:Signature|Verifier)/i
 
@@ -112,7 +113,10 @@ defmodule AshOnetime.PackageCheck do
 
       if String.valid?(source) do
         reject_match!(@secret_literal, source, "secret literal", entry)
-        reject_match!(@reference_projects, source, "reference-project string", entry)
+
+        if AshOnetime.ReferenceProjects.mentioned?(source),
+          do: raise("reference-project name found in #{entry}")
+
         reject_match!(@provider_crypto, source, "provider-specific crypto", entry)
       end
     end

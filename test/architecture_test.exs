@@ -471,12 +471,10 @@ defmodule AshOnetime.ArchitectureTest do
     assert error.class == :invalid
   end
 
-  test "reference-project and provider-crypto dependencies stay absent" do
+  test "provider-crypto dependencies stay absent" do
     source = Path.wildcard("lib/**/*.ex") |> Enum.map_join("\n", &File.read!/1)
 
     for forbidden <- [
-          "ash_webhook_it",
-          "bounded_authority",
           "Aws.KMS",
           "GoogleApi.CloudKMS",
           "ExAws"

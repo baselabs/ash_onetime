@@ -10,7 +10,7 @@
 - Nonce admission fails closed when authoritative state is unavailable.
 - Idempotency may proceed when admission state is unavailable, but must surface that condition through telemetry.
 - Verification callbacks return trusted local facts; action input cannot supply pre-verified facts.
-- Do not depend on `ash_webhook_it` or Bounded Authority packages.
+- Do not depend on or name the reference projects listed (as digests) in `scripts/reference_projects.exs`.
 - macOS and Linux are supported; Windows developers use WSL2, cloning inside its filesystem.
   CI runs on Linux; gates use Elixir (`.exs`) and `.gitattributes` preserves LF checkouts.
 
@@ -24,4 +24,4 @@ The lock and `.tool-versions` pin development releases; published ranges preserv
 - Covering tests: `mix test <paths>` through the box route against PostgreSQL 18 (`DATABASE_URL`; see `CONTRIBUTING.md`).
 - **Before a push.** `mix precommit`.
 - **Exceptions.** A release runs the release battery in `CONTRIBUTING.md` on the box.
-- **Landing.** `kimosabe-land`: CI's full suite on `kci/**` before `main` moves.
+- **Landing.** CI runs the full suite on a candidate branch before `main` moves.

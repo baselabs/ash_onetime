@@ -395,8 +395,7 @@ beneficiaries.
 
 ### Documentation
 
-- **External-effect contract corrected** (design review 2026-09-24; decision records under
-  `.kimosabe/specs/`):
+- **External-effect contract corrected** (design review 2026-09-24):
   - ADR 0001's claim that a duplicate side effect requires BOTH a lying adapter AND a
     failing peer is corrected by a dated amendment: an honest in-flight retry alone
     produced concurrent same-key executes (now prevented by the lock; the peer-side

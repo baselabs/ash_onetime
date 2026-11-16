@@ -8,25 +8,31 @@ defmodule AshOnetime.PackageBoundaryTest do
   # callbacks (KeyCustody and verifier workers) and the maintenance installs.
   @package_application "lib/ash_onetime/application.ex"
 
-  @forbidden_dependencies [
-    :ash_age,
-    :ash_webhook_it,
-    :bounded_authority,
-    :bounded_authority_protocol
-  ]
+  Code.require_file("../scripts/reference_projects.exs", __DIR__)
+
+  alias AshOnetime.ReferenceProjects
 
   test "the live package contains no forbidden boundary violations" do
     assert violations(source_entries(), Mix.Project.config()[:deps]) == []
   end
 
-  test "forbidden reference-project dependencies are rejected" do
+  test "listed reference-project dependencies and names are rejected" do
+    control = ReferenceProjects.control()
+    listed = String.to_atom(control)
+
     deps = [
-      {:ash_age, path: "../ash_age"},
-      {:ash_webhook_it, git: "https://example.invalid/ash_webhook_it.git"},
-      {:bounded_authority_protocol, "~> 0.1"}
+      {listed, "~> 0.1"},
+      {listed, git: "https://example.invalid/project.git"},
+      {:unlisted, path: "../BaseLabs/unlisted"},
+      {:unlisted, "~> 1.0"}
     ]
 
     assert Enum.count(violations([], deps), &match?({:forbidden_dependency, _, _}, &1)) == 3
+
+    assert [{:reference_project, "lib/example.ex"}] =
+             violations([{"lib/example.ex", "# depends on #{String.upcase(control)}"}], [])
+
+    assert violations([{"lib/example.ex", "# #{control}_suffix is another token"}], []) == []
   end
 
   test "runtime application callbacks outside the package application are rejected" do
@@ -76,7 +82,7 @@ defmodule AshOnetime.PackageBoundaryTest do
       {name, options} = dependency_name_and_options(dependency)
       serialized_options = inspect(options)
 
-      if name in @forbidden_dependencies or
+      if ReferenceProjects.listed?(name) or
            Regex.match?(~r/(?:Base|BaseLabs)\//, serialized_options) do
         [{:forbidden_dependency, name, options}]
       else
@@ -116,6 +122,7 @@ defmodule AshOnetime.PackageBoundaryTest do
       ),
       {:provider_signature_module, path}
     )
+    |> maybe_add(ReferenceProjects.mentioned?(source), {:reference_project, path})
     |> Enum.reverse()
   end
 
