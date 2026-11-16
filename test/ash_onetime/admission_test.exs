@@ -296,6 +296,23 @@ defmodule AshOnetime.AdmissionTest do
       assert resolved.class == :external_execute
     end
 
+    @tag locked_external_claim_class_mutation: true
+    test "idempotency locked external claim maps to :external_execute under an open transaction" do
+      request = idempotency_request()
+      result = Result.success(:admitted, claim: idempotency_claim(request))
+
+      assert {:execute, resolved} =
+               Admission.resolve(
+                 result,
+                 decision_state(:idempotency, request),
+                 %{strategy: :idempotency},
+                 System.monotonic_time(),
+                 :locked_external_claim
+               )
+
+      assert resolved.class == :external_execute
+    end
+
     test "idempotency locked external finalize maps to :external_execute under an open transaction" do
       request = idempotency_request()
       result = Result.success(:admitted, claim: idempotency_claim(request))

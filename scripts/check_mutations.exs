@@ -1311,6 +1311,16 @@ defmodule AshOnetime.MutationCheck do
       test_name: "an entry whose digest field mismatches the claim degrades to stale",
       assertion: "assert {%Result{}, :stale} = CacheApi.authoritative_payload(result, config)"
     },
+    "locked-external-claim-class" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original:
+        "  defp execution_class(:idempotency, :locked_external_claim), do: :external_execute\n",
+      mutated: "",
+      test: "test/ash_onetime/admission_test.exs",
+      tag: "locked_external_claim_class_mutation",
+      test_name: "idempotency locked external claim maps to :external_execute",
+      assertion: "Admission.resolve("
+    },
     "ets-cap-serialized-put" => %{
       path: "lib/ash_onetime/cache/ets.ex",
       original: "GenServer.call(@table, {:put, key, entry, ttl_seconds})",
