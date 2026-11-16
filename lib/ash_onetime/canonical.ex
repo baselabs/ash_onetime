@@ -9,8 +9,13 @@ defmodule AshOnetime.Canonical do
 
   `AshOnetime.Fingerprint` is SHA-256 over these bytes. Token bodies are signed over them.
 
-  Format 1 bytes never change; another encoding requires a new format number.
-  Each frame is a one-byte tag, a 32-bit unsigned big-endian length, and its payload.
+  ## Format 1
+
+  `format/0` returns `1`. Format 1 bytes never change: the same value always encodes to
+  the same bytes in every release. A different encoding is a new format with a new number.
+
+  Every value is one frame: a one-byte domain tag, a 32-bit unsigned big-endian payload
+  length, then the payload.
 
   | Tag    | Value     | Payload                                                     |
   | ------ | --------- | ----------------------------------------------------------- |
@@ -22,8 +27,16 @@ defmodule AshOnetime.Canonical do
   | `0x05` | list      | 32-bit item count, then each item's frame in list order     |
   | `0x06` | map       | 32-bit entry count, then key frame and value frame per entry |
 
-  Map entries sort by complete encoded key bytes (unsigned); construction order is irrelevant.
-  Out-of-bounds values return `:limit_exceeded` with the limit and maximum in error details.
+  Map entries are ordered by the complete encoded key bytes compared as unsigned bytes, so
+  construction order is irrelevant. Keys of different types order by tag; a shorter binary
+  key orders before a longer one because the length precedes the bytes. Distinct keys
+  always encode to distinct bytes.
+
+  ## Bounds
+
+  `bounds/0` returns the limits. A value outside them returns
+  `{:error, %AshOnetime.Error{code: :limit_exceeded, details: %{limit: limit, maximum: maximum}}}`,
+  where `limit` is the key below.
 
   | Limit                | Maximum           | Counts                                        |
   | -------------------- | ----------------- | --------------------------------------------- |
@@ -34,8 +47,14 @@ defmodule AshOnetime.Canonical do
   | `:depth`             | 16                | containers enclosing the deepest value        |
   | `:encoded_bytes`     | 65,536            | bytes of the complete encoding                |
 
-  Immutable conformance vectors: `priv/vectors/canonical-1.json`. Other implementations
-  must produce every accepted encoding and refuse every rejection in that file.
+  ## Vectors
+
+  The package ships `priv/vectors/canonical-1.json`
+  (`Application.app_dir(:ash_onetime, "priv/vectors/canonical-1.json")`). It holds values
+  with their format 1 bytes and SHA-256 fingerprints, values each bound rejects, and byte
+  strings a decoder must refuse. The file is immutable: format 1 vectors are only ever
+  added in a new file. An implementation in another language conforms when it produces
+  every accepted encoding and refuses every rejection.
   """
 
   alias AshOnetime.Error

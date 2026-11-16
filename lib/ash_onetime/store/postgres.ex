@@ -1003,7 +1003,7 @@ defmodule AshOnetime.Store.Postgres do
     # Read only claim.response_partition for a point lookup in the monthly payload child.
     # Completion sets response_partition atomically with the complete state.
     # A stale locator matching no row returns :corrupt_payload.
-    # Cross-partition payload uniqueness is enforced on the write path.
+    # The partition_date guard below repeats the WHERE predicate as defense in depth.
     sql = """
     SELECT partition_date, encoded_response
     FROM #{relation(target, "ash_onetime_response_payloads")}

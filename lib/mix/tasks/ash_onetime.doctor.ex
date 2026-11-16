@@ -51,6 +51,7 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
 
   @switches [repo: :string, prefix: :string, live: :boolean]
 
+  # Matches mix.exs ash_requirement/0 (ADR 0004); change both together.
   @ash_floor Version.parse!("3.37.2")
 
   # The three required Oban queues (authoritative source: the three `use Oban.Worker, queue:`

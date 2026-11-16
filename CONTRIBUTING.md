@@ -58,6 +58,8 @@ After publishing, run `elixir scripts/check_livebooks.exs --published` with the 
 notebook cells against PostgreSQL; it is the executable consumer check for the artifact users
 will install.
 
+Open work is tracked in [GitHub issues](https://github.com/baselabs/ash_onetime/issues).
+
 Never commit secrets, provider-specific signature implementations, or reference-project dependencies.
 
 ## Dependency compatibility
