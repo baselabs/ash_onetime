@@ -7,7 +7,15 @@ The test suite requires a dedicated PostgreSQL 18 database on `127.0.0.1`. The s
 fails closed unless `DATABASE_URL` targets exactly that dedicated database under the
 `postgres` user on a non-default port; the port is per-machine, so the dedicated instance
 never collides with another local listener. A shared server is never a test substrate:
-the guard refuses any other user, so test databases never sit beside released ones.
+use an instance that holds nothing else. The guard checks the URL's shape only, so it
+keeps out a shared cluster's own logins but cannot see what else a server holds.
+
+The maintenance tests (`test/ash_onetime/store/maintenance_test.exs`) also make
+cluster-wide role and parameter grants, so they run only on a server proven to be the
+run's own: set `TEST_ENV_RUN` to a name and run PostgreSQL in a container whose
+`/etc/hostname` reads `<name>-packages-pg`. On any other server they refuse with
+"cluster-wide grants require a proven per-run PostgreSQL server" before any grant.
+The project's own box runs and CI jobs provide such a server for every run.
 
 The repository ships no database container. Point `.env` at a PostgreSQL 18 you
 already run as a dedicated instance: copy `.env.example` to `.env`, set `PGPORT` to
