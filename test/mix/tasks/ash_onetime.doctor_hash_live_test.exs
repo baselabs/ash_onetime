@@ -1,15 +1,7 @@
 defmodule Mix.Tasks.AshOnetime.DoctorHashLiveTest do
-  @moduledoc """
-  Live schema-currency coverage for a hash-partitioned install: PostgreSQL clones the
-  delete-guard triggers onto every claim partition under the same name, so the trigger
-  query must stay DISTINCT-and-parent-constrained or a fully-migrated hash install
-  false-FAILs (the review-found class). Separate module from DoctorLiveTest because the
-  migration helper compiles a fixed-named migration module — one install per test module.
-  """
-
   use ExUnit.Case, async: false
 
-  alias AshOnetime.Test.{Migration, RealConnection}
+  alias AshOnetime.Test.Migration
   alias Mix.Tasks.AshOnetime.Doctor
 
   setup_all do
@@ -23,7 +15,7 @@ defmodule Mix.Tasks.AshOnetime.DoctorHashLiveTest do
 
     output =
       capture_io(fn ->
-        RealConnection.with_connection(fn ->
+        Migration.with_runtime_connection(schema, fn ->
           assert :ok =
                    Doctor.run(["--repo", "AshOnetime.Test.Repo", "--live", "--prefix", schema])
         end)

@@ -277,7 +277,9 @@ defp install_maintenance(mode) when mode in [:fresh, :upgrade] do
     END LOOP;
     IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid=format('%I.ash_onetime_nonce_claims',install_schema)::regclass AND tgname='ash_onetime_nonce_delete_guard') THEN
       EXECUTE format('CREATE TRIGGER ash_onetime_nonce_delete_guard BEFORE DELETE ON %I.ash_onetime_nonce_claims FOR EACH ROW EXECUTE FUNCTION %I.ash_onetime_guard_nonce_delete()',install_schema,routine_schema);
+      EXECUTE format('ALTER TABLE %I.ash_onetime_nonce_claims ENABLE ALWAYS TRIGGER ash_onetime_nonce_delete_guard',install_schema);
       EXECUTE format('CREATE TRIGGER ash_onetime_idempotency_delete_guard BEFORE DELETE ON %I.ash_onetime_idempotency_claims FOR EACH ROW EXECUTE FUNCTION %I.ash_onetime_guard_idempotency_delete()',install_schema,routine_schema);
+      EXECUTE format('ALTER TABLE %I.ash_onetime_idempotency_claims ENABLE ALWAYS TRIGGER ash_onetime_idempotency_delete_guard',install_schema);
     END IF;
     -- Fresh objects are captured in the creating transaction. Upgrades use
     -- the package DDL reference, not the existing consumer's expressions.

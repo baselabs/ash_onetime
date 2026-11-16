@@ -10,16 +10,10 @@ if Code.ensure_loaded?(Oban.Worker) do
     alias AshOnetime.Store.Postgres
     alias AshOnetime.Store.Result
 
-    # Bounded jittered backoff for a maintenance job doing DDL on the authoritative store.
-    # These are not request-path jobs. Oban's default (15 + 2^attempt seconds, 0-10% jitter)
-    # re-collides at ~17-21s — early enough to hit a lock holder that is still holding.
-    # Every maintenance routine waits at most 5s for a lock (its own lock_timeout, restored
-    # on exit); the linear+jitter shape spaces the two gating retries at
-    # [30,60)s and [60,90)s (backoff/1 is called with the FAILED attempt number; at
-    # max_attempts: 3 only two delays gate), giving contention time to clear and
-    # decorrelating simultaneous failures with a wide ~0-30s spread, and caps the delay at
-    # 120s however far max_attempts is ever raised — well inside the retention horizons the
-    # worker protects.
+    # Maintenance retries use linear backoff with up to 30 seconds of jitter.
+    # The first two delays are [30,60) and [60,90) seconds.
+    # Delay caps at 120 seconds if max_attempts increases.
+    # Spacing gives contended DDL locks time to clear.
     @base_backoff_seconds 30
     @max_backoff_seconds 120
 

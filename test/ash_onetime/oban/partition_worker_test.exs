@@ -72,10 +72,6 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
   end
 
   test "backoff is bounded and jittered within the retention window" do
-    # ROADMAP H20: a discarded PartitionWorker strands a month of retention. A failed roll
-    # returns fast under its own lock_timeout, so the backoff spaces retries [30,60)s /
-    # [60,90)s — wide enough for a contending lock holder to finish — with a ~0-30s jitter
-    # so simultaneous failures do not retry in lockstep. Bounded to [30,120] seconds.
     for attempt <- 1..3 do
       backoff = PartitionWorker.backoff(%Oban.Job{attempt: attempt})
       assert is_integer(backoff)
@@ -93,14 +89,10 @@ defmodule AshOnetime.Oban.PartitionWorkerTest do
     assert Keyword.get(PartitionWorker.__opts__(), :queue) == :ash_onetime_partitions
   end
 
-  # L5 (behavioral): a contended partition-roll advisory lock surfaces as
-  # {:error, {:roll_partitions_failed, :lock_unavailable}} — the worker embeds the Store
-  # Result.reason so Oban's job error carries the distinguishable cause past exhaustion, not an
-  # opaque :roll_partitions_failed. The roll routine runs under its own 5s lock_timeout, so a
-  # roll that cannot acquire the per-prefix advisory lock fails closed with reason
-  # :lock_unavailable after 5s. This pins the error tuple
-  # BEHAVIORALLY (a real store fault -> the actual tuple returned to Oban); a regression that
-  # collapses the tuple to the opaque atom, or drops the inner reason, fails here.
+  # A contended roll returns {:error, {:roll_partitions_failed, :lock_unavailable}}.
+  # The Store reason must survive in the Oban job error.
+  # The routine's five-second lock_timeout bounds the advisory-lock wait.
+  # Use real contention against the per-prefix roll lock.
   @tag unboxed: true
   test "worker surfaces :lock_unavailable from a contended advisory lock (L5 behavioral)", %{
     prefix: prefix

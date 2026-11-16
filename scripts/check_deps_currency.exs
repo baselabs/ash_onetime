@@ -1,7 +1,3 @@
-# Dependency currency gate.
-#
-# Policy: everything resolver-updatable gets updated now; anything not at
-# latest must be a deliberate pin with an inline reason in mix.exs.
 #
 # Exit codes:
 #   0 - no resolvable drift (blocked pins are printed, not fatal — their
@@ -17,13 +13,9 @@
 defmodule AshOnetime.DepCurrencyCheck do
   @moduledoc false
 
-  # Keep the caller-cwd contract of the original shell gate: operate from the
-  # repo root regardless of the caller's working directory.
   def main do
     File.cd!(Path.expand("..", __DIR__))
 
-    # hex.outdated exits nonzero whenever anything is outdated, which is the
-    # normal case this gate classifies itself — never treat that as failure.
     {outdated_output, _outdated_exit} =
       System.cmd("mix", ["hex.outdated"], stderr_to_stdout: true)
 
@@ -42,9 +34,6 @@ defmodule AshOnetime.DepCurrencyCheck do
         :ignore, acc -> acc
       end)
 
-    # Not a single status row recognized is the sole "table not parsed" signal.
-    # An all-up-to-date table parses fine but yields no rows, so an empty
-    # drift/pinned list is NOT a failure.
     if up_to_date + length(drift) + length(pinned) == 0 do
       IO.puts(
         :stderr,
@@ -89,14 +78,6 @@ defmodule AshOnetime.DepCurrencyCheck do
     )
   end
 
-  # Same field layout the original shell gate parsed in awk (1-based fields on
-  # the version columns anchor on the STATUS tokens, not the line edges:
-  # hex.outdated prints `Package [env] Current Latest <status words>`, where
-  # the env column (dev / dev,test) is optional — a LEFT anchor misprints
-  # env-annotated rows (observed: "ex_doc dev -> 0.40.3") and a plain
-  # right-edge anchor misprints when the requirement column carries spaces.
-  # current/latest sit immediately before "Update possible" (2 tokens) or
-  # "Update not possible" (3 tokens).
   defp parse_row(line) do
     fields = String.split(line)
     count = length(fields)

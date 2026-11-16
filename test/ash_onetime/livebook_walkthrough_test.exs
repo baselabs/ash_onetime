@@ -1,13 +1,4 @@
 defmodule AshOnetime.LivebookWalkthroughTest do
-  @moduledoc """
-  Exercises the mirrored idempotency and nonce consumer shapes in
-  `test/support/livebook_examples.ex` against the installed store: fresh execution, replay,
-  fingerprint conflict, nonce spend/reuse, and telemetry.
-
-  This test does not read or execute the `.livemd` files and does not cover the external-recovery
-  notebook. `scripts/check_livebooks.exs` is the source-cell gate for all three notebooks.
-  """
-
   use AshOnetime.Test.StoreCase, async: false
 
   alias AshOnetime.Test.LivebookExamples.Charge
@@ -131,7 +122,6 @@ defmodule AshOnetime.LivebookWalkthroughTest do
 
       events = flush_events()
 
-      # An :admitted admission fired for the fresh charge...
       assert Enum.any?(events, fn
                {[:ash_onetime, :admission], %{result_class: :admitted, action: :charge}} -> true
                _other -> false
@@ -162,10 +152,6 @@ defmodule AshOnetime.LivebookWalkthroughTest do
     count
   end
 
-  # :telemetry handlers run synchronously in the emitting process, and every emission this
-  # file observes (:admission/:conflict from charge and redeem) is triggered by calls made
-  # from the test process itself — the messages are already in the mailbox when the calls
-  # return, so a zero-timeout drain is deterministic; no settling sleep is needed.
   defp flush_events, do: flush_events([])
 
   defp flush_events(acc) do

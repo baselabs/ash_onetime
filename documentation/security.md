@@ -57,7 +57,10 @@ a resource at compile time — the scope must include `{:attribute, <tenant_attr
 needs no scope entry for isolation.)
 
 Retention and cleanup are security boundaries. Deleting a nonce while its acceptance window is
-still open can admit a replay. The acceptance window is evaluated on the application clock while
+still open can admit a replay. External completion and hold release restart retention in elapsed
+seconds, so a session's daylight saving transition cannot narrow the configured idempotency window.
+Hold release also preserves any later existing deadline.
+The acceptance window is evaluated on the application clock while
 cleanup eligibility is evaluated on the PostgreSQL clock, so a spent nonce is retained for a
 configurable clock-skew safety margin (`config :ash_onetime, :cleanup_clock_skew_margin_seconds`,
 default 1 second) beyond its retention horizon (`retain_for`, defaulting to `max_age`, plus
@@ -88,10 +91,21 @@ its settling transaction; an unreleased hold retains the claim and payload forev
 Use references unique within the installation's logical partition (a UUID is suitable).
 References do not replace caller authorization or row-security policies: release touches only
 rows visible to the caller's role. Monitor the held backlog and the live doctor for leaks.
-The DELETE guard refuses held claims even for an owner or superuser, but does not stop
-TRUNCATE, DROP, or a superuser's `session_replication_role = replica`. See
+The DELETE guards fire ALWAYS and refuse held claims in origin mode even for an owner
+or superuser. In replica mode they admit only a writer that can SET ROLE to the relation
+owner; other writers face the full origin rules. Fact triggers still refuse mutations.
+The guards do not stop TRUNCATE, DROP, or a privileged role disabling them. See
 [Operation holds](idempotency.md#keep-an-open-operations-record) for the complete contract.
 
+External completion arms the protection's `external_lock_timeout_ms` for each package
+payload INSERT and claims UPDATE. A `55P03` lock timeout rolls completion back and returns
+`:request_in_progress`, retaining the committed processing claim for recovery. Successful statements and non-aborting error results restore the previous
+`lock_timeout` using SET LOCAL. Consumer changes to
+`lock_timeout` or `statement_timeout`, whether through function SET clauses, `set_config`
+or SET statements, are outside the trust model. The restore ends a transaction-local
+`lock_timeout` change made inside that statement. It masks a session-level change until the
+transaction ends: COMMIT keeps that session value and ROLLBACK undoes it. A session-level
+`statement_timeout` change takes effect immediately and is never restored by the store.
 
 ## Maintenance and the trusted server
 
@@ -119,18 +133,97 @@ being built-in or owned by a superuser does not grant a routine blanket trust. C
 expressions must match the package's own DDL. Only the migration that just created the
 package tables captures their shapes. Every upgrade builds a fresh DDL reference, even
 if the old routines have been dropped. Unexpected shapes refuse maintenance with
-`:untrusted_dependency`; status and the live doctor report the refusal.
+`:untrusted_dependency`; maintenance status reports the refusal. The live doctor checks
+schema currency, trigger firing modes, event-trigger ownership, runtime identity and held
+backlog; it does not invoke the maintenance trust audit.
 
-The PostgreSQL server and the migrator are trusted. Superuser event triggers, preloaded
-hooks, and backend libraries execute outside a relation closure. Autovacuum ANALYZE runs
+Containment starts with every package relation and partition, every index, constraint and
+trigger on them (including consumer-added objects), package policies, package routines and
+the routine schema. Consumer trigger functions and index or constraint expressions can run
+during maintenance writes and therefore belong to its attack surface.
+
+Column defaults (`pg_attrdef`) are not containment roots because shape authentication pins
+every package column's normalized default expression before owner code runs. This covers
+claims, nonces, payload parents and partitions, and `ash_onetime_maintenance_runs`; a
+consumer-added or changed default is refused. See [shape.sql](../priv/templates/migrations/maintenance/shape.sql)
+and the `maintenance-shape-default` mutation's “Table 1 row 6: default refuses before owner
+code runs” regression. Maintenance does INSERT: its runtime ledger upserts supply every
+defaulted column (`installed_at` has no default), and roll's relocation uses `SELECT *` into
+a partition created in that same step. Installation uses defaults under the trusted migrator.
+
+Containment follows every
+outgoing dependency, every internal part, and every member of each reached extension until
+no more objects are found. Both extension membership and `DEPENDS ON EXTENSION` reach the
+extension. There is no OID cutoff: the language dependency reaches the unpinned `plpgsql`
+extension, its handlers and their schemas. Every containing schema is checked, including
+`public` and `pg_catalog`. An untrusted schema owner can remove objects it does not own
+through `DROP SCHEMA ... CASCADE`.
+
+Every reached owner must be the package owner, a superuser, or `pg_database_owner` when the
+database owner is the package owner or a superuser. For each accepted owner other than the
+package owner, every role with MEMBER reach to it must be a superuser or a member of the
+package owner. This includes INHERIT-only, SET-only and ADMIN-only membership and the actual
+database owner behind `pg_database_owner`. Refusals name the object, owner and offending
+holder. `DROP DATABASE` is outside this containment boundary, like superuser actions.
+
+Every database event trigger, enabled or disabled, is also checked: its function must have
+an accepted owner and holders under these same rules. Trust and the live doctor name the
+trigger, function and owner on refusal. DDL and login event-trigger functions execute under
+the invoking identity, so an untrusted function owner could replace its body and borrow the
+migrator's or maintenance role's authority.
+
+The PostgreSQL server and the migrator are trusted. Trusted event triggers, preloaded
+hooks, and backend libraries execute outside a relation closure. Extension install and update
+scripts are server code that the server administrator installs. Depending on the control file
+they run as the bootstrap superuser or as the installing role. Either way they are outside the
+trust model, like superusers. Autovacuum ANALYZE runs
 as the table owner outside maintenance steps. The package cannot stop the server from
-executing objects an owner or superuser installed. Install revokes runtime MAINTAIN and
-steps audit effective MAINTAIN with `has_table_privilege`, including `pg_maintain`.
-The audit also refuses SET-only paths from the runtime, maintenance or current role, or
-any LOGIN role, to a role holding MAINTAIN on a package relation.
-The CREATE and MAINTAIN audits exclude superusers (the trusted server) and roles that
-inherit the owner's privileges (owner-equivalent). Runtime and maintenance roles must hold
-no membership in the owner, whether through INHERIT or SET; every step checks that boundary.
+executing objects an owner or superuser installed. Install revokes runtime MAINTAIN.
+Install, maintenance steps and status use one effective-authority audit
+over PostgreSQL roles. It refuses MAINTAIN on every package relation (including
+`pg_maintain`), TRIGGER, TRUNCATE and REFERENCES on claims, nonce and payload roots,
+and every table or column privilege on owner-only relations, including the maintenance
+ledger and inheritance children. REFERENCES includes column grants. PostgreSQL's
+`has_table_privilege` and `has_any_column_privilege` also detect `pg_read_all_data`
+and `pg_write_all_data`, which do not need explicit relation ACL entries.
+The same audit refuses SET or ALTER SYSTEM on `session_replication_role`, checked
+with `has_parameter_privilege`, and membership in `pg_create_subscription` through
+any membership edge. [Subscription apply workers run in replica mode](https://www.postgresql.org/docs/18/logical-replication-architecture.html),
+which bypasses ORIGIN-enabled triggers. Package claims and nonce DELETE guards and every
+fact append-only trigger use ENABLE ALWAYS, including partition clones. Trust refuses any
+other firing mode. In replica mode only, a DELETE guard admits a writer able to SET to the
+relation owner (including the owner and superusers), before deleting any payload; logical
+apply mirrors the publisher's payload deletion itself. Every other writer gets the full
+origin rules. Fact triggers always refuse mutation, including by a trusted replica writer. Any subscription
+in the current database owned by an untrusted role is refused even after its creator's
+`pg_create_subscription` membership has been revoked; disabled, disconnected subscriptions
+count too.
+
+Every non-predefined role holding forbidden authority is refused, even if NOLOGIN and
+unreachable by any login: a holder-owned view or SECURITY DEFINER function granted to
+PUBLIC can expose that authority. PostgreSQL reserves the `pg_` prefix for predefined
+roles. Those roles count when reachable from runtime, scheduled maintenance, current or
+session roles, or any LOGIN role, through any membership (`MEMBER`), including ADMIN
+without INHERIT or SET. ADMIN-only members can grant themselves SET. Superusers (the
+trusted server), the owner, and roles with USAGE or SET on the owner are excluded from
+both holder and subject checks, including the subscription-owner check. The CREATE audit
+excludes superusers and roles that inherit the owner's privileges. Runtime and maintenance
+roles must hold no membership in the owner; every step checks that boundary. Run the live
+doctor once for each runtime role; it refuses the owner or any role with MEMBER or ADMIN
+authority on the package owner, naming the role.
+
+SELECT on owner-only relations remains a trust refusal, including `pg_read_all_data`.
+Forward roll copies the payload root's policies and RLS flags to newly created children.
+The install loop adds the maintenance policy to existing children, but does not copy all
+root policies or RLS flags, and relation shapes do not pin either to the root. A read-only
+grant therefore cannot safely be left to the explicit ACL status check alone. Scope backup
+grants to the package parents and other required application relations; revoke broad read
+membership or grants on package children and the ledger before maintenance can proceed.
+
+Maintenance first ships in 2.0.0. Fresh installs and maintenance upgrades from previously
+shipped releases embed these routine bodies and pin their digests in the install manifest.
+A package update alone never rewrites database routines. Function changes must rebuild
+both manifests together; replacing a body alone leaves its recorded digest stale.
 
 Function DDL takes no relation lock. A migrator acting as the owner can replace a package
 routine after its digest was checked. Relation locks cannot serialize that replacement;
@@ -177,6 +270,19 @@ happens once, nobody receives the value, and the `deliver/2` call returns
 reissue. If that code itself calls `deliver/2`, it is the caller that receives the value, and
 your outer call replays with none. Code that runs inside the action's transaction (a policy
 check) cannot call `deliver/2`: it is refused as above.
+
+Timing is outside these guarantees. Sealing and opening process
+`sum(4 + byte_size(value))` plaintext bytes, so their duration depends on the values' total
+length. External recovery telemetry measures a span that includes sealing. The envelope
+length is `49 + sum(4 + byte_size(value))` bytes and is visible wherever the envelope is.
+This is not a constant-time delivery protocol.
+
+The observation boundary covers event content, multiplicity and order within each process.
+Native interiors (the crypto NIF, ETS, atomics and PostgreSQL below its wire messages and
+rows) are outside it; arguments and returns crossing into native code remain observable.
+Memory use, reductions, garbage collection and scheduler statistics are also outside it.
+Tests cover a finite set of value tuples; they cannot establish independence for every
+possible function of values that takes the same result on all tested tuples.
 
 Outside the guarantees: the producer that creates the value, the caller after the return, and
 code with access to the running node. Live introspection of the VM (`Process.info/2` with

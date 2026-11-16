@@ -107,10 +107,6 @@ defmodule AshOnetime.Test.LivebookExamples do
         accept [:account_id, :amount]
       end
 
-      # A CRUD (changeset) nonce action with commit: :independent — exercises the change.ex
-      # dispatch path (vs. the generic_action.ex path the :redeem_*_fence actions use). The
-      # create body SUCCEEDS, so the fence marker commits in before_action via claim_committed
-      # and a retry with the same proof collides with :nonce_already_used.
       create :nonce_charge_fence do
         transaction? true
         argument :proof, :string, allow_nil?: false
@@ -143,9 +139,6 @@ defmodule AshOnetime.Test.LivebookExamples do
         run {FailRun, []}
       end
 
-      # A fence-protected nonce action whose body SUCCEEDS — proves the burn-marker commits
-      # independently AND complete/2 drives NO response persistence (a fence marker is a one-way
-      # spend, not a stored-response idempotency claim). Guards execution_class → :nonce.
       action :redeem_succeed_fence, :integer do
         transaction? true
         argument :value, :integer, allow_nil?: false

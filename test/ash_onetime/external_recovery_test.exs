@@ -105,12 +105,10 @@ defmodule AshOnetime.ExternalRecoveryTest do
     Process.exit(worker, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 5_000
 
-    # On retry the peer's `recover` returns a WELL-FORMED value (9999) that DIVERGES from what
-    # execute stored (11). For external effects the peer is authoritative (ADR 0001): finalize
-    # binds the recover result straight through, with no execute-vs-recover comparison. So the
-    # recovery COMPLETES successfully rather than rejecting the divergence — the trust boundary the
-    # protocol relies on. (The caller observes the local return value; the peer value binds the
-    # external effect result.) If a future change added divergence validation, this would break.
+    # The peer's recover result is authoritative for the external effect.
+    # A well-formed value may differ from the original execute result.
+    # Finalize binds the recover result without a divergence comparison.
+    # The caller still observes the local return value.
     ExternalEffectSupport.put_mode(:recover_divergent)
     result = run_generic(context, "divergent-recover", 11)
 
@@ -175,23 +173,12 @@ defmodule AshOnetime.ExternalRecoveryTest do
 
   test "a lying :absent recovery re-executes — the trust is inherent to the adapter contract",
        context do
-    # ROADMAP H10: the adversarial-absence worst case. execute lands an effect at the peer,
-    # the caller dies, and the retry's recover LIES — it returns :absent even though the peer
-    # already recorded the effect. The library trusts :absent as authoritative proof
-    # (external_effect.ex:7-8) and re-executes under the same operation key (the peer's calls
-    # ledger records two executes). This is the adapter's fault, not a library bug — the
-    # idempotency guarantee reduces to adapter honesty (ADR-0001), and the defense is the
-    # normative requirement that recover MUST prove absence (external-effects.md).
-    #
-    # Whether the re-execution becomes a DOUBLE-SPEND depends on the peer: a correct peer
-    # with idempotency-key handling deduplicates the second execute (its stored result is
-    # stable, and only one effect ledger row lands). The test peer models the correct case
-    # — its ON CONFLICT DO NOTHING on the operation key keeps the result and the effect
-    # ledger at one. The library's :absent trust is therefore SAFE against a correct peer
-    # even when an adapter lies: the worst observable outcome is a redundant execute the
-    # peer absorbs, not a duplicate effect. The duplicate effect only occurs when BOTH the
-    # adapter lies AND the peer fails to enforce idempotency — the two defenses are
-    # independent, and the library's defense is the adapter contract.
+    # A lying :absent causes re-execution under the same operation key.
+    # The adapter must prove absence; the library trusts that answer.
+    # The peer must independently enforce idempotency by operation key.
+    # This peer deduplicates the redundant execute, keeping one effect.
+    # A duplicate effect requires peer key deduplication to fail.
+    # Adapter honesty and peer deduplication are independent defenses.
     reference = make_ref()
 
     {worker, monitor} =
@@ -215,9 +202,6 @@ defmodule AshOnetime.ExternalRecoveryTest do
     assert [["execute", ^operation_key], ["execute", ^operation_key]] =
              ExternalPeer.calls(context.prefix)
 
-    # A correct peer deduplicates the second execute via idempotency-key handling: the
-    # stored result and the effect ledger stay at one. The redundant execute is absorbed,
-    # not doubled — the library's trust is safe against a correct peer.
     assert ExternalPeer.count(context.prefix, "external_peer_effects") == 1
     assert ExternalPeer.count(context.prefix, "external_local_effects") == 1
     assert claim_state(context.prefix, operation_key) == "complete"

@@ -148,20 +148,10 @@ defmodule AshOnetime.Cache do
       fixed_equal?(:crypto.hash(:sha256, entry.payload), claim.response_digest)
   end
 
-  # Length-prefixed framing for the cache key. The components are 32-byte SHA-256 outputs
-  # today (enforced by CHECK octet_length=32 on the claims table), so there is no
-  # concatenation ambiguity in the current shape — this is defense-in-depth: if a future
-  # change makes a component variable-length (a key-hash algorithm change, an unhashed
-  # scope component), the length prefixes keep the framing unambiguous. A collision still
-  # fails valid_entry?/2 (which re-checks fingerprint/digest/payload before any cache hit is
-  # used), so this hardens a non-load-bearing surface. The cache key is an internal hash
-  # input, not a wire format, so a direct length-prefix is lighter than Canonical.encode
-  # (which allocates a response codec).
-  #
-  # Exposed as a @doc false public function so the framing can be pinned directly against
-  # synthetic variable-length components that would collide under naive concat — a
-  # production framing regression (dropped length prefix) fails here against the real
-  # function, not a local replica. Mirrors bounded_callback_context/1's test seam.
+  # Cache-key components use length prefixes to prevent concatenation ambiguity.
+  # Returned entries remain untrusted: fingerprint, digest, and payload are validated.
+  # The key is an internal hash input, not a wire format.
+  # Cache framing never grants admission.
   @doc false
   def key(%Claim{} = claim) do
     components = [

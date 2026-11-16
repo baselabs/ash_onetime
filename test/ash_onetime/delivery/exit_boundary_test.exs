@@ -27,6 +27,14 @@ defmodule AshOnetime.Delivery.ExitBoundaryTest do
     generic: %Path{action: :mint, type: :action, input: %{value: 7}}
   ]
 
+  @external_actions %{
+    issue: :external_issue,
+    rotate: :external_rotate,
+    revoke: :external_revoke,
+    retire: :external_retire,
+    mint: :external_mint
+  }
+
   setup_all do
     # The completed-response cache is on for every path, so a value written to it (M2)
     # crosses the boundary where the checks see it; both sides use the same cache.
@@ -176,7 +184,7 @@ defmodule AshOnetime.Delivery.ExitBoundaryTest do
   defp path(%Path{} = path, :local, label), do: %{path | key: key(path, label)}
 
   defp path(%Path{} = path, :external, label) do
-    action = String.to_existing_atom("external_#{path.action}")
+    action = Map.fetch!(@external_actions, path.action)
     %{path | action: action, external?: true, key: key(path, label)}
   end
 

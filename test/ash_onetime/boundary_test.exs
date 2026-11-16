@@ -1,9 +1,4 @@
 defmodule AshOnetime.BoundaryTest do
-  @moduledoc """
-  Functional coverage for the conditional-append context boundary: read cutoffs,
-  admitted and refused appends, tenant isolation, fail-closed inputs, and the
-  Ash change surface. Concurrency proofs live in BoundaryContentionTest.
-  """
   use AshOnetime.Test.DataCase, async: false
 
   alias AshOnetime.Boundary

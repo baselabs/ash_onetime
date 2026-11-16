@@ -11,13 +11,6 @@ defmodule AshOnetime.MixProject do
       # Elixir requirement — the PUBLIC support window, not a build pin: `~> 1.20`
       # admits >= 1.20.0 and < 2.0.0. The compatibility evidence below names
       # the exact runtime exercised; this requirement is not a build pin.
-      # This repo's OWN exact toolchain identity is enforced separately:
-      # .tool-versions and CI's ELIXIR_VERSION/OTP_VERSION pin the build every
-      # gate runs on (currently 1.20.5 / OTP 29.1.2), and config/config.exs
-      # refuses a foreign OTP build before anything compiles. Lockstep rule:
-      # this requirement, .tool-versions, and CI's ELIXIR_VERSION/OTP_VERSION
-      # move together in ONE commit — the pinned toolchain must satisfy this
-      # requirement; divergence between the three is a defect.
       elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -25,12 +18,6 @@ defmodule AshOnetime.MixProject do
       description: description(),
       package: package(),
       docs: docs(),
-      # :oban/:plug/:igniter/:mint/:stream_data/:ash_sql are all runtime: false, so
-      # dialyxir no longer seeds the PLT with them on its own, while the guarded
-      # integration modules still analyze against their beams — they must be added
-      # explicitly. :ash_sql stays seeded transitively through ash_postgres's own
-      # app spec; :mint needs no explicit entry because nothing in lib/ compiles
-      # against it (it binds only inside the optional installer closure).
       dialyzer: [plt_add_apps: [:ecto_sql, :ex_unit, :mix, :oban, :plug, :igniter]],
       test_paths: ["test"],
       test_ignore_filters: [&String.starts_with?(&1, "test/compile_fixtures/")],
@@ -38,14 +25,10 @@ defmodule AshOnetime.MixProject do
     ]
   end
 
-  # The repository's declared pre-push loop (AGENTS.md, "Build and test"). It holds the
-  # whole-tree gates that need no database; covering tests run separately on their paths.
   def cli, do: [preferred_envs: [precommit: :test]]
 
   defp aliases do
     [
-      # hex.audit runs first: once the project compiles, Mix prunes code paths to the
-      # project's own dependencies, which hides the Hex archive's tasks.
       precommit: [
         "hex.audit",
         "format --check-formatted",
@@ -67,14 +50,9 @@ defmodule AshOnetime.MixProject do
   defp deps do
     [
       {:ash, ash_requirement()},
-      # Security floors (ADR 0004): AshPostgres 2.15.2 is
-      # where EEF-CVE-2026-115627 and EEF-CVE-2026-115635 are fixed (2.13.0 first fixed
-      # EEF-CVE-2026-78699). AshSql 0.8.6 fixes the query-cache security issue that
-      # retired 0.8.4/0.8.5 (November 9 amendment), above AshPostgres's transitive
-      # minimum. The core-floors case exercises these exact minimums. `runtime: false` keeps
-      # AshPostgres the owner of ash_sql's startup; the < 1.0.0 cap is the same
-      # matrix-extension posture as the Ash < 4.0.0 bound (a breaking major is
-      # proven in CI before the cap moves).
+      # Security floors (ADR 0004): AshPostgres 2.15.2 fixes tenant-isolation issues;
+      # AshSql 0.8.6 fixes query-cache security. AshPostgres owns AshSql startup,
+      # so ash_sql stays runtime: false.
       {:ash_postgres, "~> 2.15 and >= 2.15.2"},
       {:ash_sql, "~> 0.8 and >= 0.8.6", runtime: false},
       {:spark, "~> 2.7"},
@@ -82,54 +60,30 @@ defmodule AshOnetime.MixProject do
       {:postgrex, "~> 0.22"},
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.4"},
-      # The three optional integrations (Plug module, Oban workers, Igniter installer) are
-      # host-owned surfaces: the host lists the dep itself, so the host's own app spec starts
-      # it. `runtime: false` keeps an attached optional out of ash_onetime's generated
-      # `applications` list — otherwise every host that carries the dep inherits it as a
-      # runtime application of ash_onetime (the app-spec leak flagged by consumer-side audit).
-      # stream_data is property-test-only here; it cannot take `only: :test` because ash
-      # itself requires stream_data unrestricted, and Mix rejects a direct entry whose
-      # :only excludes an env a sibling needs it in — so it is kept resolvable in every env
-      # but kept out of the runtime applications list.
+      # Optional integrations are host-owned: the host declares and starts them.
+      # runtime: false keeps them out of ash_onetime's runtime application list.
+      # Their presence must not add a runtime dependency for other consumers.
+      # Ash requires stream_data in every environment, so it stays resolvable there.
+      # It is used for property tests and excluded from runtime applications.
       {:plug, "~> 1.20", optional: true, runtime: false},
       {:oban, "~> 2.23", optional: true, runtime: false},
       {:igniter, "~> 0.8 and >= 0.8.4", optional: true, runtime: false},
-      # Constrain the installer's HTTP closure without adding HTTP to core
-      # consumers: mint reaches a tree only through igniter → req → finch, so
-      # an optional requirement binds exactly the closure that carries it.
-      # Security floor (ADR 0004): Mint 1.10.2 backports the 1.11.0 fixes for
-      # EEF-CVE-2026-91043/-92103 (HTTP/2 memory exhaustion) and -94194
-      # (HTTP/1 response smuggling). Preserve that patched 1.10 release for
-      # consumers while the development lock exercises the latest 1.x.
+      # Optional Mint constrains the Igniter HTTP closure without adding HTTP to core.
+      # Mint 1.10.2 fixes HTTP/2 memory exhaustion and HTTP/1 response smuggling.
+      # Consumers retain the patched 1.10 line; the development lock uses current 1.x.
       {:mint, "~> 1.10 and >= 1.10.2", optional: true, runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
-      # Exercise real result-authorization policies without adding a consumer runtime dependency.
       {:simple_sat, "~> 0.1 and >= 0.1.1", only: :test, runtime: false},
       {:stream_data, "~> 1.4", runtime: false}
     ]
   end
 
-  # `>= 3.37.2 and < 4.0.0` is the consumer requirement. The October 6, 2026
-  # package-wide advisory inventory (ADR 0004) finds EEF-CVE-2026-94201
-  # (unsafe atom-attribute filters can exhaust the BEAM atom table) fixed
-  # only in 3.34.3. The bulk private-argument fix for -93477 shipped in
-  # 3.33.11; that version remains affected by -94201.
-  # EEF-CVE-2026-101028 (aggregate filters and sorts skip related resources'
-  # read policies) is fixed in 3.34.6, raising the floor again (ADR 0004,
-  # October 10, 2026 amendment). EEF-CVE-2026-96581 (a primary-key upsert ignores
-  # attribute multitenancy) is fixed in 3.37.2 and EEF-CVE-2026-114214 (a limit-1
-  # through-relationship load ignores the through path) in 3.37.1, raising the
-  # floor to 3.37.2 (ADR 0004, October 28, 2026 amendment).
-  # The CI compatibility matrix sets ASH_ONETIME_ASH_VERSION to pin
-  # one exact Ash per cell (the floor and each later minor); `latest`/unset keeps the floating
-  # requirement so the newest published Ash is exercised. The namespaced var name is extremely
-  # unlikely to collide with anything in a consumer's environment, so a published build sees
-  # the full requirement. A pin is validated at project-config evaluation time: it must be a
-  # version inside the published range, else Mix.raise fires — a publish with an out-of-range
-  # pin exported would otherwise silently freeze a wrong exact requirement into the package.
+  # Consumer Ash support is >= 3.37.2 and < 4.0.0 (security floors: ADR 0004).
+  # ASH_ONETIME_ASH_VERSION may pin only a plain release inside that range;
+  # latest or unset preserves the floating consumer requirement.
   @ash_floor "3.37.2"
 
   defp ash_requirement do

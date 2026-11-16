@@ -40,11 +40,6 @@ defmodule AshOnetime.Store.RollForwardTest do
   end
 
   describe "the silent-degradation fix (SEC-5 E2E — ADR-0001:65 bounded retention)" do
-    # The blocking design-adversarial challenge: SEC-5's fix must RESTORE bounded retention, not
-    # just paper over it. The proof: after roll_partitions, a payload whose response_partition
-    # falls in a rolled-forward month routes to a NAMED partition (not _default), so cleanup can
-    # drop it at retention. Before the roll, that payload would strand in _default forever.
-
     test "after a roll, a forward-month payload routes to a named partition, not _default", %{
       prefix: prefix,
       target: target

@@ -1,12 +1,6 @@
 defmodule AshOnetime.Test.VerifiedMinter do
   @moduledoc false
 
-  # Consumer-shaped opacity proof: a host module whose public spec speaks the
-  # opaque `AshOnetime.Verified.t()` and constructs only through `new/1` — the
-  # exact shape that tripped `contract_with_opaque` when hosts built the struct
-  # literally. `MIX_ENV=test mix dialyzer` analyzes this module (test/support
-  # compiles into the test env); it must report no opacity violation.
-
   alias AshOnetime.Verified
 
   @spec mint_facts(binary(), DateTime.t(), binary()) ::

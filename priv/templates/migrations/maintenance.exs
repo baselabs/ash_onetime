@@ -49,7 +49,9 @@ defmodule <%= inspect(module) %> do
       END LOOP;
       PERFORM set_config('role',owner_name,true);
       EXECUTE format('CREATE TRIGGER ash_onetime_idempotency_delete_guard BEFORE DELETE ON %s FOR EACH ROW EXECUTE FUNCTION %I.ash_onetime_guard_idempotency_delete()',#{maintenance_literal(q("ash_onetime_idempotency_claims"))}::regclass,#{maintenance_literal(@install_prefix || prefix() || "public")});
+      EXECUTE format('ALTER TABLE %s ENABLE ALWAYS TRIGGER ash_onetime_idempotency_delete_guard',#{maintenance_literal(q("ash_onetime_idempotency_claims"))}::regclass);
       EXECUTE format('CREATE TRIGGER ash_onetime_nonce_delete_guard BEFORE DELETE ON %s FOR EACH ROW EXECUTE FUNCTION %I.ash_onetime_guard_nonce_delete()',#{maintenance_literal(q("ash_onetime_nonce_claims"))}::regclass,#{maintenance_literal(@install_prefix || prefix() || "public")});
+      EXECUTE format('ALTER TABLE %s ENABLE ALWAYS TRIGGER ash_onetime_nonce_delete_guard',#{maintenance_literal(q("ash_onetime_nonce_claims"))}::regclass);
       FOR item IN SELECT * FROM jsonb_array_elements(original_acls) LOOP
         PERFORM set_config('role',pg_get_userbyid((item->>'owner')::oid),true);
         IF item->>'kind'='function' THEN

@@ -64,8 +64,6 @@ defmodule AshOnetime.WindowTest do
           ) do
       issued_at = DateTime.add(@evaluated_at, issued_offset, :second)
 
-      # The acceptance predicate, computed independently of Window: issuance within
-      # [evaluated - (max_age + skew), evaluated + skew], inclusive.
       within? = issued_offset >= -(max_age + skew) and issued_offset <= skew
 
       case Window.validate(issued_at, nil, @evaluated_at, max_age, skew) do

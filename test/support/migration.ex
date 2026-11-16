@@ -1,7 +1,7 @@
 defmodule AshOnetime.Test.Migration do
   @moduledoc false
 
-  alias AshOnetime.Test.Repo
+  alias AshOnetime.Test.{RealConnection, Repo}
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: GenerateMigrations
@@ -77,6 +77,62 @@ defmodule AshOnetime.Test.Migration do
     end
 
     %{schema: schema, module: module, version: version, path: path, temporary: temporary}
+  end
+
+  def with_runtime_connection(schema, callback) do
+    role = "doctor_runtime_#{System.unique_integer([:positive])}"
+    password = Base.encode16(:crypto.strong_rand_bytes(24))
+
+    RealConnection.with_connection(fn ->
+      SQL.query!(
+        Repo,
+        ~s|CREATE ROLE "#{role}" LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '#{password}'|,
+        []
+      )
+    end)
+
+    try do
+      RealConnection.with_connection(fn ->
+        SQL.query!(Repo, ~s|GRANT USAGE ON SCHEMA "#{schema}" TO "#{role}"|, [])
+
+        SQL.query!(
+          Repo,
+          ~s|GRANT SELECT ON "#{schema}".ash_onetime_idempotency_claims TO "#{role}"|,
+          []
+        )
+      end)
+
+      url =
+        Application.fetch_env!(:ash_onetime, Repo)[:url]
+        |> URI.parse()
+        |> Map.put(:userinfo, role <> ":" <> password)
+        |> URI.to_string()
+
+      {:ok, runtime} =
+        Repo.start_link(name: nil, url: url, pool: DBConnection.ConnectionPool, pool_size: 1)
+
+      Process.unlink(runtime)
+      previous = Repo.put_dynamic_repo(runtime)
+
+      try do
+        [[false, false]] =
+          SQL.query!(
+            runtime,
+            "SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=session_user",
+            []
+          ).rows
+
+        callback.()
+      after
+        Repo.put_dynamic_repo(previous)
+        GenServer.stop(runtime)
+      end
+    after
+      RealConnection.with_connection(fn ->
+        SQL.query!(Repo, ~s|DROP OWNED BY "#{role}"|, [])
+        SQL.query!(Repo, ~s|DROP ROLE "#{role}"|, [])
+      end)
+    end
   end
 
   def uninstall_generated!(installation) do

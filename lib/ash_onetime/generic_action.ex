@@ -119,10 +119,6 @@ defmodule AshOnetime.GenericAction do
     end
   end
 
-  # The dispatch_reservation / trusted_context / unavailable_error helpers live on
-  # AshOnetime.Admission now (shared with Change); the mutation sentinel that was here
-  # (replay-fence-generic-dispatch) was never registered in scripts/check_mutations.exs,
-  # and the consolidated Admission.dispatch_reservation/4 carries the same dispatch logic.
   defp complete(input, result) do
     case AshOnetime.Admission.state(input) do
       {:ok, %{class: :replay} = state} ->

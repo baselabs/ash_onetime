@@ -189,22 +189,24 @@ defmodule AshOnetime.Delivery.TaskRouteTest do
 
     cond do
       cell.caller == :open ->
-        assert error_code(result) == :executing_only_in_transaction, label
+        assert {cell, error_code(result)} == {cell, :executing_only_in_transaction}
         refute_received :ran, label
         assert claim_count(prefix) == before, label
 
       task? ->
-        assert error_code(result) == :executing_only_refused, label
+        assert {cell, error_code(result)} == {cell, :executing_only_refused}
         refute_received :ran, label
         assert claim_count(prefix) == before, label
 
       not cell.transaction? ->
-        assert error_code(result) == :not_in_transaction, label
+        assert {cell, error_code(result)} == {cell, :not_in_transaction}
         assert_received :ran, label
         assert claim_count(prefix) == before, label
 
       true ->
-        assert %Delivery{outcome: :executed} = elem(result, tuple_size(result) - 1), label
+        assert {^cell, %Delivery{outcome: :executed}} =
+                 {cell, result |> Tuple.to_list() |> List.last()}
+
         assert_received :ran, label
         assert claim_count(prefix) == before + 1, label
     end

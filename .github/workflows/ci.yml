@@ -11,27 +11,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# The test harness (test/test_helper.exs) fails closed unless DATABASE_URL
-# targets the dedicated loopback ash_onetime_test database under the postgres
-# user on a non-default port; CI pins the repo-default port 18841 and maps the
-# Postgres service to it. The contention tests' observer sessions derive
-# their connection from the Repo URL, so they follow the same port.
+# Tests require the dedicated loopback ash_onetime_test database as postgres.
+# Use non-default port 18841 for the PostgreSQL service.
+# Observer connections use the Repo URL.
 env:
-  # Lockstep with mix.exs' `elixir:` support window (the pinned toolchain must
-  # satisfy it) and .tool-versions — all three move together in ONE commit;
-  # divergence between the three is a defect.
   ELIXIR_VERSION: "1.20.5"
   OTP_VERSION: "29.1.2"
   DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
 
 jobs:
-  # Compatibility matrix: the per-cell gate battery (format, compile
-  # warnings-as-errors, hex.audit, deps.audit, test, credo --strict, dialyzer,
-  # docs --warnings-as-errors, hex.build) across the supported Ash range —
-  # the declared floor plus a floating `latest` cell that auto-exercises the
-  # newest published Ash on every run. The release battery (mutation matrix,
-  # source Livebook execution, unpacked-package check, DSL cheat-sheet freshness)
-  # runs once in the release-checks job against the committed lock.
   compat:
     name: "Ash ${{ matrix.ash }}"
     runs-on: ubuntu-latest
@@ -52,12 +40,14 @@ jobs:
         ports:
           - 18841:5432
         options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-compat-${{ strategy.job-index }}
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
     env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-compat-${{ strategy.job-index }}"
       ASH_ONETIME_ASH_VERSION: ${{ matrix.ash }}
 
     steps:
@@ -79,12 +69,6 @@ jobs:
             mix-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-ash${{ matrix.ash }}-
 
       - name: Resolve the matrix Ash version
-        # `== X` cells resolve to exactly X; the floating `latest` cell resolves to the
-        # newest Ash satisfying `>= 3.37.2 and < 4.0.0`. Resolve the full graph:
-        # locked AshPostgres/AshSql versions can otherwise require a newer Ash
-        # than the selected cell, concealing the consumer compatibility result.
-        # Developer tools float with that graph, exercising current tool compatibility;
-        # release-checks uses the committed lock for reproducible artifact verification.
         run: |
           mix deps.unlock --all
           mix deps.get
@@ -100,15 +84,10 @@ jobs:
           ASH_ONETIME_RLS_PRUNE_TESTS: "1"
       - run: mix credo --strict
       - run: mix dialyzer
-      # The test-env run also analyzes test/support — where the consumer-shaped
-      # opacity fixture lives (a host module whose @spec speaks the opaque
-      # AshOnetime.Verified.t()); the dev-env run above never compiles it.
       - run: MIX_ENV='test' mix dialyzer
       - run: mix docs --warnings-as-errors
       - run: mix hex.build
 
-  # Version-independent release gates from CONTRIBUTING.md, run once against the
-  # committed lock (the floating requirement — no ASH_ONETIME_ASH_VERSION pin here).
   release-checks:
     name: "Release gates"
     runs-on: ubuntu-latest
@@ -123,10 +102,14 @@ jobs:
         ports:
           - 18841:5432
         options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-release
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-release"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -157,11 +140,10 @@ jobs:
         run: mix hex.build
       - name: Unpacked consumer package check
         run: mix run scripts/check_package.exs
-      # Fails when the test repo's committed AshPostgres output (test/support/priv) is stale
-      # against the locked AshPostgres, so the suite always runs with the consumer's helpers.
+      # Check the committed test Repo migrations against AshPostgres code generation.
       - name: Ash codegen freshness
         run: MIX_ENV='test' mix ash.codegen --check
-      # Fails when the committed documentation/dsls/DSL-*.md drifts from the declared schema.
+      # Check the shipped DSL reference against the declared schema.
       - name: DSL cheat-sheet freshness
         run: mix spark.cheat_sheets --check --extensions AshOnetime.Resource
       - name: Execute Livebook source cells
@@ -174,9 +156,6 @@ jobs:
       - name: Optional integration matrix
         run: MIX_ENV='test' mix run scripts/check_optional_matrix.exs
 
-  # The other end of the OTP allowlist in config/config.exs: the dev gates run
-  # on OTP 28 (the floor of the supported set) so an in-window contributor on
-  # 28 is proven, not assumed. The allowlist grows only alongside a leg here.
   otp-28:
     name: "OTP 28"
     runs-on: ubuntu-latest
@@ -191,12 +170,14 @@ jobs:
         ports:
           - 18841:5432
         options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-otp28
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
     env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-otp28"
       OTP_VERSION: "28.5"
       DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
 

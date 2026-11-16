@@ -114,8 +114,6 @@ defmodule AshOnetime.NonceRetentionTest do
     assert {:ok, :ok} = spend(options)
     assert stored_deadline(prefix) == Window.cleanup_after(now, 664, 0)
 
-    # PostgreSQL owns cleanup time. Age this real row coherently instead of sleeping
-    # or replacing the cleanup predicate; its original deadline formula is preserved.
     elapsed = 665 + Window.cleanup_skew_margin_seconds()
 
     SQL.query!(
@@ -211,7 +209,6 @@ defmodule AshOnetime.NonceRetentionTest do
     assert {:ok, :ok} = spend(options)
     assert {:ok, deadline} = Transaction.nonce_retention_deadline(Repo, locator(options))
 
-    # A caller's new, longer policy cannot extend this already stored deadline.
     for retention <- [300, 10_000],
         instant <- [DateTime.add(deadline, -1, :microsecond), deadline] do
       Clock.freeze(instant)

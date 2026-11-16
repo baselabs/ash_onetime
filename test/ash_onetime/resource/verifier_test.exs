@@ -22,13 +22,10 @@ defmodule AshOnetime.Resource.VerifierTest do
     assert opts[:protection] == protection
   end
 
-  # M4: the verifier's verify_required_shape/2 re-asserts the AGENTS.md load-bearing
-  # invariants (strategy in [:idempotency, :one_time_nonce]; scope non-nil; key non-nil) as
-  # defense-in-depth against a future transformer regression. But the transformer's required/2
-  # rejects these FIRST, so every compile-fixture that would exercise the verifier's reject
-  # arms is short-circuited at the transformer — drop verify_required_shape and no test fails.
-  # These tests drive verify_required_shape/2 DIRECTLY (exposed @doc false) with hand-built
-  # %Protection{} structs, so each reject arm is proven to fire with its exact message.
+  # The verifier independently requires a supported strategy, scope, and key.
+  # Malformed protections must fail even if a transformer check regresses.
+  # Drive verify_required_shape/2 directly so the transformer cannot short-circuit it.
+  # Each rejected shape must retain its specific diagnostic.
   describe "verify_required_shape/2 (M4 defense-in-depth)" do
     # A minimal dsl_state satisfying verifier_error/2's get_persisted(:module) read; the
     # module is real (the test support resource) so the DslError carries a usable module.
@@ -95,8 +92,6 @@ defmodule AshOnetime.Resource.VerifierTest do
       malformed = %Protection{strategy: :bogus, scope: [:s], key: [:k]}
       well_formed = %Protection{strategy: :idempotency, scope: [:s], key: [:k]}
 
-      # The malformed first protection halts the reduce_while; the well-formed second is
-      # never reached. Reordering (well-formed first) accepts the first and then rejects.
       assert {:error, %DslError{message: "strategy must be :idempotency or :one_time_nonce"}} =
                Verifier.verify_required_shape(@verifier_dsl, [malformed, well_formed])
 

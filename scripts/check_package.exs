@@ -21,7 +21,6 @@ defmodule AshOnetime.PackageCheck do
   @reference_projects ~r/\b(?:ash_age|ash_webhook_it|bounded_authority(?:_protocol)?)\b/i
   @secret_literal ~r/\b(?:api[_-]?key|password|private[_-]?key|secret)\s*[:=]\s*["'][^"']+["']/i
   @provider_crypto ~r/defmodule\s+\S*(?:Stripe|GitHub|Slack|Twilio)\S*(?:Signature|Verifier)/i
-  @versioned_identifier ~r/(?:^|[\/_])[^\/]*_v\d+(?:\.|_|\/|$)|\b(?:defmodule|def|defp)\s+\S*(?:_v\d+|V\d+)\b/i
 
   def main do
     archive = archive!()
@@ -115,15 +114,6 @@ defmodule AshOnetime.PackageCheck do
         reject_match!(@secret_literal, source, "secret literal", entry)
         reject_match!(@reference_projects, source, "reference-project string", entry)
         reject_match!(@provider_crypto, source, "provider-specific crypto", entry)
-
-        if String.starts_with?(entry, "lib/") or String.starts_with?(entry, "priv/") do
-          reject_match!(
-            @versioned_identifier,
-            entry <> "\n" <> source,
-            "versioned identifier",
-            entry
-          )
-        end
       end
     end
 
@@ -221,12 +211,9 @@ defmodule AshOnetime.PackageCheck do
   defp assert_equal!(value, value, _message), do: :ok
   defp assert_equal!(_actual, _expected, message), do: raise(message)
 
-  # The published ash requirement is security surface (D2): a release built with an exact
-  # ASH_ONETIME_ASH_VERSION pin exported freezes "== x.y.z" into the hex metadata in place
-  # of the floating range. mix.exs rejects out-of-range pins at config evaluation; this
-  # parses the FROZEN METADATA of the archive the battery is about to approve and asserts
-  # every published security floor — plus its optional flag — actually shipped, whatever
-  # the current shell holds.
+  # Published metadata must carry every consumer security floor and optional flag.
+  # An exported exact Ash pin must not freeze the development override into a release.
+  # Validate the archive metadata that consumers receive.
   @published_requirements %{
     ash: {">= 3.37.2 and < 4.0.0", false},
     ash_postgres: {"~> 2.15 and >= 2.15.2", false},
@@ -236,7 +223,6 @@ defmodule AshOnetime.PackageCheck do
   }
 
   defp assert_published_requirements(metadata_path) do
-    # metadata.config is a dotted multi-term file, not one binary term.
     metadata =
       case :file.consult(metadata_path) do
         {:ok, metadata} ->

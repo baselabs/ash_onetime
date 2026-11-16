@@ -159,10 +159,18 @@ defmodule AshOnetime.Store.Postgres do
       when is_list(options) do
     with_checkout(target, fn ->
       with :ok <- transaction_preconditions(target),
-           :ok <- validate_claim_lock_timeout(Keyword.get(options, :lock_timeout_ms)) do
-        lock_claim_under_timeout(target, claim, Keyword.get(options, :lock_timeout_ms))
+           :ok <- validate_claim_lock_timeout(Keyword.get(options, :lock_timeout_ms)),
+           {:ok, locked} <-
+             select_claim_under_timeout(
+               target,
+               claim,
+               claim.id,
+               Keyword.get(options, :lock_timeout_ms)
+             ) do
+        resolve_locked_claim(target, locked)
       else
         {:error, %Result{} = result} -> result
+        {:error, :missing} -> Result.failure(:store_invariant, :sent, :open)
       end
     end)
   end
@@ -170,28 +178,26 @@ defmodule AshOnetime.Store.Postgres do
   def lock_for_effect(_target, _claim, _options),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
-  # The lock_timeout GUC must bound ONLY the claim lock: SET LOCAL lasts to the end of the
-  # caller's transaction, and everything after the lock runs on the same connection — the
-  # adapter's own callbacks, the action body, and the finalize writes. Leaving it armed
-  # would cap the adapter's contended writes (and finalize's payload insert) at the lock
-  # wait — exactly the class of library-imposed bound ADR-0011 rejects. So: capture the
-  # session's value, arm, lock, restore. On :lock_timeout the statement failure has
-  # aborted the transaction — there is nothing to restore into.
-  defp lock_claim_under_timeout(target, claim, nil), do: lock_claim_row(target, claim)
+  # Bound only the claim-lock wait, not callbacks or the action body.
+  # Capture lock_timeout, arm it, acquire the lock, then restore the prior value.
+  # External completion bounds each write separately (ADR 0011).
+  # A lock timeout aborts the transaction, so no restoration is possible there.
+  defp select_claim_under_timeout(target, claim, claim_id, nil),
+    do: select_claim(target, claim.strategy, logical_key(claim), claim_id)
 
-  defp lock_claim_under_timeout(target, claim, lock_timeout_ms) do
+  defp select_claim_under_timeout(target, claim, claim_id, lock_timeout_ms) do
     with {:ok, previous} <- current_lock_timeout(target),
          :ok <- arm_claim_lock_timeout(target, lock_timeout_ms) do
-      case lock_claim_row(target, claim) do
-        %Result{reason: :lock_timeout} = result ->
+      case select_claim(target, claim.strategy, logical_key(claim), claim_id) do
+        {:error, %Result{reason: :lock_timeout}} = result ->
           result
 
-        %Result{} = result ->
+        result ->
           restore_lock_timeout(target, previous)
           result
       end
     else
-      {:error, %Result{} = result} -> result
+      {:error, %Result{}} = error -> error
     end
   end
 
@@ -206,17 +212,6 @@ defmodule AshOnetime.Store.Postgres do
   defp restore_lock_timeout(target, previous) do
     _ = dispatched_query(target, "SET LOCAL lock_timeout = '#{previous}'", [])
     :ok
-  end
-
-  # The id binds alongside the logical key so a row reaped and re-inserted between the
-  # worker's commit and this lock is detected (:missing, fail closed) rather than silently
-  # adopting a different generation's claim (ADR-0010).
-  defp lock_claim_row(target, claim) do
-    case select_claim(target, claim.strategy, logical_key(claim), claim.id) do
-      {:ok, locked} -> resolve_locked_claim(target, locked)
-      {:error, :missing} -> Result.failure(:store_invariant, :sent, :open)
-      {:error, %Result{} = result} -> result
-    end
   end
 
   defp resolve_locked_claim(target, locked) do
@@ -250,19 +245,52 @@ defmodule AshOnetime.Store.Postgres do
     do: complete_external(target, claim, codec, digest, encoded_response, nil)
 
   @impl AshOnetime.Store
+  def complete_external(target, claim, codec, digest, encoded_response, hold_reference),
+    do: complete_external(target, claim, codec, digest, encoded_response, hold_reference, [])
+
+  @impl AshOnetime.Store
   def complete_external(
         %Target{} = target,
         %Claim{strategy: :idempotency} = claim,
         codec,
         digest,
         encoded_response,
-        hold_reference
-      ) do
-    complete_mode(target, claim, codec, digest, encoded_response, :external, hold_reference)
+        hold_reference,
+        options
+      )
+      when is_list(options) do
+    lock_timeout_ms = Keyword.get(options, :lock_timeout_ms, 2_000)
+
+    with_checkout(target, fn ->
+      with :ok <- transaction_preconditions(target),
+           :ok <- validate_hold(hold_reference),
+           :ok <- validate_claim_lock_timeout(lock_timeout_ms) do
+        complete_transaction(
+          target,
+          claim,
+          codec,
+          digest,
+          encoded_response,
+          {:external, lock_timeout_ms},
+          hold_reference
+        )
+      else
+        {:error, %Result{} = result} -> result
+        {:error, _error} -> Result.failure(:invalid_request, :not_started, :open)
+      end
+    end)
   end
 
-  def complete_external(_target, _claim, _codec, _digest, _encoded_response, _hold_reference),
-    do: Result.failure(:invalid_request, :not_started, :not_applicable)
+  def complete_external(
+        _target,
+        _claim,
+        _codec,
+        _digest,
+        _encoded_response,
+        _hold_reference,
+        _options
+      ),
+      do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
   defp complete_mode(target, claim, codec, digest, payload, mode, hold_reference) do
     with_checkout(target, fn ->
@@ -297,7 +325,7 @@ defmodule AshOnetime.Store.Postgres do
     sql = """
     UPDATE #{relation(target, "ash_onetime_idempotency_claims")}
     SET hold_reference = NULL,
-        retain_until = GREATEST(retain_until, statement_timestamp() + (retain_until - admitted_at))
+        retain_until = GREATEST(retain_until, statement_timestamp() + extract(epoch FROM (retain_until - admitted_at)) * interval '1 second')
     WHERE logical_partition = $1 AND hold_reference = $2
     """
 
@@ -311,10 +339,17 @@ defmodule AshOnetime.Store.Postgres do
   defp validate_hold(reference), do: AshOnetime.Hold.validate_reference(reference)
 
   @impl AshOnetime.Store
-  def load(%Target{} = target, %Claim{} = claim) do
+  def load(%Target{} = target, %Claim{} = claim, options) when is_list(options) do
     with_checkout(target, fn ->
       with :ok <- transaction_preconditions(target),
-           {:ok, loaded} <- select_claim(target, claim.strategy, logical_key(claim)),
+           :ok <- validate_claim_lock_timeout(Keyword.get(options, :lock_timeout_ms)),
+           {:ok, loaded} <-
+             select_claim_under_timeout(
+               target,
+               claim,
+               nil,
+               Keyword.get(options, :lock_timeout_ms)
+             ),
            {:ok, result} <- loaded_result(target, loaded) do
         result
       else
@@ -324,7 +359,7 @@ defmodule AshOnetime.Store.Postgres do
     end)
   end
 
-  def load(_target, _claim),
+  def load(_target, _claim, _options),
     do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
   # The committed completion of one exact claim, read outside any transaction so only
@@ -688,17 +723,58 @@ defmodule AshOnetime.Store.Postgres do
 
   defp complete_transaction(target, claim, codec, digest, encoded_response, mode, hold_reference) do
     with :ok <- validate_completion(codec, digest, encoded_response),
-         {:ok, partition_date} <- database_date(target, mode),
-         :ok <- insert_payload(target, partition_date, claim.id, encoded_response),
+         {:ok, partition_date} <- database_date(target, completion_mode(mode)),
+         :ok <-
+           completion_statement(target, mode, fn ->
+             insert_payload(target, partition_date, claim.id, encoded_response)
+           end),
          {:ok, completed} <-
-           update_complete(target, claim, partition_date, codec, digest, mode, hold_reference) do
+           completion_statement(target, mode, fn ->
+             update_complete(
+               target,
+               claim,
+               partition_date,
+               codec,
+               digest,
+               completion_mode(mode),
+               hold_reference
+             )
+           end) do
       Result.success(:complete, claim: completed, payload: encoded_response)
     else
+      {:error, %Result{reason: :lock_timeout}} when is_tuple(mode) ->
+        target.repo_module.rollback(
+          AshOnetime.Error.new(
+            :request_in_progress,
+            "a request for this key is already processing"
+          )
+        )
+
       {:error, %Result{} = result} ->
         rollback_completion(target, result)
 
       {:error, reason} ->
         rollback_completion(target, Result.failure(reason, :not_started, :rolled_back))
+    end
+  end
+
+  defp completion_mode({:external, _timeout}), do: :external
+  defp completion_mode(mode), do: mode
+
+  defp completion_statement(_target, :database, statement), do: statement.()
+
+  defp completion_statement(target, {:external, lock_timeout_ms}, statement) do
+    with {:ok, previous_timeout} <- current_lock_timeout(target),
+         :ok <- arm_claim_lock_timeout(target, lock_timeout_ms) do
+      case statement.() do
+        {:error, %Result{transaction: transaction}} = error
+        when transaction in [:rolled_back, :unknown] ->
+          error
+
+        result ->
+          restore_lock_timeout(target, previous_timeout)
+          result
+      end
     end
   end
 
@@ -923,8 +999,11 @@ defmodule AshOnetime.Store.Postgres do
   defp update_complete(target, claim, partition_date, codec, digest, mode, hold_reference) do
     retention_update =
       case mode do
-        :database -> ""
-        :external -> ", retain_until = statement_timestamp() + (retain_until - admitted_at)"
+        :database ->
+          ""
+
+        :external ->
+          ", retain_until = statement_timestamp() + extract(epoch FROM (retain_until - admitted_at)) * interval '1 second'"
       end
 
     sql = """
@@ -960,20 +1039,10 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   defp load_payload(target, claim) do
-    # The `partition_date` predicate prunes the range-partitioned payload table to the
-    # single monthly child holding this claim's response (the PK is
-    # `(partition_date, claim_id)`), turning the replay read into a point lookup instead
-    # of a scan of every monthly partition. `claim.response_partition` is non-nil for a
-    # `:complete` idempotency claim by the write-path invariant (`update_complete/5` sets
-    # it atomically with `state = 'complete'`).
-    #
-    # The `partition_date == claim.response_partition` guard below is now logically dead on
-    # the authoritative path (the WHERE binds `partition_date` to `claim.response_partition`,
-    # so any returned row satisfies it by construction) and is retained as defense-in-depth.
-    # Note: a stale/corrupted claim struct whose `response_partition` disagrees with the
-    # stored row is NOT caught by this guard — it is caught by the no-row fallthrough below
-    # (a mismatched `response_partition` makes the WHERE match nothing → `num_rows: 0` →
-    # `:corrupt_payload`). Do not remove the guard expecting it to perform that detection.
+    # Read only claim.response_partition for a point lookup in the monthly payload child.
+    # Completion sets response_partition atomically with the complete state.
+    # A stale locator matching no row returns :corrupt_payload.
+    # The partition_date guard below repeats the WHERE predicate as defense in depth.
     sql = """
     SELECT partition_date, encoded_response
     FROM #{relation(target, "ash_onetime_response_payloads")}
@@ -1070,12 +1139,10 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  # Bounds a claim-lock wait: a positive integer at or below @max_claim_lock_timeout, or
-  # nil (no arming — the nonce fence path). The ceiling sits 5s below the committed-claim
-  # worker kill so the LOCK timeout — not the worker kill — decides a contended wait
-  # (ADR-0010). Returns a typed failure rather than raising: the raise would be swallowed
-  # by the surrounding rescue/catch layers and surface as an ambiguous store failure.
-  # Unreachable from the DSL, which bounds the same range at compile time.
+  # Claim-lock waits accept nil or 1..25_000 milliseconds.
+  # Nil leaves the nonce fence path unarmed.
+  # The ceiling leaves headroom below the committed-claim worker timeout.
+  # Invalid input returns a typed failure rather than raising through rescue layers.
   defp validate_claim_lock_timeout(nil), do: :ok
 
   defp validate_claim_lock_timeout(lock_timeout_ms)
@@ -1420,12 +1487,10 @@ defmodule AshOnetime.Store.Postgres do
     end
   end
 
-  # Constant-time digest equality, size-guarded, mirroring Admission.fixed_digest_equal?/2
-  # and Cache.fixed_equal?/2 — the store's digest comparisons follow the same convention as
-  # every other comparison site in the library. Neither call site compares attacker-secret
-  # material today (a digest of the payload returned to the key holder; a caller-supplied
-  # digest validated against its own payload); the unification removes the plain-==
-  # precedent so a future secret-adjacent comparison cannot copy it.
+  # Use constant-time, size-guarded digest equality.
+  # Admission and cache comparisons follow the same rule.
+  # The size guard rejects malformed digests before comparison.
+  # Keep the rule consistent at every comparison site.
   defp fixed_digest_equal?(left, right)
        when is_binary(left) and byte_size(left) == 32 and is_binary(right) and
               byte_size(right) == 32,
@@ -1495,9 +1560,8 @@ defmodule AshOnetime.Store.Postgres do
   end
 
   defp classify_query_error(%Postgrex.Error{postgres: %{code: :insufficient_privilege}}) do
-    # The owner-savepoint prune maps its own privilege failures (a non-owner
-    # driver's lock, a DDL block) to kept partitions before classification;
-    # what reaches here is an ordinary privilege failure on a store query.
+    # Per-child prune failures become kept/refused outcomes inside the owner-owned routine.
+    # A privilege failure reaching this classifier is an ordinary store-query failure.
     Result.failure(:store_invariant, :sent, :rolled_back)
   end
 

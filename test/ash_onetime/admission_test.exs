@@ -1,13 +1,6 @@
 defmodule AshOnetime.AdmissionTest do
   use ExUnit.Case, async: true
 
-  # ROADMAP H31: Admission is the most security-critical module and is exercised mostly
-  # transitively via integration tests. These are focused unit tests for the pure decision
-  # functions that are independent of a live Postgres — the replay marker, the state
-  # propagation, the replayed/fresh stamp, and the complete/2 short-circuits — so a
-  # regression in stamp_replay, put_replay, or the untracked-transparency invariant surfaces
-  # directly, not via an integration failure.
-
   alias AshOnetime.Admission
   alias AshOnetime.Admission.State
   alias AshOnetime.Resource.Info, as: ResourceInfo
@@ -111,10 +104,6 @@ defmodule AshOnetime.AdmissionTest do
   end
 
   describe "complete/2 short-circuits" do
-    # complete/2 for :nonce/:untracked/:replay returns {:ok, result} directly — no response
-    # encoding, no payload persistence. These are the classes that do not own a stored
-    # response, so completion is a pure pass-through.
-
     test ":nonce returns the result without encoding" do
       assert {:ok, :the_result} = Admission.complete(state(:nonce), :the_result)
     end
@@ -182,10 +171,6 @@ defmodule AshOnetime.AdmissionTest do
   end
 
   describe "sanitize_request/1 (the stripping seam)" do
-    # H31: the nonce request carries trusted verification facts (the Verified components and
-    # the clock module) only as far as the store claim; the state that survives into the
-    # admission decision must not carry them. These tests pin the pure stripping directly.
-
     test "a one_time_nonce request loses verified and clock, everything else survives" do
       {:ok, request} =
         Claim.nonce(
@@ -746,31 +731,17 @@ defmodule AshOnetime.AdmissionTest do
   end
 
   describe "bounded callback context (M1)" do
-    # M1: verifier/mint/scope callbacks receive ONLY %{resource:, action:} — the trusted
-    # local facts the admission path derives itself (AGENTS.md: "verification callbacks
-    # return trusted local facts; action input cannot supply pre-verified facts"). Caller-
-    # supplied actor/tenant/keys/now are NOT forwarded (least-privilege). The prior code
-    # threaded trusted_context into bounded_callback_context/2 and ran a dead
-    # Map.take(trusted_context, [:keys, :now]) that always returned %{} (no producer of
-    # :keys/:now exists); the fix collapsed it to bounded_callback_context/1 (subject only),
-    # removing both dead paths.
-    #
-    # The behavioral tripwire lives in ActionTransactionTest — "the bounded callback context
-    # carries exactly resource and action (M1)" — which drives the real verifier with the
-    # bounded context directly (deterministic, no DB) and asserts the keys are exactly
-    # [:action, :resource]. This unit suite cannot drive the verifier; the contract is pinned
-    # there.
+    # Verifier, mint, and scope callbacks receive only resource and action.
+    # Admission derives those trusted local facts from the subject.
+    # Caller context must not expand the callback's authority.
+    # ActionTransactionTest checks the exact callback keys.
   end
 
   describe "the test seam is default-off in every build (gate tripwire)" do
-    # The Process-dictionary store redirect is compiled only when a build explicitly sets
-    # config :ash_onetime, allow_admission_override: true (mirroring Token's
-    # @allow_clock_override gate; see the gate comment in Admission). Two tripwires pin
-    # that property: a source-shape assertion (the gate is Application.compile_env on the
-    # named key, and Mix.env() never appears in the module — the deployment-fragile
-    # pattern Token abandoned), and a dev-build subprocess proving the seam functions are
-    # COMPILED OUT of a build that has not opted in (config/test.exs opts the suite in, so
-    # only an out-of-suite build can observe the off branch).
+    # Admission-store redirects require explicit compile-time allow_admission_override: true.
+    # MIX_ENV alone must not enable them.
+    # The source assertion checks the gate; the dev-build subprocess checks its off branch.
+    # Ensure modules are loaded before testing export absence.
     test "the gate is compile_env on the named key and Mix.env is absent from the module" do
       source = File.read!(Path.join(__DIR__, "../../lib/ash_onetime/admission.ex"))
 
@@ -781,15 +752,6 @@ defmodule AshOnetime.AdmissionTest do
     end
 
     test "the seam functions are absent from a dev build without the opt-in" do
-      # The dev subprocess inherits a clean env: config/config.exs imports test.exs ONLY
-      # for the test env, so in MIX_ENV=dev the allow_admission_override config is unset
-      # and the gate freezes to false at the dev build's compile time — the seam must be
-      # absent there. The probe MUST ensure_loaded the module first: function_exported?/3
-      # reports false for an unloaded module, and `mix run` compiles without loading, so
-      # an un-loaded probe prints {false, false, false} even in a build that DID compile
-      # the seam in (cross-vendor review probe, 2026-08-22) — the assertion discriminated
-      # nothing. ensure_loaded makes a dev build report {false, false, false} while an
-      # opted-in build reports {true, true, true}.
       script = ~s'''
       Code.ensure_loaded(AshOnetime.Admission)
 
@@ -826,11 +788,6 @@ defmodule AshOnetime.AdmissionTest do
       assert output =~ "admission_seam: {false, false, false}"
     end
   end
-
-  # --- H31 direct decision-function fixtures (synthetic, zero Postgres) ---
-  # Every fixture is built through the real constructors (Claim.idempotency/nonce,
-  # Result.success/failure/committed, Response.contract/encode) so a unit red names a
-  # decision-function regression, not a hand-forged struct drifting from the live shapes.
 
   defp decision_state(strategy, request, opts \\ []) do
     %State{
@@ -949,8 +906,6 @@ defmodule AshOnetime.AdmissionTest do
     contract
   end
 
-  # Mirrors TokenTest's private helper of the same shape: links dependency builds into an
-  # isolated build path so the subprocess compiles only ash_onetime fresh.
   defp link_dependency_builds!(source_build_path, target_build_path) do
     target_lib_path = Path.join(target_build_path, "lib")
     File.mkdir_p!(target_lib_path)

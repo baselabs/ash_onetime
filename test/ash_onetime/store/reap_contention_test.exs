@@ -8,9 +8,6 @@ defmodule AshOnetime.Store.ReapContentionTest do
 
   @moduletag :store
 
-  # Cross-process coordination ceiling. The spawned completer/reaper reach their observable
-  # state in milliseconds on a healthy machine; this bound only adds headroom on a loaded CI
-  # runner, and stays well under ExUnit's 60s per-test timeout even across three sequential waits.
   @receive_timeout 10_000
 
   # Comfortably above the migration's 86_400 s (1 day) hard floor and any legitimate in-flight
@@ -33,9 +30,6 @@ defmodule AshOnetime.Store.ReapContentionTest do
     parent = self()
 
     completer = spawn(fn -> completer_worker(parent, target, claim) end)
-    # Best-effort teardown: a graceful release lets the finalizer commit and clean up its
-    # connection even if an assertion below fails (and unblocks a reaper that a mutant made wait),
-    # so the shared schema's DROP never deadlocks on an orphaned row lock.
     on_exit(fn -> if Process.alive?(completer), do: send(completer, :release) end)
 
     send(completer, :start)

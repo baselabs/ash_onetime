@@ -12,6 +12,16 @@ DECLARE
   date_bytes integer[];
   day_number bigint;
   bound_dates date[];
+  authority_error text;
+  ownership_error record;
+  containment_object record;
+  ownership_column name;
+  object_owner oid;
+  owner_name name;
+  authority_owner oid;
+  holder_name name;
+  database_owner oid;
+  accepted_owner boolean;
 BEGIN
   -- R2: only exact package identities and definitions are trusted. A runtime
   -- overload is unrelated and cannot match these argument type identities.
@@ -123,24 +133,159 @@ BEGIN
   -- The policy refusal has its own closed error, including Table 1 row 5.
   policy_error := @routines@.ash_onetime_maintenance_policy_error();
   IF policy_error IS NOT NULL THEN RAISE EXCEPTION 'maintenance_blinded: %',policy_error; END IF;
-  -- R3a: inherited privileges and SET-reachable MAINTAIN holders. Owners are
-  -- trusted; every other role that can maintain a relation is refused. Holders
-  -- are found once, so the cost is roles x relations plus candidates x holders,
-  -- and holders is empty on a trusted install.
-  IF EXISTS (WITH RECURSIVE scheduled(oid) AS (
+  -- Containment follows deletion dependencies to a fixpoint. Whole-object
+  -- addresses include column dependencies. No OID cutoff: unpinned initdb
+  -- objects (including plpgsql) and every containing schema are checked.
+  -- Roots include consumer-added indexes, constraints and triggers: their
+  -- expressions and functions can execute during maintenance writes.
+  -- pg_attrdef is not a root: shape.sql authenticates every column's normalized
+  -- adbin, including all partitions and the ledger, before owner work runs.
+  -- maintenance-shape-default proves a consumer default refuses before execution.
+  -- Runtime ledger INSERTs supply every defaulted column; roll relocates SELECT *
+  -- into a partition it just created. Maintenance does perform these INSERTs.
+  FOR containment_object IN
+  WITH RECURSIVE package_relations AS MATERIALIZED (
+    SELECT @routines@.ash_onetime_maintenance_relations() AS oid
+    UNION SELECT t.tgrelid FROM pg_trigger t
+      WHERE t.tgfoid=to_regprocedure(format('%I.ash_onetime_fact_append_only()',@schema_name@))
+  ), roots(classid,objid) AS (
+    SELECT 'pg_class'::regclass,oid FROM package_relations
+    UNION SELECT 'pg_class'::regclass,i.indexrelid FROM pg_index i JOIN package_relations r ON r.oid=i.indrelid
+    UNION SELECT 'pg_constraint'::regclass,k.oid FROM pg_constraint k JOIN package_relations r ON r.oid=k.conrelid
+    UNION SELECT 'pg_trigger'::regclass,t.oid FROM pg_trigger t JOIN package_relations r ON r.oid=t.tgrelid
+    UNION SELECT 'pg_policy'::regclass,p.oid FROM pg_policy p JOIN package_relations r ON r.oid=p.polrelid AND p.polname='ash_onetime_maintenance'
+    UNION SELECT 'pg_proc'::regclass,p.oid FROM jsonb_array_elements(manifest) m
+      JOIN pg_namespace n ON n.nspname=m->>'schema'
+      JOIN pg_proc p ON p.pronamespace=n.oid AND p.proname=m->>'name' AND p.proargtypes::text=m->>'arguments'
+    UNION SELECT 'pg_namespace'::regclass,to_regnamespace(@routine_schema_name@)
+  ), closure(classid,objid) AS (
+    SELECT classid,objid FROM roots
+    UNION
+    SELECT next.classid,next.objid FROM closure c CROSS JOIN LATERAL (
+      SELECT d.refclassid AS classid,d.refobjid AS objid FROM pg_depend d WHERE d.classid=c.classid AND d.objid=c.objid
+      -- Internal parts may promote deletion to the containing object.
+      UNION SELECT d.classid,d.objid FROM pg_depend d WHERE d.refclassid=c.classid AND d.refobjid=c.objid AND d.deptype='i'
+      -- Extension members may promote deletion to their extension.
+      UNION SELECT d.classid,d.objid FROM pg_depend d WHERE c.classid='pg_extension'::regclass AND d.refclassid=c.classid AND d.refobjid=c.objid AND d.deptype='e'
+    ) next
+  ), objects AS MATERIALIZED (
+    SELECT c.classid,c.objid,i.schema,i.identity FROM closure c
+    CROSS JOIN LATERAL pg_identify_object(c.classid,c.objid,0) i
+  ) SELECT classid,objid,identity FROM objects
+    UNION SELECT 'pg_namespace'::regclass,n.oid,'schema ' || quote_ident(n.nspname)
+      FROM objects o JOIN pg_namespace n ON n.nspname=o.schema
+    ORDER BY 1,2
+  LOOP
+    -- Read the catalog's ownership column, including pinned/bootstrap owners
+    -- absent from pg_shdepend. Internal objects without an independent owner
+    -- derive their authority from the containing object already in the walk.
+    SELECT a.attname INTO ownership_column FROM pg_attribute a
+      WHERE a.attrelid=containment_object.classid AND a.attname LIKE '%owner'
+        AND a.atttypid='oid'::regtype AND NOT a.attisdropped;
+    CONTINUE WHEN ownership_column IS NULL;
+    EXECUTE format('SELECT %I FROM %s WHERE oid=$1',ownership_column,containment_object.classid::regclass)
+      INTO object_owner USING containment_object.objid;
+    SELECT r.rolname,db.datdba,
+      CASE WHEN r.rolname='pg_database_owner' THEN db.datdba ELSE r.oid END,
+      r.oid=@owner@ OR r.rolsuper OR (r.rolname='pg_database_owner' AND (db.datdba=@owner@ OR dbowner.rolsuper))
+      INTO owner_name,database_owner,authority_owner,accepted_owner
+    FROM pg_roles r CROSS JOIN pg_database db JOIN pg_roles dbowner ON dbowner.oid=db.datdba
+    WHERE r.oid=object_owner AND db.datname=current_database();
+    IF NOT accepted_owner THEN
+      RAISE EXCEPTION 'untrusted_dependency: containment object %, owner %, database owner %',
+        containment_object.identity,owner_name,pg_get_userbyid(database_owner);
+    END IF;
+    -- An accepted structural owner must not lend authority to an untrusted holder.
+    IF object_owner<>@owner@ THEN
+      SELECT r.rolname INTO holder_name FROM pg_roles r
+      WHERE pg_has_role(r.oid,authority_owner,'MEMBER') AND NOT r.rolsuper
+        AND NOT pg_has_role(r.oid,@owner@,'MEMBER') ORDER BY r.rolname LIMIT 1;
+      IF FOUND THEN
+        RAISE EXCEPTION 'untrusted_dependency: containment object %, owner %, authority owner %, holder %',
+          containment_object.identity,owner_name,pg_get_userbyid(authority_owner),holder_name;
+      END IF;
+    END IF;
+    -- End structural holder rule.
+  END LOOP;
+  -- End containment.
+
+  IF EXISTS (SELECT 1 FROM pg_trigger t
+    WHERE t.tgfoid=to_regprocedure(format('%I.ash_onetime_fact_append_only()',@schema_name@)) AND t.tgenabled<>'A') THEN
+    RAISE EXCEPTION 'untrusted_dependency: fact trigger firing mode';
+  END IF;
+
+  -- Event-trigger code runs under DDL and login identities, even outside the
+  -- relation graph. Disabled triggers remain an authority held by their owner.
+  SELECT e.evtname,p.oid::regprocedure AS function_name,r.rolname AS owner_name,
+    holder.rolname AS holder INTO ownership_error
+  FROM pg_event_trigger e JOIN pg_proc p ON p.oid=e.evtfoid JOIN pg_roles r ON r.oid=p.proowner
+  CROSS JOIN pg_database db JOIN pg_roles dbowner ON dbowner.oid=db.datdba
+  LEFT JOIN LATERAL (
+    SELECT h.rolname FROM pg_roles h
+    WHERE pg_has_role(h.oid,CASE WHEN r.rolname='pg_database_owner' THEN db.datdba ELSE r.oid END,'MEMBER')
+      AND NOT h.rolsuper AND NOT pg_has_role(h.oid,@owner@,'MEMBER')
+    ORDER BY h.rolname LIMIT 1
+  ) holder ON r.oid<>@owner@
+  WHERE db.datname=current_database() AND (
+    NOT (r.oid=@owner@ OR r.rolsuper OR (r.rolname='pg_database_owner' AND (db.datdba=@owner@ OR dbowner.rolsuper)))
+    OR holder.rolname IS NOT NULL)
+  ORDER BY e.evtname LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'untrusted_dependency: event trigger %, function %, owner %, holder %',
+      ownership_error.evtname,ownership_error.function_name,ownership_error.owner_name,ownership_error.holder;
+  END IF;
+  -- End event-trigger ownership.
+
+  -- R3a: every non-predefined holder is refused, even without a reachable
+  -- login: holder-owned views and SECURITY DEFINER routines can expose it.
+  -- Predefined roles count when any subject has membership, including ADMIN
+  -- without INHERIT or SET (an administrator can grant itself SET).
+  -- Root DML is allowed; children and the maintenance ledger are owner-only,
+  -- matching reset_acl. Replica mode bypasses ORIGIN and RI triggers; package
+  -- ALWAYS guards still enforce their owner-SET admission and origin rules.
+  WITH RECURSIVE scheduled(oid) AS (
     SELECT @maintenance@::oid WHERE @maintenance@<>@owner@
     UNION SELECT m.member FROM scheduled s JOIN pg_auth_members m ON m.roleid=s.oid WHERE m.member<>@owner@
   ), relations AS MATERIALIZED (
-    SELECT t::oid AS oid FROM @routines@.ash_onetime_maintenance_relations() t
+    SELECT t::oid AS oid,
+      t NOT IN (@idempotency@::regclass,@nonce@::regclass,@payload@::regclass) AS owner_only
+    FROM @routines@.ash_onetime_maintenance_relations() t
   ), holders AS MATERIALIZED (
-    SELECT holder.oid FROM pg_roles holder WHERE NOT holder.rolsuper AND holder.oid<>@owner@
+    SELECT holder.oid,holder.rolname,
+      CASE
+        WHEN EXISTS (SELECT 1 FROM relations t WHERE has_table_privilege(holder.oid,t.oid,'MAINTAIN')) THEN 'MAINTAIN'
+        WHEN EXISTS (SELECT 1 FROM relations t WHERE
+          (has_table_privilege(holder.oid,t.oid,
+            CASE WHEN t.owner_only THEN 'SELECT,INSERT,UPDATE,DELETE,TRIGGER,TRUNCATE,REFERENCES'
+              ELSE 'TRIGGER,TRUNCATE,REFERENCES' END)
+          OR has_any_column_privilege(holder.oid,t.oid,
+            CASE WHEN t.owner_only THEN 'SELECT,INSERT,UPDATE,REFERENCES' ELSE 'REFERENCES' END))) THEN 'relation'
+        WHEN has_parameter_privilege(holder.oid,'session_replication_role','SET, ALTER SYSTEM') THEN 'session_replication_role'
+        WHEN pg_has_role(holder.oid,'pg_create_subscription','MEMBER') THEN 'replication'
+      END AS authority
+    FROM pg_roles holder WHERE NOT holder.rolsuper AND holder.oid<>@owner@
       AND NOT pg_has_role(holder.oid,@owner@,'USAGE')
-      AND EXISTS (SELECT 1 FROM relations t WHERE has_table_privilege(holder.oid,t.oid,'MAINTAIN'))
-  ) SELECT 1 FROM pg_roles r JOIN holders holder
-      ON (holder.oid=r.oid OR pg_has_role(r.oid,holder.oid,'SET'))
-    WHERE (r.rolcanlogin OR r.oid IN (SELECT oid FROM scheduled)
-      OR r.rolname=current_setting('role') OR r.rolname=session_user) AND NOT r.rolsuper AND r.oid<>@owner@ AND NOT pg_has_role(r.oid,@owner@,'USAGE')) THEN
+      AND NOT pg_has_role(holder.oid,@owner@,'SET')
+  ) SELECT holder.authority INTO authority_error FROM holders holder
+    WHERE holder.authority IS NOT NULL AND (left(holder.rolname,3)<>'pg_' OR EXISTS (
+      SELECT 1 FROM pg_roles r WHERE pg_has_role(r.oid,holder.oid,'MEMBER')
+        AND (r.rolcanlogin OR r.oid IN (SELECT oid FROM scheduled)
+          OR r.rolname=current_setting('role') OR r.rolname=current_user OR r.rolname=session_user)
+        AND NOT r.rolsuper AND r.oid<>@owner@
+        AND NOT pg_has_role(r.oid,@owner@,'USAGE') AND NOT pg_has_role(r.oid,@owner@,'SET')
+    )) ORDER BY CASE holder.authority WHEN 'MAINTAIN' THEN 0 ELSE 1 END LIMIT 1;
+  IF authority_error='MAINTAIN' THEN
     RAISE EXCEPTION 'untrusted_dependency: effective MAINTAIN privilege';
+  ELSIF authority_error IS NOT NULL THEN
+    RAISE EXCEPTION 'untrusted_dependency: effective % privilege',authority_error;
+  END IF;
+  -- Subscription ownership survives revocation of pg_create_subscription.
+  -- Apply workers run in replica mode, bypassing ORIGIN and RI triggers.
+  IF EXISTS (SELECT 1 FROM pg_subscription s JOIN pg_roles r ON r.oid=s.subowner
+    WHERE s.subdbid=(SELECT oid FROM pg_database WHERE datname=current_database())
+      AND NOT r.rolsuper AND r.oid<>@owner@
+      AND NOT pg_has_role(r.oid,@owner@,'USAGE') AND NOT pg_has_role(r.oid,@owner@,'SET')) THEN
+    RAISE EXCEPTION 'untrusted_dependency: effective subscription privilege';
   END IF;
 
 END

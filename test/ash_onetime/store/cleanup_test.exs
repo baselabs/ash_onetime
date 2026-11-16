@@ -79,14 +79,10 @@ defmodule AshOnetime.Store.CleanupTest do
     prefix: prefix,
     target: target
   } do
-    # The :complete-branch delete-guard probe now constrains partition_date =
-    # OLD.response_partition (mirroring the partition-scoped DELETE and the H1 read-path
-    # pruning). Partition pruning and cross-partition duplicate detection are mutually
-    # exclusive — the write path (update_complete) is the authoritative guard that forbids a
-    # second payload; a stray row in a DIFFERENT partition can only exist via direct-SQL
-    # bypass, and the partition-scoped DELETE never touched it anyway. So cleanup proceeds on
-    # the authoritative partition and leaves an out-of-partition stray untouched (the write
-    # path is the real guard; this mirrors the H1 read-path test at postgres_test.exs:277).
+    # Cleanup checks payload_count within OLD.response_partition.
+    # The write path forbids cross-partition duplicates.
+    # A direct-SQL stray outside that partition does not block cleanup.
+    # Cleanup leaves that stray untouched.
     claim_id = Ecto.UUID.generate()
     insert_expired_complete(prefix, claim_id, Date.utc_today(), "current")
 
@@ -141,9 +137,6 @@ defmodule AshOnetime.Store.CleanupTest do
 
   @tag :cleanup_partition_limit_guard_mutation
   test "cleanup rejects out-of-range batch sizes and partition limits", %{target: target} do
-    # A batch of 0 or >10_000, or a partition_limit above @max_partition_drops (128), fails
-    # closed in Elixir before anything is sent. The maintenance routine refuses the same limit
-    # with 22023, but that is :sent and :rolled_back; :not_started proves the guard answered.
     assert %Result{
              status: :failure,
              reason: :invalid_request,

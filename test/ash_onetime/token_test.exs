@@ -22,7 +22,6 @@ defmodule AshOnetime.TokenTest do
   end
 
   test "an existing-format token signed before custody still verifies" do
-    # Captured from main 7f9d976 before the custody implementation.
     wire =
       "ash_onetime.BgAAAPgAAAACAwAAAARib2R5BgAAALMAAAAGAwAAAANrZXkDAAAACW5vbmNlLTEyMwMAAAAGa2V5X2lkAwAAAAlobWFjLW1haW4DAAAACWFsZ29yaXRobQMAAAALaG1hYy1zaGEyNTYDAAAACWlzc3VlZF9hdAIAAAAQMTc4NTg0NDgwMDAwMDAwMAMAAAAJbmFtZXNwYWNlAwAAAAhwYXltZW50cwMAAAAKZXhwaXJlc19hdAIAAAAQMTc4NTg0NDg2MDAwMDAwMAMAAAAJc2lnbmF0dXJlAwAAACBzSywzNOIyqSCDpHjjfl1f95XlbMk0hB8fV0dMMUSDkg"
 

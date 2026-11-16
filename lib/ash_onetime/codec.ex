@@ -31,12 +31,10 @@ defmodule AshOnetime.Codec do
     }
   end
 
-  # The protect-only limit keys bound the key/verification/cache/scope/fingerprint paths but
-  # NOT the response codec. The single source of the limit-key vocabulary's two halves: this
-  # set (protect-only) and hard_limits/0's keys (response). Both the transformer (compile-time
-  # ceiling validation) and Response.response_limit/1 (runtime select-out of protect-only keys
-  # + typo rejection) read from here so the two cannot drift — adding a protect-only key in one
-  # place carries to the other automatically.
+  # Protect-only limits bound keys, verification, caches, scopes, and fingerprints.
+  # They do not constrain the response codec.
+  # These keys and hard_limits/0 define the vocabulary used by the transformer
+  # and runtime response validation; unknown keys are rejected.
   @protect_only_limit_keys [
     max_key_bytes: 4_096,
     max_token_bytes: 65_536,

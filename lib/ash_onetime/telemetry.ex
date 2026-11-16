@@ -294,7 +294,7 @@ defmodule AshOnetime.Telemetry do
   defp validate_measurements(_event, _measurements), do: :error
 
   # ---------------------------------------------------------------------------
-  # Out-of-the-box metrics attachment (ROADMAP H21)
+  # Out-of-the-box metrics attachment
   # ---------------------------------------------------------------------------
 
   @default_handler_id "ash-onetime-default-metrics"
@@ -385,12 +385,10 @@ defmodule AshOnetime.Telemetry do
   @doc false
   @spec handle_event([atom()], map(), map(), keyword()) :: :ok
   def handle_event([:ash_onetime, event], measurements, metadata, _opts) do
-    # The default handler is a thin router: it re-emits each event as a downstream
-    # [:ash_onetime, event, :metric] event carrying the same atoms-only metadata and a
-    # normalized :count or :duration measurement. A consumer attaches their own aggregator
-    # (Telemetry.Metrics reporter, a custom handler, an ETS counter) to the :metric events.
-    # The metadata passes through unchanged — the value-free guarantee is preserved because
-    # this handler emits nothing the upstream validator did not already permit.
+    # Route each event to [:ash_onetime, event, :metric].
+    # Keep the validated atoms-only metadata unchanged.
+    # Normalize measurements to count or duration.
+    # Consumers attach their own aggregators to the metric events.
     measurement =
       if event in @duration_events do
         %{duration: Map.get(measurements, :duration, 0)}

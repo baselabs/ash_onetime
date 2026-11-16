@@ -1,11 +1,111 @@
 defmodule AshOnetime.Store.PostgresTest do
   use AshOnetime.Test.StoreCase, async: false
 
+  alias AshOnetime.Test.ExternalPeer
+
   @moduletag :store
 
   setup_all do
     installation = install_store!()
     {:ok, prefix: installation.schema}
+  end
+
+  @tag defects_batch: true
+  @tag complete_mutation: true
+  @tag unboxed: true
+  test "external completion bounds its claim update and retains the committed claim", %{
+    target: target,
+    prefix: prefix
+  } do
+    assert {:ok, %Result{claim: claim}} =
+             Repo.transaction(fn ->
+               Store.claim(target, idempotency_request("completion-lock"))
+             end)
+
+    {:ok, holder} = Postgrex.start_link(ExternalPeer.database_options())
+
+    try do
+      Postgrex.query!(holder, "BEGIN", [])
+
+      Postgrex.query!(
+        holder,
+        ~s(SELECT id FROM "#{prefix}".ash_onetime_idempotency_claims WHERE id=$1 FOR UPDATE),
+        [Ecto.UUID.dump!(claim.id)]
+      )
+
+      repo = start_unboxed_repo!()
+      parent = self()
+
+      {worker, monitor} =
+        start_monitored_worker(fn ->
+          previous = Repo.put_dynamic_repo(repo)
+
+          result =
+            Repo.transaction(fn ->
+              Store.complete_external(
+                Postgres.for_repo(Repo, prefix),
+                claim,
+                "test",
+                hash("response"),
+                "response"
+              )
+            end)
+
+          Repo.put_dynamic_repo(previous)
+          send(parent, {:completed, self(), result})
+        end)
+
+      try do
+        assert_receive {:completed, ^worker,
+                        {:error, %AshOnetime.Error{code: :request_in_progress}}},
+                       3_000
+
+        assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 1_000
+
+        assert Postgrex.query!(
+                 holder,
+                 ~s(SELECT state FROM "#{prefix}".ash_onetime_idempotency_claims WHERE id=$1),
+                 [Ecto.UUID.dump!(claim.id)]
+               ).rows == [["processing"]]
+
+        assert Postgrex.query!(
+                 holder,
+                 ~s|SELECT count(*) FROM "#{prefix}".ash_onetime_response_payloads WHERE claim_id=$1|,
+                 [Ecto.UUID.dump!(claim.id)]
+               ).rows == [[0]]
+      after
+        Process.exit(worker, :kill)
+      end
+    after
+      Postgrex.query!(holder, "ROLLBACK", [])
+      Postgrex.query!(holder, "SET session_replication_role=replica", [])
+
+      Postgrex.query!(
+        holder,
+        ~s|DELETE FROM "#{prefix}".ash_onetime_idempotency_claims WHERE id=$1|,
+        [Ecto.UUID.dump!(claim.id)]
+      )
+
+      Postgrex.query!(holder, "SET session_replication_role=origin", [])
+      GenServer.stop(holder)
+    end
+  end
+
+  @tag defects_batch: true
+  test "successful external completion restores the caller lock timeout", %{target: target} do
+    assert {:ok, %Result{status: :complete}} =
+             Repo.transaction(fn ->
+               %Result{claim: claim} =
+                 Store.claim(target, idempotency_request("completion-restore"))
+
+               SQL.query!(Repo, "SET LOCAL lock_timeout = '7s'", [])
+
+               result =
+                 Store.complete_external(target, claim, "test", hash("response"), "response")
+
+               assert SQL.query!(Repo, "SHOW lock_timeout", []).rows == [["7s"]]
+               result
+             end)
   end
 
   test "idempotency admission collides on the full logical key", %{target: target} do
@@ -237,7 +337,87 @@ defmodule AshOnetime.Store.PostgresTest do
     assert complete.response_digest == digest
 
     assert {:ok, %Result{status: :complete, payload: <<>>}} =
-             Repo.transaction(fn -> Store.load(target, complete) end)
+             Repo.transaction(fn -> Store.load(target, complete, []) end)
+  end
+
+  @tag claim_load_restore_mutation: true
+  test "claim load restores the caller lock timeout before later statements", %{target: target} do
+    request = idempotency_request("load-timeout-restore")
+
+    assert {:ok, :checked} =
+             Repo.transaction(fn ->
+               %Result{claim: claim} = Store.claim(target, request)
+               SQL.query!(Repo, "SET LOCAL lock_timeout = '7s'", [])
+
+               assert %Result{status: :processing} =
+                        Store.load(target, claim, lock_timeout_ms: 100)
+
+               assert SQL.query!(Repo, "SHOW lock_timeout", []).rows == [["7s"]]
+               :checked
+             end)
+  end
+
+  @tag claim_load_payload_restore_mutation: true
+  test "completed claim load restores the caller timeout before reading its payload", %{
+    target: target,
+    prefix: prefix
+  } do
+    request = idempotency_request("payload-timeout-restore")
+    payload = "authoritative-payload"
+    completed = seed_completed_claim!(prefix, request, payload, :crypto.hash(:sha256, payload))
+
+    assert {:ok, :checked} =
+             Repo.transaction(fn ->
+               SQL.query!(
+                 Repo,
+                 "ALTER TABLE #{relation(prefix, "ash_onetime_response_payloads")} RENAME TO payload_timeout_rows",
+                 []
+               )
+
+               SQL.query!(
+                 Repo,
+                 """
+                 CREATE FUNCTION #{relation(prefix, "observe_payload_timeout")}(payload bytea)
+                 RETURNS bytea LANGUAGE plpgsql AS $probe$
+                 BEGIN
+                   IF coalesce(current_setting('ash_onetime.payload_lock_timeout',true),'')='' THEN
+                     PERFORM set_config('ash_onetime.payload_lock_timeout',current_setting('lock_timeout'),true);
+                   END IF;
+                   RETURN payload;
+                 END $probe$
+                 """,
+                 []
+               )
+
+               SQL.query!(
+                 Repo,
+                 """
+                 CREATE VIEW #{relation(prefix, "ash_onetime_response_payloads")} AS
+                 SELECT logical_partition,partition_date,claim_id,
+                   #{relation(prefix, "observe_payload_timeout")}(encoded_response) AS encoded_response
+                 FROM #{relation(prefix, "payload_timeout_rows")}
+                 """,
+                 []
+               )
+
+               SQL.query!(Repo, "SET LOCAL ash_onetime.payload_lock_timeout = ''", [])
+               SQL.query!(Repo, "SET LOCAL lock_timeout = '7s'", [])
+
+               assert %Result{status: :complete, payload: ^payload} =
+                        Store.load(target, completed, lock_timeout_ms: 100)
+
+               observed =
+                 SQL.query!(
+                   Repo,
+                   "SELECT current_setting('ash_onetime.payload_lock_timeout')",
+                   []
+                 ).rows
+
+               assert observed == [["7s"]]
+               assert SQL.query!(Repo, "SHOW lock_timeout", []).rows == [["7s"]]
+               IO.puts("PAYLOAD_READ_TIMEOUT observed=7s claim_bound=100ms contention=false")
+               :checked
+             end)
   end
 
   test "completion accepts the Task 2 hard response ceiling exactly", %{target: target} do
@@ -254,26 +434,12 @@ defmodule AshOnetime.Store.PostgresTest do
     assert byte_size(stored) == 16_777_216
   end
 
-  # H1 production guard: this is the test that pins the production `load_payload/2`
-  # predicate. It seeds a stray payload row in a *different* partition (`~D[2100-01-01]`,
-  # which routes to `_default`) and asserts the replay returns the AUTHORITATIVE payload,
-  # ignoring the stray. Dropping the `partition_date` predicate from `load_payload/2`
-  # makes the read scan all partitions again, see both rows, and return `:corrupt_payload`
-  # — which fails this assertion. (Verified RED-then-GREEN: see the registered mutation
-  # `partition-pruning-predicate` in scripts/check_mutations.exs.)
-  #
-  # Partition pruning and cross-partition duplicate detection are mutually exclusive —
-  # once the read prunes, a stray payload row in a *different* partition is
-  # out-of-partition and invisible to the read. This is the correct behavior, not a hole:
-  # the write path (`update_complete`, see "completion rejects cross-partition payload
-  # duplication" below at the write-path test) is the authoritative guard that forbids a
-  # second payload from ever being written; the cleanup delete guard re-asserts
-  # `payload_count = 1` within the authoritative partition (its probe is partition-scoped,
-  # mirroring this read-path pruning). A stray row can only exist via direct SQL
-  # bypass (operator error / a buggy migration), which the write path already forbids — so
-  # the read returning the authoritative payload is right. This test was previously named
-  # "load rejects more than one payload row across all partitions" and asserted the
-  # now-dropped incidental detection.
+  # Replay reads only the authoritative response partition.
+  # Seed a stray payload in another partition and require the authoritative result.
+  # Removing the partition predicate would read both and return :corrupt_payload.
+  # The write path forbids cross-partition duplicates.
+  # Cleanup checks cardinality only within the authoritative partition.
+  # Direct-SQL strays do not widen the replay read.
   @tag partition_pruning_mutation: true
   test "load prunes to the authoritative partition and ignores an out-of-partition stray", %{
     prefix: prefix,
@@ -295,16 +461,9 @@ defmodule AshOnetime.Store.PostgresTest do
     insert_payload!(prefix, ~D[2100-01-01], complete.id, "extra")
 
     assert {:ok, %Result{status: :complete, payload: ^payload}} =
-             Repo.transaction(fn -> Store.load(target, complete) end)
+             Repo.transaction(fn -> Store.load(target, complete, []) end)
   end
 
-  # H1 mechanism proof (NOT a production tripwire): this test proves the partition-pruning
-  # MECHANISM directly via EXPLAIN — the predicate query shape scans exactly one named
-  # child, while the pre-fix claim_id-only shape scans every named child. It does NOT pin
-  # production `load_payload/2` (it builds its own SQL via the payload_load_plan helper, so
-  # it would stay green if the production predicate were dropped). The behavioral test
-  # above is the production guard; this test exists to document and lock the mechanism the
-  # fix relies on. First EXPLAIN-based plan assertion in the repo.
   test "the partition_date predicate prunes the payload read to one named child (EXPLAIN)", %{
     prefix: prefix,
     target: target
@@ -340,22 +499,16 @@ defmodule AshOnetime.Store.PostgresTest do
     pruned_refs = named_child_refs.(pruned_plan)
     unpruned_refs = named_child_refs.(unpruned_plan)
 
-    # The predicate query (what load_payload/2 executes) prunes to exactly one child.
     assert pruned_refs == 1,
            "expected the pruning query to reference one named child; got #{pruned_refs}.\n" <>
              "plan:\n#{Enum.join(pruned_plan, "\n")}"
 
-    # The pre-fix claim_id-only query scans every named child — proving the predicate is
-    # what causes the pruning (the mechanism), not some other planner behavior.
     assert unpruned_refs > 1,
            "expected the non-pruning (claim_id-only) query to scan multiple named children " <>
              "(proving the predicate is load-bearing); got #{unpruned_refs}.\n" <>
              "plan:\n#{Enum.join(unpruned_plan, "\n")}"
   end
 
-  # H1 behavioral regression: a replay after the payload's partition is no longer the
-  # newest (N partitions have rolled forward) still returns the correct payload. Guards
-  # that the pruning predicate did not break the read contract.
   test "replay returns the authoritative payload after partitions have rolled forward", %{
     target: target
   } do
@@ -369,16 +522,12 @@ defmodule AshOnetime.Store.PostgresTest do
                Store.complete(target, admitted.claim, "test", digest, payload)
              end)
 
-    # The claim's payload lives in the install-month partition; roll forward so later
-    # named partitions exist. The replay must still find the payload in its own partition.
-    # Assert the roll succeeded so a silent failure does not let the test pass without its
-    # distinguishing premise.
     assert {:ok, %{partitions_created: _}} = Store.roll_partitions(target, 15)
 
     assert complete.response_partition != nil
 
     assert {:ok, %Result{status: :complete, payload: ^payload}} =
-             Repo.transaction(fn -> Store.load(target, complete) end)
+             Repo.transaction(fn -> Store.load(target, complete, []) end)
   end
 
   test "idempotency requests accept only normalized bounded retention seconds" do
@@ -490,10 +639,6 @@ defmodule AshOnetime.Store.PostgresTest do
     assert table_count(prefix, "ash_onetime_idempotency_claims") == 1
     assert table_count(prefix, "ash_onetime_response_payloads") == 1
 
-    # The completion guard's state predicate (state = 'processing') matches
-    # nothing on an already-complete claim, so a second completer turns into
-    # store_invariant regardless of which layered guard fires first. No second
-    # payload or state mutation lands.
     assert {:error, %Result{status: :failure, reason: :store_invariant}} =
              Repo.transaction(fn ->
                Store.complete(target, completed, "test", digest, payload)
@@ -527,12 +672,9 @@ defmodule AshOnetime.Store.PostgresTest do
     prefix: prefix,
     target: target
   } do
-    # Isolate the state predicate (state = 'processing') in update_complete from
-    # the insert_payload conflict guard and the payload-cardinality guard: seed a
-    # complete claim with no payload, then attempt completion. insert_payload
-    # lands exactly one row, the cardinality and partition checks pass, and only
-    # the state predicate (claim is :complete, not :processing) forces the 0-row
-    # update into store_invariant. Proves the state guard is a real backstop.
+    # Completion requires state = processing independently of payload guards.
+    # Seed a complete claim without a payload so the insert and cardinality checks pass.
+    # The state predicate alone must force :store_invariant.
     request = idempotency_request("recompletion-state-backstop")
     payload = "authoritative"
     digest = :crypto.hash(:sha256, payload)
@@ -571,7 +713,7 @@ defmodule AshOnetime.Store.PostgresTest do
               reason: :store_invariant,
               admission_dispatch: :sent,
               transaction: :open
-            }} = Repo.transaction(fn -> Store.load(target, claim) end)
+            }} = Repo.transaction(fn -> Store.load(target, claim, []) end)
   end
 
   test "catalog has separated strategy columns and exact payload columns", %{prefix: prefix} do
@@ -773,12 +915,6 @@ defmodule AshOnetime.Store.PostgresTest do
     )
   end
 
-  # EXPLAIN of the load_payload/2 SELECT shape. `prune?: true` produces the fixed query
-  # shape (with the partition_date predicate); `prune?: false` produces the pre-fix
-  # claim_id-only shape, to prove the predicate is load-bearing for pruning. Verified on
-  # PG 18 (the version test_helper.exs pins) that the parameterized form prunes visibly in
-  # the plan text — both the pruned (1 named child) and unpruned (all named children)
-  # shapes are observable. Used by the H1 partition-pruning mechanism proof.
   defp payload_load_plan(prefix, claim_id, %Date{} = partition_date, opts) do
     prune? = Keyword.get(opts, :prune?, true)
 
@@ -805,11 +941,6 @@ defmodule AshOnetime.Store.PostgresTest do
     Enum.map(rows, &hd/1)
   end
 
-  # Seeds an already-complete authoritative claim plus its single payload via
-  # direct SQL, bypassing Store.complete. This is the "given" state for the
-  # re-completion tests: the seeded claim never passes through update_complete,
-  # so a mutation of the completion state predicate isolates the re-completion
-  # call (the "when") rather than also breaking a first-completion setup step.
   defp seed_completed_claim!(prefix, request, payload, digest) do
     partition_date = Date.utc_today()
     now = DateTime.utc_now() |> DateTime.truncate(:second)

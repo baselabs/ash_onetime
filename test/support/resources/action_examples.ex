@@ -555,8 +555,6 @@ defmodule AshOnetime.Test.ActionExamples.Resource do
 
       retention(3_600)
       external_effect(AshOnetime.Test.ActionExamples.ExternalEffect)
-      # Exercises the ADR-0010 wait bound at a fast-fail value; 1000ms keeps the
-      # blocked-query observation window comfortably wide for the polling helper.
       external_lock_timeout_ms(1_000)
     end
 

@@ -38,8 +38,6 @@ defmodule AshOnetime.MixDependencySecurityTest do
   test "ash_postgres consumer requirement rejects advised versions" do
     requirement = requirement!(:ash_postgres)
     refute Version.match?("2.12.0", requirement)
-    # EEF-CVE-2026-115627 and EEF-CVE-2026-115635 affect AshPostgres < 2.15.2,
-    # including the former 2.13.0 floor; 2.14.5 is also retired.
     refute Version.match?("2.13.0", requirement)
     refute Version.match?("2.14.5", requirement)
     refute Version.match?("2.15.1", requirement)

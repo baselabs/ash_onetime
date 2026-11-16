@@ -215,11 +215,9 @@ defmodule AshOnetime.Codec.ResponseTest do
 
   @tag response_limits_unknown_key_mutation: true
   test "response limits reject unknown option keys (no silent drop)" do
-    # After ARCH-8, the response entity no longer carries its own `limits`; the response-relevant
-    # limits flow through trusted[:limits] (the unified protect-level vocabulary). A typo'd key
-    # (max_respomse_bytes) is NEITHER a response key NOR a known protect-only key, so the
-    # response_limit/1 selector's typo-reject path fires — it is rejected, not silently dropped
-    # to the hard default (adversarial C1). RED if the selector's typo guard is removed.
+    # Response limits come from the protect-level vocabulary.
+    # An unknown key is neither a response key nor a known protect-only bound.
+    # Reject it explicitly instead of falling back to the hard default.
     response = %AshOnetime.Resource.Response{
       codec: AshOnetime.Codec.Resource,
       fields: [:id, :name, :amount],
@@ -255,10 +253,6 @@ defmodule AshOnetime.Codec.ResponseTest do
   end
 
   test "every protect-only limit key is selected out without being mistaken for a typo" do
-    # diff-review F1: the protect-only key set (Codec.protect_only_ceilings/0) and the response
-    # key set (Codec.hard_limits/0) are both sourced from Codec so they cannot drift. This test
-    # pins that EVERY protect-only key is accepted (selected out), not rejected as a typo — if
-    # a future protect-only key were added to the transformer but not to Codec, this would fail.
     response = %AshOnetime.Resource.Response{
       codec: AshOnetime.Codec.Resource,
       fields: [:id, :name, :amount],
@@ -272,12 +266,9 @@ defmodule AshOnetime.Codec.ResponseTest do
   end
 
   test "a malformed trusted limits list is rejected, not rescued into an opaque error" do
-    # diff-review F2 / correctness lens F-1: a non-keyword list (non-tuple elements, or odd
-    # arity) must be rejected explicitly via the selector's Keyword.keyword? guard (message
-    # "response limits are invalid") — not fall through to contract/4's blanket rescue
-    # (message "response contract is invalid"). Asserting on the message discriminates the
-    # structured-reject path from the rescue path: neutering the guard makes split_with raise
-    # and the rescue's different message surfaces, turning this test red.
+    # Reject non-keyword limits as "response limits are invalid".
+    # Do not let malformed lists fall through to the general contract rescue.
+    # The distinct message identifies the structured validation path.
     response = %AshOnetime.Resource.Response{
       codec: AshOnetime.Codec.Resource,
       fields: [:id, :name, :amount],

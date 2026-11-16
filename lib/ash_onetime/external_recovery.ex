@@ -114,13 +114,10 @@ defmodule AshOnetime.ExternalRecovery do
   defp continue(_decision, _subject, _protection, _context, _started, _delivery),
     do: unavailable()
 
-  # ADR-0010 pre-peer claim lock: before ANY peer call, take the claim row FOR UPDATE in the
-  # caller's open transaction with a bounded wait, then re-resolve. A same-key retry now
-  # either waits out the original and replays its completed result, or fails with
-  # :request_in_progress — it can no longer execute concurrently under one operation key.
-  # A claim that completed while this caller was blocked resolves to a replay (the full-row
-  # lock result routes through the same finalize-mode resolver); a reaped-and-reinserted row
-  # is missing under the id bind and fails closed.
+  # Before any peer call, lock the claim in the caller transaction with a bounded wait.
+  # Re-resolve the full locator: processing proceeds, complete replays, and missing fails closed.
+  # A contended same-key retry returns :request_in_progress.
+  # The claim-id binding rejects a reaped-and-reinserted row (ADR 0010).
   defp lock_for_peer(state, protection, started) do
     case Store.lock_for_effect(state.target, state.claim, claim_lock_options(protection)) do
       %Result{status: :failure, reason: :lock_timeout} ->
@@ -248,15 +245,7 @@ defmodule AshOnetime.ExternalRecovery do
   end
 
   defp finalize(state, subject, protection, peer_result, started, source) do
-    loaded = Store.load(state.target, state.claim)
-
-    case Admission.resolve(
-           loaded,
-           state,
-           protection,
-           started,
-           :locked_external_finalize
-         ) do
+    case resolve_finalization_claim(state, protection, started) do
       {:execute, locked_state} ->
         emit(locked_state, started, :finalize_locked)
 
@@ -276,13 +265,7 @@ defmodule AshOnetime.ExternalRecovery do
   end
 
   defp lock_replay(state, protection, started) do
-    case Admission.resolve(
-           Store.load(state.target, state.claim),
-           state,
-           protection,
-           started,
-           :locked_external_finalize
-         ) do
+    case resolve_finalization_claim(state, protection, started) do
       {:replay, replayed, replay_state} ->
         emit(replay_state, started, :replayed)
         {:replay, replayed, replay_state}
@@ -295,10 +278,17 @@ defmodule AshOnetime.ExternalRecovery do
     end
   end
 
-  # Without executing-only values, `execute/3` returns `{:ok, peer_result}`. With them it
-  # returns `{:ok, peer_result, values}`, and the values are sealed here, in the function
-  # that receives them and inside the same containment (§2.7.3, step 3). A seal failure is
-  # an unknown outcome: the claim stays processing and recovery applies.
+  defp resolve_finalization_claim(state, protection, started) do
+    case Store.load(state.target, state.claim, claim_lock_options(protection)) do
+      %Result{status: :failure, reason: :lock_timeout} ->
+        emit_claim_lock_conflict(state)
+        {:error, Error.new(:request_in_progress, "a request for this key is already processing")}
+
+      %Result{} = loaded ->
+        Admission.resolve(loaded, state, protection, started, :locked_external_finalize)
+    end
+  end
+
   defp safe_execute(module, operation_key, subject, context, nil) do
     case module.execute(operation_key, subject, context) do
       {:ok, peer_result} -> {:ok, peer_result}

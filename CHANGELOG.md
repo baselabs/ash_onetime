@@ -21,6 +21,9 @@ All notable changes to this project are documented in this file.
   producer, duplicate names, and an update or destroy with `require_atomic? true`. A generic
   action returning a resource stores the `fields` of the returned resource and replays it as
   a loaded record.
+- **Delivery timing boundary.** Sealing and opening time, envelope length and external
+  recovery duration can depend on value length. The security guide states timing, native
+  interiors and runtime resource statistics as limits of the confidentiality guarantee.
 - **Delivery review fixes.** Existing CRUD and generic response contracts retain their
   frozen digests; only generic resource projections bind the returned resource. Exit-boundary
   inventories cover OTP 28.5 and 29.1.2, and comparisons retain semantic values, settings,
@@ -29,6 +32,42 @@ All notable changes to this project are documented in this file.
   rolled back: recovery can find the committed peer effect without delivering a value.
 - **Response `fields` text.** The DSL documentation states that the first tracked caller
   also receives only the `fields` projection.
+- External completion restores the caller's lock timeout after non-aborting invariant
+  errors as well as successful writes. Trust and the operation-hold upgrade find fact
+  triggers in every schema by function identity. The security guide explains consumer
+  objects in the containment roots and authenticated column defaults.
+- External completion and hold release restart retention using elapsed seconds across
+  daylight saving changes in any session `TimeZone`. Calendar interval addition could
+  shorten or lengthen the window by an hour. Release still preserves a later deadline.
+- External completion bounds payload INSERT and claims UPDATE with the protection's lock
+  timeout, restores the caller's timeout after success, and returns `:request_in_progress`
+  on contention while retaining the processing claim.
+- Claims and nonce DELETE guards and fact append-only triggers fire ALWAYS on parents and
+  partitions. The mandatory operation-hold upgrade updates existing and renamed fact
+  triggers by function identity. Trusted replica writers bypass DELETE guards without
+  repeating payload deletion; other writers keep the origin rules and fact triggers refuse
+  every mutation. Catalog-qualified authority checks also protect legacy invoker guards
+  from writer search-path shadowing. Trust refuses other firing modes and the live doctor
+  names each trigger.
+- Maintenance audits containment through every dependency, internal part and extension
+  member, without an OID cutoff, and checks all containing schemas and accepted owners'
+  holders. Trust and the live doctor refuse event triggers with untrusted function owners
+  or holders, including disabled and login triggers. The live doctor also refuses
+  owner-equivalent runtime roles; run it for each runtime role after migration or restore.
+  The security guide states the extension-script and DROP DATABASE trust boundaries.
+
+- Maintenance ships an effective-authority audit in 2.0.0. It refuses forbidden
+  table and column privileges held by any non-predefined role, and predefined
+  authority reachable through any membership, including ADMIN without INHERIT or
+  SET. It also refuses SET or ALTER SYSTEM on `session_replication_role`, membership
+  in `pg_create_subscription`, and database subscriptions with untrusted owners.
+  SELECT on owner-only relations remains refused because existing children do not
+  guarantee the root's RLS state and policies. Fresh installs and upgrades from
+  shipped releases embed this audit; maintenance has not previously shipped.
+
+- External replay and finalize claim loads use the protection's lock timeout and return
+  `:request_in_progress` on contention. Each claim-lock statement restores the caller's
+  timeout before payload reads, callbacks or later writes.
 
 - **Replay relationships.** Replay admission clears all pending relationship changes,
   including caller-managed relationships and belongs-to inputs, across create, update,

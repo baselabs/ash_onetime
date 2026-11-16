@@ -1,7 +1,5 @@
 # ash_onetime
 
-[![mutation battery](https://img.shields.io/badge/mutation_battery-red--proven-brightgreen)](CONTRIBUTING.md)
-
 `ash_onetime` is an Ash extension for explicit keyed-effect semantics. It separates
 replay-safe idempotency from collision-rejecting one-time nonces and uses PostgreSQL as the
 authoritative admissions store.
@@ -135,10 +133,7 @@ migration, and sets up the schema. See the
 ## Try it
 
 Runnable Livebook notebooks — one per concern — walk through each strategy against a real
-PostgreSQL. Open them in [Livebook](https://livebook.dev), set `DATABASE_URL`, and run every
-cell. The release gate executes the notebook source against the real PostgreSQL ledger and
-real cryptographic verification before local packaging and again from the published Hex
-package after release.
+PostgreSQL. Open them in [Livebook](https://livebook.dev), set `DATABASE_URL`, and run every cell.
 
 - [Idempotency](documentation/livebooks/idempotency.livemd) — fresh execution, replay, fingerprint conflict.
 - [One-time nonces](documentation/livebooks/nonces.livemd) — spend, reuse rejection, and the `commit: :independent` replay fence.
@@ -150,20 +145,12 @@ transactional-outbox patterns.
 
 ## Status
 
-This guide targets [v1.10.0](CHANGELOG.md). Resources can opt into conditional-append
-context boundaries over an append-only fact table with the `context_boundary` section
-and `AshOnetime.Boundary` — admission only when nothing matching changed since read.
-See [Context boundaries](documentation/context-boundary.md). The payload-partition prune
-decides `DROP TABLE` as the table owner inside a per-partition savepoint, so no
-row-level-security configuration can narrow its emptiness check; see
-[Operations](documentation/operations.md). Existing installs need no migration; the
-fact tables are opt-in via `mix ash_onetime.gen.migrations --fact-tables`.
+This guide targets [v1.10.0](CHANGELOG.md). [Context boundaries](documentation/context-boundary.md)
+admit an append only when nothing matching changed since read. Partition pruning checks emptiness
+as the table owner; existing installs must generate and apply the maintenance upgrade migrations
+(see [Upgrading](documentation/upgrading.md)). Fact tables are opt-in with `--fact-tables`.
 
-Every protected action chooses `:idempotency` or `:one_time_nonce` and declares a nonempty
-scope; there is no default strategy or global scope fallback. The release battery includes a
-[mutation battery](CONTRIBUTING.md) whose rows must each fail under their named source mutation,
-plus direct execution of the four Livebooks against PostgreSQL. Full release history is in the
-[CHANGELOG](CHANGELOG.md).
+Every protected action declares `:idempotency` or `:one_time_nonce` and a nonempty scope; neither has a fallback.
 
 ## Compatibility
 
@@ -173,47 +160,16 @@ plus direct execution of the four Livebooks against PostgreSQL. Full release his
 - Ash `>= 3.37.2` and `< 4.0.0`
 - AshPostgres `~> 2.15 and >= 2.15.2`, AshSql `~> 0.8 and >= 0.8.6`
 - Optional Mint `~> 1.10 and >= 1.10.2` when the host carries the installer HTTP closure
-- PostgreSQL 18 for the project test harness. The SQL surface requires PostgreSQL 11+
-  (declarative hash/range partitioning with default partitions, `SKIP LOCKED`,
-  `pg_advisory_xact_lock(bigint)`); versions below 18 are not exercised by this project's
-  CI — treat them as unverified.
+- PostgreSQL 18 for the project test harness. The generated maintenance SQL requires PostgreSQL 17+
+  (`MAINTAIN` privilege checks and revocations). Versions below 18 are not exercised
+  by this project's CI; treat PostgreSQL 17 as unverified.
 
 The security floors follow
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md).
-The October 28, 2026 amendment raises the Ash floor to 3.37.2 for
-[EEF-CVE-2026-96581](https://cna.erlef.org/osv/EEF-CVE-2026-96581.html) (fixed in 3.37.2)
-and [EEF-CVE-2026-114214](https://cna.erlef.org/osv/EEF-CVE-2026-114214.html) (fixed in
-3.37.1), and the AshPostgres floor to 2.15.2 for
-[EEF-CVE-2026-115627](https://cna.erlef.org/osv/EEF-CVE-2026-115627.html) and
-[EEF-CVE-2026-115635](https://cna.erlef.org/osv/EEF-CVE-2026-115635.html). AshPostgres 2.15.2
-requires AshSql 0.8.4; the November 9 amendment raises the declared floor to 0.8.6
-because [0.8.4](https://hex.pm/packages/ash_sql/0.8.4) and
-[0.8.5](https://hex.pm/packages/ash_sql/0.8.5) were retired for a query-cache security
-issue, fixed in [0.8.6](https://hex.pm/packages/ash_sql/0.8.6). The October 10, 2026
-amendment raised the Ash floor to 3.34.6 for
-[EEF-CVE-2026-101028](https://cna.erlef.org/osv/EEF-CVE-2026-101028.html). The earlier floor
-addressed these advisories:
-[EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html) affects Ash
-`>= 3.5.1 and < 3.34.3`; Ash 3.33.11 contains the
-[EEF-CVE-2026-93477](https://cna.erlef.org/osv/EEF-CVE-2026-93477.html) fix but remains
-affected by EEF-CVE-2026-94201. Mint 1.10.2 backports the fixes for
-[EEF-CVE-2026-91043](https://cna.erlef.org/osv/EEF-CVE-2026-91043.html),
-[EEF-CVE-2026-92103](https://cna.erlef.org/osv/EEF-CVE-2026-92103.html), and
-[EEF-CVE-2026-94194](https://cna.erlef.org/osv/EEF-CVE-2026-94194.html). Optional Igniter and
-Mint remain excluded from this package's runtime applications.
-Compatibility across the range is verified per matrix cell by the standard gate
-battery — format, compile with warnings-as-errors, `mix hex.audit` (Hex security
-advisories), `mix deps.audit`, the full test suite, `mix credo --strict`,
-`mix dialyzer` in both dev and test environments, `mix docs --warnings-as-errors`, and
-`mix hex.build` — run against
-the 3.37.2 floor and the latest published Ash 3.x. Each compatibility cell unlocks the full
-dependency graph before resolution so the committed lock cannot hold a transitive dependency
-back. The release battery (mutation matrix, executable Livebooks, unpacked-package check, DSL
-cheat-sheet freshness) runs against the committed lock, not per cell.
-`.github/workflows/ci.yml` is configured to re-run this matrix on every push and
-pull request, plus a dedicated OTP 28 leg covering the other end of the supported
-runtime set. The pinned development runtime is Elixir 1.20.5 / Erlang/OTP 29.1.2
-(`.tool-versions`).
+Ash 3.37.2 and AshPostgres 2.15.2 include the required authorization and tenant-isolation fixes.
+AshSql 0.8.6 fixes query-cache security; the affected 0.8.4 and 0.8.5 releases are retired.
+Mint 1.10.2 fixes HTTP/2 memory exhaustion and HTTP/1 response smuggling.
+Optional integrations remain excluded from this package's runtime applications.
 
 ## Development
 

@@ -321,8 +321,9 @@ defmodule AshOnetime.ArchitectureTest do
       complete: 6,
       complete_external: 5,
       complete_external: 6,
+      complete_external: 7,
       held_backlog: 1,
-      load: 2,
+      load: 3,
       lock_for_effect: 3,
       processing_backlog: 1,
       reap: 3,
@@ -337,11 +338,12 @@ defmodule AshOnetime.ArchitectureTest do
       complete: 6,
       complete_external: 5,
       complete_external: 6,
+      complete_external: 7,
       for_repo: 1,
       for_repo: 2,
       for_repo: 3,
       held_backlog: 1,
-      load: 2,
+      load: 3,
       lock_for_effect: 3,
       nonce_retention_deadline: 4,
       processing_backlog: 1,
@@ -386,37 +388,15 @@ defmodule AshOnetime.ArchitectureTest do
     Mix.Tasks.AshOnetime.RollPartitions => [run: 1]
   }
 
-  # Internal modules (@moduledoc false) whose project-authored public surface is pinned by
-  # the export census anyway. Their @doc false functions are contract seams exercised by
-  # direct unit tests (e.g. Admission's sanitizer seams and bounded_callback_context/1), so
-  # an accidental removal — or an accidental new public function — must red the census
-  # exactly like a documented module's exports would. The pinned set is the full authored
-  # surface, not a hand-picked subset: the census compares exactly.
+  # Pin every project-authored public export, including internal contract seams.
   @pinned_internal_modules [
     AshOnetime.Admission,
     AshOnetime.Store,
     AshOnetime.Store.Postgres
   ]
 
-  # The exact-export census compares a hand-maintained `@exports` snapshot against
-  # `module.__info__(:functions)`. For modules built on an injecting framework
-  # (e.g. `use Splode.Error`), `__info__(:functions)` also lists functions the
-  # framework's macros expand into the host module at compile time — and that injected
-  # set grows across dependency versions, breaking the census on drift the project
-  # does not own. `AshOnetime.Error` is the only `use Splode.Error` module in the
-  # documented set; CI's compat matrix runs `mix deps.unlock ash && mix deps.update
-  # ash` (.github/workflows/ci.yml), which resolves the newest Splode satisfying
-  # `~> 0.3`, and Splode 0.3.2 added `keyword_list_options?/0` to the injected set —
-  # so CI red-barred while the 0.3.1-committed lock stayed green locally.
-  #
-  # Rather than hand-maintain an exempt allowlist (which would rot the same way and
-  # could not mechanically detect a project override of an injected fn, or a framework
-  # removing one), the census derives the project-authored exports from each module's
-  # OWN source AST (`project_defined_arity_set/1`) and compares the snapshot only
-  # against those. `__info__(:functions)` minus the source-derived set is the live
-  # framework-injected surface — which closes both drift directions: a project
-  # override reclassifies the fn as authored (so it falls under the guard), and a
-  # framework removal drops it from `__info__` (so a stale snapshot entry fails loud).
+  # Compare exports authored in each module's source AST.
+  # Framework-injected exports are outside this package's API census.
 
   test "the production module and public documentation censuses are exact" do
     {:ok, application_modules} = :application.get_key(:ash_onetime, :modules)
@@ -487,12 +467,7 @@ defmodule AshOnetime.ArchitectureTest do
   end
 
   test "documented public exports are exact" do
-    # Compare the `@exports` snapshot only against the exports each module AUTHORS
-    # (parsed from its own source AST), not the framework-injected ones. This keeps
-    # the census robust to framework-version drift in the injected set (e.g. Splode
-    # adding `keyword_list_options?/0` across a patch bump) while still guarding every
-    # project-owned export — and a project override of an injected fn, or a framework
-    # removing one, both surface as a snapshot mismatch.
+    # Compare the snapshot with project-authored exports, excluding framework injections.
     actual =
       Map.new(@documented_modules ++ @pinned_internal_modules, fn module ->
         {module, project_owned_arity_set(module)}
@@ -502,14 +477,10 @@ defmodule AshOnetime.ArchitectureTest do
   end
 
   test "AshOnetime.Error is a Splode error so its typed code survives the Ash pipeline" do
-    # ARCH-1: AshOnetime.Error must be a Splode leaf of class :invalid so Ash preserves it
-    # (instead of wrapping it as an unknown error and losing the typed :code). A bare
-    # defexception would make splode_error?/0 undefined and ash_error?/1 false.
-    #
-    # Force-load the module before the membership check: `function_exported?/3` reports
-    # the CURRENT beam state, so a module no other test has touched yet reads as
-    # unexported, which made this assertion seed-dependent (failed in isolation,
-    # passed once a neighboring test loaded the module).
+    # AshOnetime.Error must be a Splode leaf of class :invalid.
+    # Ash must preserve its typed code through the error pipeline.
+    # Load the module before checking exported functions.
+    # An unloaded module otherwise appears to export nothing.
     Code.ensure_compiled(AshOnetime.Error)
 
     assert function_exported?(AshOnetime.Error, :splode_error?, 0)
@@ -569,8 +540,6 @@ defmodule AshOnetime.ArchitectureTest do
   defp arity_pairs({name, _meta, nil}) when is_atom(name), do: [{name, 0}]
   defp arity_pairs(_), do: []
 
-  # The exports the module owns: those present in `__info__(:functions)` AND authored
-  # in its source — i.e. excluding anything a framework macro injected.
   defp project_owned_arity_set(module) do
     module.__info__(:functions)
     |> MapSet.new()

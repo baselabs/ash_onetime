@@ -1,50 +1,33 @@
 defmodule AshOnetime.Cache.Ets do
   @moduledoc """
-  A reference ETS adapter for the optional completed-response cache.
+  Bounded, TTL-aware ETS cache for completed responses.
 
-  Bounded and TTL-aware. `:ets` has no native TTL, so each entry carries an expiry
-  monotonic-time deadline and `get/1` rejects expired entries (and lazily deletes them). A
-  max-entries cap bounds steady-state memory; when the cap is reached `put/3` evicts the
-  single oldest-by-deadline entry before inserting, which keeps the hot set resident under
-  churn without a background sweeper.
-
-  The adapter is NOT admission authority — `AshOnetime` validates every field of a returned
-  entry against the authoritative PostgreSQL claim before using the payload (see
-  `AshOnetime.Cache`). Treat every entry as untrusted.
+  Entries carry monotonic expiry deadlines. `get/1` rejects and lazily deletes expired
+  entries; `put/3` evicts the oldest deadline when the entry cap is reached.
+  PostgreSQL remains authoritative: `AshOnetime.Cache` validates every returned entry.
 
   ## Supervision
 
-  The ETS table is owned by a GenServer started via `start_link/1`. Add it to your supervision
-  tree (it owns the table; if it terminates the table is destroyed, which is safe — the cache
-  is optional and a miss falls through to PostgreSQL):
+  The GenServer owns the table. Add it to your supervision tree:
 
       children = [
-        # ...your repo...
         {AshOnetime.Cache.Ets, max_entries: 10_000}
       ]
 
-  Then configure it as the cache module:
+  Configure the cache module:
 
       config :ash_onetime, cache: AshOnetime.Cache.Ets
 
-  The table is named `__MODULE__` (one ETS cache per VM). A multi-instance deployment (e.g.
-  one cache per tenant prefix) wraps this module behind a per-instance module so each gets its
-  own `__MODULE__`-named table; the reference adapter is single-instance by design.
+  The table is named `AshOnetime.Cache.Ets`: this adapter supports one instance per VM.
+  Losing the process destroys the table; a miss falls through to PostgreSQL.
 
   ## Options
 
-    * `:max_entries` — the bounded cap; `put/3` evicts the oldest-by-deadline entry when the
-      cap is reached before inserting (default 10_000). The cap bounds entry COUNT only — the
-      per-entry byte ceiling is enforced upstream by `AshOnetime.Cache` (`max_entry_bytes`).
+    * `:max_entries` — entry-count cap, default 10_000. The per-entry byte ceiling
+      comes from `AshOnetime.Cache` (`max_entry_bytes`).
 
-  ## Limitations
-
-  This is a reference adapter tuned for simplicity and correctness, not throughput: the
-  eviction is a single oldest-by-deadline scan, and expired entries are reaped lazily on
-  `get/1` rather than by a background sweeper. A high-throughput deployment should reach for
-  Redis or a dedicated cache with sampled-LRU eviction and active expiry; this adapter exists
-  so the cache-degradation path in `AshOnetime.Cache` is reachable without a third-party
-  dependency.
+  Eviction scans for the oldest deadline; expiry is lazy, with no background sweeper.
+  Size the cache for the workload or supply another adapter.
   """
 
   @behaviour AshOnetime.Cache

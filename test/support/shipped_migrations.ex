@@ -12,8 +12,6 @@ defmodule AshOnetime.Test.ShippedMigrations do
     "v1.10.0" => "operation_hold"
   }
 
-  # The files are unmodified git blobs. Only the generator's module identity
-  # and template lookup move; its option validation and rendering run as shipped.
   def render(release, function, repo, options) do
     fixture_directory = Path.join(@directory, Map.fetch!(@fixtures, release))
     directory = Path.join(System.tmp_dir!(), "ao_shipped_#{Ecto.UUID.generate()}")

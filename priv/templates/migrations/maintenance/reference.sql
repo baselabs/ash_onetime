@@ -47,6 +47,8 @@ BEGIN
         CASE root.name WHEN 'ash_onetime_idempotency_claims' THEN 'ash_onetime_idempotency_delete_guard' ELSE 'ash_onetime_nonce_delete_guard' END,
         relation_oid::regclass,@routine_schema_name@,
         CASE root.name WHEN 'ash_onetime_idempotency_claims' THEN 'ash_onetime_guard_idempotency_delete' ELSE 'ash_onetime_guard_nonce_delete' END);
+      EXECUTE format('ALTER TABLE %s ENABLE ALWAYS TRIGGER %I',relation_oid::regclass,
+        CASE root.name WHEN 'ash_onetime_idempotency_claims' THEN 'ash_onetime_idempotency_delete_guard' ELSE 'ash_onetime_nonce_delete_guard' END);
     END IF;
     result := result || jsonb_build_object(root.name,@routines@.ash_onetime_maintenance_shape(relation_oid::oid));
     -- This deparser sees only this routine's newly created package DDL. It

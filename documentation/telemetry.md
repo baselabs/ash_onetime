@@ -91,6 +91,7 @@ hand-rolling the event list and the count/duration split, the library ships an o
 helper:
 
 ```elixir
+
 # in your application startup, once per VM, after the repo is started
 AshOnetime.Telemetry.attach()
 ```
@@ -164,26 +165,11 @@ not a gap to close.
 
 ### Why no spans
 
-The value-free metadata guarantee — the four atoms `strategy` / `resource` / `action` /
-`result_class`, and nothing else — is enforced by the telemetry module's validator and
-pinned by the `forbidden-telemetry` mutation fixture in `scripts/check_mutations.exs`.
-`:telemetry.span/3` cannot satisfy it:
-
-1. **`span/3` force-injects `telemetry_span_context` onto every event's metadata**
-   unconditionally (`deps/telemetry/src/telemetry.erl:446-448`). The closed four-atom
-   metadata shape would gain a fifth key on every span event by construction.
-2. **`span/3` emits `:exception` with `kind` / `reason` / `stacktrace` merged onto the
-   metadata, *inside* the span, before any caller `rescue` can catch it**
-   (`telemetry.erl:378-387`). The span's `catch` fires the `:exception` event and then
-   re-raises; the admission entry points' `rescue`/`catch` coerce the re-raise to a typed
-   `:failed` result, but the event has already been dispatched. An exception `reason` or
-   `stacktrace` can carry secret-bearing terms (an `AshOnetime.Error` struct, a
-   `Postgrex.Error` with query text, a typed-argument mismatch carrying a token), and the
-   surface exists precisely to keep such terms out of telemetry.
-
-For the latency-bearing event families (`:admission`, `:replay`, `:verification`,
-`:encoding`, `:external_recovery`), `:duration` is already on the point event — p99/SLO
-measurement does not require spans.
+Point events preserve the value-free metadata contract and already carry duration for latency.
+`:telemetry.span/3` adds a span-context key and emits exception kind, reason, and stacktrace
+before caller rescue can sanitize them. Those values can contain protected request material.
+Use library point events for classified admission results. Consumers needing distributed
+tracing can wrap their own call boundary, where they control metadata and exception handling.
 
 ### Trace correlation: wrap at the consumer boundary
 

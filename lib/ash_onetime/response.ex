@@ -463,15 +463,10 @@ defmodule AshOnetime.Response do
     end
   end
 
-  # The unified protect limits (the 11-key vocabulary) carry BOTH response-relevant keys
-  # (max_response_*, from Codec.hard_limits/0) and protect-only keys (Codec.protect_only_ceilings/0
-  # — max_key_bytes, max_token_bytes, etc.) that bound the key/verification/cache paths, not the
-  # response codec. The response contract SELECTS the response-relevant subset and REJECTS any
-  # key that is neither — a typo (e.g. max_respomse_bytes) must not be silently dropped, and a
-  # malformed limits list (non-keyword) is rejected explicitly rather than via a rescue. Both
-  # key sets are sourced from Codec (single source of truth) so the typo-discrimination set
-  # cannot drift from the transformer's ceiling vocabulary. (ARCH-8 collapsed the dual-surface
-  # filter this replaced.)
+  # Protect limits include response limits and protect-only bounds from Codec.
+  # Select only response keys for the codec; accept known protect-only keys.
+  # Reject unknown keys and non-keyword lists explicitly.
+  # Both key sets come from Codec, matching compile-time validation.
   @response_limit_keys MapSet.new(Map.keys(Codec.hard_limits()))
   @protect_only_limit_keys MapSet.new(Keyword.keys(Codec.protect_only_ceilings()))
 

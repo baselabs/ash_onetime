@@ -1,29 +1,22 @@
-# Build artifacts
 _build/
 erl_crash.dump
 *.beam
 *.ez
 *.tar
 
-# Dependencies
 deps/
 
-# Documentation
 /doc/
 /graphify-out/
 
-# Dialyzer PLTs
 priv/plts/
 
-# Environment
 .env
 .env.local
 
-# OS
 .DS_Store
 *.DS_Store
 
-# AI Tools
 /.serena/
 /.expert/
 /.gemini/
@@ -35,12 +28,8 @@ priv/plts/
 /.agent/
 /.aider/
 
-# Superpowers lifecycle artifacts (specs, plans, handoffs, reviews) — local only, never tracked
 /docs/superpowers/
 
-# Forge lifecycle artifacts (handoffs, exec-runs, memory) — local only, never tracked
 /.forge/
 
-# Kimosabe lifecycle artifacts (memory, handoffs, reviews) — local only, never tracked;
-# .kimosabe/critical-surfaces is the one tracked exception
 /.kimosabe/

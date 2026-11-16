@@ -43,16 +43,28 @@ prefix are explicit. Schedule `AshOnetime.Oban.CleanupWorker` only if Oban is in
 
 A completed idempotency claim with `hold_reference` is retained regardless of `retain_until`.
 The caller must release it in the operation's settling transaction. If it never releases, the
-record and its payload are kept forever by design. Monitor:
+record and its payload are kept forever by design.
+
+External completion restarts retention from its statement time using the configured
+elapsed seconds. Hold release restarts the same elapsed window and preserves any later
+existing deadline. Both are independent of the connection's `TimeZone`, including daylight
+saving transitions; a configured day of 86,400 seconds remains 86,400 elapsed seconds.
+
+Monitor held operations:
 
 ```elixir
 AshOnetime.Store.held_backlog(target)
+
 # {:ok, %{held_count: count, oldest_age_seconds: seconds_or_nil}}
 ```
 
 The age is measured from the oldest held claim's admission; no held claims means `nil`.
 `mix ash_onetime.doctor --repo MyApp.Repo --live` prints the same figures and verifies the
-operation-hold column, validated CHECK, partial indexes, and guard/cleanup definitions. With
+operation-hold column, validated CHECK, partial indexes, guard/cleanup definitions and ALWAYS
+firing modes on package triggers, including fact tables and partitions. Run it once for each
+runtime role using that role's database connection; it refuses owner-equivalent runtime roles
+and names them. It also names every event trigger with an untrusted function owner or holder,
+even when disabled. With
 row security applying to its current role (row security enabled and FORCE or a non-owner,
 without superuser/BYPASSRLS), it explicitly labels them **rows visible to this role, not an
 installation total**. The Store read likewise observes only visible rows. Use a maintenance
@@ -60,8 +72,10 @@ role with the appropriate policy when an installation-wide view is needed.
 
 Cleanup and the DEFAULT drain exclude held rows; reap never selects complete rows. The
 BEFORE DELETE guard stops ordinary DELETEs even by an owner or superuser with SQLSTATE `23514`.
-It does not stop TRUNCATE, DROP, disabled triggers, or a superuser's
-`session_replication_role = replica`. No additional guards are installed for those operations.
+Claims and nonce DELETE guards fire ALWAYS. In replica mode a writer able to SET to the
+relation owner may delete at once, leaving payload deletion to logical apply; all other
+writers still face the origin rules. Fact append-only triggers always refuse mutations.
+TRUNCATE, DROP and disabled triggers remain outside these guards.
 The payload prune retains an occupied month even when its held claim's deadline is long past.
 
 Existing installations need the [operation-hold upgrade](upgrading.md#v1100--operation-holds-november-13-2026).
@@ -407,6 +421,22 @@ not a pool-sizing issue. If it is `:unknown`, inspect the worker's exit reason i
 job or application logs; that class names an unspecified dispatch failure a pool raise will
 not fix.
 
+### Trigger modes during restore
+
+A full `pg_dump` restore preserves ENABLE ALWAYS (`tgenabled = 'A'`) on parents and
+partitions. A data-only restore with `--disable-triggers` leaves triggers at ORIGIN (`'O'`):
+trust refuses that installation and the live doctor names every affected package trigger,
+including fact triggers. Restore the mode on each parent with:
+
+```sql
+ALTER TABLE schema_name.table_name ENABLE ALWAYS TRIGGER trigger_name;
+```
+
+The supported data-only restore uses a trusted role able to SET to each package relation's
+owner, with `PGOPTIONS='-c session_replication_role=replica'`, without `--disable-triggers`.
+The claims and nonce guards then admit apply without repeating payload deletion. Fact tables
+remain append-only. Run the live doctor once for each runtime role after restore.
+
 ### restore-from-backup — a database restore has rewound admission state
 
 **Symptom.** This runbook is preventive: read it BEFORE restoring a backup (PITR or snapshot)
@@ -422,8 +452,9 @@ the store no longer knows those keys were spent. What that means per strategy:
 - **Idempotency:** a key whose effect completed after the restore point executes FRESH on
   retry — the restored store has no claim, and the retry's fingerprint matches (it is the
   same request), so it admits rather than conflicts. The protected effect can fire twice.
-  Where an `external_effect` adapter is deployed, its `recover/3` protocol observes the peer
-  state on the retry; otherwise this is business-level reconciliation.
+  An external retry with a lost claim gets a new claim UUID and peer operation key, then
+  executes as fresh. Recovery under that new key cannot discover the prior effect;
+  business-level reconciliation must use application logs and peer records.
 - **Cross-system disagreement:** external systems (payment providers, webhook targets)
   remember effects the restored store has forgotten. The application's own logs and the
   peers' records for the post-restore-point period are the source of truth for what actually
@@ -442,9 +473,9 @@ restore point is in scope for reconciliation.
    restore point are replayable by an adversary (not just a retrying client), block their
    redemption at the edge until the windows close. Minutes of fencing, not hours.
 3. Reconcile external effects: for every post-restore-point effect, confirm against the peer
-   whether it happened. Idempotency retries with an `external_effect` adapter perform this
-   automatically via the recover protocol; adapters without it (or unprotected actions) need
-   business reconciliation.
+   whether it happened using a business identity that survives the restore. The recover
+   protocol helps only while the original claim and its operation key survive. A restored-away
+   claim receives a new key on retry, so the library cannot reconcile it automatically.
 4. Roll the partition window forward: the restored (older) `ash_onetime_response_payloads`
    partition set may have a lapsed forward window — new payloads would route to `_default`
    and never drop. Run `mix ash_onetime.roll_partitions --repo MyApp.Repo` after the restore
@@ -467,7 +498,7 @@ owner can `DROP TABLE` anyway, so the owner uses its own exemption, scoped to a
 subtransaction no other session can observe. Per past-retention partition it takes the
 DROP's own `ACCESS EXCLUSIVE` lock on the parent first, then the child and the `_default`
 partition without waiting, re-verifies by OID that the relation is a plain-heap
-child of the schema's payload parent owned by the driver, applies an uncommitted
+child of the schema's payload parent owned by the routine owner, applies an uncommitted
 `ALTER TABLE … NO FORCE ROW LEVEL SECURITY`, refuses if FORCE is still on (a DDL hook
 can reapply it), and probes emptiness with `EXISTS` while `row_security` is disabled.
 `row_security=off` is armed before the ALTER and remains a required fail-closed defense
@@ -490,8 +521,42 @@ owner directly, through PUBLIC, or through role membership refuses cleanup and r
 with `:untrusted_dependency`. The check compares stored node trees without deparsing and
 runs after recursive SHARE UPDATE EXCLUSIVE locks on every package root. Runtime DML
 continues; inheritance, partition, and trigger DDL cannot enter between the check and work.
-The install revokes MAINTAIN, and each step audits effective privileges, including pg_maintain. Transient lock refusals remain
-separate from permanent prune refusals in the recorded facts.
+The install revokes MAINTAIN. Install, each maintenance step and status audit effective
+MAINTAIN on every package relation; TRIGGER, TRUNCATE and REFERENCES on the three roots;
+and SELECT, INSERT, UPDATE, DELETE, TRIGGER, TRUNCATE, REFERENCES and MAINTAIN on children
+and the ledger. Column SELECT, INSERT, UPDATE and REFERENCES count on owner-only relations;
+column REFERENCES counts on roots. The audit includes predefined read/write/maintenance
+roles, SET and ALTER SYSTEM on `session_replication_role`, membership in
+`pg_create_subscription`, and subscriptions in this database owned by untrusted roles.
+It refuses every non-predefined holder, even an unreachable NOLOGIN group, because a
+holder-owned proxy object can expose its privileges. Predefined roles count through any
+membership from a runtime, maintenance, current, session or LOGIN role, including ADMIN-only
+membership. Superusers and owner-equivalent roles remain the trusted-server boundary.
+
+The containment audit follows all dependencies, internal parts and extension members to a
+fixpoint, including the low-OID `plpgsql` extension and every containing schema (`public`
+and `pg_catalog` included). Accepted owners are the package owner, superusers and
+`pg_database_owner` with an accepted database owner. Every holder of another accepted owner
+must be a superuser or a member of the package owner. Refusals name the object, owner and
+holder. Transfer an offending schema or dependency to an accepted owner, or revoke every
+untrusted membership path before resuming. `DROP DATABASE` is outside this boundary.
+Every database event trigger, including disabled triggers, has its function ownership and
+holders checked by trust and the live doctor; transfer an untrusted function to an accepted
+owner before maintenance. Extension install and update scripts are server code that the
+server administrator installs. Depending on the control file they run as the bootstrap
+superuser or as the installing role. Either way they are outside the trust model, like
+superusers.
+
+On `:untrusted_dependency`, revoke the forbidden table, column or parameter grant from its
+holder, or remove the predefined-role membership path; revoke every path, including ADMIN.
+Remove or transfer an untrusted subscription to the trusted owner under the operator's
+normal change process; revoking `pg_create_subscription` alone does not remove it. SELECT
+remains refused: existing children do not guarantee the root's RLS flags and policies, even
+though forward roll copies them to new payload children. Replace broad backup read grants
+(such as `pg_read_all_data`) with SELECT on package parents and other required application
+relations, without grants on package children or the ledger. Check maintenance status again
+before resuming steps. Transient lock refusals remain separate from permanent prune refusals
+in the recorded facts. See [Security](security.md#maintenance-and-the-trusted-server).
 
 Package tables stay in the selected table schema. Routines live in the owner-owned schema
 `ash_onetime_` plus the first 48 lowercase hexadecimal characters of SHA-256 of the table
@@ -501,6 +566,11 @@ revokes PUBLIC CREATE, grants USAGE to the maintenance role, and each step audit
 CREATE under the trusted-owner/server boundary described in [Security](security.md).
 Publish package tables without row filters. A non-NULL publication row filter refuses the
 step with `:untrusted_dependency`; publication membership without a filter is supported.
+
+External completion arms the protection's `external_lock_timeout_ms` separately for its
+payload INSERT and claims UPDATE, restoring the caller's previous `lock_timeout` after each
+successful statement. SQLSTATE `55P03` returns `:request_in_progress` and rolls completion
+back while retaining the committed processing claim for recovery.
 
 Store maintenance calls each run in a transaction with a separate
 `SET LOCAL statement_timeout` statement before the function call. Configure
@@ -547,10 +617,10 @@ Operational notes:
   schedules) both hold the parent's row lock from claim deletion, so both requesting the DROP
   lock would deadlock. The prune takes a transaction-scoped advisory key on the parent's OID just
   before locking; a cleanup that finds it taken stops its partition pass and still commits its
-  claim cleanup. Non-owner drivers never take the key.
+  claim cleanup. The owner-owned routine takes the key on behalf of authorized callers.
 - **Successful drops hold their locks until the transaction ends**, and the advisory key with
-  them. `Store.cleanup` commits right after the pass; if you call it inside your own
-  transaction, commit promptly.
+  them. `Store.cleanup` owns and commits its transaction after the pass, and refuses nested
+  calls. Direct routine callers must commit promptly.
 - **Why empty months stay attached.** Ordinary short transactions never starve the prune: once
   its lock request is queued, new work queues behind it. Only a lock holder that outlasts the
   budget does, such as a session idle in a transaction, a long report, or a backup. Under
@@ -573,10 +643,9 @@ Operational notes:
   its lock, so a row committed while the lock waits would be invisible to the count;
   cleanup refuses with `:unsupported_isolation` like every claim path.
 - **`roll_partitions` copies the parent's ENABLE/FORCE row-security settings and full
-  policy set onto every partition it creates.** Children are directly queryable by name
-  (a runtime role with default privileges holds SELECT on everything the owner creates),
-  so the copied policies are what keep a direct child read tenant-scoped. The store's own
-  writes go through the parent, whose policies govern.
+  policy set onto every partition it creates.** The maintenance upgrade also makes child
+  ACLs owner-only and audits effective table and column privileges. Runtime DML uses
+  the parent, whose policies govern; granting runtime access to children is refused.
 - **Children that already exist when you enable RLS must be brought in line once** —
   the copy runs at creation, not retroactively. Include this in the same migration that
   enables RLS on the parent (the `_default` partition and the install-time months
@@ -620,7 +689,6 @@ Operational notes:
   every partition (reason `:ddl_blocked`) without failing cleanup. A hook reapplying FORCE
   similarly refuses with `:force_reapplied`.
 
-
 ## Key rotation
 
 Token verification resolves material by the signed key identifier. Add a new key before
@@ -632,11 +700,9 @@ The supported runtime is Elixir `~> 1.20` (verified on 1.20.5; this admits later
 and excludes 2.0 or newer) and Erlang/OTP 28 or 29 with Ash `>= 3.37.2 and < 4.0.0`,
 AshPostgres `~> 2.15 and >= 2.15.2`, and PostgreSQL 18 (the version the project's test harness and release
 checks run on). The optional installer HTTP closure is constrained to Mint
-`~> 1.10 and >= 1.10.2`. The SQL surface itself needs PostgreSQL 11 or newer — declarative
-hash/range partitioning with default partitions, `SELECT ... FOR UPDATE SKIP LOCKED`, and
-`pg_advisory_xact_lock(bigint)` are all 11+ features — but nothing below 18 is exercised by
-this project's CI: treat older servers as unverified, and report (or CI-pin) the version you
-run before relying on one. Release checks include the full suite, mutation matrix, executable
+`~> 1.10 and >= 1.10.2`. The generated maintenance SQL needs PostgreSQL 17 or newer
+for its `MAINTAIN` privilege checks and revocations. Nothing below 18 is exercised by
+this project's CI; treat PostgreSQL 17 as unverified. Release checks include the full suite, mutation matrix, executable
 Livebooks against PostgreSQL, warnings-as-errors documentation, exact Hex archive inspection,
 and an unpacked zero-configuration consumer, all run on the runtime pinned in `.tool-versions`;
 see [CONTRIBUTING](../CONTRIBUTING.md).

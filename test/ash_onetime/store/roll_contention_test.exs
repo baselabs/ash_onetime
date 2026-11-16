@@ -1,14 +1,4 @@
 defmodule AshOnetime.Store.RollContentionTest do
-  @moduledoc """
-  Convergence test for concurrent partition rolls (SEC-5). Each roll runs in its own
-  real (sandbox: false) connection. The test asserts that after concurrent rolls + two
-  convergence rolls, the partition state is sound: a second convergence reports 0 created
-  and the forward window has >= months named partitions. This proves concurrency does not
-  corrupt the state, NOT that the advisory lock serializes (the lock and the 42P07 fallback
-  are redundant idempotency mechanisms; the lock's absence is not independently observable
-  because the fallback — or the fail-closed rescue — absorbs the duplicate).
-  """
-
   use ExUnit.Case, async: false
 
   alias AshOnetime.Store
@@ -77,13 +67,6 @@ defmodule AshOnetime.Store.RollContentionTest do
     assert {:ok, %{partitions_created: 0}} = result
   end
 
-  # The sandbox-ownership race tripwire: back-to-back real connections acquired and
-  # released in ONE process must never collide on a stale ownership allowance. Under the
-  # previous `Sandbox.start_owner!/2` helper this crashes deterministically on the first
-  # pair (`{:badmatch, {:already, :allowed}}` inside start_owner! — the full-suite flake
-  # this file used to carry); the in-process checkout/checkin helper cleans the caller's
-  # ownership entry synchronously, so 100 immediate cycles are clean. Pure ownership churn
-  # (no SQL), so the loop costs milliseconds.
   test "back-to-back real connections in one process never collide on stale allowance" do
     for _ <- 1..100 do
       assert :ok = RealConnection.with_connection(fn -> :ok end)

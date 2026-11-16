@@ -143,12 +143,10 @@ if Code.ensure_loaded?(Igniter) do
 
     defp add_optional_dependency(igniter, _false, _dependency), do: igniter
 
-    # `--resource` is opt-in and repeatable. Each named resource gets the extension injected
-    # into its `use Ash.Resource` call and a starter `onetime` block scaffolded when absent.
-    # Per-resource opt-in stays the default, so the block ships empty (an empty `onetime do
-    # end` compiles to "no protected actions"); the protect-block shape is documented in the
-    # getting-started guide rather than auto-generated, so the installer never protects an
-    # action the consumer did not name.
+    # --resource is opt-in and repeatable; each target receives the extension.
+    # Scaffold an empty onetime block only when absent.
+    # An empty block protects no actions.
+    # The consumer explicitly chooses each protected action.
     defp wire_resources(igniter, []), do: igniter
 
     defp wire_resources(igniter, [name | rest]) do
@@ -186,12 +184,10 @@ if Code.ensure_loaded?(Igniter) do
       end
     end
 
-    # A target qualifies for wiring only if it declares `use Ash.Resource`. This mirrors the
-    # `move_to_use` precondition that `Spark.Igniter.add_extension/5` silently no-ops without,
-    # so a non-resource (e.g. an Ash.Domain) is rejected explicitly instead of receiving a
-    # stray `onetime` block it cannot compile. Returns `{boolean, igniter}` because
-    # `find_module/2` may mutate the igniter (module index) and its contract forbids discarding
-    # it. Read-only on the source: `find_module` returns the zipper without staging an edit.
+    # Only modules declaring use Ash.Resource qualify for extension wiring.
+    # Reject other modules before adding an onetime block.
+    # Return the updated Igniter module index from find_module/2.
+    # The lookup itself does not stage a source edit.
     defp resource?(igniter, resource) do
       case Igniter.Project.Module.find_module(igniter, resource) do
         {:ok, {igniter, _source, zipper}} ->

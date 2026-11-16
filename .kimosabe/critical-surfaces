@@ -1,4 +1,3 @@
-# Migrated verbatim 2026-08-22 from .forge/critical-surfaces (legacy forge retirement, issue #12).
 # Full repo-relative globs. Changes require a T2 commit trailer.
 lib/ash_onetime/store/**
 lib/ash_onetime/token.ex
@@ -8,5 +7,3 @@ lib/ash_onetime/change.ex
 lib/ash_onetime/generic_action.ex
 lib/ash_onetime/external_effect.ex
 priv/**
-# 2026-10-28: dropped scripts/check_mutations.exs and test/** (gate tooling and tests are not
-# heavy-tier product paths; owner ruling that process is sized to the risk of each change).

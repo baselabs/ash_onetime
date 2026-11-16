@@ -54,6 +54,7 @@ defmodule AshOnetime.Test.ExitBoundary.Normalization do
     do: Map.new(Map.to_list(map), fn {k, v} -> {k, align_clock(v, clocks)} end)
 
   defp align_clock(value, _clocks), do: value
+
   @uuid_generators [{Ecto.UUID, :generate, 0}, {Ash.UUID, :generate, 0}]
   @clock_generators for function <- [:monotonic_time, :system_time],
                         arity <- [0, 1],

@@ -1,17 +1,10 @@
 defmodule AshOnetime.Test.LockContention do
   @moduledoc false
 
-  # Forces a Store operation into REAL :lock_timeout contention for the L5 worker error-tuple
-  # tests. A holder process acquires the conflicting lock in its own real (sandbox: false)
-  # transaction and holds it; the worker (in the test process's separate sandbox:false
-  # transaction) blocks against it and times out. Two real connections is what makes the
-  # contention observable.
-  #
-  # Robustness (per cross-vendor review): every acquired holder is released on EVERY path —
-  # including the failure path where the worker assertion raised
-  # or the holder never signaled readiness. The holder TRAPS EXITS so a `:shutdown` signal runs
-  # its `after` (Sandbox.stop_owner, returning the connection); `:kill` is never used because it
-  # would skip the after and leak the checked-out connection + lock to the pool.
+  # Hold a conflicting lock on a separate real connection until the worker times out.
+  # Release the holder on every path, including assertion or readiness failure.
+  # The holder traps exits so shutdown runs connection cleanup.
+  # Never kill it in a way that skips its after block.
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
