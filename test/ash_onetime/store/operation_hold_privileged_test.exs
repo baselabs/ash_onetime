@@ -8,9 +8,16 @@ defmodule AshOnetime.Store.OperationHoldPrivilegedTest do
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: Generator
 
   @moduletag :operation_hold_superuser
-  unless System.get_env("ASH_ONETIME_SUPERUSER_URL") do
-    @moduletag skip:
-                 "supply ASH_ONETIME_SUPERUSER_URL for an isolated PostgreSQL 18 superuser connection"
+  cond do
+    System.get_env("ASH_ONETIME_SUPERUSER_URL") ->
+      :ok
+
+    System.get_env("CI") == "true" ->
+      raise "CI must supply ASH_ONETIME_SUPERUSER_URL; the privileged tests may not skip there"
+
+    true ->
+      @moduletag skip:
+                   "supply ASH_ONETIME_SUPERUSER_URL for an isolated PostgreSQL 18 superuser connection"
   end
 
   setup do

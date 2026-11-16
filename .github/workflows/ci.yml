@@ -2,22 +2,28 @@ name: CI
 
 on:
   push:
-    branches: [main, 'kci/**'] # kci/<sha>: kimosabe-land's pre-merge run of this workflow
-    tags: ['v*'] # Verify each tagged release artifact before manual Hex publication.
+    branches: [main, 'kci/**'] # kci/<sha>: pre-merge verification of a candidate commit
     paths-ignore: ['**/*.md', 'docs/**', 'LICENSE*', '.github/ISSUE_TEMPLATE/**']
   pull_request:
+  # Weekly run against the newest published Ash 3.x (the compat matrix's "latest" cell) and
+  # the newest resolvable dependencies, so upstream drift shows without a push.
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 # Tests require the dedicated loopback ash_onetime_test database as postgres.
 # Use non-default port 18841 for the PostgreSQL service.
-# Observer connections use the Repo URL.
+# Observer connections use the Repo URL. Each job's PostgreSQL is its own superuser
+# container, so the privileged operation-hold tests run against it rather than skipping.
 env:
   ELIXIR_VERSION: "1.20.5"
   OTP_VERSION: "29.1.2"
   DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+  ASH_ONETIME_SUPERUSER_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
 
 jobs:
   compat:
@@ -131,6 +137,9 @@ jobs:
 
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
+      # Fails on any direct dependency with a resolvable newer release.
+      - name: Dependency currency
+        run: mix run --no-start scripts/check_deps_currency.exs
       - name: Mutation battery
         run: MIX_ENV='test' mix run scripts/check_mutations.exs -- all
         env:
@@ -179,7 +188,6 @@ jobs:
     env:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-otp28"
       OTP_VERSION: "28.5"
-      DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
