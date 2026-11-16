@@ -1311,6 +1311,16 @@ defmodule AshOnetime.MutationCheck do
       test_name: "an entry whose digest field mismatches the claim degrades to stale",
       assertion: "assert {%Result{}, :stale} = CacheApi.authoritative_payload(result, config)"
     },
+    "ets-cap-serialized-put" => %{
+      path: "lib/ash_onetime/cache/ets.ex",
+      original: "GenServer.call(@table, {:put, key, entry, ttl_seconds})",
+      mutated:
+        "maybe_evict(max_entries()); :ets.insert(@table, {key, entry, System.monotonic_time(:second) + ttl_seconds}); :ok",
+      test: "test/ash_onetime/cache/ets_test.exs",
+      tag: "ets_cap_serialized_mutation",
+      test_name: "concurrent puts never leave more entries than the cap",
+      assertion: "assert entry_count() == 1"
+    },
     "cleanup-partition-limit-guard" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original: "partition_limit <= @max_partition_drops do",

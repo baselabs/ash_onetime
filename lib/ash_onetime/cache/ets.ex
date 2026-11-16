@@ -6,6 +6,9 @@ defmodule AshOnetime.Cache.Ets do
   entries; `put/3` evicts the oldest deadline when the entry cap is reached.
   PostgreSQL remains authoritative: `AshOnetime.Cache` validates every returned entry.
 
+  Reads go straight to the table. Writes go through the owning process, so the cap check,
+  the eviction and the insert are one step and concurrent writers never exceed the cap.
+
   ## Supervision
 
   The GenServer owns the table. Add it to your supervision tree:
@@ -39,9 +42,9 @@ defmodule AshOnetime.Cache.Ets do
   @default_max_entries 10_000
 
   # The table stores entries as `{key, %Entry{}, expiry_monotonic}` plus a `{:__config__, n}`
-  # row carrying the max-entries cap. The owning GenServer is the table owner; `:public` lets
-  # the cache callbacks (called from arbitrary admission processes) read/write without a
-  # message round-trip, while `read_concurrency` tunes for the cache access pattern.
+  # row carrying the max-entries cap. The owning GenServer is the table owner and its only
+  # writer of new entries. `:public` lets admission processes read without a message round
+  # trip, and delete their own expired or invalidated keys, which can only lower the count.
   @table_options [:set, :public, :named_table, {:read_concurrency, true}]
 
   ## Public API
@@ -127,8 +130,8 @@ defmodule AshOnetime.Cache.Ets do
         if expiry > System.monotonic_time(:second) do
           {:ok, entry}
         else
-          # Lazy expiry: the entry's deadline passed. Delete and miss.
-          :ets.delete(@table, key)
+          # Lazy expiry: delete exactly the expired row, never a fresh one written since.
+          :ets.delete_object(@table, {key, entry, expiry})
           :miss
         end
 
@@ -142,12 +145,9 @@ defmodule AshOnetime.Cache.Ets do
   @impl AshOnetime.Cache
   def put(key, %Entry{} = entry, ttl_seconds)
       when is_binary(key) and is_integer(ttl_seconds) and ttl_seconds > 0 do
-    maybe_evict()
-    expiry = System.monotonic_time(:second) + ttl_seconds
-    :ets.insert(@table, {key, entry, expiry})
-    :ok
+    GenServer.call(@table, {:put, key, entry, ttl_seconds})
   catch
-    :error, :badarg -> {:error, :unavailable}
+    :exit, _reason -> {:error, :unavailable}
   end
 
   def put(_key, _entry, _ttl_seconds), do: {:error, :invalid_entry}
@@ -170,6 +170,12 @@ defmodule AshOnetime.Cache.Ets do
   end
 
   @impl GenServer
+  def handle_call({:put, key, entry, ttl_seconds}, _from, state) do
+    unless :ets.member(@table, key), do: maybe_evict(state.max_entries)
+    :ets.insert(@table, {key, entry, System.monotonic_time(:second) + ttl_seconds})
+    {:reply, :ok, state}
+  end
+
   def handle_call(_msg, _from, state), do: {:reply, {:error, :unknown_call}, state}
 
   @impl GenServer
@@ -184,18 +190,9 @@ defmodule AshOnetime.Cache.Ets do
 
   ## Eviction
 
-  defp maybe_evict do
-    case {entry_count(), max_entries()} do
-      {count, cap} when count >= cap and cap > 0 -> evict_oldest()
-      _ -> :ok
-    end
-  end
-
-  defp entry_count do
+  defp maybe_evict(cap) do
     # Subtract 1 for the :__config__ row that is not a cache entry.
-    :ets.info(@table, :size) - 1
-  catch
-    :error, :badarg -> 0
+    if cap > 0 and :ets.info(@table, :size) - 1 >= cap, do: evict_oldest(), else: :ok
   end
 
   defp evict_oldest do

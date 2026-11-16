@@ -97,6 +97,51 @@ defmodule AshOnetime.Cache.EtsTest do
     end
   end
 
+  describe "the cap under concurrent writers" do
+    @tag ets_cap_serialized_mutation: true
+    test "concurrent puts never leave more entries than the cap" do
+      stop_supervised!(Ets)
+      start_supervised!({Ets, max_entries: 1})
+
+      1..64
+      |> Task.async_stream(
+        fn writer ->
+          for round <- 1..50 do
+            entry = %Entry{claim_id: Ecto.UUID.generate(), payload: "#{writer}-#{round}"}
+            :ok = Ets.put("k#{writer}-#{round}", entry, 60)
+          end
+        end,
+        max_concurrency: 64,
+        ordered: false
+      )
+      |> Stream.run()
+
+      assert entry_count() == 1
+    end
+
+    test "replacing a present key at the cap evicts nothing else" do
+      e1 = %Entry{claim_id: Ecto.UUID.generate(), payload: "1"}
+      e2 = %Entry{claim_id: Ecto.UUID.generate(), payload: "2"}
+      e3 = %Entry{claim_id: Ecto.UUID.generate(), payload: "3"}
+      replacement = %Entry{claim_id: Ecto.UUID.generate(), payload: "3b"}
+
+      for {key, entry} <- [{"k1", e1}, {"k2", e2}, {"k3", e3}], do: :ok = Ets.put(key, entry, 60)
+      assert :ok = Ets.put("k3", replacement, 60)
+
+      assert {:ok, ^e1} = Ets.get("k1")
+      assert {:ok, ^e2} = Ets.get("k2")
+      assert {:ok, ^replacement} = Ets.get("k3")
+    end
+
+    test "put without the owning process is unavailable, not a crash" do
+      stop_supervised!(Ets)
+      entry = %Entry{claim_id: Ecto.UUID.generate(), payload: "x"}
+      assert {:error, :unavailable} = Ets.put("k", entry, 60)
+    end
+  end
+
+  defp entry_count, do: :ets.info(Ets, :size) - 1
+
   describe "clear" do
     test "clear drops every entry but retains the config" do
       e = %Entry{claim_id: Ecto.UUID.generate(), payload: "x"}

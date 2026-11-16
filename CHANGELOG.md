@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- The reference ETS cache holds its entry cap under concurrent writers. Writes go through
+  the owning process, so the cap check, eviction and insert are one step; replacing a
+  present key evicts nothing else; lazy expiry deletes only the expired row; and a write
+  with the cache process stopped returns `{:error, :unavailable}`. Reads stay concurrent.
 - External completion restores the caller's lock timeout after non-aborting invariant
   errors as well as successful writes. Trust and the operation-hold upgrade find fact
   triggers in every schema by function identity. The security guide explains consumer
