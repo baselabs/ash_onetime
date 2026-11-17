@@ -31,14 +31,14 @@ runs:
         curl -sSfLo "$RUNNER_TEMP/osv-db/osv-scalibr/Hex/all.zip" \
           "https://osv-vulnerabilities.storage.googleapis.com/Hex/all.zip"
 
-    - name: Scan mix.lock offline, with the network denied
+    - name: Scan every committed lock offline, with the network denied
       shell: bash
       run: |
         if sudo unshare --net -- curl -sS -m 5 -o /dev/null https://osv.dev 2>/dev/null; then
           echo "network is reachable inside the scan namespace" >&2
           exit 1
         fi
-        for lock in mix.lock test/support/fixtures/advisory_scan/mix.lock; do
+        for lock in mix.lock locks/ash-floor/mix.lock test/support/fixtures/advisory_scan/mix.lock; do
           name="$(echo "$lock" | tr '/.' '__')"
           sudo unshare --net -- env OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY="$RUNNER_TEMP/osv-db" \
             "$RUNNER_TEMP/osv-scanner" scan source --offline --all-packages --format json \
@@ -58,14 +58,15 @@ runs:
     - name: Check the scan covered the whole lock
       shell: bash
       run: |
-        for lock in mix.lock test/support/fixtures/advisory_scan/mix.lock; do
+        for lock in mix.lock locks/ash-floor/mix.lock test/support/fixtures/advisory_scan/mix.lock; do
           name="$(echo "$lock" | tr '/.' '__')"
           mix run --no-start --no-compile --no-deps-check scripts/check_advisory_scan.exs \
             "$lock" "$RUNNER_TEMP/osv-$name.json"
         done
 
-    # Both audits read the committed lock: hex.audit for retirements and the advisories Hex
-    # carries, deps.audit for the advisory database. Neither contains the other's findings.
+    # Both audits read mix.lock: hex.audit for retirements and the advisories Hex carries,
+    # deps.audit for the advisory database. Neither contains the other's findings. The compat
+    # floor cell runs both against locks/ash-floor/mix.lock.
     - shell: bash
       run: mix hex.audit
     - shell: bash

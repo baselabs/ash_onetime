@@ -1,8 +1,20 @@
 name: Upstream drift
 
-# Reports upstream drift — newest Ash 3.x, newest resolvable dependencies, new
-# advisories and retirements — on the default branch without a push.
-# This scheduled or manual run never gates a landing.
+# Reports upstream drift ahead of the locks, on the default branch's code, weekly or when
+# dispatched. It never gates a landing and has no verdict job.
+#
+# What it runs, each job on the default branch's checkout:
+# - compat: the Ash floor and the newest Ash 3.x, every dependency resolved fresh from
+#   upstream (the one unlocked fetch in this repository), then the full battery;
+# - release-checks: the release gates on the committed lock, whose currency check fails when
+#   a direct dependency has a newer resolvable release;
+# - compatibility: the second toolchain from .tool-versions on the committed lock;
+# - security: the offline advisory scan and both audits on the committed lock, which surface
+#   advisories and retirements published since the last candidate.
+#
+# It publishes nothing: contents: read, no secret, no environment, no cache written from an
+# upstream resolution. It runs no pull-request code: it starts only from the schedule or a
+# dispatch, refuses any ref but the default branch, and every checkout names that branch.
 on:
   schedule:
     - cron: '17 6 * * 1'
@@ -41,6 +53,15 @@ jobs:
       postgres_client: ${{ steps.versions.outputs.postgres_client }}
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
     steps:
+      - name: Refuse any ref but the default branch
+        env:
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "::error::drift runs only on refs/heads/$DEFAULT_BRANCH, not $REF"
+            exit 1
+          fi
       - name: Check out the default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -59,8 +80,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Floor: declared security floor (EEF-CVE-2026-96581; ADR 0004).
-        # Latest: newest published Ash 3.x within the declared range.
+        # Floor: declared security floor (EEF-CVE-2026-96581; ADR 0004), newest of the rest.
+        # Latest: newest published Ash 3.x within the declared range, newest of the rest.
         ash: ${{ fromJSON(format('["{0}","latest"]', needs.toolchain.outputs.ash_floor)) }}
 
     services:
@@ -94,6 +115,7 @@ jobs:
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
           ash: ${{ matrix.ash }}
+          resolution: upstream
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
 
@@ -137,16 +159,17 @@ jobs:
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
 
   compatibility:
-    name: Compatibility (Elixir ${{ matrix.elixir }}, OTP ${{ matrix.otp }})
+    name: Compatibility (${{ matrix.elixir && format('Elixir {0}, OTP {1}', matrix.elixir, matrix.otp) || 'no second toolchain declared' }})
     needs: toolchain
-    if: needs.toolchain.outputs.beam_lanes != '[]'
     runs-on: ubuntu-24.04
     # Same composite as ci.yml; slowest green there: 17 min, run 44145457629; about twice that.
     timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.toolchain.outputs.beam_lanes) }}
+        # With no second toolchain in .tool-versions the job still runs, as one cell that
+        # checks nothing and succeeds, the same shape as ci.yml.
+        include: ${{ fromJSON(needs.toolchain.outputs.beam_lanes != '[]' && needs.toolchain.outputs.beam_lanes || '[{"elixir":"","otp":""}]') }}
 
     services:
       postgres:
@@ -168,12 +191,16 @@ jobs:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-lane-${{ strategy.job-index }}"
 
     steps:
+      - if: matrix.elixir == ''
+        run: echo ".tool-versions declares no second toolchain; nothing to run"
       - name: Check out the default branch
+        if: matrix.elixir != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - uses: ./.github/actions/compatibility-lane
+      - if: matrix.elixir != ''
+        uses: ./.github/actions/compatibility-lane
         with:
           elixir: ${{ matrix.elixir }}
           otp: ${{ matrix.otp }}
