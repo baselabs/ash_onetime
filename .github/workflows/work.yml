@@ -80,7 +80,10 @@ jobs:
         with:
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
-      - name: Check both cells' locks, resolving any that is not current
+      # Each cell is fetched and then audited before the next, because Mix checks deps/
+      # against the cell's lock. deps.audit reads <path>/mix.lock, so it is pointed at each
+      # cell's lock directory.
+      - name: Check and audit both cells' locks, resolving any that is not current
         id: lock
         env:
           ASH_FLOOR: ${{ needs.toolchain.outputs.ash_floor }}
@@ -89,24 +92,18 @@ jobs:
           # Mix writes a lock into an existing directory only.
           mkdir -p locks/ash-floor
           for cell in latest "$ASH_FLOOR"; do
-            if ! ASH_ONETIME_ASH_VERSION="$cell" mix deps.get --check-locked; then
-              ASH_ONETIME_ASH_VERSION="$cell" mix deps.get
+            export ASH_ONETIME_ASH_VERSION="$cell"
+            if ! mix deps.get --check-locked; then
+              mix deps.get
               changed=true
             fi
+            mix hex.audit
+            lock_dir=$(mix run --no-start --no-compile --no-deps-check -e 'IO.write(Path.dirname(Mix.Project.config()[:lockfile]))')
+            mix deps.audit --path "$lock_dir"
           done
           git status --short -- mix.lock locks
           git diff -- mix.lock locks
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
-      # deps.audit reads <path>/mix.lock, so it is pointed at each cell's lock directory.
-      - name: Audit both locks
-        env:
-          ASH_FLOOR: ${{ needs.toolchain.outputs.ash_floor }}
-        run: |
-          for cell in latest "$ASH_FLOOR"; do
-            ASH_ONETIME_ASH_VERSION="$cell" mix hex.audit
-            lock_dir=$(ASH_ONETIME_ASH_VERSION="$cell" mix run --no-start --no-compile --no-deps-check -e 'IO.write(Path.dirname(Mix.Project.config()[:lockfile]))')
-            mix deps.audit --path "$lock_dir"
-          done
       - if: steps.lock.outputs.changed == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
