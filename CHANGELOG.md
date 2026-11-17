@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- Mutation checks attribute each failure to its own test, file and assertion. Structured
+  ExUnit records prevent a test name and assertion from unrelated failures from proving a
+  mutation killed; new entries can pin the exact assertion line.
+
 - Store failures are classified by SQLSTATE class on every store path. A canceled statement,
   serialization failure, deadlock, resource exhaustion or system error is the retryable
   `:store_failure` (503), not `:store_invariant` (500). A connection exception, session

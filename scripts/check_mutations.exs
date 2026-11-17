@@ -1,7 +1,21 @@
+Code.require_file("mutation_failures.exs", __DIR__)
+
 defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
   @mutations %{
+    "mutation-checker-failure-attribution" => %{
+      path: "scripts/mutation_failures.exs",
+      original:
+        "record[\"test_name\"] == test_name and\n        Path.expand(record[\"file\"]) in Enum.map(List.wrap(mutation.test), &Path.expand/1) and\n        assertion_matches?(record, mutation, assertion)",
+      mutated:
+        "Enum.any?(records, &(&1[\"test_name\"] == test_name)) and\n        Enum.any?(records, &assertion_matches?(&1, mutation, assertion))",
+      test: "test/mutation_check_test.exs",
+      tag: "mutation_checker_attribution_mutation",
+      test_name: "failure attribution refuses a name and assertion from different failures",
+      assertion: "refute AshOnetime.MutationFailures.matches?",
+      assertion_line: 15
+    },
     "M-doctor-fact-schema" => %{
       path: "lib/mix/tasks/ash_onetime.doctor.ex",
       original:
@@ -2879,6 +2893,10 @@ defmodule AshOnetime.MutationCheck do
       ] ++ Enum.map(@forbidden_telemetry, fn {field, _value} -> "telemetry-#{field}" end)
   }
 
+  @groups Map.put(@groups, "mutation-checker-attribution", [
+            "mutation-checker-failure-attribution"
+          ])
+
   @registered @mutations |> Map.keys() |> MapSet.new()
 
   def main(["--self-test"]) do
@@ -3015,8 +3033,10 @@ defmodule AshOnetime.MutationCheck do
       raise "mutation #{name} survived its owned test"
     end
 
+    failure_records = AshOnetime.MutationFailures.records(red_output)
+
     unless Enum.all?(required_failures, fn {test_name, assertion} ->
-             String.contains?(red_output, test_name) and String.contains?(red_output, assertion)
+             AshOnetime.MutationFailures.matches?(failure_records, mutation, test_name, assertion)
            end) do
       raise "mutation #{name} failed without every required named assertion"
     end
@@ -3124,7 +3144,18 @@ defmodule AshOnetime.MutationCheck do
 
     System.cmd(
       "mix",
-      ["test", "--force"] ++ List.wrap(mutation.test) ++ ["--only", mutation.tag, "--seed", "0"],
+      ["test", "--force"] ++
+        List.wrap(mutation.test) ++
+        [
+          "--only",
+          mutation.tag,
+          "--seed",
+          "0",
+          "--formatter",
+          "AshOnetime.Test.MutationFormatter",
+          "--formatter",
+          "ExUnit.CLIFormatter"
+        ],
       env: env,
       stderr_to_stdout: true
     )
