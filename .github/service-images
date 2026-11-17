@@ -1,0 +1,4 @@
+# Service images the CI jobs start, each pinned by its multi-arch index digest.
+# The toolchain action reads this file; workflows take the image from its outputs.
+# postgres: PostgreSQL 18.7 (postgres:18.7-trixie)
+postgres=postgres@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc

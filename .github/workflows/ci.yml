@@ -24,6 +24,7 @@ env:
 jobs:
   # .tool-versions lists defaults first, followed by the compatibility pairs.
   # mix.exs owns the Ash security floor used by the compatibility matrix.
+  # .github/service-images owns the digest-pinned PostgreSQL service image.
   toolchain:
     name: Read suite toolchains
     runs-on: ubuntu-24.04
@@ -33,9 +34,10 @@ jobs:
       otp: ${{ steps.versions.outputs.otp }}
       beam_lanes: ${{ steps.versions.outputs.beam_lanes }}
       ash_floor: ${{ steps.versions.outputs.ash_floor }}
+      postgres_image: ${{ steps.versions.outputs.postgres_image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Read defaults, compatibility lanes, and Ash floor
+      - name: Read defaults, compatibility lanes, Ash floor, and service images
         id: versions
         uses: ./.github/actions/toolchain
 
@@ -53,7 +55,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18
+        image: ${{ needs.toolchain.outputs.postgres_image }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -87,7 +89,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18
+        image: ${{ needs.toolchain.outputs.postgres_image }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -124,7 +126,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18
+        image: ${{ needs.toolchain.outputs.postgres_image }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

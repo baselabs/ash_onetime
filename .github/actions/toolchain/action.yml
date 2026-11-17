@@ -1,5 +1,5 @@
 name: Read suite toolchains
-description: Validate and read the shared BEAM toolchains and declared Ash floor
+description: Validate and read the shared BEAM toolchains, declared Ash floor and pinned service images
 outputs:
   elixir:
     description: Default Elixir build
@@ -13,6 +13,9 @@ outputs:
   ash_floor:
     description: Declared Ash security floor from mix.exs
     value: ${{ steps.ash-floor.outputs.ash_floor }}
+  postgres_image:
+    description: PostgreSQL service image pinned by digest in .github/service-images
+    value: ${{ steps.service-images.outputs.postgres_image }}
 runs:
   using: composite
   steps:
@@ -40,4 +43,23 @@ runs:
             raise SystemExit('Expected @ash_floor to declare a stable version string')
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             output.write(f'ash_floor={floor[1]}\n')
+        PYTHON
+    - name: Read the pinned service images
+      id: service-images
+      shell: bash
+      run: |
+        python3 - <<'PYTHON'
+        import os
+        import re
+        from pathlib import Path
+
+        entries = [line for line in Path('.github/service-images').read_text().splitlines() if line.strip() and not line.lstrip().startswith('#')]
+        postgres = [line for line in entries if line.startswith('postgres=')]
+        if len(postgres) != 1:
+            raise SystemExit('Expected exactly one postgres= entry in .github/service-images')
+        image = re.fullmatch(r'postgres=(postgres@sha256:[0-9a-f]{64})', postgres[0])
+        if image is None:
+            raise SystemExit('Expected the postgres image to be pinned as postgres@sha256:<digest>')
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write(f'postgres_image={image[1]}\n')
         PYTHON
