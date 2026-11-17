@@ -20,6 +20,7 @@ defmodule AshOnetime.Store.Result do
           | :worker_timeout
           | :rolled_back
           | :corrupt_payload
+          | :store_failure
           | :store_invariant
           | :in_transaction
           | :maintenance_timeout

@@ -109,6 +109,24 @@ transaction** — so a request that executes ambiguously holds the caller's tran
 to two adapter timeouts. The package's other external callbacks (verifiers, minters) are
 time-bounded by the package; the effect callbacks are bounded by the adapter.
 
+### Sizing the action's transaction timeout
+
+The protected action's transaction stays open on the caller's connection for the whole
+request: the committed claim, the peer calls and finalization. The host repo's `:timeout`
+(Ecto's default is 15 seconds) bounds that transaction. The committed claim runs on a second
+connection with its own 30-second bound, which waits up to `external_lock_timeout_ms` for a
+claim lock. If the repo `:timeout` expires first, DBConnection ends the action's transaction
+and the request fails closed: no local effect commits, and the claim is recovered on retry.
+
+Set the protected action's repo `:timeout` above the sum of `external_lock_timeout_ms`, the
+slowest expected claim write and two adapter timeouts (an ambiguous `execute/3` is followed by
+`recover/3` in the same transaction). The repo configuration's `:timeout` is the default for
+every operation, transactions included:
+
+```elixir
+config :my_app, MyApp.Repo, timeout: 60_000
+```
+
 ## The adapter MUST prove absence (normative)
 
 `:absent` from `recover/3` is **authoritative proof**, not a default. The package trusts it

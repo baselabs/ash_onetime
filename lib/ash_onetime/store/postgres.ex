@@ -1068,7 +1068,13 @@ defmodule AshOnetime.Store.Postgres do
     if target.repo_module.in_transaction?() do
       Result.failure(:store_invariant, :not_started, :not_applicable)
     else
-      target.repo_module.transaction(fn -> claim_for_commit(target, request, lock_timeout_ms) end)
+      # The worker's own deadline governs its transaction, not the host repo's :timeout (Ecto
+      # defaults to 15 seconds, below the 25-second lock-wait cap). The caller kills the worker
+      # at @committed_claim_timeout; the extra margin keeps DBConnection from firing first.
+      target.repo_module.transaction(
+        fn -> claim_for_commit(target, request, lock_timeout_ms) end,
+        timeout: @committed_claim_timeout + 5_000
+      )
       |> committed_transaction_result()
     end
   end
@@ -1531,8 +1537,28 @@ defmodule AshOnetime.Store.Postgres do
     Result.failure(:lock_timeout, :sent, :rolled_back)
   end
 
-  defp classify_query_error(%Postgrex.Error{postgres: %{code: :admin_shutdown}}) do
-    Result.failure(:disconnected, :unknown, :unknown)
+  # Statement completion unknown: the server cannot say whether the statement committed.
+  defp classify_query_error(%Postgrex.Error{postgres: %{pg_code: "40003"}}) do
+    Result.failure(:dispatched_unknown, :unknown, :unknown)
+  end
+
+  # A lost or terminating session: connection exceptions (08), idle-session and idle-in-
+  # transaction terminations (25P03, 57P05), and server shutdown or restart (57P01-57P04).
+  defp classify_query_error(%Postgrex.Error{postgres: %{pg_code: <<"08", _::binary>>}}),
+    do: Result.failure(:disconnected, :unknown, :unknown)
+
+  defp classify_query_error(%Postgrex.Error{postgres: %{pg_code: <<"57P", _::binary>>}}),
+    do: Result.failure(:disconnected, :unknown, :unknown)
+
+  defp classify_query_error(%Postgrex.Error{postgres: %{pg_code: "25P03"}}),
+    do: Result.failure(:disconnected, :unknown, :unknown)
+
+  # Transient server conditions that roll the statement back: a canceled statement (57014),
+  # transaction rollback (40: serialization failure, deadlock), insufficient resources (53)
+  # and system errors (58). The store did not change; the request can be retried.
+  defp classify_query_error(%Postgrex.Error{postgres: %{pg_code: pg_code}})
+       when pg_code == "57014" or binary_part(pg_code, 0, 2) in ["40", "53", "58"] do
+    Result.failure(:store_failure, :sent, :rolled_back)
   end
 
   defp classify_query_error(%Postgrex.Error{}) do

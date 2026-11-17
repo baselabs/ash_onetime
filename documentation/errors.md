@@ -114,7 +114,7 @@ mis-categorize them; the per-code HTTP below overrides the `:invalid` class.
 | `:custody_timeout` | **503** | Custody exceeded its deadline; fail closed and retry only while the proof remains admissible. |
 | `:custody_contract_violation` | **500** | Custody raised, exited, was killed or returned a result outside its contract. |
 | `:verifier_contract_violation` | **500** | A verifier or minter raised, exited, was killed or returned malformed facts. |
-| `:store_invariant` | **500** | The authoritative store returned a result that violated an internal invariant (integrity fault, not client input). |
+| `:store_invariant` | **500** | The authoritative store returned a result that violated an internal invariant, or PostgreSQL reported an integrity, contract or configuration fault (any SQLSTATE not mapped to a 503 code below). Not client input; retrying will not clear it. |
 | `:replay_relationship_change` | **500** | A relationship change reached completion on a replay; the action's transaction was explicitly rolled back. |
 | `:outcome_unknown` | **503** | External recovery was ambiguous; the effect's outcome could not be determined (retryable). |
 | `:invalid_evaluated_at` | **500** | The trusted evaluation clock returned an invalid time. |
@@ -143,13 +143,13 @@ configuration faults that will not clear by retrying.
 | Code | HTTP | Meaning |
 |---|---|---|
 | `:checkout_unavailable` | **503** | No database connection could be checked out (pool exhausted or down). |
-| `:disconnected` | **503** | The database connection dropped mid-operation. |
-| `:worker_timeout` | **503** | The independently committed claim's worker exceeded its 30s ceiling. |
+| `:disconnected` | **503** | The database session was lost mid-operation: the connection dropped, or PostgreSQL reported a connection exception (SQLSTATE class `08`), a session termination (`25P03`, `57P05`) or a server shutdown or restart (`57P01`–`57P04`). Whether the statement committed is unknown. |
+| `:worker_timeout` | **503** | The worker that commits an external-effect claim on its own connection did not finish within 30 seconds; it was stopped and whether its claim committed is unknown. The worker's transaction carries its own bound, so the host repo's `:timeout` does not cut it short. |
 | `:maintenance_timeout` | **503** | SQLSTATE 57014 cancels a maintenance statement at its caller-armed deadline. Fixed message: "maintenance statement timed out"; details `%{}`. Transient; the step rolls back. |
 | `:lock_unavailable` | **503** | A maintenance lock could not be acquired within the remaining lock budget. |
 | `:lock_timeout` | **503** | A row lock could not be acquired within the timeout. |
-| `:dispatched_unknown` | **503** | A statement was dispatched but its outcome is unknown (retryable). |
-| `:store_failure` | **503** | The authoritative store failed for an unenumerated reason. |
+| `:dispatched_unknown` | **503** | A statement was dispatched but its outcome is unknown, including SQLSTATE `40003` (statement completion unknown). Retryable. |
+| `:store_failure` | **503** | PostgreSQL rolled the statement back for a transient reason: a canceled statement (`57014`, for example the host repo's `:timeout`), a transaction rollback (class `40`: serialization failure, deadlock), insufficient resources (class `53`) or a system error (class `58`). Also the generic code for an unenumerated store reason. The store did not change. |
 | `:missing_prefix` | **500** | The context-tenant schema prefix is missing or out of the 1..63-byte bound (fail-closed, not truncated). |
 | `:not_in_transaction` | **500** | Admission ran outside the required database transaction. |
 | `:unsupported_isolation` | **500** | The connection's transaction isolation level is unsupported. |

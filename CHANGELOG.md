@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- Store failures are classified by SQLSTATE class on every store path. A canceled statement,
+  serialization failure, deadlock, resource exhaustion or system error is the retryable
+  `:store_failure` (503), not `:store_invariant` (500). A connection exception, session
+  termination or server shutdown is `:disconnected`, and statement completion unknown
+  (`40003`) is `:dispatched_unknown`; both emit `store_uncertainty`. Integrity, contract and
+  configuration faults stay `:store_invariant`.
+- The worker that commits an external-effect claim bounds its own transaction at its 30-second
+  deadline. It used the host repo's `:timeout`, so with Ecto's 15-second default a slow claim
+  failed as `:store_invariant` before the deadline and lock waits above 15 seconds were never
+  honored. The external-effects guide explains how to size the action's transaction timeout.
 - The reference ETS cache holds its entry cap under concurrent writers. Writes go through
   the owning process, so the cap check, eviction and insert are one step; replacing a
   present key evicts nothing else; lazy expiry deletes only the expired row; and a write
