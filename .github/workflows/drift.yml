@@ -143,14 +143,14 @@ jobs:
         ports:
           - 18841:5432
         options: >-
-          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-otp28
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-lane-${{ strategy.job-index }}
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
     env:
-      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-otp28"
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-lane-${{ strategy.job-index }}"
 
     steps:
       - name: Check out the default branch
