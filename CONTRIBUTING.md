@@ -11,9 +11,8 @@ per-job service containers do.
 
 The repository ships no database container. Point `.env` at a PostgreSQL 18 you
 already run as a dedicated instance: copy `.env.example` to `.env`, set `PGPORT` to
-that server's non-standard port and keep the port inside `DATABASE_URL` in sync;
-`.env` also carries `HEX_API_KEY` when publishing. If the server is unreachable, fix
-or report it; do not start a second database on another port.
+that server's non-standard port and keep the port inside `DATABASE_URL` in sync. If the
+server is unreachable, fix or report it; do not start a second database on another port.
 
 ```sh
 cp .env.example .env   # then set PGPORT and DATABASE_URL's port to your server's port
@@ -39,7 +38,7 @@ mix hex.audit
 mix hex.build
 ```
 
-Run these additional commands before publishing a release:
+CI's release-gates job also runs these on every candidate:
 
 ```sh
 mix run --no-start scripts/check_deps_currency.exs
@@ -55,10 +54,10 @@ mix run scripts/check_optional_matrix.exs
 To reset notebook installs, remove `_build/livebook-install` (or your `MIX_INSTALL_DIR`).
 Each notebook removes its UUID-named schema after verification.
 
-After publishing, run `elixir scripts/check_livebooks.exs --published` with the same
-`DATABASE_URL`. The published mode starts from Hex rather than the checkout, then executes all
-notebook cells against PostgreSQL; it is the executable consumer check for the artifact users
-will install.
+Releases publish only through the `Publish to Hex` workflow, which an owner dispatches; no
+one publishes from a workstation. After publication, `elixir scripts/check_livebooks.exs
+--published` starts from Hex rather than the checkout, then executes all notebook cells against
+PostgreSQL; it is the executable consumer check for the artifact users will install.
 
 Open work is tracked in [GitHub issues](https://github.com/baselabs/ash_onetime/issues).
 

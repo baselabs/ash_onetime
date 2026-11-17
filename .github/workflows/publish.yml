@@ -1,0 +1,88 @@
+name: Publish to Hex
+
+# infra dispatches this, with the owner's approval, once the version commit has landed on the
+# default branch and its qualified run is green; infra reads the release back and tags
+# v<version> on that commit. ash_onetime is a public package on hex.pm, so there is no
+# organization step. No cache is restored or saved.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish
+    # The Hex key lives only in the publish environment and only in the publish step's env.
+    if: contains(fromJSON('["corepay","palermo-git"]'), github.actor) && contains(fromJSON('["corepay","palermo-git"]'), github.triggering_actor)
+    environment: publish
+    # A public repository never uses the build box or its runners.
+    runs-on: ubuntu-24.04
+    # No run exists yet. Estimated from run 44145457629's steps: uncached compile 81 s, docs,
+    # hex.build, and the package check 51 s; about twice that.
+    timeout-minutes: 10
+    env:
+      MIX_ENV: dev
+    steps:
+      - name: Refuse any ref but the default branch
+        env:
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "::error::publish runs only on refs/heads/$DEFAULT_BRANCH, not $REF"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Read the development toolchain
+        id: toolchain
+        uses: ./.github/actions/toolchain
+      - uses: ./.github/actions/beam
+        with:
+          elixir: ${{ steps.toolchain.outputs.elixir }}
+          otp: ${{ steps.toolchain.outputs.otp }}
+      - name: Refuse a version already published or tagged
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          version=$(python3 - <<'PY'
+          import re
+          from pathlib import Path
+          found = re.findall(r'^\s*@version\s+"([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)"\s*$', Path("mix.exs").read_text(), re.MULTILINE)
+          if len(found) != 1:
+              raise SystemExit("expected exactly one @version in mix.exs")
+          print(found[0])
+          PY
+          )
+          # --exit-code: 0 when the tag exists, 2 when it does not, anything else is an error.
+          tagged=0
+          git ls-remote --exit-code --tags "https://github.com/$REPOSITORY.git" "refs/tags/v$version" > /dev/null || tagged=$?
+          case "$tagged" in
+            2) ;;
+            0) echo "::error::v$version is already tagged"; exit 1 ;;
+            *) echo "::error::cannot read the repository's tags (git exited $tagged)"; exit 1 ;;
+          esac
+          status=$(curl -sS -o /dev/null -w '%{http_code}' "https://hex.pm/api/packages/ash_onetime/releases/$version")
+          case "$status" in
+            404) echo "ash_onetime $version is neither published nor tagged" ;;
+            200) echo "::error::ash_onetime $version is already on hex.pm"; exit 1 ;;
+            *) echo "::error::hex.pm answered $status for ash_onetime $version"; exit 1 ;;
+          esac
+      - run: mix local.hex --force
+      - run: mix local.rebar --force
+      - name: Fetch dependencies
+        run: mix deps.get --check-locked
+      - run: mix docs --warnings-as-errors
+      # ASH_ONETIME_ASH_VERSION pins Ash exactly for the compatibility matrix; if it were set
+      # here the published requirement would freeze to that version, so it is cleared for the
+      # build, the inspection and the publish alike.
+      - name: Build the package
+        run: env -u ASH_ONETIME_ASH_VERSION mix hex.build
+      - name: Inspect the built package
+        run: env -u ASH_ONETIME_ASH_VERSION mix run scripts/check_package.exs
+      - name: Publish to hex.pm
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: env -u ASH_ONETIME_ASH_VERSION mix hex.publish --yes
