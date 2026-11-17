@@ -1,0 +1,33 @@
+name: BEAM toolchain
+description: Install the exact Erlang/OTP and Elixir builds from .tool-versions and refuse any other
+inputs:
+  elixir:
+    description: Exact Elixir build from the toolchain job, such as 1.20.5-otp-29
+    required: true
+  otp:
+    description: Exact Erlang/OTP build from the toolchain job, such as 29.1.2
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      with:
+        otp-version: ${{ inputs.otp }}
+        elixir-version: ${{ inputs.elixir }}
+        version-type: strict
+
+    # setup-beam resolves the request; this proves what is on PATH is that build.
+    - name: Refuse any installed version but the requested one
+      shell: bash
+      env:
+        WANT_ELIXIR: ${{ inputs.elixir }}
+        WANT_OTP: ${{ inputs.otp }}
+      run: |
+        otp_version_file=$(erl -noshell -eval 'io:format("~s", [filename:join([code:root_dir(), "releases", erlang:system_info(otp_release), "OTP_VERSION"])]), halt().')
+        have_otp=$(tr -d '[:space:]' < "$otp_version_file")
+        have_elixir=$(elixir -e 'IO.write("#{System.version()}-otp-#{System.build_info()[:otp_release]}")')
+        echo "Erlang/OTP $have_otp, Elixir $have_elixir"
+        if [ "$have_otp" != "$WANT_OTP" ] || [ "$have_elixir" != "$WANT_ELIXIR" ]; then
+          echo "::error::installed Erlang/OTP $have_otp and Elixir $have_elixir; .tool-versions requires $WANT_OTP and $WANT_ELIXIR"
+          exit 1
+        fi

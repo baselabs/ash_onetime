@@ -24,11 +24,10 @@ runs:
         version: ${{ inputs.postgres-client }}
         pgdg-key: ${{ inputs.pgdg-key }}
 
-    - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+    - uses: ./.github/actions/beam
       with:
-        otp-version: ${{ inputs.otp }}
-        elixir-version: ${{ inputs.elixir }}
-        version-type: strict
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
 
     - name: Cache deps and build
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -40,6 +39,9 @@ runs:
         restore-keys: |
           mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-ash${{ inputs.ash }}-
 
+    # The one deliberate exception to --check-locked: each cell resolves the Ash floor or the
+    # newest Ash 3.x, which is a different lock by design. The security, release-gates and
+    # compatibility-lane jobs prove the committed lock with --check-locked in the same run.
     - name: Resolve the matrix Ash version
       shell: bash
       run: |
