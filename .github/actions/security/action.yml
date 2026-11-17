@@ -45,14 +45,13 @@ runs:
             --output-file "$RUNNER_TEMP/osv-$name.json" -L "$lock"
         done
 
-    - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+    - uses: ./.github/actions/beam
       with:
-        otp-version: ${{ inputs.otp }}
-        elixir-version: ${{ inputs.elixir }}
-        version-type: strict
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
 
     - shell: bash
-      run: mix deps.get
+      run: mix deps.get --check-locked
 
     # The scan must cover every hex and git lock entry. The fixture lock holds one of each,
     # proving git entries are counted on both sides.
@@ -65,5 +64,9 @@ runs:
             "$lock" "$RUNNER_TEMP/osv-$name.json"
         done
 
+    # Both audits read the committed lock: hex.audit for retirements and the advisories Hex
+    # carries, deps.audit for the advisory database. Neither contains the other's findings.
     - shell: bash
       run: mix hex.audit
+    - shell: bash
+      run: mix deps.audit

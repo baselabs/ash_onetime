@@ -28,6 +28,7 @@ jobs:
   toolchain:
     name: Read suite toolchains
     runs-on: ubuntu-24.04
+    # Slowest green: 7 s, run 44145457629. Five minutes is the floor for any job.
     timeout-minutes: 5
     outputs:
       elixir: ${{ steps.versions.outputs.elixir }}
@@ -39,6 +40,8 @@ jobs:
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Read defaults, compatibility lanes, Ash floor, and service pins
         id: versions
         uses: ./.github/actions/toolchain
@@ -47,7 +50,8 @@ jobs:
     name: "Ash ${{ matrix.ash }}"
     needs: toolchain
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Slowest green: 24 min (Ash 3.37.2), run 44145457629; about twice that.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
@@ -77,6 +81,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/compat
         with:
           elixir: ${{ needs.toolchain.outputs.elixir }}
@@ -89,7 +95,8 @@ jobs:
     name: "Release gates"
     needs: toolchain
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # Slowest green: 81 min, run 44145457629 (the mutation battery is 69 min of it); about twice that.
+    timeout-minutes: 160
 
     services:
       postgres:
@@ -112,6 +119,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/release-gates
         with:
           elixir: ${{ needs.toolchain.outputs.elixir }}
@@ -124,7 +133,8 @@ jobs:
     needs: toolchain
     if: needs.toolchain.outputs.beam_lanes != '[]'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Slowest green: 17 min, run 44145457629; about twice that.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -151,6 +161,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/compatibility-lane
         with:
           elixir: ${{ matrix.elixir }}
@@ -162,10 +174,13 @@ jobs:
     name: "Security"
     needs: toolchain
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Slowest green: 14 s, runs 44161675015 and 44145457629. Five minutes is the floor for any job.
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/security
         with:
           elixir: ${{ needs.toolchain.outputs.elixir }}
@@ -178,6 +193,7 @@ jobs:
     if: always()
     needs: [toolchain, compat, release-checks, compatibility, security]
     runs-on: ubuntu-24.04
+    # Slowest green: 6 s, run 44145457629. Five minutes is the floor for any job.
     timeout-minutes: 5
     steps:
       - name: Require every qualification job to succeed

@@ -21,11 +21,10 @@ runs:
         version: ${{ inputs.postgres-client }}
         pgdg-key: ${{ inputs.pgdg-key }}
 
-    - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+    - uses: ./.github/actions/beam
       with:
-        otp-version: ${{ inputs.otp }}
-        elixir-version: ${{ inputs.elixir }}
-        version-type: strict
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
 
     - name: Cache deps and build
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -38,7 +37,7 @@ runs:
           mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-release-
 
     - shell: bash
-      run: mix deps.get
+      run: mix deps.get --check-locked
     - shell: bash
       run: mix compile --warnings-as-errors
     # Fails on any direct dependency with a resolvable newer release.
