@@ -27,7 +27,10 @@ defmodule AshOnetime.Codec.Resource do
   @doc false
   def normalize(:ok, %{kind: :resource, result_mode: :ok}), do: {:ok, :ok}
 
-  def normalize(%resource{} = value, %{resource: resource, kind: :resource} = contract) do
+  def normalize(nil, %{kind: :resource, result_mode: {:resource, :returned}, allow_nil?: true}),
+    do: {:ok, nil}
+
+  def normalize(%resource{} = value, %{record_resource: resource, kind: :resource} = contract) do
     with :ok <- Response.validate_fields(resource, contract.fields),
          :ok <- unloaded_relationships(value, resource),
          {:ok, values} <- projection_values(value, contract) do
@@ -51,7 +54,7 @@ defmodule AshOnetime.Codec.Resource do
   @doc false
   def encode_envelope(
         %resource{} = value,
-        %{resource: resource, kind: :resource} = contract,
+        %{record_resource: resource, kind: :resource} = contract,
         raw_tag,
         _opts
       ) do
@@ -65,6 +68,21 @@ defmodule AshOnetime.Codec.Resource do
       false -> codec_mismatch()
       {:error, %Error{} = error} -> {:error, error}
       _other -> value_invalid()
+    end
+  end
+
+  def encode_envelope(
+        nil,
+        %{kind: :resource, result_mode: {:resource, :returned}, allow_nil?: true} = contract,
+        raw_tag,
+        _opts
+      ) do
+    with true <- raw_tag in [@tag, JSON.format_tag()],
+         {:ok, payload} <- JSON.pack(@adapter, "nil", nil, contract) do
+      {:ok, raw_tag, payload}
+    else
+      false -> codec_mismatch()
+      {:error, %Error{} = error} -> {:error, error}
     end
   end
 
@@ -88,23 +106,18 @@ defmodule AshOnetime.Codec.Resource do
         expected_tag,
         _opts
       ) do
+    shapes = if nil_allowed?(contract), do: ["resource", "nil"], else: ["resource"]
+
     with true <- raw_tag == expected_tag,
-         :ok <- Response.validate_fields(contract.resource, contract.fields),
-         {:ok, projected} <- JSON.unpack(payload, @adapter, "resource", contract),
-         true <- is_map(projected),
-         true <- declared_fields_match?(Map.keys(projected), contract.fields),
-         {:ok, values} <- restore_values(projected, contract),
-         {:ok, resource} <- rehydrate(values, contract) do
-      {:ok, resource}
+         :ok <- Response.validate_fields(contract.record_resource, contract.fields),
+         {:ok, shape, value} <- JSON.unpack_shape(payload, @adapter, shapes, contract) do
+      restore_record(shape, value, contract)
     else
       false ->
         {:error, Error.new(:response_fields_invalid, "persisted response fields are invalid")}
 
       {:error, %Error{} = error} ->
         {:error, error}
-
-      _other ->
-        value_invalid()
     end
   end
 
@@ -127,8 +140,29 @@ defmodule AshOnetime.Codec.Resource do
 
   def decode_envelope(_raw_tag, _payload, _contract, _expected_tag, _opts), do: value_invalid()
 
+  defp restore_record("nil", nil, _contract), do: {:ok, nil}
+
+  defp restore_record("resource", projected, contract) do
+    with true <- is_map(projected),
+         true <- declared_fields_match?(Map.keys(projected), contract.fields),
+         {:ok, values} <- restore_values(projected, contract) do
+      rehydrate(values, contract)
+    else
+      false ->
+        {:error, Error.new(:response_fields_invalid, "persisted response fields are invalid")}
+
+      {:error, %Error{} = error} ->
+        {:error, error}
+    end
+  end
+
+  defp restore_record(_shape, _value, _contract), do: value_invalid()
+
+  defp nil_allowed?(%{result_mode: {:resource, :returned}, allow_nil?: true}), do: true
+  defp nil_allowed?(_contract), do: false
+
   defp project(value, contract) do
-    attributes = Map.new(ResourceInfo.attributes(contract.resource), &{&1.name, &1})
+    attributes = Map.new(ResourceInfo.attributes(contract.record_resource), &{&1.name, &1})
 
     Enum.reduce_while(contract.fields, {:ok, %{}}, fn field, {:ok, result} ->
       attribute = Map.fetch!(attributes, field)
@@ -165,7 +199,7 @@ defmodule AshOnetime.Codec.Resource do
   end
 
   defp restore_values(projected, contract) do
-    attributes = Map.new(ResourceInfo.attributes(contract.resource), &{&1.name, &1})
+    attributes = Map.new(ResourceInfo.attributes(contract.record_resource), &{&1.name, &1})
 
     Enum.reduce_while(contract.fields, {:ok, %{}}, fn field, {:ok, result} ->
       attribute = Map.fetch!(attributes, field)
@@ -215,7 +249,7 @@ defmodule AshOnetime.Codec.Resource do
   end
 
   defp rehydrate(values, contract) do
-    resource = contract.resource
+    resource = contract.record_resource
 
     restored =
       resource
@@ -268,6 +302,10 @@ defmodule AshOnetime.Codec.Resource do
     MapSet.new(actual) == MapSet.new(Enum.map(expected, &Atom.to_string/1))
   end
 
+  # A generic action's returned record carries no metadata of its own on replay; the
+  # replay stamp is added by admission (§2.7.6).
+  defp result_metadata(%{result_mode: {:resource, :returned}}), do: %{}
+
   defp result_metadata(contract) do
     metadata = %{selected: contract.fields}
 
@@ -277,6 +315,9 @@ defmodule AshOnetime.Codec.Resource do
     end
   end
 
+  # Ecto accepts `:built`, `:loaded` and `:deleted` only. A generic action returned a
+  # persisted record, so `:returned` is `:loaded`.
+  defp resource_state({:resource, :returned}), do: :loaded
   defp resource_state({:resource, state}), do: state
 
   defp value_invalid,

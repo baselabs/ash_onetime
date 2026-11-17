@@ -6,6 +6,12 @@ defmodule AshOnetime.ExternalEffect do
   An adapter must pass it unchanged to the peer's idempotency and recovery surfaces.
   `:absent` is authoritative proof that no peer operation exists; every uncertain,
   exceptional, or malformed outcome is ambiguity and must not permit a new key.
+
+  When the protection declares `executing_only` names, `execute/3` returns
+  `{:ok, peer_result, values}`, where `values` is a map with exactly the declared names as
+  keys, each a binary of at most 64 KiB. The package seals the map at once to the
+  `AshOnetime.deliver/2` caller and never stores it; any other shape is an unknown outcome.
+  `recover/3` never returns values: a recovered execution delivers none.
   """
 
   @private_result :ash_onetime_external_result
@@ -17,7 +23,9 @@ defmodule AshOnetime.ExternalEffect do
   @type trusted_context :: map()
 
   @callback execute(operation_key(), subject(), trusted_context()) ::
-              {:ok, peer_result()} | {:error, :outcome_unknown}
+              {:ok, peer_result()}
+              | {:ok, peer_result(), %{optional(atom()) => binary()}}
+              | {:error, :outcome_unknown}
 
   @callback recover(operation_key(), subject(), trusted_context()) ::
               {:ok, peer_result()} | :absent | :unknown

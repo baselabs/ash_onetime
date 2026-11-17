@@ -58,7 +58,7 @@ defmodule AshOnetime.Test.Migration do
     Mix.Task.reenable("ash_onetime.gen.migrations")
     GenerateMigrations.run(arguments)
     [path] = Path.wildcard(Path.join(migrations, "*_install_ash_onetime.exs"))
-    [{module, _bytecode}] = Code.compile_file(path)
+    module = compile!(path)
     version = path |> Path.basename() |> String.slice(0, 14) |> String.to_integer()
 
     Sandbox.mode(Repo, :auto)
@@ -136,6 +136,10 @@ defmodule AshOnetime.Test.Migration do
   end
 
   def uninstall_generated!(installation) do
+    # Every generated install migration has the same module name, so another installation's
+    # uninstall may have unloaded it; load this installation's own file again.
+    if not Code.ensure_loaded?(installation.module), do: compile!(installation.path)
+
     Sandbox.mode(Repo, :auto)
 
     try do
@@ -154,5 +158,19 @@ defmodule AshOnetime.Test.Migration do
     :code.delete(installation.module)
     File.rm_rf!(installation.temporary)
     :ok
+  end
+
+  # Every generated install migration is the same module; each installation compiles its
+  # own file, and the redefinition is expected.
+  defp compile!(path) do
+    previous = Code.get_compiler_option(:ignore_module_conflict)
+    Code.put_compiler_option(:ignore_module_conflict, true)
+
+    try do
+      [{module, _bytecode}] = Code.compile_file(path)
+      module
+    after
+      Code.put_compiler_option(:ignore_module_conflict, previous)
+    end
   end
 end

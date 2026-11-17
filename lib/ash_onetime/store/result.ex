@@ -11,6 +11,7 @@ defmodule AshOnetime.Store.Result do
           :invalid_request
           | :invalid_nonce_window
           | :not_in_transaction
+          | :in_transaction
           | :unsupported_isolation
           | :checkout_unavailable
           | :missing_prefix

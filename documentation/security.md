@@ -239,3 +239,56 @@ not hold grant options. Same-named functions in the table schema do not enter th
 All package calls are schema-qualified and explicitly typed. The routine manifest checks the
 whole executable `pg_proc` row, normalized argument-default and SQL-body trees, a zero
 `prosupport`, and the source digest.
+
+## Executing-only values
+
+Executing-only values have two guarantees. Confidentiality: only the caller of
+`AshOnetime.deliver/2` can receive the value; it is sealed when the producer returns it, to a
+key that exists only inside that call. At most one delivery, failing closed: each call
+delivers at most once, and any doubt returns an error with no value.
+
+A value is delivered only after its effect has committed. `deliver/2` refuses to run inside
+an open transaction (`:executing_only_in_transaction`), because a transaction it does not own
+can roll back after the value was returned, and a retry under the same key would then
+deliver a second one. After Ash returns success, `deliver/2` reads the store's committed
+completion for its own claim, outside any transaction, and opens the value only when that
+completion exists. When it does not (for example, an `after_transaction` hook turned a
+rolled-back action into success), the call returns `:executing_only_lost` with no value.
+For a local transactional effect, rollback also undoes the effect and its claim; a retry
+under the same key can execute and deliver a fresh value. An external peer may already
+have committed its effect before the local rollback. The committed processing claim then
+remains: a retry recovers the peer's existing effect with no value. An unavailable or
+uncertain completion read proves neither rollback nor absence of an external effect.
+Reconcile through the external-effect recovery protocol; a committed effect's lost value
+cannot be re-derived. Revoke what it granted and reissue under a new key.
+
+The proven limit: code in your own action pipeline that is handed the built changeset or
+input before the package's entry and outside the action's transaction (a
+`before_transaction` hook) can run the same action on it. That spends the claim. The effect
+happens once, nobody receives the value, and the `deliver/2` call returns
+`:executing_only_lost` (or the error Ash returns for the row that effect changed); revoke and
+reissue. If that code itself calls `deliver/2`, it is the caller that receives the value, and
+your outer call replays with none. Code that runs inside the action's transaction (a policy
+check) cannot call `deliver/2`: it is refused as above.
+
+Timing is outside these guarantees. Sealing and opening process
+`sum(4 + byte_size(value))` plaintext bytes, so their duration depends on the values' total
+length. External recovery telemetry measures a span that includes sealing. The envelope
+length is `49 + sum(4 + byte_size(value))` bytes and is visible wherever the envelope is.
+This is not a constant-time delivery protocol.
+
+The observation boundary covers event content, multiplicity and order within each process.
+Native interiors (the crypto NIF, ETS, atomics and PostgreSQL below its wire messages and
+rows) are outside it; arguments and returns crossing into native code remain observable.
+Memory use, reductions, garbage collection and scheduler statistics are also outside it.
+Tests cover a finite set of value tuples; they cannot establish independence for every
+possible function of values that takes the same result on all tested tuples.
+
+Outside the guarantees: the producer that creates the value, the caller after the return, and
+code with access to the running node. Live introspection of the VM (`Process.info/2` with
+`:backtrace`, a crash dump, a debugger, a heap read before the garbage collector reclaims
+it) can read any term of any process, the value included; this is the
+trusted-runtime boundary, and it stays open. A value lost after its transaction committed is lost
+for good: no path re-derives it, so the remedy is to revoke what it granted and reissue under
+a new key. Any other way to observe the value, or to receive it twice, is a defect: report it
+as a security issue.

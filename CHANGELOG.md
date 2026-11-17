@@ -18,6 +18,34 @@ All notable changes to this project are documented in this file.
   the owning process, so the cap check, eviction and insert are one step; replacing a
   present key evicts nothing else; lazy expiry deletes only the expired row; and a write
   with the cache process stopped returns `{:error, :unavailable}`. Reads stay concurrent.
+- **Executing-only values.** An idempotency protection can declare `executing_only` names,
+  produced by an `AshOnetime.Producer` (`produce`) or returned by an external effect's
+  `execute/3` as `{:ok, peer_result, values}`. `AshOnetime.deliver/2` runs the action and
+  returns the values beside the Ash result in `%AshOnetime.Delivery{}`: `:executed` with every
+  value, `:replayed` or `:recovered` with none. The values are sealed when produced to a key
+  that exists only inside the `deliver/2` call, and never reach a row, the cache, a hold,
+  telemetry, logs, errors or a replay. A value opens only after the store holds the
+  committed completion of the call's claim. New refusals: `:executing_only_requires_call`
+  (the action was run without `deliver/2`), `:executing_only_in_transaction` (called inside
+  an open transaction), `:executing_only_refused` (a bulk subject, a subject not built for its
+  action, or a call Ash would run in another process); and failures
+  `:executing_only_invalid` (the producer broke its contract) and `:executing_only_lost` (the
+  value cannot be delivered). The verifier refuses a name also in `fields` or naming a field
+  of the returned resource, a strategy other than fail-closed idempotency, a missing
+  producer, duplicate names, and an update or destroy with `require_atomic? true`. A generic
+  action returning a resource stores the `fields` of the returned resource and replays it as
+  a loaded record.
+- **Delivery timing boundary.** Sealing and opening time, envelope length and external
+  recovery duration can depend on value length. The security guide states timing, native
+  interiors and runtime resource statistics as limits of the confidentiality guarantee.
+- **Delivery review fixes.** Existing CRUD and generic response contracts retain their
+  frozen digests; only generic resource projections bind the returned resource. Exit-boundary
+  inventories cover OTP 28.5 and 29.1.2, and comparisons retain semantic values, settings,
+  frame arguments and event multiplicities. Key-custody controls cover real ETS and
+  persistent-term writes. Missing local completion does not prove an external effect
+  rolled back: recovery can find the committed peer effect without delivering a value.
+- **Response `fields` text.** The DSL documentation states that the first tracked caller
+  also receives only the `fields` projection.
 - External completion restores the caller's lock timeout after non-aborting invariant
   errors as well as successful writes. Trust and the operation-hold upgrade find fact
   triggers in every schema by function identity. The security guide explains consumer

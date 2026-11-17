@@ -14,6 +14,7 @@ defmodule AshOnetime.Response do
     @moduledoc false
     @enforce_keys [
       :resource,
+      :record_resource,
       :action_name,
       :action_type,
       :kind,
@@ -28,6 +29,7 @@ defmodule AshOnetime.Response do
     ]
     defstruct [
       :resource,
+      :record_resource,
       :action_name,
       :action_type,
       :kind,
@@ -47,6 +49,7 @@ defmodule AshOnetime.Response do
 
     @type t :: %__MODULE__{
             resource: module(),
+            record_resource: module() | nil,
             action_name: atom(),
             action_type: atom(),
             kind: atom(),
@@ -235,7 +238,10 @@ defmodule AshOnetime.Response do
       else: {:error, Error.new(:response_codec_failed, "response codec changed the result")}
   end
 
-  defp equal_result(left, right, %{kind: :resource, fields: fields, resource: resource}) do
+  defp equal_result(nil, nil, %{kind: :resource, allow_nil?: true}), do: :ok
+
+  defp equal_result(left, right, %{kind: :resource, fields: fields, record_resource: resource})
+       when is_struct(left) and is_struct(right) do
     attributes = Map.new(ResourceInfo.attributes(resource), &{&1.name, &1})
 
     if Enum.all?(fields, &equal_field?(&1, attributes, left, right)) do
@@ -244,6 +250,9 @@ defmodule AshOnetime.Response do
       {:error, Error.new(:response_codec_failed, "response codec changed the result")}
     end
   end
+
+  defp equal_result(_left, _right, %{kind: :resource}),
+    do: {:error, Error.new(:response_codec_failed, "response codec changed the result")}
 
   defp equal_field?(field, attributes, left, right) do
     attribute = Map.fetch!(attributes, field)
@@ -262,6 +271,7 @@ defmodule AshOnetime.Response do
       {:ok,
        %{
          kind: :resource,
+         record_resource: resource,
          result_mode: result_mode,
          field_specs: field_specs,
          type: nil,
@@ -275,6 +285,7 @@ defmodule AshOnetime.Response do
     {:ok,
      %{
        kind: :action_result,
+       record_resource: nil,
        result_mode: :ok,
        type: nil,
        constraints: [],
@@ -291,6 +302,7 @@ defmodule AshOnetime.Response do
         {:ok,
          %{
            kind: :action_result,
+           record_resource: nil,
            result_mode: {:typed, normalized_type, constraints, action.allow_nil?},
            type: normalized_type,
            constraints: constraints,
@@ -303,11 +315,47 @@ defmodule AshOnetime.Response do
     end
   end
 
-  defp shape(_resource, %{type: :action}, _fields, _trusted) do
-    {:error, "generic action response fields must be empty"}
+  # A generic action that returns a resource record stores the projection its `fields`
+  # allow, validated against the returned resource (§2.7.6). The record was persisted by
+  # the action, so the replayed struct is `:loaded`.
+  defp shape(_resource, %{type: :action} = action, fields, _trusted) do
+    with {:ok, record_resource} <- returned_resource(action),
+         :ok <- validate_fields(record_resource, fields),
+         {:ok, field_specs} <- field_specs(record_resource, fields) do
+      {:ok,
+       %{
+         kind: :resource,
+         record_resource: record_resource,
+         result_mode: {:resource, :returned},
+         field_specs: field_specs,
+         type: nil,
+         constraints: [],
+         allow_nil?: action.allow_nil? == true
+       }}
+    else
+      :error -> {:error, "generic action response fields require a resource return"}
+      {:error, _reason} = error -> error
+    end
   end
 
   defp shape(_resource, _action, _fields, _trusted), do: {:error, "action type is unsupported"}
+
+  @doc false
+  # The persisted resource a generic action returns: `:struct` with an `instance_of`
+  # resource that is not embedded. `:error` for any other return. Ash takes a bare
+  # resource module as a return type only for an embedded resource, whose record is a
+  # value stored through the typed path, never a returned record.
+  @spec returned_resource(map()) :: {:ok, module()} | :error
+  def returned_resource(%{type: :action, returns: Ash.Type.Struct} = action) do
+    candidate = Keyword.get(action.constraints || [], :instance_of)
+
+    if is_atom(candidate) and not is_nil(candidate) and ResourceInfo.resource?(candidate) and
+         not ResourceInfo.embedded?(candidate),
+       do: {:ok, candidate},
+       else: :error
+  end
+
+  def returned_resource(_action), do: :error
 
   @doc false
   def validate_fields(resource, fields) do
@@ -370,10 +418,18 @@ defmodule AshOnetime.Response do
         :codec,
         :codec_opts
       ])
+      |> bind_returned_resource(base)
       |> :erlang.term_to_binary([:deterministic])
 
     :crypto.hash(:sha256, descriptor)
   end
+
+  # Existing result modes retain the frozen descriptor byte for byte. Only the new
+  # generic resource projection binds a resource separate from the action resource.
+  defp bind_returned_resource(descriptor, %{result_mode: {:resource, :returned}} = base),
+    do: Map.put(descriptor, :record_resource, base.record_resource)
+
+  defp bind_returned_resource(descriptor, _base), do: descriptor
 
   defp binding(raw_tag, contract_digest) do
     @binding_prefix <> raw_tag <> ":" <> Base.url_encode64(contract_digest, padding: false)

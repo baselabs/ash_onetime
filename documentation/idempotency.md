@@ -36,6 +36,73 @@ the cache never admits an effect.
 Do not describe this as exactly-once delivery. The guarantee is a PostgreSQL-authoritative,
 once-per-key local effect and typed replay within the declared retention boundary.
 
+## Values only the executing caller receives
+
+Some actions create a value that only the caller that ran them may ever see: an API key, a
+recovery code, an initial password. Declare those values with `executing_only` and produce
+them with an `AshOnetime.Producer` (or return them from an external effect's `execute/3`).
+They are never stored, cached, logged or replayed; the stored response keeps only `fields`.
+
+```elixir
+defmodule MyApp.ApiKeys.Secret do
+  @behaviour AshOnetime.Producer
+
+  @impl true
+  def produce(_changeset, _context),
+    do: {:ok, %{secret: Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)}}
+end
+
+onetime do
+  protect :issue do
+    strategy :idempotency
+    scope [{:static, "api-key"}]
+    key {:client, :request_key}
+    fingerprint arguments: [:label], attributes: []
+    response AshOnetime.Codec.Resource, fields: [:id, :label], classify: MyApp.ApiKeyClassifier
+    executing_only [:secret]
+    produce MyApp.ApiKeys.Secret
+  end
+end
+```
+
+Run the action through `AshOnetime.deliver/2`, never through `Ash.create/2` or a code
+interface; a direct call is refused with `:executing_only_requires_call` before anything
+runs.
+
+```elixir
+MyApp.ApiKey
+|> Ash.Changeset.for_create(:issue, %{label: "ci", request_key: request_key}, actor: actor)
+|> AshOnetime.deliver()
+|> case do
+  {:ok, api_key, %AshOnetime.Delivery{outcome: :executed, values: %{secret: secret}}} ->
+    show_once(api_key, secret)
+
+  {:ok, api_key, %AshOnetime.Delivery{outcome: outcome}} when outcome in [:replayed, :recovered] ->
+    # The key ran before. Its value may have been delivered or lost before delivery.
+    already_issued(api_key)
+
+  {:error, error} ->
+    handle(error)
+end
+```
+
+- `:executed` carries every declared value; `:replayed` and `:recovered` carry none. A replay
+  is also visible through `AshOnetime.replayed?/1`.
+- Call `deliver/2` outside any transaction. Inside one it is refused with
+  `:executing_only_in_transaction` before anything runs, because a transaction it does not
+  own could roll back after the value was returned.
+- A value opens only after the store holds the committed completion of this call's claim.
+  A missing or uncertain completion returns `:executing_only_lost` with no value, even
+  if a hook reported success. Local transactional rollback undoes the local effect and
+  claim, so a retry can execute and deliver a fresh value. An external peer can commit
+  before the local rollback; retry then recovers the existing effect with no value.
+  An unavailable completion read proves no absence: reconcile through external recovery.
+- A value lost after its transaction committed is lost for good. No path re-derives it:
+  revoke what it granted and reissue under a new key.
+
+See [Security](security.md#executing-only-values) for the guarantees and their limit, and
+[Errors](errors.md) for the codes.
+
 ## Keep an open operation's record
 
 A request can finish while the operation it opened continues. Set a hold at completion so

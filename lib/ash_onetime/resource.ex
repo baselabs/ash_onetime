@@ -41,9 +41,11 @@ defmodule AshOnetime.Resource.Protection do
     :external_effect,
     :hold,
     :external_lock_timeout_ms,
+    :produce,
     on_definite_store_failure: :fail_closed,
     commit: :with_action,
     limits: [],
+    executing_only: [],
     __spark_metadata__: nil
   ]
 
@@ -62,6 +64,8 @@ defmodule AshOnetime.Resource.Protection do
           on_definite_store_failure: :fail_closed | :execute_untracked,
           commit: :with_action | :independent,
           limits: Keyword.t(),
+          executing_only: [atom()],
+          produce: module() | nil,
           __spark_metadata__: Spark.Dsl.Entity.spark_meta()
         }
 end
@@ -95,8 +99,11 @@ defmodule AshOnetime.Resource do
         type: {:list, :atom},
         default: [],
         doc:
-          "The resource attributes projected into the stored/replayed response payload. " <>
-            "Acts as the field allowlist; attributes not named here never enter the response."
+          "The stored response's field allowlist. The first tracked caller receives this " <>
+            "projection too: an attribute not named here is unavailable to it (returned as " <>
+            "`Ash.NotLoaded`), not only to replays. Untracked execution returns the action's " <>
+            "own result. A value only the executing caller may receive is declared with " <>
+            "`executing_only`, delivered only through `AshOnetime.deliver/2`, and never stored."
       ],
       classify: [
         type: :module,
@@ -197,6 +204,23 @@ defmodule AshOnetime.Resource do
             "The lock serializes same-key external retries through the peer call so two " <>
             "executes can never overlap under one operation key (ADR-0010). Requires " <>
             "`external_effect`."
+      ],
+      executing_only: [
+        type: {:list, :atom},
+        default: [],
+        doc:
+          "Names of values only the executing caller may receive. Each is produced once, " <>
+            "sealed to the calling process, delivered only through `AshOnetime.deliver/2`, " <>
+            "and never stored, cached, logged or replayed. A name must not also appear in " <>
+            "the response `fields` or name a field of the returned resource. Requires the " <>
+            "`:idempotency` strategy with `:fail_closed`, and either `produce` or " <>
+            "`external_effect`."
+      ],
+      produce: [
+        type: :module,
+        doc:
+          "An `AshOnetime.Producer` module that produces the `executing_only` values for a " <>
+            "local execution. External-effect actions produce them from `execute/3` instead."
       ],
       on_definite_store_failure: [
         type: {:in, [:fail_closed, :execute_untracked]},

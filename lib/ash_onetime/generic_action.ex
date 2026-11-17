@@ -21,12 +21,74 @@ defmodule AshOnetime.GenericAction do
   def prepare(%Ash.ActionInput{} = input, opts, context) do
     protection = Keyword.fetch!(opts, :protection)
 
+    case protection.executing_only do
+      [] -> install(input, protection, context)
+      names -> install_delivery(input, protection, names, context)
+    end
+  end
+
+  defp install(input, protection, context) do
     input
     |> Ash.ActionInput.before_action(
-      fn pending -> reserve(pending, protection, context) end,
+      fn pending -> reserve(pending, protection, context, nil) end,
       prepend?: true
     )
     |> Ash.ActionInput.after_action(fn final_input, result -> complete(final_input, result) end)
+  end
+
+  # Executing-only delivery (§2.7.3, §2.7.6). Every build makes a fresh cell, captured by
+  # the prepended before-action, whose first act is the entry check. Admission and the
+  # producer run there, in the caller's process; `run/3` never receives the values.
+  # Completion runs in the after-action, which reads `inv` from the entry.
+  defp install_delivery(input, protection, names, context) do
+    {input, cell} = AshOnetime.Delivery.put_cell(input)
+
+    input
+    |> Ash.ActionInput.before_action(
+      fn pending ->
+        with {:ok, handle} <- AshOnetime.Delivery.claim(pending, cell, names),
+             %Ash.ActionInput{} = admitted <- reserve(pending, protection, context, handle),
+             :ok <- produce(admitted, handle, protection, context) do
+          admitted
+        end
+      end,
+      prepend?: true
+    )
+    |> Ash.ActionInput.after_action(fn final_input, result ->
+      final_input
+      |> complete(result)
+      |> complete_delivery(final_input)
+    end)
+  end
+
+  defp produce(input, handle, protection, context) do
+    case AshOnetime.Admission.state(input) do
+      {:ok, %{class: :execute}} ->
+        AshOnetime.Delivery.produce(
+          handle,
+          protection.produce,
+          input,
+          AshOnetime.Admission.trusted_context(context)
+        )
+
+      {:ok, _state} ->
+        :ok
+
+      :error ->
+        {:error, AshOnetime.Admission.unavailable_error()}
+    end
+  end
+
+  defp complete_delivery({:error, _error} = error, _input), do: error
+
+  defp complete_delivery(completed, input) do
+    with {:ok, %{delivery_source: source} = state} when not is_nil(source) <-
+           AshOnetime.Admission.state(input),
+         :ok <- AshOnetime.Delivery.complete_current(input, state) do
+      completed
+    else
+      _other -> {:error, AshOnetime.Delivery.lost()}
+    end
   end
 
   @impl Ash.Resource.Actions.Implementation
@@ -43,10 +105,10 @@ defmodule AshOnetime.GenericAction do
     end
   end
 
-  defp reserve(input, protection, context) do
+  defp reserve(input, protection, context, delivery) do
     trusted = AshOnetime.Admission.trusted_context(context)
 
-    reservation = AshOnetime.Admission.dispatch_reservation(input, protection, trusted)
+    reservation = AshOnetime.Admission.dispatch_reservation(input, protection, trusted, delivery)
 
     case reservation do
       {:execute, state} -> AshOnetime.Admission.put_state(input, state)

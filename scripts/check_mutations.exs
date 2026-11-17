@@ -1549,9 +1549,9 @@ defmodule AshOnetime.MutationCheck do
     "dsl-response-unknown-opt" => %{
       path: "lib/ash_onetime/resource.ex",
       original:
-        "      fields: [\n        type: {:list, :atom},\n        default: [],\n        doc:\n          \"The resource attributes projected into the stored/replayed response payload. \" <>\n            \"Acts as the field allowlist; attributes not named here never enter the response.\"\n      ],",
+        "      fields: [\n        type: {:list, :atom},\n        default: [],\n        doc:\n          \"The stored response's field allowlist. The first tracked caller receives this \" <>\n            \"projection too: an attribute not named here is unavailable to it (returned as \" <>\n            \"`Ash.NotLoaded`), not only to replays. Untracked execution returns the action's \" <>\n            \"own result. A value only the executing caller may receive is declared with \" <>\n            \"`executing_only`, delivered only through `AshOnetime.deliver/2`, and never stored.\"\n      ],",
       mutated:
-        "      field: [\n        type: {:list, :atom},\n        default: [],\n        doc: \"mutant alias that accepts the typo the guard rejects.\"\n      ],\n      fields: [\n        type: {:list, :atom},\n        default: [],\n        doc:\n          \"The resource attributes projected into the stored/replayed response payload. \" <>\n            \"Acts as the field allowlist; attributes not named here never enter the response.\"\n      ],",
+        "      field: [\n        type: {:list, :atom},\n        default: [],\n        doc: \"mutant alias that accepts the typo the guard rejects.\"\n      ],\n      fields: [\n        type: {:list, :atom},\n        default: [],\n        doc:\n          \"The stored response's field allowlist. The first tracked caller receives this \" <>\n            \"projection too: an attribute not named here is unavailable to it (returned as \" <>\n            \"`Ash.NotLoaded`), not only to replays. Untracked execution returns the action's \" <>\n            \"own result. A value only the executing caller may receive is declared with \" <>\n            \"`executing_only`, delivered only through `AshOnetime.deliver/2`, and never stored.\"\n      ],",
       test: "test/compile_fixtures_test.exs",
       tag: "response_unknown_opt_mutation",
       test_name: "response rejects unknown options (no silent drop)",
@@ -2053,8 +2053,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "state-claim-sanitization" => %{
       path: "lib/ash_onetime/admission.ex",
-      original: "class: class, claim: sanitize_claim(result.claim)",
-      mutated: "class: class, claim: result.claim",
+      original: "        | class: class,\n          claim: sanitize_claim(result.claim),",
+      mutated: "        | class: class,\n          claim: result.claim,",
       test: "test/ash_onetime/action_transaction_test.exs",
       tag: "state_confidentiality_mutation",
       test_name: "verified nonce admits one generic execution then rejects reuse",
@@ -2210,7 +2210,7 @@ defmodule AshOnetime.MutationCheck do
     "generic-preparation" => %{
       path: "lib/ash_onetime/generic_action.ex",
       original:
-        "Ash.ActionInput.before_action(\n      fn pending -> reserve(pending, protection, context) end,",
+        "Ash.ActionInput.before_action(\n      fn pending -> reserve(pending, protection, context, nil) end,",
       mutated: "Ash.ActionInput.before_action(\n      fn pending -> pending end,",
       test: "test/ash_onetime/action_transaction_test.exs",
       tag: "marker_propagation_mutation",
@@ -2323,9 +2323,9 @@ defmodule AshOnetime.MutationCheck do
     "authorization-order" => %{
       path: "lib/ash_onetime/change.ex",
       original:
-        "protection = Keyword.fetch!(opts, :protection)\n\n    Ash.Changeset.around_action(",
+        "  defp install(changeset, protection, context) do\n    Ash.Changeset.around_action(",
       mutated:
-        "protection = Keyword.fetch!(opts, :protection)\n\n    changeset = reserve(changeset, protection, context)\n\n    Ash.Changeset.around_action(",
+        "  defp install(changeset, protection, context) do\n    changeset = reserve(changeset, protection, context, nil)\n\n    Ash.Changeset.around_action(",
       test: "test/ash_onetime/authorization_order_test.exs",
       tag: "authorization_order_mutation",
       test_name: "change registration performs no admission callback before Ash authorization",
@@ -2363,9 +2363,9 @@ defmodule AshOnetime.MutationCheck do
     "external-operation-key" => %{
       path: "lib/ash_onetime/external_recovery.ex",
       original:
-        "defp continue({:recover, state}, subject, protection, context, started) do\n    operation_key = state.claim.id",
+        "defp continue({:recover, state}, subject, protection, context, started, delivery) do\n    operation_key = state.claim.id",
       mutated:
-        "defp continue({:recover, state}, subject, protection, context, started) do\n    operation_key = state.request.id",
+        "defp continue({:recover, state}, subject, protection, context, started, delivery) do\n    operation_key = state.request.id",
       test: "test/ash_onetime/external_recovery_test.exs",
       tag: "external_operation_key_mutation",
       test_name: "caller death before peer preserves one key and retry proves absence",
@@ -2374,9 +2374,9 @@ defmodule AshOnetime.MutationCheck do
     "pre-peer-lock-removed" => %{
       path: "lib/ash_onetime/external_recovery.ex",
       original:
-        "      case lock_for_peer(state, protection, started) do\n        {:ok, locked} ->\n          execute_then_settle(locked, subject, protection, context, operation_key, started)",
+        "      case lock_for_peer(state, protection, started) do\n        {:ok, locked} ->\n          execute_then_settle(\n",
       mutated:
-        "      case {:ok, state} do\n        {:ok, locked} ->\n          execute_then_settle(locked, subject, protection, context, operation_key, started)",
+        "      case {:ok, state} do\n        {:ok, locked} ->\n          execute_then_settle(\n",
       test: "test/ash_onetime/external_contention_test.exs",
       tag: "pre_peer_lock_mutation",
       test_name: "an in-flight retry is refused while the original holds the pre-peer claim lock",
@@ -2384,8 +2384,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "effect-lock-generation" => %{
       path: "lib/ash_onetime/store/postgres.ex",
-      original: "AND id = $5::uuid",
-      mutated: "AND (id = $5::uuid OR true)",
+      original: "AND id = $5::uuid\n    FOR UPDATE",
+      mutated: "AND (id = $5::uuid OR true)\n    FOR UPDATE",
       test: "test/ash_onetime/store/contention_test.exs",
       tag: "effect_lock_generation_mutation",
       test_name: "lock_for_effect refuses a row whose id no longer matches the logical key",
@@ -2687,6 +2687,356 @@ defmodule AshOnetime.MutationCheck do
       test_name: "rejects input that is not a keyword list",
       assertion: "Verified.new(%{key: \"nonce-1\"})"
     },
+    "executing-only-strategy" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original: "      protection.strategy != :idempotency ->\n        error(",
+      mutated: "      false ->\n        error(",
+      test: "test/compile_fixtures_test.exs",
+      tag: "executing_only_verifier_mutation",
+      test_name: "rejects matrix case executing_only_nonce at its semantic option",
+      assertion: "assert status != 0, output"
+    },
+    "executing-only-require-atomic" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original: "Map.get(context.action, :require_atomic?) == true ->",
+      mutated: "false ->",
+      test: "test/compile_fixtures_test.exs",
+      tag: "executing_only_verifier_mutation",
+      test_name: "rejects matrix case executing_only_atomic_update at its semantic option",
+      assertion: "assert status != 0, output",
+      required_failures: [
+        {"rejects matrix case executing_only_atomic_update at its semantic option",
+         "assert status != 0, output"},
+        {"rejects matrix case executing_only_atomic_destroy at its semantic option",
+         "assert status != 0, output"}
+      ]
+    },
+    "returned-record-state" => %{
+      path: "lib/ash_onetime/codec/resource.ex",
+      original: "defp resource_state({:resource, :returned}), do: :loaded",
+      mutated: "defp resource_state({:resource, :returned}), do: :built",
+      test: "test/ash_onetime/codec",
+      tag: "returned_record_state_mutation",
+      test_name: "a returned record replays with its stored fields, loaded, and no metadata",
+      assertion: "assert restored.__meta__.state == :loaded",
+      required_failures: [
+        {"a returned record replays with its stored fields, loaded, and no metadata",
+         "assert restored.__meta__.state == :loaded"},
+        {"a replayed returned record equals the original on its stored fields",
+         "assert replayed.__meta__.state == :loaded"}
+      ]
+    },
+    "returned-record-contract-resource" => %{
+      path: "lib/ash_onetime/response.ex",
+      original:
+        "  defp shape(_resource, %{type: :action} = action, fields, _trusted) do\n    with {:ok, record_resource} <- returned_resource(action),\n         :ok <- validate_fields(record_resource, fields),",
+      mutated:
+        "  defp shape(resource, %{type: :action} = action, fields, _trusted) do\n    with {:ok, record_resource} <- returned_resource(action),\n         :ok <- validate_fields(resource, fields),",
+      test: "test/ash_onetime/codec/returned_test.exs",
+      tag: "returned_record_validation_mutation",
+      test_name:
+        "a generic action's fields are valid on the returned resource and not on the action's",
+      assertion: "assert {:ok, contract} = contract(action, [:id, :token])"
+    },
+    "returned-record-verifier-resource" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original: "          not ResourceInfo.embedded?(candidate) ->\n        {:ok, candidate}",
+      mutated: "          not ResourceInfo.embedded?(candidate) ->\n        {:ok, dsl_state}",
+      test: "test/compile_fixtures_test.exs",
+      tag: "returned_record_validation_mutation",
+      test_name: "accepts matrix case returned_fields",
+      assertion: "assert status == 0, output",
+      required_failures: [
+        {"accepts matrix case returned_fields", "assert status == 0, output"},
+        {"rejects matrix case returned_action_field at its semantic option",
+         "assert status != 0, output"}
+      ]
+    },
+    "returned-record-contract-embedded" => %{
+      path: "lib/ash_onetime/response.ex",
+      original:
+        "ResourceInfo.resource?(candidate) and\n         not ResourceInfo.embedded?(candidate),",
+      mutated: "ResourceInfo.resource?(candidate),",
+      test: "test/ash_onetime/codec/returned_test.exs",
+      tag: "returned_record_embedded_mutation",
+      test_name: "an embedded return is a value: its fields are refused and it is stored whole",
+      assertion: "assert {action, {:error, %Error{code: :response_contract_invalid}}} ="
+    },
+    "returned-record-verifier-embedded" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original:
+        "      compiled(candidate) == :ok and ResourceInfo.resource?(candidate) and\n          not ResourceInfo.embedded?(candidate) ->",
+      mutated: "      compiled(candidate) == :ok and ResourceInfo.resource?(candidate) ->",
+      test: "test/compile_fixtures_test.exs",
+      tag: "returned_record_embedded_mutation",
+      test_name: "rejects matrix case returned_embedded_struct_field at its semantic option",
+      assertion: "assert status != 0, output"
+    },
+    "executing-only-embedded-return" => %{
+      path: "lib/ash_onetime/resource/transformer.ex",
+      original: "      :error -> embedded_return(context.action)",
+      mutated: "      :error -> :error",
+      test: "test/compile_fixtures_test.exs",
+      tag: "returned_record_embedded_mutation",
+      test_name: "rejects matrix case executing_only_embedded_attribute at its semantic option",
+      assertion: "assert status != 0, output",
+      required_failures: [
+        {"rejects matrix case executing_only_embedded_attribute at its semantic option",
+         "assert status != 0, output"},
+        {"rejects matrix case executing_only_embedded_struct_attribute at its semantic option",
+         "assert status != 0, output"}
+      ]
+    },
+    "delivery-entry-cell" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original: "         entry_cell == cell do",
+      mutated: "         true do",
+      test: "test/ash_onetime/delivery/nested_claim_test.exs",
+      tag: "nested_cell",
+      test_name: "create: a cell replaced in the subject before the call fails closed",
+      assertion: "assert error_code(result) == :executing_only_refused",
+      required_failures:
+        for route <- [:create, :update, :destroy, :soft_destroy, :generic] do
+          {"#{route}: a cell replaced in the subject before the call fails closed",
+           "assert error_code(result) == :executing_only_refused"}
+        end
+    },
+    "delivery-entry-pid" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original: "    if pid == self() and resource == subject.resource",
+      mutated: "    if true and resource == subject.resource",
+      test: "test/ash_onetime/delivery/nested_claim_test.exs",
+      tag: "nested_wrong_pid",
+      test_name: "create: an armed entry under the right H(ref) for another pid is refused",
+      assertion: "assert error_code(result) == :executing_only_refused",
+      required_failures:
+        for route <- [:create, :update, :destroy, :soft_destroy, :generic] do
+          {"#{route}: an armed entry under the right H(ref) for another pid is refused",
+           "assert error_code(result) == :executing_only_refused"}
+        end
+    },
+    "delivery-entry-hashed-key" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original: "  def key(ref), do: {__MODULE__, :crypto.hash(:sha256, ref)}",
+      mutated: "  def key(ref), do: {__MODULE__, ref}",
+      test: "test/ash_onetime/delivery/nested_claim_test.exs",
+      tag: "nested_hash_key",
+      test_name:
+        "create: the entry lives under H(ref), and no dictionary key holds the reference",
+      assertion: "assert_received {:entry, true, false}",
+      required_failures:
+        for route <- [:create, :update, :destroy, :soft_destroy, :generic] do
+          {"#{route}: the entry lives under H(ref), and no dictionary key holds the reference",
+           "assert_received {:entry, true, false}"}
+        end
+    },
+    "delivery-entry-rule-one" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original: "      Process.put(key, {:claimed, inv, public})",
+      mutated:
+        "      Process.put(key, {:claimed, inv, Map.get(subject.context.private.ash_onetime_delivery, :public, public)})",
+      test: "test/ash_onetime/delivery/nested_claim_test.exs",
+      tag: "nested_rule_one",
+      test_name: "create: entry facts placed in the subject's context are never read",
+      assertion:
+        "assert %Delivery{outcome: :executed, values: %{secret: secret}} = delivery(result)",
+      required_failures:
+        for route <- [:create, :update, :destroy, :soft_destroy, :generic] do
+          {"#{route}: entry facts placed in the subject's context are never read",
+           "assert %Delivery{outcome: :executed, values: %{secret: secret}} = delivery(result)"}
+        end
+    },
+    "delivery-entry-spent-as-armed" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original:
+        "  defp claim_entry(_spent, _key, _ref, _subject, _cell, _names), do: {:error, lost()}",
+      mutated:
+        "  defp claim_entry(_spent, key, ref, subject, cell, names), do: claim_entry({:armed, self(), subject.resource, subject.action.name, cell, elem(:crypto.generate_key(:ecdh, :x25519), 0)}, key, ref, subject, cell, names)",
+      test: "test/ash_onetime/delivery/nested_claim_test.exs",
+      tag: "nested_shape:a",
+      test_name: "create, policy, shape a",
+      assertion: "assert outcome(row.outer) == expected.outer",
+      required_failures:
+        for route <- [:create, :update, :soft_destroy],
+            callback <- [:policy, :before_transaction] do
+          {"#{route}, #{callback}, shape a", "assert outcome(row.outer) == expected.outer"}
+        end
+    },
+    "delivery-replay-admission" => %{
+      path: "lib/ash_onetime/admission.ex",
+      original: "      {:replay, replayed, replay_state}",
+      mutated:
+        "      {:execute, %{replay_state | class: :execute, replayed: nil, delivery_source: :executed}}",
+      test: "test/ash_onetime/delivery/nested_claim_test.exs",
+      tag: "nested_shape:deliver_rebuild",
+      test_name: "create, before_transaction, shape deliver_rebuild",
+      assertion: "assert outcome(row.outer) == expected.outer",
+      required_failures:
+        for route <- [:create, :update, :soft_destroy, :generic] do
+          {"#{route}, before_transaction, shape deliver_rebuild",
+           "assert outcome(row.outer) == expected.outer"}
+        end
+    },
+    "delivery-replay-produce-crud" => %{
+      path: "lib/ash_onetime/change.ex",
+      original:
+        "    case AshOnetime.Admission.state(changeset) do\n      {:ok, %{class: :execute}} ->",
+      mutated:
+        "    case AshOnetime.Admission.state(changeset) do\n      {:ok, %{class: class}} when class in [:execute, :replay] ->",
+      test: "test/ash_onetime/delivery/nested_claim_test.exs",
+      tag: "nested_shape:deliver_rebuild",
+      test_name: "create, before_transaction, shape deliver_rebuild",
+      assertion: "assert row.produced == 1",
+      required_failures:
+        for route <- [:create, :update, :soft_destroy] do
+          {"#{route}, before_transaction, shape deliver_rebuild", "assert row.produced == 1"}
+        end
+    },
+    "delivery-replay-produce-generic" => %{
+      path: "lib/ash_onetime/generic_action.ex",
+      original:
+        "    case AshOnetime.Admission.state(input) do\n      {:ok, %{class: :execute}} ->",
+      mutated:
+        "    case AshOnetime.Admission.state(input) do\n      {:ok, %{class: class}} when class in [:execute, :replay] ->",
+      test: "test/ash_onetime/delivery/nested_claim_test.exs",
+      tag: "nested_shape:deliver_rebuild",
+      test_name: "generic, before_transaction, shape deliver_rebuild",
+      assertion: "assert row.produced == 1"
+    },
+    "delivery-finalize-replay-drop" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original:
+        "      {{:sealed, ^inv, _envelope}, :replayed, _state} ->\n        Process.put(key, {:done, inv, :replayed, nil, nil})",
+      mutated:
+        "      {{:sealed, ^inv, envelope}, :replayed, %{target: target, claim: claim}} ->\n        Process.put(key, {:done, inv, :executed, envelope, {target, claim}})",
+      test: "test/ash_onetime/delivery/provenance_test.exs",
+      tag: "executing_only_provenance",
+      test_name:
+        "finalize resolves to a replay: the sealed values are dropped and the outcome is :replayed",
+      assertion: "assert {:done, inv, :replayed, nil, nil} = Process.get(key)"
+    },
+    "delivery-task-transaction" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original:
+        "not (changeset.action.transaction? and Ash.DataLayer.data_layer_can?(resource, :transact)) and",
+      mutated: "true and",
+      test: "test/ash_onetime/delivery/task_route_test.exs",
+      tag: "executing_only_route:task",
+      test_name: "deliver/2 refuses exactly the cells where Ash runs create in a Task",
+      assertion: "assert {^cell, %Delivery{outcome: :executed}}"
+    },
+    "delivery-task-timeout" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original: "not is_nil(timeout) and timeout != :infinity and",
+      mutated: "(is_nil(timeout) or timeout == :infinity or is_integer(timeout)) and",
+      test: "test/ash_onetime/delivery/task_route_test.exs",
+      tag: "executing_only_route:task",
+      test_name: "deliver/2 refuses exactly the cells where Ash runs create in a Task",
+      assertion: "assert {cell, error_code(result)} == {cell, :not_in_transaction}"
+    },
+    "delivery-task-async" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original: "!Application.get_env(:ash, :disable_async?) and",
+      mutated: "true and",
+      test: "test/ash_onetime/delivery/task_route_test.exs",
+      tag: "executing_only_route:task",
+      test_name: "deliver/2 refuses exactly the cells where Ash runs create in a Task",
+      assertion: "assert {cell, error_code(result)} == {cell, :not_in_transaction}"
+    },
+    "delivery-task-engine" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original: "Ash.DataLayer.data_layer_can?(resource, :async_engine)",
+      mutated: "not Ash.DataLayer.data_layer_can?(resource, :async_engine)",
+      test: "test/ash_onetime/delivery/task_route_test.exs",
+      tag: "executing_only_route:task",
+      test_name: "deliver/2 refuses exactly the cells where Ash runs create in a Task",
+      assertion: "assert {cell, error_code(result)} == {cell, :executing_only_refused}"
+    },
+    "delivery-task-generic" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original: "  defp task_route?(_subject, _opts), do: false",
+      mutated: "  defp task_route?(_subject, _opts), do: true",
+      test: "test/ash_onetime/delivery/task_route_test.exs",
+      tag: "executing_only_route:task",
+      test_name: "a generic action runs in the caller's process on every cell",
+      assertion: "assert {^cell, %Delivery{outcome: :executed}}"
+    },
+    "delivery-route-in-transaction" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original:
+        "      Ash.DataLayer.in_transaction?(subject.resource) -> {:error, in_transaction()}",
+      mutated: "      false -> {:error, in_transaction()}",
+      test: "test/ash_onetime/delivery/route_refusal_test.exs",
+      tag: "executing_only_route:in_transaction",
+      test_name: "an open transaction on create is refused before anything runs",
+      assertion: "assert error_code(result) == :executing_only_in_transaction",
+      required_failures:
+        for route <- [:create, :update, :destroy, :soft_destroy, :generic] do
+          {"an open transaction on #{route} is refused before anything runs",
+           "assert error_code(result) == :executing_only_in_transaction"}
+        end
+    },
+    "delivery-committed-generation" => %{
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "SELECT state\n    FROM \#{relation(target, \"ash_onetime_idempotency_claims\")}\n    WHERE \#{@logical_key_predicate} AND id = $5::uuid",
+      mutated:
+        "SELECT state\n    FROM \#{relation(target, \"ash_onetime_idempotency_claims\")}\n    WHERE \#{@logical_key_predicate} AND (id = $5::uuid OR true)",
+      test: "test/ash_onetime/store/committed_completion_test.exs",
+      tag: "committed_generation_mutation",
+      test_name: "only the exact claim's committed completion reads complete",
+      assertion: "assert Store.committed_completion(target, stranger) == :absent"
+    },
+    "delivery-committed-readback" => %{
+      path: "lib/ash_onetime/delivery.ex",
+      original: "        with :complete <- Store.committed_completion(target, claim),",
+      mutated: "        with :complete <- :complete,",
+      test: "test/ash_onetime/delivery/recovered_rollback_test.exs",
+      tag: "executing_only_recovered",
+      test_name: "case A on create: a failure after the entry completed is recovered",
+      assertion: "assert error_code(first) == :executing_only_lost",
+      required_failures:
+        for route <- [:create, :update, :destroy, :soft_destroy, :generic] do
+          {"case A on #{route}: a failure after the entry completed is recovered",
+           "assert error_code(first) == :executing_only_lost"}
+        end
+    },
+    "envelope-small-order" => %{
+      path: "lib/ash_onetime/delivery/envelope.ex",
+      original: "    if <<head::binary, Bitwise.band(last, 0x7F)>> in @small_order,",
+      mutated: "    if false and is_binary(head) and is_integer(last),",
+      test: "test/ash_onetime/delivery/envelope_test.exs",
+      tag: "executing_only_envelope:low_order",
+      test_name: "every small-order point is refused before sealing",
+      assertion: "assert Envelope.seal(key, c.values, c.context) == {:error, :low_order}",
+      required_failures: [
+        {"every small-order point is refused before sealing",
+         "assert Envelope.seal(key, c.values, c.context) == {:error, :low_order}"},
+        {"every small-order ephemeral key is refused before the agreement",
+         "{:error, :low_order}"}
+      ]
+    },
+    "envelope-bound" => %{
+      path: "lib/ash_onetime/delivery/envelope.ex",
+      original: "  defp split(envelope, bound) when byte_size(envelope) - @header_bytes > bound,",
+      mutated:
+        "  defp split(envelope, bound) when false and is_integer(bound) and is_binary(envelope),",
+      test: "test/ash_onetime/delivery/envelope_test.exs",
+      tag: "executing_only_envelope:length",
+      test_name: "a total over the declared bound is refused before decrypting",
+      assertion:
+        "assert Envelope.open(envelope, c.secret, c.public, 1, c.context) == {:error, :bound}"
+    },
+    "envelope-trailing" => %{
+      path: "lib/ash_onetime/delivery/envelope.ex",
+      original: "  defp decode(_rest, 0, _values), do: {:error, :trailing}",
+      mutated: "  defp decode(_rest, 0, values), do: {:ok, Enum.reverse(values)}",
+      test: "test/ash_onetime/delivery/envelope_test.exs",
+      tag: "executing_only_envelope:length",
+      test_name: "a trailing byte inside the authenticated plaintext",
+      assertion:
+        "assert Envelope.open(envelope, c.secret, c.public, 2, c.context) == {:error, :trailing}"
+    },
     "verified-expires-at-validation" => %{
       path: "lib/ash_onetime/verified.ex",
       original: "      true -> {:error, \"expires_at must be a DateTime or nil\"}",
@@ -2763,8 +3113,387 @@ defmodule AshOnetime.MutationCheck do
                })
              end)
 
+  # §2.7.8, one mutation per exit class: at the seal, the plaintext values leave through
+  # the class (each leak ends the process, port or timer it starts), and the boundary test
+  # must name a canary crossing in that class. A direct NIF load (E18) takes no call
+  # trace, so its owner is the classifier's static check that no non-OTP module, this
+  # package's included, calls `erlang:load_nif/2`.
+  @exit_leak_site "      Process.put(key, {:sealed, inv, envelope})"
+
+  @exit_leaks %{
+    1 => """
+    send(self(), {:ash_onetime_leak, leak})
+    receive do: ({:ash_onetime_leak, ^leak} -> :ok)
+    """,
+    2 => """
+    :erlang.cancel_timer(:erlang.send_after(60_000, self(), {:ash_onetime_leak, leak}))
+    """,
+    3 => """
+    Process.put(:ash_onetime_leak, leak)
+    Process.delete(:ash_onetime_leak)
+    """,
+    4 => """
+    {leak_pid, leak_monitor} = spawn_monitor(fn -> byte_size(leak) end)
+    receive do: ({:DOWN, ^leak_monitor, :process, ^leak_pid, _reason} -> :ok)
+    """,
+    5 => """
+    leak_table = :ets.new(:ash_onetime_leak, [:private])
+    :ets.insert(leak_table, {:leak, leak})
+    :ets.delete(leak_table)
+    """,
+    6 => """
+    :persistent_term.put({:ash_onetime_leak, inv}, leak)
+    :persistent_term.erase({:ash_onetime_leak, inv})
+    """,
+    7 => """
+    :atomics.put(:atomics.new(1, signed: false), 1, :binary.decode_unsigned(hd(ordered)))
+    """,
+    8 => """
+    leak_port = Port.open({:spawn, "cat"}, [:binary])
+    :erlang.port_set_data(leak_port, leak)
+    Port.close(leak_port)
+    """,
+    9 => """
+    :crypto.hash(:sha256, leak)
+    """,
+    10 => """
+    leak_path = Path.join(System.tmp_dir!(), "ash_onetime_leak_" <> Base.encode16(inv))
+    File.write!(leak_path, leak)
+    File.rm!(leak_path)
+    """,
+    11 => """
+    {:ok, leak_socket} = :gen_udp.open(0, [:binary, active: false])
+    {:ok, leak_port} = :inet.port(leak_socket)
+    :gen_udp.send(leak_socket, {127, 0, 0, 1}, leak_port, leak)
+    :gen_udp.close(leak_socket)
+    """,
+    12 => """
+    try do
+      String.to_existing_atom(Base.encode16(leak))
+    rescue
+      ArgumentError -> :ok
+    end
+    """,
+    13 => """
+    Application.put_env(:ash_onetime, :ash_onetime_leak, leak)
+    Application.delete_env(:ash_onetime, :ash_onetime_leak)
+    """,
+    14 => """
+    Logger.metadata(ash_onetime_leak: leak)
+    Logger.metadata(ash_onetime_leak: nil)
+    """,
+    15 => """
+    :io_lib.format(~c"~p", [leak])
+    """,
+    16 => """
+    :erts_debug.size(leak)
+    """,
+    17 => """
+    :code.where_is_file(String.to_charlist(Base.encode16(leak)))
+    """,
+    18 => """
+    try do
+      :erlang.load_nif(String.to_charlist(Base.encode16(leak)), 0)
+    rescue
+      ErlangError -> :ok
+    end
+    """,
+    19 => """
+    try do
+      :erlang.process_flag(:priority, leak)
+    rescue
+      ArgumentError -> :ok
+    end
+    """,
+    20 => """
+    leak_waiter = spawn(fn -> receive do: (:stop -> :ok) end)
+    leak_monitor = :erlang.monitor(:process, leak_waiter, tag: leak)
+    send(leak_waiter, :stop)
+    receive do: ({^leak, ^leak_monitor, :process, ^leak_waiter, _reason} -> :ok)
+    """,
+    21 => """
+    try do
+      throw({:ash_onetime_leak, leak})
+    catch
+      {:ash_onetime_leak, _leak} -> :ok
+    end
+    """,
+    22 => """
+    try do
+      :erlang.system_info(leak)
+    rescue
+      ArgumentError -> :ok
+    end
+    """,
+    23 => """
+    try do
+      :erlang.trace_info(self(), leak)
+    rescue
+      ArgumentError -> :ok
+    end
+    """,
+    24 => """
+    :telemetry.execute([:ash_onetime, :leak], %{}, %{value: leak})
+    """
+  }
+
+  @mutations Enum.reduce(@exit_leaks, @mutations, fn {n, leak}, mutations ->
+               lines =
+                 ["leak = Enum.join(ordered)" | String.split(leak, "\n", trim: true)]
+                 |> Enum.map_join(&("      " <> &1 <> "\n"))
+
+               owner =
+                 if n == 18 do
+                   test_name = "no dependency module calls load_nif directly"
+                   assertion = "1 modules load a NIF: [AshOnetime.Delivery]"
+
+                   %{
+                     test: "test/ash_onetime/delivery/exit_boundary_classifier_test.exs",
+                     tag: "exit_boundary_static",
+                     test_name: test_name,
+                     assertion: assertion,
+                     required_failures: [{test_name, assertion}]
+                   }
+                 else
+                   %{
+                     test: "test/ash_onetime/delivery/exit_boundary_test.exs",
+                     tag: "exit_boundary_core",
+                     test_name: "create, local: an execute delivers once",
+                     assertion: "run: a canary crossed the boundary",
+                     required_failures: [
+                       {"create, local: an execute delivers once",
+                        "run: a canary crossed the boundary"},
+                       {"create, local: an execute delivers once", "{:e#{n}, "}
+                     ]
+                   }
+                 end
+
+               Map.put(
+                 mutations,
+                 "exit-boundary-e#{n}",
+                 Map.merge(
+                   %{
+                     path: "lib/ash_onetime/delivery.ex",
+                     original: @exit_leak_site,
+                     mutated: lines <> @exit_leak_site
+                   },
+                   owner
+                 )
+               )
+             end)
+
+  # §2.7.8, the M-table: each defect moves the values or the envelope somewhere the
+  # boundary checks must name. A value-carrying defect moves the values with every byte
+  # inverted, so the canary search misses it and the named check (X1, X2, X3) has to
+  # catch it; an envelope defect moves the envelope as sealed, for the envelope search.
+  @m_leak "Enum.map_join(Map.values(values), fn v -> for <<b <- v>>, into: <<>>, do: <<255 - b>> end)"
+  @m_core {"create, local: an execute delivers once", "exit_boundary_core"}
+  @m_seal "      {:ok, values} -> seal(handle, values)"
+  @m_completion "    completion = persist_encoded(state, encoded, reference)\n"
+  @m_open "        with :complete <- Store.committed_completion(target, claim),\n"
+
+  @m_table %{
+    # Only the producer holds the values, and the checker edits one site, so the payload
+    # defect asks the producer again for what it produced.
+    "m1-payload" =>
+      {:core, "lib/ash_onetime/admission.ex", @m_completion,
+       """
+           encoded =
+             case AshOnetime.Resource.Info.protection(state.resource, state.action) do
+               %{executing_only: [_ | _], produce: producer} when not is_nil(producer) ->
+                 {:ok, values} = producer.produce(nil, %{})
+                 payload = encoded.payload <> #{@m_leak}
+                 %{encoded | payload: payload, digest: :crypto.hash(:sha256, payload)}
+
+               _other ->
+                 encoded
+             end
+
+       """ <> @m_completion, "X1: the persisted projections differ"},
+    "m2-cache" =>
+      {:core, "lib/ash_onetime/delivery.ex", @m_seal,
+       """
+             {:ok, values} ->
+               {:ok, %{cache: %{module: cache}}} = AshOnetime.Admission.state(subject)
+
+               cache.put(
+                 :crypto.hash(:sha256, handle.inv),
+                 %AshOnetime.Cache.Entry{payload: #{@m_leak}},
+                 60
+               )
+
+               seal(handle, values)
+       """, "X2: the emitted events differ"},
+    "m3-hold" =>
+      {:core, "lib/ash_onetime/delivery.ex", @m_seal,
+       """
+             {:ok, values} ->
+               {:ok, %{hold: hold}} = AshOnetime.Admission.state(subject)
+               hold.reference(#{@m_leak}, %{resource: handle.resource, action: handle.action})
+               seal(handle, values)
+       """, "X2: the emitted events differ"},
+    "m9-reraise" =>
+      {{"create, local: producer failures are contained", "exit_boundary_failures"},
+       "lib/ash_onetime/delivery.ex", "    _exception -> {:error, invalid()}",
+       "    exception -> reraise exception, __STACKTRACE__", "run: a canary crossed the boundary"},
+    "m11-error-message" =>
+      {:core, "lib/ash_onetime/delivery.ex", @m_seal,
+       "      {:ok, values} -> {:error, AshOnetime.Error.new(:executing_only_invalid, Enum.join(Map.values(values)))}",
+       "run: a canary crossed the boundary"},
+    "m12-context" =>
+      {:core, "lib/ash_onetime/change.ex",
+       """
+                    :ok <- produce(admitted, handle, protection, context) do
+                 admitted
+                 |> complete(callback)
+       """,
+       """
+                    :ok <- produce(admitted, handle, protection, context) do
+                 {:ok, values} = protection.produce.produce(admitted, %{})
+
+                 admitted
+                 |> Ash.Changeset.set_context(%{ash_onetime_leak: #{@m_leak}})
+                 |> complete(callback)
+       """, "X2: the emitted events differ"},
+    "m13a-dictionary" =>
+      {:core, "lib/ash_onetime/delivery.ex", @m_seal,
+       """
+             {:ok, values} ->
+               Process.put({:ash_onetime_plaintext, handle.inv}, #{@m_leak})
+               seal(handle, values)
+       """, "X2: the emitted events differ"},
+    "m13b-after-delete" =>
+      {:core, "lib/ash_onetime/delivery.ex", "    after\n      Process.delete(key)\n",
+       "    after\n      :ok\n", "run: delivery entries left in the caller"},
+    "m16-metadata" =>
+      {:core, "lib/ash_onetime/delivery.ex",
+       "    with {:ok, delivery} <- open.(), do: {:ok, result, delivery}",
+       """
+           with {:ok, %{values: values} = delivery} <- open.() do
+             {:ok, Ash.Resource.put_metadata(result, :ash_onetime_leak, #{@m_leak}), delivery}
+           end
+       """, "X3: the caller's results differ"},
+    "m17-task" =>
+      {:core, "lib/ash_onetime/delivery.ex", "    case module.produce(subject, context) do",
+       "    case Task.await(Task.async(fn -> module.produce(subject, context) end)) do",
+       "X2: the emitted events differ"},
+    "m19-envelope-payload" =>
+      {:core, "lib/ash_onetime/admission.ex", @m_completion,
+       """
+           encoded =
+             case for({{AshOnetime.Delivery, _}, {:sealed, _, e}} <- Process.get(), do: e) do
+               [envelope | _] ->
+                 payload = encoded.payload <> envelope
+                 %{encoded | payload: payload, digest: :crypto.hash(:sha256, payload)}
+
+               [] ->
+                 encoded
+             end
+
+       """ <> @m_completion, "run: an envelope crossed the boundary"},
+    "m20-envelope-message" =>
+      {:core, "lib/ash_onetime/delivery.ex", @m_open,
+       "        Process.send_after(self(), {:ash_onetime_envelope, envelope}, 0)\n\n" <> @m_open,
+       "run: an envelope crossed the boundary"},
+    "m21-envelope-port" =>
+      {:core, "lib/ash_onetime/delivery.ex", @m_open,
+       """
+               leak_port = Port.open({:spawn, "cat"}, [:binary])
+               :erlang.port_set_data(leak_port, envelope)
+               Port.close(leak_port)
+
+       """ <> @m_open, "run: an envelope crossed the boundary"},
+    "m22-envelope-monitor" =>
+      {:core, "lib/ash_onetime/delivery.ex", @m_open,
+       """
+               leak_waiter = spawn(fn -> receive do: (:stop -> :ok) end)
+               leak_monitor = :erlang.monitor(:process, leak_waiter, tag: envelope)
+               send(leak_waiter, :stop)
+               receive do: ({^envelope, ^leak_monitor, :process, ^leak_waiter, _} -> :ok)
+
+       """ <> @m_open, "run: an envelope crossed the boundary"}
+  }
+
+  @mutations Enum.reduce(@m_table, @mutations, fn {name,
+                                                   {owner, path, original, mutated, assertion}},
+                                                  mutations ->
+               {test_name, tag} = if owner == :core, do: @m_core, else: owner
+
+               Map.put(mutations, name, %{
+                 path: path,
+                 original: original,
+                 mutated: mutated,
+                 test: "test/ash_onetime/delivery/exit_boundary_test.exs",
+                 tag: tag,
+                 test_name: test_name,
+                 assertion: assertion,
+                 required_failures: [{test_name, assertion}]
+               })
+             end)
+
+  # Independent-review tripwires. These mutate one existing semantic value or
+  # multiplicity in the fixtures feeding the actual X1/X2/X3 comparators. The first,
+  # second and fourth use inverted canaries that evade the raw canary search.
+  @review_mutations %{
+    "review-existing-field" =>
+      {"overwrite an existing result field", ~s(run = %{twin | note: "existing note"}),
+       "run = %{twin | note: for(<<b <- secret>>, into: <<>>, do: <<255 - b>>)}",
+       "X3: an existing result field changed"},
+    "review-same-width-binary" =>
+      {"replace an opaque binary at the same width",
+       ~s[run = :crypto.hash(:sha256, "public payload")],
+       "run = for <<b <- secret>>, into: <<>>, do: <<255 - b>>",
+       "X1: a same-width opaque binary changed"},
+    "review-repeated-event" =>
+      {"repeat an existing event", "run = [event]", "run = [event, event]",
+       "X2: an existing event was repeated"},
+    "review-frame-argument" =>
+      {"retain a package frame argument", "run = [frame]",
+       "run = [put_elem(frame, 2, [for(<<b <- secret>>, into: <<>>, do: <<255 - b>>)])]",
+       "X3: a package frame argument changed"},
+    "review-protection-setting" =>
+      {"retain a protection setting", "run = %{twin | retention: 3600}",
+       "run = %{twin | retention: 3601}", "X2: a protection setting changed"}
+  }
+  @mutations Enum.reduce(@review_mutations, @mutations, fn {name,
+                                                            {test, original, mutated, assertion}},
+                                                           acc ->
+               Map.put(acc, name, %{
+                 path: "test/ash_onetime/delivery/exit_boundary_semantics_test.exs",
+                 original: original,
+                 mutated: mutated,
+                 test: "test/ash_onetime/delivery/exit_boundary_semantics_test.exs",
+                 tag: "exit_boundary_review",
+                 test_name: "review mutation: " <> test,
+                 assertion: assertion
+               })
+             end)
+  @mutations Map.put(@mutations, "external-rollback-readback", %{
+               path: "lib/ash_onetime/delivery.ex",
+               original: @m_open,
+               mutated: "        with :complete <- :complete,\n",
+               test: "test/ash_onetime/delivery/external_rollback_test.exs",
+               tag: "executing_only_external_rollback",
+               test_name:
+                 "create: external commit survives rollback and a success hook never delivers it",
+               assertion: "assert error_code(first) == :executing_only_lost",
+               required_failures:
+                 for route <- [:create, :update, :destroy, :soft_destroy, :generic] do
+                   {"#{route}: external commit survives rollback and a success hook never delivers it",
+                    "assert error_code(first) == :executing_only_lost"}
+                 end
+             })
+
+  # `all` is computed from @mutations rather than hand-listed, which is what STRUCTURALLY prevents
+  # the orphan class (a newly added mutation is in `all` by construction — CONTRIBUTING and the CI
+  # release-checks job both run `-- all`). The self-test below is a REGRESSION GUARD, not present
+  # coverage: while `all` is `Map.keys(@mutations)` it can never fire, but it trips the moment a
+  # future change reverts `all` to a hand-list that drops a registered mutation — the exact drift
+  # that once orphaned the ARCH mutations. The named subsets below stay for fast, focused local runs.
   @groups %{
     "all" => Map.keys(@mutations),
+    "exit-boundary-review" => Map.keys(@review_mutations),
+    "external-rollback" => ["external-rollback-readback"],
     "defects-batch" => [
       "M-doctor-fact-schema",
       "M-complete-restore",
@@ -2808,6 +3537,50 @@ defmodule AshOnetime.MutationCheck do
       "replay-relationship-clearing",
       "replay-relationship-rollback",
       "generic-replay-relationship-backstop"
+    ],
+    "executing-only-delivery" => [
+      "executing-only-strategy",
+      "executing-only-require-atomic",
+      "returned-record-state",
+      "returned-record-contract-resource",
+      "returned-record-verifier-resource",
+      "returned-record-contract-embedded",
+      "returned-record-verifier-embedded",
+      "executing-only-embedded-return",
+      "delivery-entry-cell",
+      "delivery-entry-pid",
+      "delivery-entry-hashed-key",
+      "delivery-entry-rule-one",
+      "delivery-entry-spent-as-armed",
+      "delivery-replay-admission",
+      "delivery-replay-produce-crud",
+      "delivery-replay-produce-generic",
+      "delivery-finalize-replay-drop",
+      "delivery-route-in-transaction",
+      "delivery-committed-readback",
+      "delivery-committed-generation",
+      "envelope-small-order",
+      "envelope-bound",
+      "envelope-trailing"
+    ],
+    "delivery-task-route" =>
+      Enum.map(~w[transaction timeout async engine generic], &("delivery-task-" <> &1)),
+    "exit-boundary" => Enum.map(1..24, &"exit-boundary-e#{&1}"),
+    "m-table" => [
+      "m1-payload",
+      "m2-cache",
+      "m3-hold",
+      "m9-reraise",
+      "m11-error-message",
+      "m12-context",
+      "m13a-dictionary",
+      "m13b-after-delete",
+      "m16-metadata",
+      "m17-task",
+      "m19-envelope-payload",
+      "m20-envelope-message",
+      "m21-envelope-port",
+      "m22-envelope-monitor"
     ],
     "response-allowlist" => ["response-field-guard"],
     "return-type" => ["return-contract"],

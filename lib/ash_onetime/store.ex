@@ -82,6 +82,10 @@ defmodule AshOnetime.Store do
   @spec load(term(), Claim.t(), keyword()) :: Result.t()
   def load(target, claim, options), do: Postgres.load(target, claim, options)
 
+  @doc false
+  @spec committed_completion(term(), Claim.t()) :: :complete | :absent | Result.t()
+  def committed_completion(target, claim), do: Postgres.committed_completion(target, claim)
+
   @type cleanup_counts :: %{
           idempotency: non_neg_integer(),
           nonce: non_neg_integer(),

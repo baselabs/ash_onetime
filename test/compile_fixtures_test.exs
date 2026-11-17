@@ -359,7 +359,53 @@ defmodule AshOnetime.CompileFixturesTest do
        "AshOnetime.CompileFixture.UnsafeValidation must export replay_safety/1 for idempotent replay validation"},
     unsafe_pipeline_validation:
       {:charge, :action,
-       "AshOnetime.CompileFixture.UnsafeValidation must export replay_safety/1 for idempotent replay validation"}
+       "AshOnetime.CompileFixture.UnsafeValidation must export replay_safety/1 for idempotent replay validation"},
+    executing_only_nonce:
+      {:redeem, :executing_only, "executing_only requires the :idempotency strategy"},
+    executing_only_untracked:
+      {:charge, :on_definite_store_failure, "executing_only values cannot execute untracked"},
+    executing_only_duplicate: {:charge, :executing_only, "executing_only names must be unique"},
+    executing_only_response_field:
+      {:charge, :executing_only, "executing_only name :amount is also a response field"},
+    executing_only_attribute:
+      {:charge, :executing_only,
+       "executing_only name :account_id names a field of the returned resource"},
+    executing_only_relationship:
+      {:charge, :executing_only,
+       "executing_only name :owner names a field of the returned resource"},
+    executing_only_returned_attribute:
+      {:issue, :executing_only,
+       "executing_only name :token names a field of the returned resource"},
+    executing_only_returned_calculation:
+      {:issue, :executing_only,
+       "executing_only name :label names a field of the returned resource"},
+    executing_only_embedded_attribute:
+      {:stamp, :executing_only,
+       "executing_only name :token names a field of the returned resource"},
+    executing_only_embedded_struct_attribute:
+      {:stamp_struct, :executing_only,
+       "executing_only name :token names a field of the returned resource"},
+    executing_only_atomic_update:
+      {:adjust, :action, "an action with executing_only values must set require_atomic? false"},
+    executing_only_atomic_destroy:
+      {:remove, :action, "an action with executing_only values must set require_atomic? false"},
+    executing_only_without_source:
+      {:charge, :produce, "executing_only requires produce or external_effect"},
+    executing_only_missing_producer:
+      {:charge, :produce,
+       "AshOnetime.CompileFixture.MissingProducer is missing callbacks [produce: 2]"},
+    executing_only_produce_with_external:
+      {:charge, :produce,
+       "produce applies to local actions; an external effect produces from execute/3"},
+    produce_without_executing_only: {:charge, :produce, "produce requires executing_only names"},
+    returned_action_field:
+      {:issue, :response, "response field :amount must be a public non-sensitive attribute"},
+    returned_embedded_field:
+      {:stamp, :response, "generic action response fields require a resource return"},
+    returned_embedded_struct_field:
+      {:stamp_struct, :response, "generic action response fields require a resource return"},
+    crud_returned_field:
+      {:charge, :response, "response field :token must be a public non-sensitive attribute"}
   }
 
   @runner ~S"""
@@ -409,6 +455,7 @@ defmodule AshOnetime.CompileFixturesTest do
   Application.put_env(:ash, :default_string_length_count, :codepoints)
   fixture_dir = Path.expand("test/compile_fixtures")
   Code.require_file(Path.join(fixture_dir, "support.exs"))
+  Code.require_file(Path.join(fixture_dir, "returned.exs"))
   Code.require_file(Path.join(fixture_dir, "matrix_cases.exs"))
   case_name = String.to_existing_atom(case_name)
   expected = AshOnetime.CompileFixture.MatrixCases.module(case_name)
@@ -496,6 +543,18 @@ defmodule AshOnetime.CompileFixturesTest do
       @tag capability_guard_mutation: true
     end
 
+    if case_name |> Atom.to_string() |> String.contains?("executing_only") do
+      @tag executing_only_verifier_mutation: true
+    end
+
+    if case_name |> Atom.to_string() |> String.contains?("returned") do
+      @tag returned_record_validation_mutation: true
+    end
+
+    if case_name |> Atom.to_string() |> String.contains?("embedded") do
+      @tag returned_record_embedded_mutation: true
+    end
+
     @tag matrix_case: case_name
     test "rejects matrix case #{case_name} at its semantic option" do
       case_name = unquote(case_name)
@@ -531,6 +590,30 @@ defmodule AshOnetime.CompileFixturesTest do
     assert status != 0, output
     assert fixture_fact(output, "RESULT") == "rejected"
     assert fixture_fact(output, "LOADED") == "false"
+  end
+
+  # The executing-only matrix rejects only what it names: a local producer, an external
+  # effect, and a generic action returning another resource or an embedded value whose
+  # fields the names avoid each compile.
+  for case_name <- [
+        :executing_only_local,
+        :executing_only_external,
+        :executing_only_returned_generic,
+        :executing_only_embedded_generic,
+        :returned_fields
+      ] do
+    if case_name |> Atom.to_string() |> String.contains?("returned") do
+      @tag returned_record_validation_mutation: true
+    end
+
+    @tag matrix_case: case_name
+    test "accepts matrix case #{case_name}" do
+      {output, status} = run_matrix_case(unquote(case_name))
+
+      assert status == 0, output
+      assert fixture_fact(output, "RESULT") == "compiled"
+      assert fixture_fact(output, "LOADED") == "true"
+    end
   end
 
   test "nonce CRUD requires only a closed around-action capability declaration" do

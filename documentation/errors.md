@@ -102,6 +102,9 @@ through the authoritative store — not only the codes raised on the happy admis
 | `:response_contract_mismatch` | 422 | The persisted response contract does not match. |
 | `:external_effect_unavailable` | 422 | An external effect is unavailable. |
 | `:external_recovery_unavailable` | 422 | External recovery is unavailable. |
+| `:executing_only_in_transaction` | 422 | `AshOnetime.deliver/2` was called inside an open transaction, which could roll back after the value was returned. Nothing ran; call it outside any transaction. |
+| `:executing_only_refused` | 422 | `AshOnetime.deliver/2` refused the call before anything ran: a bulk subject, a subject not built for its action, a call Ash would run in another process, or an entry that is not this call's. No value exists. |
+| `:executing_only_requires_call` | 422 | An action that declares `executing_only` values was run without `AshOnetime.deliver/2`. Nothing ran. |
 
 ### Server-fault codes (5xx — override the class default)
 
@@ -130,6 +133,8 @@ mis-categorize them; the per-code HTTP below overrides the `:invalid` class.
 | `:admission_request_invalid` | **500** | The admission request is internally invalid. |
 | `:admission_unavailable` | **503** | Admission is unavailable (fail-closed; retryable). |
 | `:telemetry_invalid` | **500** | A telemetry event was invalid (internal). |
+| `:executing_only_invalid` | **500** | The producer or external callback raised, threw, exited or returned values outside its contract. No value is delivered and local transactional work rolls back. An external peer may already have committed; reconcile through external recovery. |
+| `:executing_only_lost` | **500** | The executing-only values cannot be delivered to this caller. Local transactional rollback undoes the local effect and claim, so a retry can execute and deliver a fresh value. An external peer may have committed before the local rollback; retry then recovers its existing effect with no value. An unavailable or uncertain completion read proves no absence: use external recovery to reconcile. A committed effect's lost value cannot be re-derived; revoke what it granted and reissue under a new key. |
 
 ### Store-fault and transport codes (5xx — override the class default)
 
@@ -179,3 +184,6 @@ failures become `:custody_contract_violation`.
 `:replay_relationship_change` also uses a fixed message, "relationship changes cannot run
 on a replay", and empty details. It rolls back explicitly even when the caller sets
 `rollback_on_error?: false`.
+
+The `:executing_only_*` codes use fixed messages and empty details. No executing-only value,
+envelope or key ever reaches an error.

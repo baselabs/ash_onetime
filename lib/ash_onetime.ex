@@ -39,6 +39,49 @@ defmodule AshOnetime do
   def replayed?(_other), do: nil
 
   @doc """
+  Runs a protected action that declares `executing_only` values and delivers those values
+  to this caller, at most once.
+
+  `subject` is one changeset or action input already built for that action
+  (`Ash.Changeset.for_create/4`, `for_update/4`, `for_destroy/4`,
+  `Ash.ActionInput.for_action/4`). `opts` are the options of `Ash.create/2`,
+  `Ash.update/2`, `Ash.destroy/2` or `Ash.run_action/2`. An update runs with
+  `atomic_upgrade?: false`.
+
+  Returns:
+
+    * `{:ok, result, %AshOnetime.Delivery{}}`, or
+      `{:ok, result, notifications, %AshOnetime.Delivery{}}` when Ash returns
+      notifications. `result` is `nil` where Ash returns `:ok` (a generic action without a
+      return type; a destroy without `return_destroyed?`).
+    * `{:error, error}` with no values.
+
+  The `AshOnetime.Delivery` outcome is `:executed` with every declared value,
+  `:replayed` or `:recovered` with none. Only this caller can open the values: they are
+  sealed when the producer returns them, to a key that exists only inside this call.
+
+  Call it outside any transaction: inside one it is refused with
+  `:executing_only_in_transaction` before anything runs, because that transaction could
+  roll back after the value was returned. Refused with `:executing_only_refused` before
+  anything runs: a bulk subject, a subject not built for its action, or a call Ash would
+  run in another process.
+
+  An `:executed` value opens only after Ash returned and the store holds the committed
+  completion of this call's claim. A missing or uncertain completion returns
+  `:executing_only_lost` with no value, even if a later hook reported success. Local
+  transactional rollback undoes the local effect and claim, so a retry can execute and
+  deliver a fresh value. An external peer can commit before the local rollback; retry
+  then recovers the existing peer effect with no value. An unavailable completion read
+  proves no absence; reconcile through external recovery. A committed effect's lost
+  value cannot be re-derived: revoke what it granted and reissue under a new key.
+  """
+  @spec deliver(Ash.Changeset.t() | Ash.ActionInput.t(), keyword()) ::
+          {:ok, term(), AshOnetime.Delivery.t()}
+          | {:ok, term(), [Ash.Notifier.Notification.t()], AshOnetime.Delivery.t()}
+          | {:error, term()}
+  def deliver(subject, opts \\ []), do: AshOnetime.Delivery.deliver(subject, opts)
+
+  @doc """
   The reserved verification-input names a protected action must never accept from caller
   input — `:key`, `:issued_at`, `:expires_at`, `:verification_state`, `:algorithm`. These
   are trusted local facts the verification path derives itself; accepting them as action
