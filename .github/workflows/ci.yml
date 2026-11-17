@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches: [main, 'kci/**'] # kci/<sha>: pre-merge verification of a candidate commit
-    paths-ignore: ['**/*.md', 'docs/**', 'LICENSE*', '.github/ISSUE_TEMPLATE/**']
   pull_request:
   # Weekly run against the newest published Ash 3.x (the compat matrix's "latest" cell) and
   # the newest resolvable dependencies, so upstream drift shows without a push.
