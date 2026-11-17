@@ -9,9 +9,11 @@ name: Work
 # runner's token, so a run must hold only its own branch's cache scope: main's scope and a
 # candidate's scope are what qualification runs restore. It restores caches and saves none.
 #
-# Lock changes: change mix.exs, or delete a package's entry from mix.lock to update it within
-# its requirement, and push. When the lock is not current, the lock job resolves it, audits
-# it, uploads it as the artifact mix-lock-<sha> and fails until that file is committed.
+# Lock changes: each Ash cell has its own committed lock, mix.lock for the floating
+# requirement and locks/ash-floor/mix.lock for the declared floor (mix.exs selects it). Change
+# mix.exs, or delete a package's entry from a lock to update it within its requirement, and
+# push. When a lock is not current, the lock job resolves it, audits both, uploads the locks
+# as the artifact mix-lock-<sha> and fails until they are committed.
 on:
   push:
     branches-ignore: [main, 'kci/**']
@@ -37,6 +39,7 @@ jobs:
     outputs:
       elixir: ${{ steps.versions.outputs.elixir }}
       otp: ${{ steps.versions.outputs.otp }}
+      ash_floor: ${{ steps.versions.outputs.ash_floor }}
       postgres_image: ${{ steps.versions.outputs.postgres_image }}
       postgres_client: ${{ steps.versions.outputs.postgres_client }}
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
@@ -66,9 +69,9 @@ jobs:
     name: Lock check
     needs: toolchain
     runs-on: ubuntu-24.04
-    # No run exists yet. Estimated from run 44145457629: uncached dependency fetch and both
-    # audits are about two minutes; about twice that.
-    timeout-minutes: 5
+    # Slowest green with one lock: 1 min 44 s, run 44184372397. Two locks are about twice
+    # that, so about twice again.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -77,29 +80,46 @@ jobs:
         with:
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
-      - name: Check the lock, resolving it when it is not current
+      - name: Check both cells' locks, resolving any that is not current
         id: lock
+        env:
+          ASH_FLOOR: ${{ needs.toolchain.outputs.ash_floor }}
         run: |
-          if mix deps.get --check-locked; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            mix deps.get
-            git diff mix.lock
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-      - run: mix hex.audit
-      - run: mix deps.audit
+          changed=false
+          # Mix writes a lock into an existing directory only.
+          mkdir -p locks/ash-floor
+          for cell in latest "$ASH_FLOOR"; do
+            if ! ASH_ONETIME_ASH_VERSION="$cell" mix deps.get --check-locked; then
+              ASH_ONETIME_ASH_VERSION="$cell" mix deps.get
+              changed=true
+            fi
+          done
+          git status --short -- mix.lock locks
+          git diff -- mix.lock locks
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+      # deps.audit reads <path>/mix.lock, so it is pointed at each cell's lock directory.
+      - name: Audit both locks
+        env:
+          ASH_FLOOR: ${{ needs.toolchain.outputs.ash_floor }}
+        run: |
+          for cell in latest "$ASH_FLOOR"; do
+            ASH_ONETIME_ASH_VERSION="$cell" mix hex.audit
+            lock_dir=$(ASH_ONETIME_ASH_VERSION="$cell" mix run --no-start --no-compile --no-deps-check -e 'IO.write(Path.dirname(Mix.Project.config()[:lockfile]))')
+            mix deps.audit --path "$lock_dir"
+          done
       - if: steps.lock.outputs.changed == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mix-lock-${{ github.sha }}
-          path: mix.lock
+          path: |
+            mix.lock
+            locks/ash-floor/mix.lock
           if-no-files-found: error
           retention-days: 7
       - if: steps.lock.outputs.changed == 'true'
-        name: Require the resolved lock to be committed
+        name: Require the resolved locks to be committed
         run: |
-          echo "::error::mix.lock is not current; commit the artifact mix-lock-$GITHUB_SHA"
+          echo "::error::a lock is not current; run gh run download $GITHUB_RUN_ID -n mix-lock-$GITHUB_SHA in the repository root and commit mix.lock and locks/ash-floor/mix.lock"
           exit 1
 
   tests:

@@ -55,8 +55,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Floor: declared security floor (EEF-CVE-2026-96581; ADR 0004).
-        # Latest: newest published Ash 3.x within the declared range.
+        # Floor: declared security floor (EEF-CVE-2026-96581; ADR 0004), locked in
+        # locks/ash-floor/mix.lock.
+        # Latest: the floating requirement, locked in mix.lock; the release gates' currency
+        # check keeps that lock at the newest Ash 3.x.
         ash: ${{ fromJSON(format('["{0}","latest"]', needs.toolchain.outputs.ash_floor)) }}
 
     services:
@@ -88,6 +90,7 @@ jobs:
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
           ash: ${{ matrix.ash }}
+          resolution: locked
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
 
@@ -129,16 +132,17 @@ jobs:
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
 
   compatibility:
-    name: Compatibility (Elixir ${{ matrix.elixir }}, OTP ${{ matrix.otp }})
+    name: Compatibility (${{ matrix.elixir && format('Elixir {0}, OTP {1}', matrix.elixir, matrix.otp) || 'no second toolchain declared' }})
     needs: toolchain
-    if: needs.toolchain.outputs.beam_lanes != '[]'
     runs-on: ubuntu-24.04
     # Slowest green: 17 min, run 44145457629; about twice that.
     timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.toolchain.outputs.beam_lanes) }}
+        # With no second toolchain in .tool-versions the job still runs, as one cell that
+        # checks nothing and succeeds, so every result its verdict reads is a success.
+        include: ${{ fromJSON(needs.toolchain.outputs.beam_lanes != '[]' && needs.toolchain.outputs.beam_lanes || '[{"elixir":"","otp":""}]') }}
 
     services:
       postgres:
@@ -160,10 +164,14 @@ jobs:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-lane-${{ strategy.job-index }}"
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - if: matrix.elixir == ''
+        run: echo ".tool-versions declares no second toolchain; nothing to run"
+      - if: matrix.elixir != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: ./.github/actions/compatibility-lane
+      - if: matrix.elixir != ''
+        uses: ./.github/actions/compatibility-lane
         with:
           elixir: ${{ matrix.elixir }}
           otp: ${{ matrix.otp }}
@@ -186,8 +194,8 @@ jobs:
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
 
-  # The one verdict a landing reads: every job above succeeded. Compatibility
-  # may be skipped only when .tool-versions lists no second toolchain.
+  # The one verdict a landing reads: every job above succeeded. A skipped, cancelled or
+  # failed job refuses; no job is allowed to be absent.
   qualified:
     name: qualified
     if: always()
@@ -203,10 +211,7 @@ jobs:
           python3 - <<'PY'
           import json, os, sys
           results = json.loads(os.environ['NEEDS'])
-          lanes = results['toolchain'].get('outputs', {}).get('beam_lanes')
-          def passed(name, job):
-              return job['result'] == 'success' or (name == 'compatibility' and job['result'] == 'skipped' and lanes == '[]')
-          failed = [name for name, job in results.items() if not passed(name, job)]
+          failed = [f"{name} ({job['result']})" for name, job in results.items() if job['result'] != 'success']
           if failed:
               print('Qualification refused: ' + ', '.join(failed))
           sys.exit(bool(failed))
