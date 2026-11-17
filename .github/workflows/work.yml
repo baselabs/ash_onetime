@@ -69,9 +69,8 @@ jobs:
     name: Lock check
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Slowest green with one lock: 1 min 44 s, run 44184372397. Two locks are about twice
-    # that, so about twice again.
-    timeout-minutes: 10
+    # Slowest green: 2 min, run 44190116854. Five minutes is the floor for any job.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -123,9 +122,8 @@ jobs:
     name: Test suite
     needs: toolchain
     runs-on: ubuntu-24.04
-    # No run exists yet. Estimated from run 44145457629's Ash 3.37.2 job: mix test 14 min,
-    # compile 81 s and setup; about twice that.
-    timeout-minutes: 35
+    # Slowest green: 20 min, run 44190116854; about twice that.
+    timeout-minutes: 40
 
     services:
       postgres:
@@ -177,9 +175,8 @@ jobs:
     name: Mutation battery
     needs: toolchain
     runs-on: ubuntu-24.04
-    # No run exists yet. Estimated from run 44145457629's release gates: the mutation battery
-    # 69 min, compile 81 s and setup; about twice that.
-    timeout-minutes: 150
+    # Slowest green: 70 min, run 44190116854; about twice that.
+    timeout-minutes: 140
 
     services:
       postgres:

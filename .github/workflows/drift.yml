@@ -75,8 +75,8 @@ jobs:
     name: "Ash ${{ matrix.ash }}"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Same composite as ci.yml; slowest green there: 24 min (Ash 3.37.2), run 44145457629; about twice that.
-    timeout-minutes: 50
+    # Same composite as ci.yml; slowest green there: 32 min (Ash latest), run 44190160838; about twice that.
+    timeout-minutes: 65
     strategy:
       fail-fast: false
       matrix:
@@ -162,8 +162,8 @@ jobs:
     name: Compatibility (${{ matrix.elixir && format('Elixir {0}, OTP {1}', matrix.elixir, matrix.otp) || 'no second toolchain declared' }})
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Same composite as ci.yml; slowest green there: 17 min, run 44145457629; about twice that.
-    timeout-minutes: 35
+    # Same composite as ci.yml; slowest green there: 19 min, run 44190160838; about twice that.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -211,7 +211,7 @@ jobs:
     name: "Security"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Same composite as ci.yml; slowest green there: 14 s, runs 44161675015 and 44145457629. Five minutes is the floor for any job.
+    # Same composite as ci.yml; slowest green there: 2 min 9 s, run 44190160838 (three locks scanned). Five minutes is the floor for any job.
     timeout-minutes: 5
 
     steps:
