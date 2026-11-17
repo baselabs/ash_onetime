@@ -1,0 +1,43 @@
+name: Read suite toolchains
+description: Validate and read the shared BEAM toolchains and declared Ash floor
+outputs:
+  elixir:
+    description: Default Elixir build
+    value: ${{ steps.versions.outputs.elixir }}
+  otp:
+    description: Default Erlang/OTP build
+    value: ${{ steps.versions.outputs.otp }}
+  beam_lanes:
+    description: Additional Elixir and Erlang/OTP pairs as JSON
+    value: ${{ steps.versions.outputs.beam_lanes }}
+  ash_floor:
+    description: Declared Ash security floor from mix.exs
+    value: ${{ steps.ash-floor.outputs.ash_floor }}
+runs:
+  using: composite
+  steps:
+    - name: Validate the shared toolchain reader
+      shell: bash
+      run: sh scripts/toolchain.sh --self-test
+    - name: Read defaults and compatibility lanes
+      id: versions
+      shell: bash
+      run: sh scripts/toolchain.sh >> "$GITHUB_OUTPUT"
+    - name: Read the declared Ash security floor
+      id: ash-floor
+      shell: bash
+      run: |
+        python3 - <<'PYTHON'
+        import os
+        import re
+        from pathlib import Path
+
+        declarations = re.findall(r'^[ \t]*@ash_floor\b[^\n]*$', Path('mix.exs').read_text(), re.MULTILINE)
+        if len(declarations) != 1:
+            raise SystemExit('Expected exactly one @ash_floor declaration in mix.exs')
+        floor = re.fullmatch(r'[ \t]*@ash_floor[ \t]+"([0-9]+\.[0-9]+\.[0-9]+)"[ \t]*', declarations[0])
+        if floor is None:
+            raise SystemExit('Expected @ash_floor to declare a stable version string')
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write(f'ash_floor={floor[1]}\n')
+        PYTHON

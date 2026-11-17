@@ -1,0 +1,40 @@
+name: BEAM compatibility lane
+description: Run the beam compatibility lane battery for qualification and upstream drift
+inputs:
+  elixir:
+    description: Exact Elixir build from the toolchain job
+    required: true
+  otp:
+    description: Exact Erlang/OTP build from the toolchain job
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      with:
+        otp-version: ${{ inputs.otp }}
+        elixir-version: ${{ inputs.elixir }}
+        version-type: strict
+
+    - name: Cache deps and build
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: |
+          deps
+          _build
+        key: mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-compatibility-${{ hashFiles('mix.exs', 'mix.lock') }}
+
+    - shell: bash
+      run: mix deps.get
+    - shell: bash
+      run: mix format --check-formatted
+    - shell: bash
+      run: mix compile --warnings-as-errors
+    - shell: bash
+      run: mix hex.audit
+    - shell: bash
+      run: mix test
+      env:
+        ASH_ONETIME_RLS_PRUNE_TESTS: "1"
+    - shell: bash
+      run: mix credo --strict

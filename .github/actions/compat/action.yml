@@ -1,0 +1,61 @@
+name: Ash compatibility
+description: Run the ash compatibility battery for qualification and upstream drift
+inputs:
+  elixir:
+    description: Exact Elixir build from the toolchain job
+    required: true
+  otp:
+    description: Exact Erlang/OTP build from the toolchain job
+    required: true
+  ash:
+    description: Ash floor or latest matrix cell
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      with:
+        otp-version: ${{ inputs.otp }}
+        elixir-version: ${{ inputs.elixir }}
+        version-type: strict
+
+    - name: Cache deps and build
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: |
+          deps
+          _build
+        key: mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-ash${{ inputs.ash }}-${{ hashFiles('mix.exs', 'mix.lock') }}
+        restore-keys: |
+          mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-ash${{ inputs.ash }}-
+
+    - name: Resolve the matrix Ash version
+      shell: bash
+      run: |
+        mix deps.unlock --all
+        mix deps.get
+
+    - shell: bash
+      run: mix format --check-formatted
+    - shell: bash
+      run: mix compile --warnings-as-errors
+    # hex.audit (not deps.audit) is what surfaces Hex security advisories such as
+    # EEF-CVE-2026-55736; it fails the build on any retired/advised dependency.
+    - shell: bash
+      run: mix hex.audit
+    - shell: bash
+      run: mix deps.audit
+    - shell: bash
+      run: mix test
+      env:
+        ASH_ONETIME_RLS_PRUNE_TESTS: "1"
+    - shell: bash
+      run: mix credo --strict
+    - shell: bash
+      run: mix dialyzer
+    - shell: bash
+      run: MIX_ENV='test' mix dialyzer
+    - shell: bash
+      run: mix docs --warnings-as-errors
+    - shell: bash
+      run: mix hex.build

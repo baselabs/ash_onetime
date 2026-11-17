@@ -1,17 +1,16 @@
 name: CI
 
+# One qualification run per kci/<sha> candidate; qualified is its verdict.
+# Only a candidate with a successful verdict can move main.
 on:
   push:
-    branches: [main, 'kci/**'] # kci/<sha>: pre-merge verification of a candidate commit
-  pull_request:
-  # Weekly run against the newest published Ash 3.x (the compat matrix's "latest" cell) and
-  # the newest resolvable dependencies, so upstream drift shows without a push.
-  schedule:
-    - cron: "17 6 * * 1"
-  workflow_dispatch:
+    branches: ['kci/**']
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 # Tests require the dedicated loopback ash_onetime_test database as postgres.
@@ -19,21 +18,38 @@ concurrency:
 # Observer connections use the Repo URL. Each job's PostgreSQL is its own superuser
 # container, so the privileged operation-hold tests run against it rather than skipping.
 env:
-  ELIXIR_VERSION: "1.20.5"
-  OTP_VERSION: "29.1.2"
   DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
   ASH_ONETIME_SUPERUSER_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
 
 jobs:
+  # .tool-versions lists defaults first, followed by the compatibility pairs.
+  # mix.exs owns the Ash security floor used by the compatibility matrix.
+  toolchain:
+    name: Read suite toolchains
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      elixir: ${{ steps.versions.outputs.elixir }}
+      otp: ${{ steps.versions.outputs.otp }}
+      beam_lanes: ${{ steps.versions.outputs.beam_lanes }}
+      ash_floor: ${{ steps.versions.outputs.ash_floor }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Read defaults, compatibility lanes, and Ash floor
+        id: versions
+        uses: ./.github/actions/toolchain
+
   compat:
     name: "Ash ${{ matrix.ash }}"
-    runs-on: ubuntu-latest
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        ash:
-          - "3.37.2" # declared security floor (EEF-CVE-2026-96581; ADR 0004)
-          - "latest" # floating >= 3.37.2, < 4.0.0 — newest published Ash 3.x
+        # Floor: declared security floor (EEF-CVE-2026-96581; ADR 0004).
+        # Latest: newest published Ash 3.x within the declared range.
+        ash: ${{ fromJSON(format('["{0}","latest"]', needs.toolchain.outputs.ash_floor)) }}
 
     services:
       postgres:
@@ -57,45 +73,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      - uses: ./.github/actions/compat
         with:
-          otp-version: ${{ env.OTP_VERSION }}
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-
-      - name: Cache deps and build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: |
-            deps
-            _build
-          key: mix-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-ash${{ matrix.ash }}-${{ hashFiles('mix.exs', 'mix.lock') }}
-          restore-keys: |
-            mix-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-ash${{ matrix.ash }}-
-
-      - name: Resolve the matrix Ash version
-        run: |
-          mix deps.unlock --all
-          mix deps.get
-
-      - run: mix format --check-formatted
-      - run: mix compile --warnings-as-errors
-      # hex.audit (not deps.audit) is what surfaces Hex security advisories such as
-      # EEF-CVE-2026-55736; it fails the build on any retired/advised dependency.
-      - run: mix hex.audit
-      - run: mix deps.audit
-      - run: mix test
-        env:
-          ASH_ONETIME_RLS_PRUNE_TESTS: "1"
-      - run: mix credo --strict
-      - run: mix dialyzer
-      - run: MIX_ENV='test' mix dialyzer
-      - run: mix docs --warnings-as-errors
-      - run: mix hex.build
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          ash: ${{ matrix.ash }}
 
   release-checks:
     name: "Release gates"
-    runs-on: ubuntu-latest
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
 
     services:
       postgres:
@@ -118,55 +106,21 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      - uses: ./.github/actions/release-gates
         with:
-          otp-version: ${{ env.OTP_VERSION }}
-          elixir-version: ${{ env.ELIXIR_VERSION }}
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
 
-      - name: Cache deps and build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: |
-            deps
-            _build
-          key: mix-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-release-${{ hashFiles('mix.exs', 'mix.lock') }}
-          restore-keys: |
-            mix-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-release-
-
-      - run: mix deps.get
-      - run: mix compile --warnings-as-errors
-      # Fails on any direct dependency with a resolvable newer release.
-      - name: Dependency currency
-        run: mix run --no-start scripts/check_deps_currency.exs
-      - name: Mutation battery
-        run: MIX_ENV='test' mix run scripts/check_mutations.exs -- all
-        env:
-          ASH_ONETIME_RLS_PRUNE_TESTS: "1"
-      # check_package.exs inspects the built archive, so hex.build must precede it.
-      - name: Build the Hex package
-        run: mix hex.build
-      - name: Unpacked consumer package check
-        run: mix run scripts/check_package.exs
-      # Check the committed test Repo migrations against AshPostgres code generation.
-      - name: Ash codegen freshness
-        run: MIX_ENV='test' mix ash.codegen --check
-      # Check the shipped DSL reference against the declared schema.
-      - name: DSL cheat-sheet freshness
-        run: mix spark.cheat_sheets --check --extensions AshOnetime.Resource
-      - name: Execute Livebook source cells
-        run: elixir scripts/check_livebooks.exs --local
-      # Optional-integration matrix: which integrations compile per consumer dep set,
-      # that no optional dep leaks into the runtime application closure, and two
-      # conflict proofs — exact advised pins (igniter == 0.8.3, mint == 1.10.1)
-      # must FAIL to resolve, proving the security floors bind in a real consumer
-      # resolution (ADR 0004).
-      - name: Optional integration matrix
-        run: MIX_ENV='test' mix run scripts/check_optional_matrix.exs
-
-  otp-28:
-    name: "OTP 28"
-    runs-on: ubuntu-latest
+  compatibility:
+    name: Compatibility (Elixir ${{ matrix.elixir }}, OTP ${{ matrix.otp }})
+    needs: toolchain
+    if: needs.toolchain.outputs.beam_lanes != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.toolchain.outputs.beam_lanes) }}
 
     services:
       postgres:
@@ -186,87 +140,48 @@ jobs:
 
     env:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-otp28"
-      OTP_VERSION: "28.5"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      - uses: ./.github/actions/compatibility-lane
         with:
-          otp-version: ${{ env.OTP_VERSION }}
-          elixir-version: ${{ env.ELIXIR_VERSION }}
+          elixir: ${{ matrix.elixir }}
+          otp: ${{ matrix.otp }}
 
-      - name: Cache deps and build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: |
-            deps
-            _build
-          key: mix-${{ runner.os }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-otp28leg-${{ hashFiles('mix.exs', 'mix.lock') }}
-
-      - run: mix deps.get
-      - run: mix format --check-formatted
-      - run: mix compile --warnings-as-errors
-      - run: mix hex.audit
-      - run: mix test
-        env:
-          ASH_ONETIME_RLS_PRUNE_TESTS: "1"
-      - run: mix credo --strict
-
-  # Supply-chain advisories on the committed lock, failing closed. osv-scanner (one pinned 2.x
-  # release, checksum-verified) runs offline: the public Hex advisory database is downloaded
-  # first, with nothing from the lock sent, and the scan then runs in a network namespace with
-  # no network. It fails on any published advisory affecting a locked version, with no
-  # database, or when the number of packages it reports differs from the lock's hex and git
-  # entries. hex.audit fails on any retired package.
   security:
     name: "Security"
-    runs-on: ubuntu-latest
-    env:
-      OSV_SCANNER_VERSION: "2.7.1"
-      OSV_SCANNER_SHA256: "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install osv-scanner and download the Hex advisory database
-        run: |
-          curl -sSfLo "$RUNNER_TEMP/osv-scanner" \
-            "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
-          echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check --strict
-          chmod +x "$RUNNER_TEMP/osv-scanner"
-          mkdir -p "$RUNNER_TEMP/osv-db/osv-scalibr/Hex"
-          curl -sSfLo "$RUNNER_TEMP/osv-db/osv-scalibr/Hex/all.zip" \
-            "https://osv-vulnerabilities.storage.googleapis.com/Hex/all.zip"
-
-      - name: Scan mix.lock offline, with the network denied
-        run: |
-          if sudo unshare --net -- curl -sS -m 5 -o /dev/null https://osv.dev 2>/dev/null; then
-            echo "network is reachable inside the scan namespace" >&2
-            exit 1
-          fi
-          for lock in mix.lock test/support/fixtures/advisory_scan/mix.lock; do
-            name="$(echo "$lock" | tr '/.' '__')"
-            sudo unshare --net -- env OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY="$RUNNER_TEMP/osv-db" \
-              "$RUNNER_TEMP/osv-scanner" scan source --offline --all-packages --format json \
-              --output-file "$RUNNER_TEMP/osv-$name.json" -L "$lock"
-          done
-
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      - uses: ./.github/actions/security
         with:
-          otp-version: ${{ env.OTP_VERSION }}
-          elixir-version: ${{ env.ELIXIR_VERSION }}
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
 
-      - run: mix deps.get
-
-      # The scan must cover every hex and git lock entry. The fixture lock holds one of each,
-      # proving git entries are counted on both sides.
-      - name: Check the scan covered the whole lock
+  # The one verdict a landing reads: every job above succeeded. Compatibility
+  # may be skipped only when .tool-versions lists no second toolchain.
+  qualified:
+    name: qualified
+    if: always()
+    needs: [toolchain, compat, release-checks, compatibility, security]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every qualification job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
         run: |
-          for lock in mix.lock test/support/fixtures/advisory_scan/mix.lock; do
-            name="$(echo "$lock" | tr '/.' '__')"
-            mix run --no-start --no-compile --no-deps-check scripts/check_advisory_scan.exs \
-              "$lock" "$RUNNER_TEMP/osv-$name.json"
-          done
-
-      - run: mix hex.audit
+          python3 - <<'PY'
+          import json, os, sys
+          results = json.loads(os.environ['NEEDS'])
+          lanes = results['toolchain'].get('outputs', {}).get('beam_lanes')
+          def passed(name, job):
+              return job['result'] == 'success' or (name == 'compatibility' and job['result'] == 'skipped' and lanes == '[]')
+          failed = [name for name, job in results.items() if not passed(name, job)]
+          if failed:
+              print('Qualification refused: ' + ', '.join(failed))
+          sys.exit(bool(failed))
+          PY

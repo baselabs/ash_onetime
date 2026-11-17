@@ -1,0 +1,67 @@
+name: Release gates
+description: Run the release gates battery for qualification and upstream drift
+inputs:
+  elixir:
+    description: Exact Elixir build from the toolchain job
+    required: true
+  otp:
+    description: Exact Erlang/OTP build from the toolchain job
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      with:
+        otp-version: ${{ inputs.otp }}
+        elixir-version: ${{ inputs.elixir }}
+        version-type: strict
+
+    - name: Cache deps and build
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: |
+          deps
+          _build
+        key: mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-release-${{ hashFiles('mix.exs', 'mix.lock') }}
+        restore-keys: |
+          mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-release-
+
+    - shell: bash
+      run: mix deps.get
+    - shell: bash
+      run: mix compile --warnings-as-errors
+    # Fails on any direct dependency with a resolvable newer release.
+    - name: Dependency currency
+      shell: bash
+      run: mix run --no-start scripts/check_deps_currency.exs
+    - name: Mutation battery
+      shell: bash
+      run: MIX_ENV='test' mix run scripts/check_mutations.exs -- all
+      env:
+        ASH_ONETIME_RLS_PRUNE_TESTS: "1"
+    # check_package.exs inspects the built archive, so hex.build must precede it.
+    - name: Build the Hex package
+      shell: bash
+      run: mix hex.build
+    - name: Unpacked consumer package check
+      shell: bash
+      run: mix run scripts/check_package.exs
+    # Check the committed test Repo migrations against AshPostgres code generation.
+    - name: Ash codegen freshness
+      shell: bash
+      run: MIX_ENV='test' mix ash.codegen --check
+    # Check the shipped DSL reference against the declared schema.
+    - name: DSL cheat-sheet freshness
+      shell: bash
+      run: mix spark.cheat_sheets --check --extensions AshOnetime.Resource
+    - name: Execute Livebook source cells
+      shell: bash
+      run: elixir scripts/check_livebooks.exs --local
+    # Optional-integration matrix: which integrations compile per consumer dep set,
+    # that no optional dep leaks into the runtime application closure, and two
+    # conflict proofs — exact advised pins (igniter == 0.8.3, mint == 1.10.1)
+    # must FAIL to resolve, proving the security floors bind in a real consumer
+    # resolution (ADR 0004).
+    - name: Optional integration matrix
+      shell: bash
+      run: MIX_ENV='test' mix run scripts/check_optional_matrix.exs

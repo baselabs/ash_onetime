@@ -1,0 +1,179 @@
+name: Upstream drift
+
+# Reports upstream drift — newest Ash 3.x, newest resolvable dependencies, new
+# advisories and retirements — on the default branch without a push.
+# This scheduled or manual run never gates a landing.
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Tests require the dedicated loopback ash_onetime_test database as postgres.
+# Use non-default port 18841 for the PostgreSQL service.
+# Observer connections use the Repo URL. Each job's PostgreSQL is its own superuser
+# container, so the privileged operation-hold tests run against it rather than skipping.
+env:
+  DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+  ASH_ONETIME_SUPERUSER_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+
+jobs:
+  # .tool-versions lists defaults first, followed by the compatibility pairs.
+  # mix.exs owns the Ash security floor used by the compatibility matrix.
+  toolchain:
+    name: Read suite toolchains
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      elixir: ${{ steps.versions.outputs.elixir }}
+      otp: ${{ steps.versions.outputs.otp }}
+      beam_lanes: ${{ steps.versions.outputs.beam_lanes }}
+      ash_floor: ${{ steps.versions.outputs.ash_floor }}
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Read defaults, compatibility lanes, and Ash floor
+        id: versions
+        uses: ./.github/actions/toolchain
+
+  compat:
+    name: "Ash ${{ matrix.ash }}"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor: declared security floor (EEF-CVE-2026-96581; ADR 0004).
+        # Latest: newest published Ash 3.x within the declared range.
+        ash: ${{ fromJSON(format('["{0}","latest"]', needs.toolchain.outputs.ash_floor)) }}
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-compat-${{ strategy.job-index }}
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-compat-${{ strategy.job-index }}"
+      ASH_ONETIME_ASH_VERSION: ${{ matrix.ash }}
+
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: ./.github/actions/compat
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          ash: ${{ matrix.ash }}
+
+  release-checks:
+    name: "Release gates"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-release
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-release"
+
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: ./.github/actions/release-gates
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+
+  compatibility:
+    name: Compatibility (Elixir ${{ matrix.elixir }}, OTP ${{ matrix.otp }})
+    needs: toolchain
+    if: needs.toolchain.outputs.beam_lanes != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.toolchain.outputs.beam_lanes) }}
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-otp28
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-otp28"
+
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: ./.github/actions/compatibility-lane
+        with:
+          elixir: ${{ matrix.elixir }}
+          otp: ${{ matrix.otp }}
+
+  security:
+    name: "Security"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: ./.github/actions/security
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
