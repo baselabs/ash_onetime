@@ -446,6 +446,15 @@ defmodule AshOnetime.MutationCheck do
       test_name: "cluster grant isolation refuses an unproven server",
       assertion: "Expected exception RuntimeError"
     },
+    "maintenance-effective-cluster-isolation-run" => %{
+      path: "test/test_helper.exs",
+      original: "if System.get_env(\"GITHUB_ACTIONS\") == \"true\" do",
+      mutated: "if false do",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_cluster_isolation_mutation",
+      test_name: "cluster grant isolation refuses an unproven server",
+      assertion: "Expected exception RuntimeError"
+    },
     "claim-load-payload-timeout-restore" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:

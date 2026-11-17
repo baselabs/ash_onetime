@@ -3,9 +3,11 @@
 The tests require a dedicated PostgreSQL 18 instance: `DATABASE_URL` must name
 `ash_onetime_test` on `127.0.0.1`, as `postgres`, on a non-default port.
 The URL guard cannot detect unrelated databases: never use a shared server.
-Maintenance tests make cluster-wide grants and require a proven per-run container:
-set `TEST_ENV_RUN` to a name whose container `/etc/hostname` is `<name>-packages-pg`.
-The box route and CI supply that isolated server.
+Maintenance tests make cluster-wide grants and require a proven throwaway server: start it
+with a hostname that begins `ao-` and set `ASH_ONETIME_TEST_SERVER` to that hostname. The
+tests read `/etc/hostname` from the server and refuse a mismatch. In GitHub Actions the
+hostname must also carry the run and attempt (`ao-<run_id>-<run_attempt>-`), which CI's
+per-job service containers do.
 
 The repository ships no database container. Point `.env` at a PostgreSQL 18 you
 already run as a dedicated instance: copy `.env.example` to `.env`, set `PGPORT` to

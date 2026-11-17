@@ -20,10 +20,9 @@ The lock and `.tool-versions` pin development releases; published ranges preserv
 
 ## Build and test
 
-- Build: `mix compile --warnings-as-errors`, through the box route.
-- Covering tests: `mix test <paths>` through the box route against PostgreSQL 18 (`DATABASE_URL`; see `CONTRIBUTING.md`).
-- **Before a push.** `mix precommit`, through the box route.
-- **Type check.** `mix dialyzer` (and `MIX_ENV=test mix dialyzer`), through the box route.
-- **Never on the workstation.** Every Mix task that compiles (build, tests, dialyzer, docs, precommit) runs through the box route; the full suite runs only in CI.
-- **Exceptions.** A release runs the release battery in `CONTRIBUTING.md` on the box.
+- **Where it runs.** Compile, tests, type checks, docs and lock changes run in this repository's own GitHub Actions jobs on hosted runners, each with its own PostgreSQL 18 service container. Agents never run them on a workstation or on shared build machines.
+- Build: `mix compile --warnings-as-errors`.
+- Covering tests: `mix test <paths>` against PostgreSQL 18 (`DATABASE_URL` and `ASH_ONETIME_TEST_SERVER`; see `CONTRIBUTING.md`).
+- **Type check.** `mix dialyzer` and `MIX_ENV=test mix dialyzer`, in the same CI run.
+- **Release battery.** The additional release commands in `CONTRIBUTING.md` run in CI's release-gates job.
 - **Landing.** CI runs the full suite on a candidate branch before `main` moves.
