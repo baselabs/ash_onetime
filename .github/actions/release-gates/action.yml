@@ -7,9 +7,20 @@ inputs:
   otp:
     description: Exact Erlang/OTP build from the toolchain job
     required: true
+  postgres-client:
+    description: PGDG PostgreSQL client package version from the toolchain job
+    required: true
+  pgdg-key:
+    description: PGDG apt signing key fingerprint from the toolchain job
+    required: true
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/postgres-client
+      with:
+        version: ${{ inputs.postgres-client }}
+        pgdg-key: ${{ inputs.pgdg-key }}
+
     - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
       with:
         otp-version: ${{ inputs.otp }}
