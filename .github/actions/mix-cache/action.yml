@@ -1,10 +1,12 @@
 name: Mix cache
 description: >-
   The one definition of each Mix cache's key and paths. Qualification, drift and work runs
-  restore; only the cache warmer on the default branch saves.
+  restore; only the cache warmer on the default branch looks up and saves.
 inputs:
   mode:
-    description: restore (every job that builds) or save (the cache warmer only)
+    description: >-
+      restore (every job that builds), or lookup and save (the cache warmer only: lookup reports
+      whether the exact key exists without downloading it)
     required: true
   cell:
     description: >-
@@ -20,7 +22,7 @@ inputs:
     required: true
 outputs:
   hit:
-    description: true when restore found this exact key
+    description: true when restore or lookup found this exact key
     value: ${{ steps.restore.outputs.cache-hit }}
 runs:
   using: composite
@@ -33,14 +35,14 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         case "$MODE" in
-          restore) ;;
+          restore | lookup) ;;
           save)
             default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
             if [ "$REF" != "refs/heads/$default_branch" ]; then
               echo "::error::only refs/heads/$default_branch saves a cache, not $REF"
               exit 1
             fi ;;
-          *) echo "::error::mode must be restore or save, not $MODE"; exit 1 ;;
+          *) echo "::error::mode must be restore, lookup or save, not $MODE"; exit 1 ;;
         esac
 
     # Every committed lock is in the key: the floor cell's lock is locks/ash-floor/mix.lock,
@@ -55,16 +57,19 @@ runs:
         echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
         echo "key=$PREFIX$LOCKS" >> "$GITHUB_OUTPUT"
 
-    - name: Restore deps and build
+    # A lookup takes no restore-keys: only the exact key counts as warm, and nothing is
+    # downloaded, so a build after a miss starts cold.
+    - name: Restore deps and build, or look the key up
       id: restore
-      if: inputs.mode == 'restore'
+      if: inputs.mode != 'save'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           deps
           _build
         key: ${{ steps.key.outputs.key }}
-        restore-keys: ${{ steps.key.outputs.prefix }}
+        restore-keys: ${{ inputs.mode == 'restore' && steps.key.outputs.prefix || '' }}
+        lookup-only: ${{ inputs.mode == 'lookup' }}
 
     - name: Save deps and build
       if: inputs.mode == 'save'

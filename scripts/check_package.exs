@@ -23,8 +23,8 @@ defmodule AshOnetime.PackageCheck do
   @secret_literal ~r/\b(?:api[_-]?key|password|private[_-]?key|secret)\s*[:=]\s*["'][^"']+["']/i
   @provider_crypto ~r/defmodule\s+\S*(?:Stripe|GitHub|Slack|Twilio)\S*(?:Signature|Verifier)/i
 
-  def main do
-    archive = archive!()
+  def main(arguments) do
+    archive = archive!(arguments)
     before_digest = digest_file(archive)
     temporary = Path.join(System.tmp_dir!(), "ash_onetime_package_#{unique()}")
     outer = Path.join(temporary, "outer")
@@ -62,12 +62,8 @@ defmodule AshOnetime.PackageCheck do
     end
   end
 
-  defp archive! do
-    case Path.wildcard("ash_onetime-*.tar") do
-      [archive] -> archive
-      archives -> raise "expected exactly one ash_onetime archive, found #{length(archives)}"
-    end
-  end
+  defp archive!([archive]), do: archive
+  defp archive!(_arguments), do: raise("usage: mix run scripts/check_package.exs ARCHIVE")
 
   defp assert_outer!(archive) do
     archive
@@ -266,4 +262,4 @@ defmodule AshOnetime.PackageCheck do
   defp unique, do: System.unique_integer([:positive, :monotonic])
 end
 
-AshOnetime.PackageCheck.main()
+AshOnetime.PackageCheck.main(System.argv())
