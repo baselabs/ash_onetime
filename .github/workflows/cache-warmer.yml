@@ -1,0 +1,223 @@
+name: Cache warmer
+
+# The one writer of the Mix caches that qualification (ci.yml), upstream drift and work runs
+# restore. It builds the default branch's committed locks and saves each cache under the key
+# .github/actions/mix-cache names; nothing else saves a cache. A cache it already holds is not
+# rebuilt.
+#
+# Caches it writes, each restored only:
+# - ash<floor> and ashlatest: ci.yml's Ash cells (deps, both builds and the dialyzer PLTs);
+# - release: the release gates, every mutation battery shard and work runs;
+# - compatibility: the second toolchain from .tool-versions, when one is declared.
+#
+# It starts only from the schedule or a dispatch, each job refuses any ref but the default
+# branch before anything else, and it holds contents: read with no secret and no environment.
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# The same settings the restoring jobs build under, so a restored build is the one they make.
+# Nothing here connects to a database.
+env:
+  DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+  ASH_ONETIME_SUPERUSER_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+
+jobs:
+  toolchain:
+    name: Read suite toolchains
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    outputs:
+      elixir: ${{ steps.versions.outputs.elixir }}
+      otp: ${{ steps.versions.outputs.otp }}
+      beam_lanes: ${{ steps.versions.outputs.beam_lanes }}
+      ash_floor: ${{ steps.versions.outputs.ash_floor }}
+      default_branch: ${{ steps.ref.outputs.default_branch }}
+    steps:
+      # The default branch is read from the repository, as in every workflow here.
+      - name: Refuse any ref but the default branch
+        id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref }}
+        run: |
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          if [ "$REF" != "refs/heads/$default_branch" ]; then
+            echo "::error::the cache warmer runs only on refs/heads/$default_branch, not $REF"
+            exit 1
+          fi
+          echo "default_branch=$default_branch" >> "$GITHUB_OUTPUT"
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.ref.outputs.default_branch }}
+          persist-credentials: false
+      - name: Read defaults, compatibility lanes and the Ash floor
+        id: versions
+        uses: ./.github/actions/toolchain
+
+  ash-cells:
+    name: "Warm Ash ${{ matrix.ash }}"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same cells as ci.yml's compat job.
+        ash: ${{ fromJSON(format('["{0}","latest"]', needs.toolchain.outputs.ash_floor)) }}
+    env:
+      ASH_ONETIME_ASH_VERSION: ${{ matrix.ash }}
+    steps:
+      - name: Refuse any ref but the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref }}
+        run: |
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          if [ "$REF" != "refs/heads/$default_branch" ]; then
+            echo "::error::the cache warmer runs only on refs/heads/$default_branch, not $REF"
+            exit 1
+          fi
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.toolchain.outputs.default_branch }}
+          persist-credentials: false
+      - uses: ./.github/actions/beam
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      - id: cache
+        uses: ./.github/actions/mix-cache
+        with:
+          mode: restore
+          cell: ash${{ matrix.ash }}
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      - name: Build what the Ash cell builds
+        if: steps.cache.outputs.hit != 'true'
+        run: |
+          mix deps.get --check-locked
+          mix compile --warnings-as-errors
+          MIX_ENV='test' mix compile --warnings-as-errors
+          mix dialyzer --plt
+          MIX_ENV='test' mix dialyzer --plt
+      - if: steps.cache.outputs.hit != 'true'
+        uses: ./.github/actions/mix-cache
+        with:
+          mode: save
+          cell: ash${{ matrix.ash }}
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+
+  release:
+    name: Warm the release build
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    steps:
+      - name: Refuse any ref but the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref }}
+        run: |
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          if [ "$REF" != "refs/heads/$default_branch" ]; then
+            echo "::error::the cache warmer runs only on refs/heads/$default_branch, not $REF"
+            exit 1
+          fi
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.toolchain.outputs.default_branch }}
+          persist-credentials: false
+      - uses: ./.github/actions/beam
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      - id: cache
+        uses: ./.github/actions/mix-cache
+        with:
+          mode: restore
+          cell: release
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      - name: Build what the release gates, mutation shards and work runs build
+        if: steps.cache.outputs.hit != 'true'
+        run: |
+          mix deps.get --check-locked
+          mix compile --warnings-as-errors
+          MIX_ENV='test' mix compile --warnings-as-errors
+      - if: steps.cache.outputs.hit != 'true'
+        uses: ./.github/actions/mix-cache
+        with:
+          mode: save
+          cell: release
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+
+  compatibility:
+    name: Warm the second toolchain (${{ matrix.elixir && format('Elixir {0}, OTP {1}', matrix.elixir, matrix.otp) || 'none declared' }})
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same lanes as ci.yml's compatibility job; with none declared, one cell that
+        # warms nothing.
+        include: ${{ fromJSON(needs.toolchain.outputs.beam_lanes != '[]' && needs.toolchain.outputs.beam_lanes || '[{"elixir":"","otp":""}]') }}
+    steps:
+      - name: Refuse any ref but the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref }}
+        run: |
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          if [ "$REF" != "refs/heads/$default_branch" ]; then
+            echo "::error::the cache warmer runs only on refs/heads/$default_branch, not $REF"
+            exit 1
+          fi
+      - if: matrix.elixir == ''
+        run: echo ".tool-versions declares no second toolchain; nothing to warm"
+      - name: Check out the default branch
+        if: matrix.elixir != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.toolchain.outputs.default_branch }}
+          persist-credentials: false
+      - if: matrix.elixir != ''
+        uses: ./.github/actions/beam
+        with:
+          elixir: ${{ matrix.elixir }}
+          otp: ${{ matrix.otp }}
+      - id: cache
+        if: matrix.elixir != ''
+        uses: ./.github/actions/mix-cache
+        with:
+          mode: restore
+          cell: compatibility
+          elixir: ${{ matrix.elixir }}
+          otp: ${{ matrix.otp }}
+      - name: Build what the compatibility lane builds
+        if: matrix.elixir != '' && steps.cache.outputs.hit != 'true'
+        run: |
+          mix deps.get --check-locked
+          mix compile --warnings-as-errors
+          MIX_ENV='test' mix compile --warnings-as-errors
+      - if: matrix.elixir != '' && steps.cache.outputs.hit != 'true'
+        uses: ./.github/actions/mix-cache
+        with:
+          mode: save
+          cell: compatibility
+          elixir: ${{ matrix.elixir }}
+          otp: ${{ matrix.otp }}

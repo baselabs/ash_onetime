@@ -26,13 +26,13 @@ runs:
         elixir: ${{ inputs.elixir }}
         otp: ${{ inputs.otp }}
 
-    - name: Cache deps and build
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+    # Restore only; the cache warmer on the default branch writes this lane's cache.
+    - uses: ./.github/actions/mix-cache
       with:
-        path: |
-          deps
-          _build
-        key: mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-compatibility-${{ hashFiles('mix.exs', 'mix.lock') }}
+        mode: restore
+        cell: compatibility
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
 
     - shell: bash
       run: mix deps.get --check-locked

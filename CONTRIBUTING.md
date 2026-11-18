@@ -38,7 +38,7 @@ mix hex.audit
 mix hex.build
 ```
 
-CI's release-gates job also runs these on every candidate:
+CI's release-gates and mutation-battery jobs also run these on every candidate:
 
 ```sh
 mix run --no-start scripts/check_deps_currency.exs
@@ -46,6 +46,7 @@ mix spark.cheat_sheets --check --extensions AshOnetime.Resource
 mix docs --warnings-as-errors
 MIX_ENV=test mix ash.codegen --check                      # committed test-repo codegen freshness
 MIX_ENV=test mix run scripts/check_mutations.exs -- all   # with DATABASE_URL exported as in your .env
+                                                          # CI runs it as shards: -- --shard I/N all
 elixir scripts/check_livebooks.exs --local                # executes source cells against PostgreSQL
 mix run scripts/check_package.exs                         # after the gate's mix hex.build
 mix run scripts/check_optional_matrix.exs

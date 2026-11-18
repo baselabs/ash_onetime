@@ -1,13 +1,14 @@
 name: Work
 
-# Every push to a work branch runs the whole test suite, the whole mutation battery and the
-# lock check on that branch head, before a landing candidate exists. It is never a verdict:
+# Every push to a work branch runs the whole test suite, the whole mutation battery (in the same
+# shards as ci.yml) and the lock check on that branch head, before a landing candidate exists. It is never a verdict:
 # no job is named qualified, ci.yml never calls it, and it cannot move main. Sessions never
 # dispatch workflows, so a push starts it; there are no inputs.
 #
 # It refuses main and kci/ candidates. Any code a job runs can write the cache through the
 # runner's token, so a run must hold only its own branch's cache scope: main's scope and a
-# candidate's scope are what qualification runs restore. It restores caches and saves none.
+# candidate's scope are what qualification runs restore. It restores the cache warmer's
+# caches and saves none.
 #
 # Lock changes: each Ash cell has its own committed lock, mix.lock for the floating
 # requirement and locks/ash-floor/mix.lock for the declared floor (mix.exs selects it). Change
@@ -44,13 +45,15 @@ jobs:
       postgres_client: ${{ steps.versions.outputs.postgres_client }}
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
     steps:
+      # The default branch is read from the repository, as in every workflow here.
       - name: Refuse the default branch, candidates and anything not a branch
         env:
+          GH_TOKEN: ${{ github.token }}
           REF: ${{ github.ref }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
           case "$REF" in
-            "refs/heads/$DEFAULT_BRANCH" | refs/heads/kci/*)
+            "refs/heads/$default_branch" | refs/heads/kci/*)
               echo "::error::work runs refuse $REF: main and kci/ scopes feed qualification"
               exit 1 ;;
             refs/heads/*) ;;
@@ -58,7 +61,7 @@ jobs:
               echo "::error::work runs only on branches, not $REF"
               exit 1 ;;
           esac
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Read defaults and service pins at the branch head
@@ -69,10 +72,10 @@ jobs:
     name: Lock check
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Slowest green: 2 min, run 44190116854. Five minutes is the floor for any job.
-    timeout-minutes: 5
+    # Slowest green: 2 min 49 s, run 44201990085; about twice that.
+    timeout-minutes: 6
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/beam
@@ -146,7 +149,7 @@ jobs:
       ASH_ONETIME_RLS_PRUNE_TESTS: "1"
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/postgres-client
@@ -157,26 +160,28 @@ jobs:
         with:
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
-      # Restore only. Anything this run could write stays in this branch's cache scope.
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      # Restore only; the cache warmer on the default branch writes the release cache.
+      - uses: ./.github/actions/mix-cache
         with:
-          path: |
-            deps
-            _build
-          key: mix-${{ runner.os }}-otp${{ needs.toolchain.outputs.otp }}-elixir${{ needs.toolchain.outputs.elixir }}-release-${{ hashFiles('mix.exs', 'mix.lock') }}
-          restore-keys: |
-            mix-${{ runner.os }}-otp${{ needs.toolchain.outputs.otp }}-elixir${{ needs.toolchain.outputs.elixir }}-release-
+          mode: restore
+          cell: release
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
       - run: mix deps.get --check-locked
       - run: mix compile --warnings-as-errors
       - run: MIX_ENV='test' mix compile --warnings-as-errors
       - run: mix test
 
   mutations:
-    name: Mutation battery
+    name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Slowest green: 70 min, run 44190116854; about twice that.
-    timeout-minutes: 140
+    timeout-minutes: 90 # no green run yet
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same shards as ci.yml.
+        shard: [1, 2, 3, 4]
 
     services:
       postgres:
@@ -188,37 +193,23 @@ jobs:
         ports:
           - 18841:5432
         options: >-
-          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-work-mutations
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-work-mutations-${{ strategy.job-index }}
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
     env:
-      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-work-mutations"
-      ASH_ONETIME_RLS_PRUNE_TESTS: "1"
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-work-mutations-${{ strategy.job-index }}"
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/postgres-client
-        with:
-          version: ${{ needs.toolchain.outputs.postgres_client }}
-          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
-      - uses: ./.github/actions/beam
+      - uses: ./.github/actions/mutations
         with:
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
-      # Restore only. Anything this run could write stays in this branch's cache scope.
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: |
-            deps
-            _build
-          key: mix-${{ runner.os }}-otp${{ needs.toolchain.outputs.otp }}-elixir${{ needs.toolchain.outputs.elixir }}-release-${{ hashFiles('mix.exs', 'mix.lock') }}
-          restore-keys: |
-            mix-${{ runner.os }}-otp${{ needs.toolchain.outputs.otp }}-elixir${{ needs.toolchain.outputs.elixir }}-release-
-      - run: mix deps.get --check-locked
-      - run: MIX_ENV='test' mix compile --warnings-as-errors
-      - run: MIX_ENV='test' mix run scripts/check_mutations.exs -- all
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+          shard: ${{ matrix.shard }}/${{ strategy.job-total }}

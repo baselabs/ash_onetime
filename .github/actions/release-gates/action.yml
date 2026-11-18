@@ -1,5 +1,7 @@
 name: Release gates
-description: Run the release gates battery for qualification and upstream drift
+description: >-
+  Run the release gates for qualification and upstream drift; the mutation battery is its own
+  jobs (the mutations composite)
 inputs:
   elixir:
     description: Exact Elixir build from the toolchain job
@@ -26,15 +28,13 @@ runs:
         elixir: ${{ inputs.elixir }}
         otp: ${{ inputs.otp }}
 
-    - name: Cache deps and build
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+    # Restore only; the cache warmer on the default branch writes the release cache.
+    - uses: ./.github/actions/mix-cache
       with:
-        path: |
-          deps
-          _build
-        key: mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-release-${{ hashFiles('mix.exs', 'mix.lock') }}
-        restore-keys: |
-          mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-release-
+        mode: restore
+        cell: release
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
 
     - shell: bash
       run: mix deps.get --check-locked
@@ -44,11 +44,6 @@ runs:
     - name: Dependency currency
       shell: bash
       run: mix run --no-start scripts/check_deps_currency.exs
-    - name: Mutation battery
-      shell: bash
-      run: MIX_ENV='test' mix run scripts/check_mutations.exs -- all
-      env:
-        ASH_ONETIME_RLS_PRUNE_TESTS: "1"
     # check_package.exs inspects the built archive, so hex.build must precede it.
     - name: Build the Hex package
       shell: bash

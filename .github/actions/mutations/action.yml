@@ -1,0 +1,51 @@
+name: Mutation battery
+description: >-
+  Run one shard of the mutation battery for qualification, upstream drift and work runs. Each
+  shard is its own job; together the shards run every registered mutation exactly once.
+inputs:
+  elixir:
+    description: Exact Elixir build from the toolchain job
+    required: true
+  otp:
+    description: Exact Erlang/OTP build from the toolchain job
+    required: true
+  postgres-client:
+    description: PGDG PostgreSQL client package version from the toolchain job
+    required: true
+  pgdg-key:
+    description: PGDG apt signing key fingerprint from the toolchain job
+    required: true
+  shard:
+    description: This job's shard as I/N, such as 2/4, from the job's matrix
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/postgres-client
+      with:
+        version: ${{ inputs.postgres-client }}
+        pgdg-key: ${{ inputs.pgdg-key }}
+
+    - uses: ./.github/actions/beam
+      with:
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
+
+    # Restore only; the cache warmer on the default branch writes the release cache.
+    - uses: ./.github/actions/mix-cache
+      with:
+        mode: restore
+        cell: release
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
+
+    - shell: bash
+      run: mix deps.get --check-locked
+    - shell: bash
+      run: MIX_ENV='test' mix compile --warnings-as-errors
+    - name: Mutation battery shard
+      shell: bash
+      env:
+        SHARD: ${{ inputs.shard }}
+        ASH_ONETIME_RLS_PRUNE_TESTS: "1"
+      run: MIX_ENV='test' mix run scripts/check_mutations.exs -- --shard "$SHARD" all
