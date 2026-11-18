@@ -96,7 +96,8 @@ defmodule AshOnetime.MixProject do
 
   # Each Ash cell CI runs has its own committed lock, so every fetch is --check-locked:
   # mix.lock for the floating requirement and locks/ash-floor/mix.lock for the declared floor.
-  # The Work workflow's lock job resolves both; neither is written by hand.
+  # Each is resolved with mix deps.get where mix.exs changes and committed with it; the Work
+  # workflow's lock job only checks and audits them. Neither is written by hand.
   defp lockfile do
     if System.get_env("ASH_ONETIME_ASH_VERSION") == @ash_floor,
       do: "locks/ash-floor/mix.lock",

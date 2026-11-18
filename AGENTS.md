@@ -19,9 +19,9 @@ The lock and `.tool-versions` pin development releases; published ranges preserv
 
 ## Build and test
 
-- **Where it runs.** Compile, tests, type checks, docs and lock changes run in this repository's own GitHub Actions jobs on hosted runners, each with its own PostgreSQL 18 service container. Agents never run them on a workstation or on shared build machines.
+- **Where it runs.** Compile, tests, type checks and docs run in this repository's own GitHub Actions jobs on hosted runners, each with its own PostgreSQL 18 service container. Agents never run them on a workstation or on shared build machines.
 - Build: `mix compile --warnings-as-errors`.
-- **Covering tests.** Every push to a work branch runs the `Work` workflow on that head: the whole suite against PostgreSQL 18 (`DATABASE_URL` and `ASH_ONETIME_TEST_SERVER`; see `CONTRIBUTING.md`), the whole mutation battery and the lock check of both Ash cells' locks (`mix.lock` and `locks/ash-floor/mix.lock`), which uploads the resolved locks when a committed one is not current. Never write lock entries by hand.
+- **Covering tests.** Every push to a work branch runs the `Work` workflow on that head: the whole suite against PostgreSQL 18 (`DATABASE_URL` and `ASH_ONETIME_TEST_SERVER`; see `CONTRIBUTING.md`), the whole mutation battery and the lock check of both Ash cells' locks (`mix.lock` and `locks/ash-floor/mix.lock`), which fails when a committed lock is not current and resolves nothing. Resolve a lock with `mix deps.get` (with `ASH_ONETIME_ASH_VERSION` set to the floor for the floor cell) where `mix.exs` changes, and commit it with that change; resolving compiles nothing. Only the drift report resolves fresh from upstream. Never write lock entries by hand.
 - **Type check.** `mix dialyzer` and `MIX_ENV=test mix dialyzer`, in the same CI run.
 - **Release battery.** The additional release commands in `CONTRIBUTING.md` run in CI's release-gates job and
   its mutation-battery shard jobs. No job may measure over 45 minutes or carry a limit over 90; a

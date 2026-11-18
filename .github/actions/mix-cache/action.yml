@@ -1,7 +1,8 @@
 name: Mix cache
 description: >-
-  The one definition of each Mix cache's key and paths. Qualification, drift and work runs
-  restore; only the cache warmer on the default branch looks up and saves.
+  The one definition of each Mix cache's key and paths. Qualification and work runs restore;
+  only the cache warmer on the default branch looks up and saves. The drift report reads and
+  writes no cache.
 inputs:
   mode:
     description: >-
