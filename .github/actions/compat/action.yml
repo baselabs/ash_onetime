@@ -44,18 +44,14 @@ runs:
           *) echo "::error::resolution must be locked or upstream, not $RESOLUTION"; exit 1 ;;
         esac
 
-    # The floor cell's lock is locks/ash-floor/mix.lock (mix.exs selects it), so the key
-    # covers every committed lock.
-    - name: Cache deps and build
-      if: inputs.resolution == 'locked'
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+    # Restore only; the cache warmer on the default branch writes this cell's cache.
+    - if: inputs.resolution == 'locked'
+      uses: ./.github/actions/mix-cache
       with:
-        path: |
-          deps
-          _build
-        key: mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-ash${{ inputs.ash }}-${{ hashFiles('mix.exs', 'mix.lock', 'locks/**/mix.lock') }}
-        restore-keys: |
-          mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-ash${{ inputs.ash }}-
+        mode: restore
+        cell: ash${{ inputs.ash }}
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
 
     - name: Fetch the cell's committed lock
       if: inputs.resolution == 'locked'

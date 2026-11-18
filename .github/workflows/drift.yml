@@ -8,12 +8,13 @@ name: Upstream drift
 #   upstream (the one unlocked fetch in this repository), then the full battery;
 # - release-checks: the release gates on the committed lock, whose currency check fails when
 #   a direct dependency has a newer resolvable release;
+# - mutations: the mutation battery on the committed lock, in the same shards as ci.yml;
 # - compatibility: the second toolchain from .tool-versions on the committed lock;
 # - security: the offline advisory scan and both audits on the committed lock, which surface
 #   advisories and retirements published since the last candidate.
 #
-# It publishes nothing: contents: read, no secret, no environment, no cache written from an
-# upstream resolution. It runs no pull-request code: it starts only from the schedule or a
+# It publishes nothing: contents: read, no secret, no environment, and it writes no cache (jobs
+# on the committed lock restore the cache warmer's caches; the upstream cells use none). It runs no pull-request code: it starts only from the schedule or a
 # dispatch, refuses any ref but the default branch, and every checkout names that branch.
 on:
   schedule:
@@ -52,20 +53,26 @@ jobs:
       postgres_image: ${{ steps.versions.outputs.postgres_image }}
       postgres_client: ${{ steps.versions.outputs.postgres_client }}
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
+      default_branch: ${{ steps.ref.outputs.default_branch }}
     steps:
+      # The default branch is read from the repository, which every event can reach, rather than
+      # from the event's payload.
       - name: Refuse any ref but the default branch
+        id: ref
         env:
+          GH_TOKEN: ${{ github.token }}
           REF: ${{ github.ref }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          if [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
-            echo "::error::drift runs only on refs/heads/$DEFAULT_BRANCH, not $REF"
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          if [ "$REF" != "refs/heads/$default_branch" ]; then
+            echo "::error::drift runs only on refs/heads/$default_branch, not $REF"
             exit 1
           fi
+          echo "default_branch=$default_branch" >> "$GITHUB_OUTPUT"
       - name: Check out the default branch
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ steps.ref.outputs.default_branch }}
           persist-credentials: false
       - name: Read defaults, compatibility lanes, Ash floor, and service pins
         id: versions
@@ -106,9 +113,9 @@ jobs:
 
     steps:
       - name: Check out the default branch
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ needs.toolchain.outputs.default_branch }}
           persist-credentials: false
       - uses: ./.github/actions/compat
         with:
@@ -123,8 +130,7 @@ jobs:
     name: "Release gates"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Same composite as ci.yml; slowest green there: 81 min, run 44145457629 (the mutation battery is 69 min of it); about twice that.
-    timeout-minutes: 160
+    timeout-minutes: 90 # no green run yet
 
     services:
       postgres:
@@ -147,9 +153,9 @@ jobs:
 
     steps:
       - name: Check out the default branch
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ needs.toolchain.outputs.default_branch }}
           persist-credentials: false
       - uses: ./.github/actions/release-gates
         with:
@@ -157,6 +163,50 @@ jobs:
           otp: ${{ needs.toolchain.outputs.otp }}
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+
+  mutations:
+    name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same shards as ci.yml.
+        shard: [1, 2, 3, 4]
+
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-mutations-${{ strategy.job-index }}
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-mutations-${{ strategy.job-index }}"
+
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.toolchain.outputs.default_branch }}
+          persist-credentials: false
+      - uses: ./.github/actions/mutations
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+          shard: ${{ matrix.shard }}/${{ strategy.job-total }}
 
   compatibility:
     name: Compatibility (${{ matrix.elixir && format('Elixir {0}, OTP {1}', matrix.elixir, matrix.otp) || 'no second toolchain declared' }})
@@ -195,9 +245,9 @@ jobs:
         run: echo ".tool-versions declares no second toolchain; nothing to run"
       - name: Check out the default branch
         if: matrix.elixir != ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ needs.toolchain.outputs.default_branch }}
           persist-credentials: false
       - if: matrix.elixir != ''
         uses: ./.github/actions/compatibility-lane
@@ -216,9 +266,9 @@ jobs:
 
     steps:
       - name: Check out the default branch
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ needs.toolchain.outputs.default_branch }}
           persist-credentials: false
       - uses: ./.github/actions/security
         with:

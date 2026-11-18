@@ -23,7 +23,11 @@ The lock and `.tool-versions` pin development releases; published ranges preserv
 - Build: `mix compile --warnings-as-errors`.
 - **Covering tests.** Every push to a work branch runs the `Work` workflow on that head: the whole suite against PostgreSQL 18 (`DATABASE_URL` and `ASH_ONETIME_TEST_SERVER`; see `CONTRIBUTING.md`), the whole mutation battery and the lock check of both Ash cells' locks (`mix.lock` and `locks/ash-floor/mix.lock`), which uploads the resolved locks when a committed one is not current. Never write lock entries by hand.
 - **Type check.** `mix dialyzer` and `MIX_ENV=test mix dialyzer`, in the same CI run.
-- **Release battery.** The additional release commands in `CONTRIBUTING.md` run in CI's release-gates job.
+- **Release battery.** The additional release commands in `CONTRIBUTING.md` run in CI's release-gates job and
+  its mutation-battery shard jobs. No job may measure over 45 minutes or carry a limit over 90; a
+  longer job is split into jobs, never given a looser limit.
+- **Caches.** Every job restores Mix caches through `.github/actions/mix-cache`; only the `Cache warmer`
+  workflow on the default branch saves them.
 - **Landing.** CI runs the full suite on a candidate branch before `main` moves.
 
 ## CI/CD and releases

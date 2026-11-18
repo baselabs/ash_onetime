@@ -39,7 +39,7 @@ jobs:
       postgres_client: ${{ steps.versions.outputs.postgres_client }}
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Read defaults, compatibility lanes, Ash floor, and service pins
@@ -82,7 +82,7 @@ jobs:
       ASH_ONETIME_ASH_VERSION: ${{ matrix.ash }}
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/compat
@@ -98,8 +98,7 @@ jobs:
     name: "Release gates"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Slowest green: 81 min, run 44145457629 (the mutation battery is 69 min of it); about twice that.
-    timeout-minutes: 160
+    timeout-minutes: 90 # no green run yet
 
     services:
       postgres:
@@ -121,7 +120,7 @@ jobs:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-release"
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/release-gates
@@ -130,6 +129,50 @@ jobs:
           otp: ${{ needs.toolchain.outputs.otp }}
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+
+  # The mutation battery, split into shards so no job runs past 45 minutes. Each shard runs
+  # every Nth registered mutation (scripts/check_mutations.exs --shard); together they run
+  # all of them once. Add a shard to the list when the slowest one nears 45 minutes.
+  mutations:
+    name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-mutations-${{ strategy.job-index }}
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-mutations-${{ strategy.job-index }}"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/mutations
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+          shard: ${{ matrix.shard }}/${{ strategy.job-total }}
 
   compatibility:
     name: Compatibility (${{ matrix.elixir && format('Elixir {0}, OTP {1}', matrix.elixir, matrix.otp) || 'no second toolchain declared' }})
@@ -167,7 +210,7 @@ jobs:
       - if: matrix.elixir == ''
         run: echo ".tool-versions declares no second toolchain; nothing to run"
       - if: matrix.elixir != ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - if: matrix.elixir != ''
@@ -186,7 +229,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/security
@@ -199,7 +242,7 @@ jobs:
   qualified:
     name: qualified
     if: always()
-    needs: [toolchain, compat, release-checks, compatibility, security]
+    needs: [toolchain, compat, release-checks, mutations, compatibility, security]
     runs-on: ubuntu-24.04
     # Slowest green: 6 s, run 44145457629. Five minutes is the floor for any job.
     timeout-minutes: 5
