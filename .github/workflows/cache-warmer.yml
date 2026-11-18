@@ -1,9 +1,9 @@
 name: Cache warmer
 
-# The one writer of the Mix caches that qualification (ci.yml), upstream drift and work runs
-# restore. It builds the default branch's committed locks and saves each cache under the key
-# .github/actions/mix-cache names; nothing else saves a cache. Each job looks its key up first
-# and builds, cold, only when the key is missing.
+# The one writer of the Mix caches that qualification (ci.yml) and work runs restore; the
+# drift report reads none. It builds the default branch's committed locks and saves each cache
+# under the key .github/actions/mix-cache names; nothing else saves a cache. Each job looks
+# its key up first and builds, cold, only when the key is missing.
 #
 # A push to the default branch warms a changed key at once. The schedule only replaces an
 # evicted cache: GitHub starts scheduled workflows hours late and drops some.

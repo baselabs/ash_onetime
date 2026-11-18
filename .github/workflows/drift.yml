@@ -13,9 +13,10 @@ name: Upstream drift
 # - security: the offline advisory scan and both audits on the committed lock, which surface
 #   advisories and retirements published since the last candidate.
 #
-# It publishes nothing: contents: read, no secret, no environment, and it writes no cache (jobs
-# on the committed lock restore the cache warmer's caches; the upstream cells use none). It runs no pull-request code: it starts only from the schedule or a
-# dispatch, refuses any ref but the default branch, and every checkout names that branch.
+# It publishes nothing: contents: read, no secret, no environment. It reads and writes no
+# cache: every job builds from nothing, so a report never rests on a cached build. It runs no
+# pull-request code: it starts only from the schedule or a dispatch, refuses any ref but the
+# default branch, and every checkout names that branch.
 on:
   schedule:
     - cron: '17 6 * * 1'
@@ -163,6 +164,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/release-gates
         with:
+          cache: none
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
@@ -208,6 +210,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/mutations
         with:
+          cache: none
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
@@ -258,6 +261,7 @@ jobs:
       - if: matrix.elixir != ''
         uses: ./.github/actions/compatibility-lane
         with:
+          cache: none
           elixir: ${{ matrix.elixir }}
           otp: ${{ matrix.otp }}
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}

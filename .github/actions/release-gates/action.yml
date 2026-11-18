@@ -15,9 +15,24 @@ inputs:
   pgdg-key:
     description: PGDG apt signing key fingerprint from the toolchain job
     required: true
+  cache:
+    description: >-
+      restore (qualification restores the cache warmer's release cache) or none
+      (the drift report, which reads and writes no cache)
+    required: true
 runs:
   using: composite
   steps:
+    - name: Refuse an unknown cache input
+      shell: bash
+      env:
+        CACHE: ${{ inputs.cache }}
+      run: |
+        case "$CACHE" in
+          restore | none) ;;
+          *) echo "::error::cache must be restore or none, not $CACHE"; exit 1 ;;
+        esac
+
     - uses: ./.github/actions/postgres-client
       with:
         version: ${{ inputs.postgres-client }}
@@ -28,8 +43,10 @@ runs:
         elixir: ${{ inputs.elixir }}
         otp: ${{ inputs.otp }}
 
-    # Restore only; the cache warmer on the default branch writes the release cache.
-    - uses: ./.github/actions/mix-cache
+    # Restore only, and never in the drift report; the cache warmer on the default branch
+    # writes the release cache.
+    - if: inputs.cache == 'restore'
+      uses: ./.github/actions/mix-cache
       with:
         mode: restore
         cell: release

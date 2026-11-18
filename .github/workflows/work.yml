@@ -10,11 +10,10 @@ name: Work
 # candidate's scope are what qualification runs restore. It restores the cache warmer's
 # caches and saves none.
 #
-# Lock changes: each Ash cell has its own committed lock, mix.lock for the floating
-# requirement and locks/ash-floor/mix.lock for the declared floor (mix.exs selects it). Change
-# mix.exs, or delete a package's entry from a lock to update it within its requirement, and
-# push. When a lock is not current, the lock job resolves it, audits both, uploads the locks
-# as the artifact mix-lock-<sha> and fails until they are committed.
+# Locks: each Ash cell has its own committed lock, mix.lock for the floating requirement and
+# locks/ash-floor/mix.lock for the declared floor (mix.exs selects it). A lock is resolved
+# where it is edited and committed with the mix.exs change. The lock job fetches each cell
+# --check-locked, audits it, and fails when either lock is not current; it resolves nothing.
 on:
   push:
     branches-ignore: [main, 'kci/**']
@@ -85,41 +84,20 @@ jobs:
       # Each cell is fetched and then audited before the next, because Mix checks deps/
       # against the cell's lock. deps.audit reads <path>/mix.lock, so it is pointed at each
       # cell's lock directory.
-      - name: Check and audit both cells' locks, resolving any that is not current
-        id: lock
+      - name: Check and audit both cells' committed locks
         env:
           ASH_FLOOR: ${{ needs.toolchain.outputs.ash_floor }}
         run: |
-          changed=false
-          # Mix writes a lock into an existing directory only.
-          mkdir -p locks/ash-floor
           for cell in latest "$ASH_FLOOR"; do
             export ASH_ONETIME_ASH_VERSION="$cell"
             if ! mix deps.get --check-locked; then
-              mix deps.get
-              changed=true
+              echo "::error::the lock for Ash $cell is not current; resolve it with mix deps.get (ASH_ONETIME_ASH_VERSION=$cell) where mix.exs changed and commit it with that change"
+              exit 1
             fi
             mix hex.audit
             lock_dir=$(mix run --no-start --no-compile --no-deps-check -e 'IO.write(Path.dirname(Mix.Project.config()[:lockfile]))')
             mix deps.audit --path "$lock_dir"
           done
-          git status --short -- mix.lock locks
-          git diff -- mix.lock locks
-          echo "changed=$changed" >> "$GITHUB_OUTPUT"
-      - if: steps.lock.outputs.changed == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: mix-lock-${{ github.sha }}
-          path: |
-            mix.lock
-            locks/ash-floor/mix.lock
-          if-no-files-found: error
-          retention-days: 7
-      - if: steps.lock.outputs.changed == 'true'
-        name: Require the resolved locks to be committed
-        run: |
-          echo "::error::a lock is not current; run gh run download $GITHUB_RUN_ID -n mix-lock-$GITHUB_SHA in the repository root and commit mix.lock and locks/ash-floor/mix.lock"
-          exit 1
 
   tests:
     name: Test suite
@@ -210,6 +188,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/mutations
         with:
+          cache: restore
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}

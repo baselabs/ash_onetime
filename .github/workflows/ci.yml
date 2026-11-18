@@ -129,6 +129,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/release-gates
         with:
+          cache: restore
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
@@ -174,6 +175,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/mutations
         with:
+          cache: restore
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
@@ -222,6 +224,7 @@ jobs:
       - if: matrix.elixir != ''
         uses: ./.github/actions/compatibility-lane
         with:
+          cache: restore
           elixir: ${{ matrix.elixir }}
           otp: ${{ matrix.otp }}
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
