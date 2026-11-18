@@ -176,7 +176,8 @@ jobs:
     name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
     needs: toolchain
     runs-on: ubuntu-24.04
-    timeout-minutes: 90 # no green run yet
+    # Slowest green shard: 25 min 59 s, run 44212940459; about twice that.
+    timeout-minutes: 52
     strategy:
       fail-fast: false
       matrix:
