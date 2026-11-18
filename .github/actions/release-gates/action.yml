@@ -44,13 +44,10 @@ runs:
     - name: Dependency currency
       shell: bash
       run: mix run --no-start scripts/check_deps_currency.exs
-    # check_package.exs inspects the built archive, so hex.build must precede it.
-    - name: Build the Hex package
+    # The package and docs archives publish.yml uploads, built and inspected the same way.
+    - name: Build and inspect the release archives
       shell: bash
-      run: mix hex.build
-    - name: Unpacked consumer package check
-      shell: bash
-      run: mix run scripts/check_package.exs
+      run: python3 scripts/release_archives.py build "$RUNNER_TEMP/ash-onetime-release-archives"
     # Check the committed test Repo migrations against AshPostgres code generation.
     - name: Ash codegen freshness
       shell: bash

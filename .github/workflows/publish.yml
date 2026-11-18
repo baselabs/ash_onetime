@@ -1,30 +1,40 @@
 name: Publish to Hex
 
-# infra dispatches this, with the owner's approval, once the version commit has landed on the
-# default branch and its qualified run is green; infra reads the release back and tags
-# v<version> on that commit. ash_onetime is a public package on hex.pm, so there is no
-# organization step. No cache is restored or saved.
+# Infra dispatches after the version commit qualifies on the default branch. A held release
+# is finished by dispatching again on that commit after approval. Infra reads the archives
+# back before tagging; this workflow creates neither a tag nor a GitHub release.
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Docs uploads have no conditional-create API. Serialize this workflow's dispatches so a
+# second run checks the first run's served archives before deciding what is missing.
+concurrency:
+  group: hex-publication
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Publish
-    # The Hex key lives only in the publish environment and only in the publish step's env.
+    # The Hex key lives only in the publish environment and only in the upload step's env.
     if: contains(fromJSON('["corepay","palermo-git"]'), github.actor) && contains(fromJSON('["corepay","palermo-git"]'), github.triggering_actor)
     environment: publish
-    # A public repository never uses the build box or its runners.
     runs-on: ubuntu-24.04
-    # No run exists yet. Estimated from run 44145457629's steps: uncached compile 81 s, docs,
-    # hex.build, and the package check 51 s; about twice that.
-    timeout-minutes: 10
+    timeout-minutes: 90 # no green run yet
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      package_sha256: ${{ steps.archives.outputs.package_sha256 }}
+      ready: ${{ steps.read-back.outputs.ready }}
+      elixir: ${{ steps.toolchain.outputs.elixir }}
+      otp: ${{ steps.toolchain.outputs.otp }}
+      postgres_image: ${{ steps.toolchain.outputs.postgres_image }}
+      postgres_client: ${{ steps.toolchain.outputs.postgres_client }}
+      pgdg_key: ${{ steps.toolchain.outputs.pgdg_key }}
     env:
       MIX_ENV: dev
     steps:
-      # The default branch is read from the repository, as in every workflow here.
       - name: Refuse any ref but the default branch
         env:
           GH_TOKEN: ${{ github.token }}
@@ -45,56 +55,148 @@ jobs:
         with:
           elixir: ${{ steps.toolchain.outputs.elixir }}
           otp: ${{ steps.toolchain.outputs.otp }}
-      # A first publication creates the package on hex.pm; that is the owner's, made by the
-      # owner. This workflow only adds releases to a package hex.pm already has.
-      - name: Refuse to create a package
+      - name: Read the version and require dated release notes
+        id: release
         run: |
-          status=$(curl -sS -o /dev/null -w '%{http_code}' "https://hex.pm/api/packages/ash_onetime")
-          case "$status" in
-            200) echo "hex.pm has the package ash_onetime" ;;
-            404) echo "::error::hex.pm does not have the package ash_onetime; its first publication is the owner's, made by the owner"; exit 1 ;;
-            *) echo "::error::hex.pm answered $status for the package ash_onetime"; exit 1 ;;
-          esac
-      - name: Refuse a version already published or tagged
+          mkdir "$RUNNER_TEMP/ash-onetime-hex-upload"
+          python3 scripts/release_archives.py notes "$RUNNER_TEMP/ash-onetime-release-assets"
+          echo "version=$(python3 scripts/release_archives.py version)" >> "$GITHUB_OUTPUT"
+      - name: Refuse a tagged version
         env:
           REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
-          version=$(python3 - <<'PY'
-          import re
-          from pathlib import Path
-          found = re.findall(r'^\s*@version\s+"([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)"\s*$', Path("mix.exs").read_text(), re.MULTILINE)
-          if len(found) != 1:
-              raise SystemExit("expected exactly one @version in mix.exs")
-          print(found[0])
-          PY
-          )
-          # --exit-code: 0 when the tag exists, 2 when it does not, anything else is an error.
+          # --exit-code: 0 when the tag exists, 2 when absent; anything else is an error.
           tagged=0
-          git ls-remote --exit-code --tags "https://github.com/$REPOSITORY.git" "refs/tags/v$version" > /dev/null || tagged=$?
+          git ls-remote --exit-code --tags "https://github.com/$REPOSITORY.git" "refs/tags/v$VERSION" > /dev/null || tagged=$?
           case "$tagged" in
             2) ;;
-            0) echo "::error::v$version is already tagged"; exit 1 ;;
+            0) echo "::error::v$VERSION is already tagged"; exit 1 ;;
             *) echo "::error::cannot read the repository's tags (git exited $tagged)"; exit 1 ;;
           esac
-          status=$(curl -sS -o /dev/null -w '%{http_code}' "https://hex.pm/api/packages/ash_onetime/releases/$version")
+      - name: Refuse to create a package
+        run: |
+          status=$(curl --connect-timeout 10 --max-time 30 -sS -o /dev/null -w '%{http_code}' https://hex.pm/api/packages/ash_onetime)
           case "$status" in
-            404) echo "ash_onetime $version is neither published nor tagged" ;;
-            200) echo "::error::ash_onetime $version is already on hex.pm"; exit 1 ;;
-            *) echo "::error::hex.pm answered $status for ash_onetime $version"; exit 1 ;;
+            200) echo "hex.pm has the package ash_onetime" ;;
+            404) echo "::error::ash_onetime is absent from hex.pm; first publication is the owner's, made by the owner"; exit 1 ;;
+            *) echo "::error::hex.pm answered $status for ash_onetime"; exit 1 ;;
           esac
-      - run: mix local.hex --force
+      - run: mix local.hex 2.7.0 --force
       - run: mix local.rebar --force
       - name: Fetch dependencies
         run: mix deps.get --check-locked
-      - run: mix docs --warnings-as-errors
-      # ASH_ONETIME_ASH_VERSION pins Ash exactly for the compatibility matrix; if it were set
-      # here the published requirement would freeze to that version, so it is cleared for the
-      # build, the inspection and the publish alike.
-      - name: Build the package
-        run: env -u ASH_ONETIME_ASH_VERSION mix hex.build
-      - name: Inspect the built package
-        run: env -u ASH_ONETIME_ASH_VERSION mix run scripts/check_package.exs
-      - name: Publish to hex.pm
+      # The same build and inspection the release gates run on every candidate.
+      - name: Build and inspect the package and docs archives
+        id: archives
+        run: python3 scripts/release_archives.py build "$RUNNER_TEMP/ash-onetime-release-assets"
+      - name: Plan missing uploads without a key
+        id: plan
+        working-directory: ${{ runner.temp }}/ash-onetime-hex-upload
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          assets="$RUNNER_TEMP/ash-onetime-release-assets"
+          mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs" plan "$VERSION" "$assets/ash_onetime-$VERSION.tar" "$assets/ash_onetime-$VERSION-docs.tar.gz"
+      - name: Upload only missing inspected archives
+        id: upload
+        working-directory: ${{ runner.temp }}/ash-onetime-hex-upload
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-        run: env -u ASH_ONETIME_ASH_VERSION mix hex.publish --yes
+          VERSION: ${{ steps.release.outputs.version }}
+          PACKAGE_PLAN: ${{ steps.plan.outputs.package }}
+          DOCS_PLAN: ${{ steps.plan.outputs.docs }}
+        run: |
+          assets="$RUNNER_TEMP/ash-onetime-release-assets"
+          mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs" upload "$VERSION" "$assets/ash_onetime-$VERSION.tar" "$assets/ash_onetime-$VERSION-docs.tar.gz" "$PACKAGE_PLAN" "$DOCS_PLAN"
+      - name: Read both archives back without a key
+        id: read-back
+        working-directory: ${{ runner.temp }}/ash-onetime-hex-upload
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          STAGED: ${{ steps.upload.outputs.staged }}
+        run: |
+          assets="$RUNNER_TEMP/ash-onetime-release-assets"
+          mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs" read-back "$VERSION" "$assets/ash_onetime-$VERSION.tar" "$assets/ash_onetime-$VERSION-docs.tar.gz" "$STAGED"
+      - name: Upload release-assets for consumer verification
+        if: ${{ !cancelled() && steps.archives.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/ash-onetime-release-assets/
+          if-no-files-found: error
+      - name: Remove this job's temporary release files
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/ash-onetime-release-assets" "$RUNNER_TEMP/ash-onetime-hex-upload"
+
+  published-livebooks:
+    name: Published Livebooks
+    needs: publish
+    if: contains(fromJSON('["corepay","palermo-git"]'), github.actor) && contains(fromJSON('["corepay","palermo-git"]'), github.triggering_actor)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: ${{ needs.publish.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-published
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-published"
+    steps:
+      - name: Explain a held publication
+        if: needs.publish.outputs.ready != 'true'
+        run: echo "::notice::Published Livebooks await both archives; dispatch again on this commit after approval to finish"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.publish.outputs.ready == 'true'
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/postgres-client
+        if: needs.publish.outputs.ready == 'true'
+        with:
+          version: ${{ needs.publish.outputs.postgres_client }}
+          pgdg-key: ${{ needs.publish.outputs.pgdg_key }}
+      - uses: ./.github/actions/beam
+        if: needs.publish.outputs.ready == 'true'
+        with:
+          elixir: ${{ needs.publish.outputs.elixir }}
+          otp: ${{ needs.publish.outputs.otp }}
+      - name: Install pinned Hex and Rebar
+        if: needs.publish.outputs.ready == 'true'
+        run: |
+          mix local.hex 2.7.0 --force
+          mix local.rebar --force
+      - name: Wait until the published package is served
+        if: needs.publish.outputs.ready == 'true'
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+          PACKAGE_SHA256: ${{ needs.publish.outputs.package_sha256 }}
+        run: |
+          archive="$RUNNER_TEMP/ash-onetime-published.tar"
+          trap 'rm -f -- "$archive"' EXIT
+          for attempt in $(seq 1 12); do
+            status=$(curl --connect-timeout 10 --max-time 30 -sS -o "$archive" -w '%{http_code}' "https://repo.hex.pm/tarballs/ash_onetime-$VERSION.tar")
+            case "$status" in
+              200) printf '%s  %s\n' "$PACKAGE_SHA256" "$archive" | sha256sum --check; exit 0 ;;
+              404) ;;
+              *) echo "::error::repo.hex.pm answered $status"; exit 1 ;;
+            esac
+            if [ "$attempt" -lt 12 ]; then sleep 5; fi
+          done
+          echo "::error::ash_onetime $VERSION was not served before the wait ended"
+          exit 1
+      - name: Execute published Livebook source cells
+        if: needs.publish.outputs.ready == 'true'
+        run: elixir scripts/check_livebooks.exs --published

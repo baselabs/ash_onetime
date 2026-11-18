@@ -43,22 +43,35 @@ CI's release-gates and mutation-battery jobs also run these on every candidate:
 ```sh
 mix run --no-start scripts/check_deps_currency.exs
 mix spark.cheat_sheets --check --extensions AshOnetime.Resource
-mix docs --warnings-as-errors
 MIX_ENV=test mix ash.codegen --check                      # committed test-repo codegen freshness
 MIX_ENV=test mix run scripts/check_mutations.exs -- all   # with DATABASE_URL exported as in your .env
                                                           # CI runs it as shards: -- --shard I/N all
 elixir scripts/check_livebooks.exs --local                # executes source cells against PostgreSQL
-mix run scripts/check_package.exs                         # after the gate's mix hex.build
+python3 scripts/release_archives.py build _build/release # package and docs archives, inspected
 mix run scripts/check_optional_matrix.exs
 ```
 
 To reset notebook installs, remove `_build/livebook-install` (or your `MIX_INSTALL_DIR`).
 Each notebook removes its UUID-named schema after verification.
 
-Releases publish only through the `Publish to Hex` workflow, which an owner dispatches; no
-one publishes from a workstation. After publication, `elixir scripts/check_livebooks.exs
---published` starts from Hex rather than the checkout, then executes all notebook cells against
-PostgreSQL; it is the executable consumer check for the artifact users will install.
+Infra dispatches releases through the `Publish to Hex` workflow after the version commit
+qualifies on the default branch. No one publishes from a workstation. The workflow requires
+an existing package on Hex, an untagged version and dated release notes. It builds and inspects
+the package and reproducible docs archives before the one keyed step uploads only missing
+archives, without loading a Mix project. It refuses retired releases or differing bytes and
+never replaces a served archive. If Hex holds either upload for approval, infra finishes it by
+dispatching again on the same commit after approval.
+
+The publish job uploads one `release-assets` artifact containing the package archive, docs
+archive, `SHA256SUMS` and `NOTES.md`. Infra reads both archives back, compares the package
+with that artifact, tags the published commit and creates the GitHub release from those files.
+Consumers verify files from that GitHub release; the workflow artifact expires. No workflow
+creates a GitHub release or runs on a tag.
+
+The separate, keyless `published-livebooks` job waits until the archives are served, then runs
+`elixir scripts/check_livebooks.exs --published` against its own PostgreSQL service. It starts
+from Hex rather than the checkout and executes all notebook cells against the package users
+will install. Qualification executes the notebooks only with `--local`.
 
 Open work is tracked in [GitHub issues](https://github.com/baselabs/ash_onetime/issues).
 

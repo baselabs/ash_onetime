@@ -42,6 +42,17 @@ Re-read it whenever you touch a workflow, a Dockerfile, a release script or a se
   deploy, publish, tag a version, dispatch a workflow, push an image by hand, or handle a
   release, publish or CI key. When something should go out, send infra-1 one message: the
   repository, the full commit, what goes out and anything it needs.
+- **Publication.** Infra dispatches `publish.yml` on the qualified default-branch commit. It
+  publishes only a new version of an existing Hex package, with a dated changelog section and
+  no existing version tag. Build and inspect the package and reproducible docs archives before
+  the keyed step; that step only uploads missing archives with `mix run --no-mix-exs` from an
+  empty directory. A held release is finished by a second dispatch on the same commit after
+  approval. Matching served archives are reused; retired releases and differing bytes are
+  refused, never replaced. Read both archives back without a key. The publish job exports
+  the package, docs, checksums and notes as one `release-assets` artifact for infra to compare
+  and attach to the GitHub release. No workflow creates a release or runs on a tag. The
+  `published-livebooks` job needs the publish job, uses the same actor restriction, and holds
+  no environment or key. Qualification uses only local package consumers.
 - **You write your own workflow changes; infra-1 reviews them.** Before landing a change to
   `.github/`, a Dockerfile, a release script or anything that touches a secret, send infra-1 the
   branch and head and wait for its review. Take any CI/CD, runner, box or key problem to

@@ -82,7 +82,7 @@ jobs:
     name: "Ash ${{ matrix.ash }}"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Same composite as ci.yml; slowest green there: 32 min (Ash latest), run 44190160838; about twice that.
+    # Same composite as ci.yml; slowest green there: 32 min (Ash latest), run 44190160838, cold; about twice that.
     timeout-minutes: 65
     strategy:
       fail-fast: false
@@ -130,8 +130,11 @@ jobs:
     name: "Release gates"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Slowest green: 14 min 23 s, run 44212940459; about twice that.
-    timeout-minutes: 30
+    # Slowest green: 14 min 23 s, run 44212940459, which restored a cache. A cold start adds
+    # about 3 min: the dev compile took 86 s cold in run 44190160838 and the test compile
+    # about as long. The docs build these gates now add has no run of its own here; allow
+    # about 2 min. About twice 19 1/2 min; measured again on its first cold green run.
+    timeout-minutes: 40
 
     services:
       postgres:
@@ -169,7 +172,8 @@ jobs:
     name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Slowest green shard: 25 min 59 s, run 44212940459; about twice that.
+    # Slowest green shard: 25 min 59 s, run 44212940459, which restored a cache; slowest cold:
+    # 24 min 58 s, Work run 44216676477 (the same composite). About twice the slower.
     timeout-minutes: 52
     strategy:
       fail-fast: false
@@ -214,7 +218,7 @@ jobs:
     name: Compatibility (${{ matrix.elixir && format('Elixir {0}, OTP {1}', matrix.elixir, matrix.otp) || 'no second toolchain declared' }})
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Same composite as ci.yml; slowest green there: 19 min, run 44190160838; about twice that.
+    # Same composite as ci.yml; slowest green there: 19 min, run 44190160838, cold; about twice that.
     timeout-minutes: 40
     strategy:
       fail-fast: false
