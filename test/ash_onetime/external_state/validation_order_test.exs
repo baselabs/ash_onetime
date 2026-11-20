@@ -5,6 +5,7 @@ for partitioning <- [nil, 2] do
             ) do
     use AshOnetime.Test.ExternalStateCase, async: false
     @moduletag hash_partitions: partitioning
+    @moduletag :enforcement_raised_before_checkout_mutation
 
     @scenarios [
       {:claim, :open},

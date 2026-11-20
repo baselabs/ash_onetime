@@ -9133,7 +9133,7 @@ defmodule AshOnetime.MutationCheck do
                  original:
                    ":not_started -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)",
                  mutated: ":not_started -> Result.failure(:disconnected, :unknown, :unknown)",
-                 test: "test/ash_onetime/external_state/query_transport_test.exs",
+                 test: ["test/ash_onetime/external_state/query_transport_test.exs", "test/ash_onetime/external_state/validation_order_test.exs"],
                  tag: "enforcement_raised_before_checkout_mutation",
                  test_name: "plain: a stopped native pool proves checkout never started",
                  assertion: "assert %Result",
