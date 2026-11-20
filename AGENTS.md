@@ -42,6 +42,18 @@ Re-read it whenever you touch a workflow, a Dockerfile, a release script or a se
   deploy, publish, tag a version, dispatch a workflow, push an image by hand, or handle a
   release, publish or CI key. When something should go out, send infra-1 one message: the
   repository, the full commit, what goes out and anything it needs.
+- **A landing ends with its cleanup.** A landing is not done until everything the change created
+  is gone. In the same step that confirms the default branch moved, remove:
+  - its work branch, on GitHub and locally (`git branch -d` succeeds, because the landed commits
+    are on the default branch);
+  - its worktree;
+  - any Actions cache scoped to that branch;
+  - every scratch ref, container, clone and temporary file it made.
+
+  A branch that a rebuild replaces is deleted when the replacement is pushed, not when the
+  replacement lands. The landing report lists what was removed. A child agent's final report
+  lists every branch, ref, worktree, file and artifact it created, so the landing can remove
+  them.
 - **Publication.** Infra dispatches `publish.yml` on the qualified default-branch commit. It
   publishes only a new version of an existing Hex package, with a dated changelog section and
   no existing version tag. Build and inspect the package and reproducible docs archives before
