@@ -9199,18 +9199,18 @@ defmodule AshOnetime.MutationCheck do
                  tag: "enforcement_query_connection_error_mutation",
                  test_name: "plain: a terminated native client stays disconnected after dispatch",
                  assertion: "assert_receive {:lost_client_result,",
-                 assertion_line: 109,
+                 assertion_line: 115,
                  required_failures: [
                    %{
                      test_name:
                        "plain: a terminated native client stays disconnected after dispatch",
                      assertion: "assert_receive {:lost_client_result,",
-                     assertion_line: 109
+                     assertion_line: 115
                    },
                    %{
                      test_name: "2: a terminated native client stays disconnected after dispatch",
                      assertion: "assert_receive {:lost_client_result,",
-                     assertion_line: 109
+                     assertion_line: 115
                    }
                  ]
                },
@@ -9275,18 +9275,18 @@ defmodule AshOnetime.MutationCheck do
                  tag: "enforcement_query_other_error_mutation",
                  test_name: "plain: a real COPY connection refusal remains dispatched unknown",
                  assertion: "assert_receive",
-                 assertion_line: 144,
+                 assertion_line: 150,
                  required_failures: [
                    %{
                      test_name:
                        "plain: a real COPY connection refusal remains dispatched unknown",
                      assertion: "assert_receive",
-                     assertion_line: 144
+                     assertion_line: 150
                    },
                    %{
                      test_name: "2: a real COPY connection refusal remains dispatched unknown",
                      assertion: "assert_receive",
-                     assertion_line: 144
+                     assertion_line: 150
                    }
                  ]
                }

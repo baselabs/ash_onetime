@@ -110,7 +110,9 @@ for partitioning <- [nil, 2] do
           "test",
           :crypto.hash(:sha256, "response"),
           "response",
-          nil, lock_timeout_ms: 0)
+          nil,
+          lock_timeout_ms: 0
+        )
 
     defp reject(:release, target, _request, _claim), do: Postgres.release(target, "")
 

@@ -96,7 +96,12 @@ for partitioning <- [nil, 2] do
           assert role == c.runtime
           :ok = Supervisor.terminate_child(supervisor, child_id)
           assert_receive {:DOWN, ^monitor, :process, ^connection, _reason}, 5000
-          send(parent, {:lost_client_result, Postgres.claim(native_target, request!("lost-client"))})
+
+          send(
+            parent,
+            {:lost_client_result, Postgres.claim(native_target, request!("lost-client"))}
+          )
+
           send(parent, {:native_driver_result, SQL.query(pool, "SELECT 1", [])})
         end)
       rescue
@@ -106,6 +111,7 @@ for partitioning <- [nil, 2] do
       end
 
       assert_receive {:native_driver_result, {:error, %DBConnection.ConnectionError{}}}, 5000
+
       assert_receive {:lost_client_result,
                       %Result{
                         status: :failure,
