@@ -25,6 +25,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     run = ttl_reads(pair.run)
     twin = ttl_reads(pair.twin)
     assert run != [] and twin != []
+    IO.inspect(%{run: run, twin: twin}, label: "C_TICK_READS")
     assert DateTime.to_unix(hd(twin)) - DateTime.to_unix(List.last(run)) == 1
     assert_green(pair)
   end
@@ -250,7 +251,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                   {m, f, if(is_list(a), do: length(a), else: a), location}
                 end)
               )
-          }, label: "U14_ANCHORS", limit: :infinity)
+          },
+          label: "U14_ANCHORS",
+          limit: :infinity
+        )
 
         pair
       end
@@ -285,7 +289,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     reads = ttl_reads(side)
     if reads == [], do: raise("C-tick did not capture a TTL read")
     target = (DateTime.to_unix(List.last(reads)) + 1) * 1_000
-    Process.sleep(max(target - System.system_time(:millisecond), 0))
+    now = System.system_time(:millisecond)
+    IO.inspect(%{target: target, after_side: now}, label: "C_TICK_BOUNDARY")
+    Process.sleep(max(target - now, 0))
   end
 
   defp ttl_reads(side) do

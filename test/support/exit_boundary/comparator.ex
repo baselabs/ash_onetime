@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.Comparator do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.{
+    AttributeCopies,
     ClockExpressions,
     ContextCopies,
     Declarations,
@@ -104,6 +105,10 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       row: row,
       pairing: pairing,
       query_contexts: %{},
+      attribute_copies: {
+        Registry.compute(:attribute_copy, [ri, run.resource]),
+        Registry.compute(:attribute_copy, [ti, twin.resource])
+      },
       current: nil,
       errors: [],
       queries: {rq, tq},
@@ -979,6 +984,17 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       else: error(state, :o2b_action, path, a, b)
   end
 
+  defp term(%Ash.Resource.Actions.Argument{} = a, %Ash.Resource.Actions.Argument{} = b, state, path) do
+    run_action = Registry.compute(:o2b_argument, [state.run.resource, state.row.action])
+    twin_action = Registry.compute(:o2b_argument, [state.twin.resource, state.row.action])
+    expected_run = Enum.find(run_action.arguments, &(&1.name == a.name))
+    expected_twin = Enum.find(twin_action.arguments, &(&1.name == b.name))
+
+    if a.name === b.name and a === expected_run and b === expected_twin,
+      do: state,
+      else: error(state, :o2b_argument, path, a, b)
+  end
+
   defp term(
          %{__struct__: module, stacktrace: a},
          %{__struct__: module, stacktrace: b},
@@ -1065,6 +1081,13 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     column_value(a, b, column, state, path ++ [4])
   end
 
+  defp term({:data_row, a}, {:data_row, b}, state, path) do
+    previous = state.current
+    state = row_state(state, wire_claim_state(a), wire_claim_state(b))
+    state = term(a, b, state, path ++ [1])
+    %{state | current: previous}
+  end
+
   defp term(
          {:data_column, sql, {ordinal, binds}, n, name, table, number, oid, format, a},
          {:data_column, twin_sql, {twin_ordinal, twin_binds}, n, name, twin_table, number, oid,
@@ -1112,14 +1135,15 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     state =
       derived_operation(a.operation_hash, b.operation_hash, state, path ++ [:operation_hash])
 
+    previous = state.current
+    state = row_state(state, a.state, b.state)
+
     state =
       Enum.reduce([response_codec: :codec, response_digest: :digest], state, fn {field, key}, s ->
-        if Map.fetch!(a, field) == nil and Map.fetch!(b, field) == nil,
-          do: s,
-          else:
-            response_value(Map.fetch!(a, field), Map.fetch!(b, field), key, s, path ++ [field])
+        response_value(Map.fetch!(a, field), Map.fetch!(b, field), key, s, path ++ [field])
       end)
 
+    state = %{state | current: previous}
     fields = [:id, :operation_hash, :response_codec, :response_digest]
     term(Map.drop(Map.from_struct(a), fields), Map.drop(Map.from_struct(b), fields), state, path)
   end
@@ -1141,10 +1165,10 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   end
 
   defp term(%AshOnetime.Store.Result{} = a, %AshOnetime.Store.Result{} = b, state, path) do
-    state =
-      if a.payload == nil and b.payload == nil,
-        do: state,
-        else: response_value(a.payload, b.payload, :payload, state, path ++ [:payload])
+    previous = state.current
+    state = row_state(state, a.status, b.status)
+    state = response_value(a.payload, b.payload, :payload, state, path ++ [:payload])
+    state = %{state | current: previous}
 
     term(
       Map.delete(Map.from_struct(a), :payload),
@@ -1202,11 +1226,18 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         |> Enum.with_index()
         |> Enum.reduce(state, fn {{ar, br}, n}, s ->
           if length(ar) == length(br) and length(ar) == length(a.columns) do
-            Enum.zip(ar, br)
+            previous = s.current
+            run_row = Map.new(Enum.zip(a.columns, ar))
+            twin_row = Map.new(Enum.zip(b.columns, br))
+            s = row_state(s, run_row["state"], twin_row["state"])
+
+            s = Enum.zip(ar, br)
             |> Enum.with_index()
             |> Enum.reduce(s, fn {{av, bv}, k}, s ->
               column_value(av, bv, Enum.at(a.columns, k), s, path ++ [:rows, n, k])
             end)
+
+            %{s | current: previous}
           else
             error(s, :result_row_width, path ++ [:rows, n], ar, br)
           end
@@ -1309,36 +1340,20 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   end
 
   defp term(a, b, state, path) when is_map(a) and is_map(b) do
-    fields = Registry.typed_fields(Map.get(a, :__struct__))
+    if argument = AttributeCopies.slot(state.at, path) do
+      {run_sources, twin_sources} = state.attribute_copies
+      source_a = Map.get(run_sources, {at_index(state.at, :run_index), argument})
+      source_b = Map.get(twin_sources, {at_index(state.at, :twin_index), argument})
 
-    {state, paired} =
-      Enum.reduce(Enum.sort(Map.keys(a)), {state, MapSet.new()}, fn key, {s, paired} ->
-        twin_key = map_key(key, s)
+      case {source_a, source_b} do
+        {%{value: ^a, typed: typed}, %{value: ^b, typed: typed}} ->
+          attributes(a, b, typed, state, path)
 
-        case Map.fetch(b, twin_key) do
-          {:ok, bv} ->
-            s = term(key, twin_key, s, path ++ [{:key, key}])
-            av = Map.fetch!(a, key)
-
-            s =
-              case Map.get(fields, key) do
-                :uuid -> uuid_identity(av, bv, s, path ++ [key])
-                :operation -> derived_operation(av, bv, s, path ++ [key])
-                nil -> term(av, bv, s, path ++ [key])
-              end
-
-            {s, MapSet.put(paired, twin_key)}
-
-          :error ->
-            {error(s, :o5_map_key, path ++ [key], {:ok, Map.fetch!(a, key)}, :error), paired}
-        end
-      end)
-
-    Enum.reduce(Enum.sort(Map.keys(b)), state, fn key, s ->
-      if MapSet.member?(paired, key),
-        do: s,
-        else: error(s, :o5_map_key, path ++ [key], :error, {:ok, Map.fetch!(b, key)})
-    end)
+        _ -> error(state, :attribute_copy, path, a, b)
+      end
+    else
+      map(a, b, state, path)
+    end
   end
 
   defp term(a, b, state, path) when is_list(a) and is_list(b) do
@@ -1364,11 +1379,16 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
             ~w(id logical_partition operation_hash scope_hash key_hash fingerprint state response_partition response_codec response_digest hold_reference admitted_at retain_until inserted_at)
 
           if length(a) == length(columns) and length(b) == length(columns) do
-            Enum.zip(a, b)
+            previous = state.current
+            state = row_state(state, Enum.at(a, 6), Enum.at(b, 6))
+
+            state = Enum.zip(a, b)
             |> Enum.with_index()
             |> Enum.reduce(state, fn {{av, bv}, n}, s ->
               column_value(av, bv, Enum.at(columns, n), s, path ++ [n])
             end)
+
+            %{state | current: previous}
           else
             error(state, :claim_row_width, path, length(a), length(b))
           end
@@ -1463,11 +1483,44 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     end
   end
 
+  defp map(a, b, state, path) do
+    fields = Registry.typed_fields(Map.get(a, :__struct__))
+
+    {state, paired} =
+      Enum.reduce(Enum.sort(Map.keys(a)), {state, MapSet.new()}, fn key, {s, paired} ->
+        twin_key = map_key(key, s)
+
+        case Map.fetch(b, twin_key) do
+          {:ok, bv} ->
+            s = term(key, twin_key, s, path ++ [{:key, key}])
+            av = Map.fetch!(a, key)
+
+            s =
+              case Map.get(fields, key) do
+                :uuid -> uuid_identity(av, bv, s, path ++ [key])
+                :operation -> derived_operation(av, bv, s, path ++ [key])
+                nil -> term(av, bv, s, path ++ [key])
+              end
+
+            {s, MapSet.put(paired, twin_key)}
+
+          :error ->
+            {error(s, :o5_map_key, path ++ [key], {:ok, Map.fetch!(a, key)}, :error), paired}
+        end
+      end)
+
+    Enum.reduce(Enum.sort(Map.keys(b)), state, fn key, s ->
+      if MapSet.member?(paired, key),
+        do: s,
+        else: error(s, :o5_map_key, path ++ [key], :error, {:ok, Map.fetch!(b, key)})
+    end)
+  end
+
   defp subject(a, b, state, path) do
     state = validate_subject_declaration(a, :run, state, path)
     state = validate_subject_declaration(b, :twin, state, path)
-    {a, state} = private(a, b, state, path)
-    {a, state} = subject_attributes(a, b, state, path)
+    state = context(a.context, b.context, state, path ++ [:context])
+    {fields, state} = subject_attributes(a, b, state, path)
     slots = Registry.hook_slots(state.row.type)
 
     state =
@@ -1487,7 +1540,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     # list element, and the list's length, still goes through the exact comparison.
     a = replace_hooks(a, slots, state.row)
     b = replace_hooks(b, slots, state.row)
-    term(Map.from_struct(a), Map.from_struct(b), state, path)
+    term(
+      Map.drop(Map.from_struct(a), [:context | fields]),
+      Map.drop(Map.from_struct(b), [:context | fields]),
+      state,
+      path
+    )
   end
 
   defp validate_subject_declaration(subject, side, state, path) do
@@ -1498,32 +1556,37 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       else: error(state, :o2b_action, path ++ [side, :action], subject.action, expected)
   end
 
-  defp private(a, b, state, path) do
-    state = context(a.context, b.context, state, path ++ [:context])
-    {%{a | context: b.context}, state}
-  end
-
   defp subject_attributes(%Ash.Changeset{} = a, b, state, path) do
-    keys = (Map.keys(a.attributes) ++ Map.keys(b.attributes)) |> Enum.uniq() |> Enum.sort()
+    fields = [:attributes, :attribute_changes]
     typed = Registry.uuid_attributes(state.run.resource)
 
     state =
-      Enum.reduce(keys, state, fn key, s ->
-        case {Map.fetch(a.attributes, key), Map.fetch(b.attributes, key)} do
-          {{:ok, av}, {:ok, bv}} ->
-            if key in typed,
-              do: uuid_identity(av, bv, s, path ++ [:attributes, key]),
-              else: term(av, bv, s, path ++ [:attributes, key])
-
-          {av, bv} ->
-            error(s, :o5_map_key, path ++ [:attributes, key], av, bv)
-        end
+      Enum.reduce(fields, state, fn field, s ->
+        attributes(Map.fetch!(a, field), Map.fetch!(b, field), typed, s, path ++ [field])
       end)
 
-    {%{a | attributes: b.attributes}, state}
+    {fields, state}
   end
 
-  defp subject_attributes(a, _b, state, _path), do: {a, state}
+  defp subject_attributes(_a, _b, state, _path), do: {[], state}
+
+  defp attributes(a, b, typed, state, path) when is_map(a) and is_map(b) do
+    keys = (Map.keys(a) ++ Map.keys(b)) |> Enum.uniq() |> Enum.sort()
+
+    Enum.reduce(keys, state, fn key, s ->
+      case {Map.fetch(a, key), Map.fetch(b, key)} do
+        {{:ok, av}, {:ok, bv}} ->
+          if key in typed,
+            do: uuid_identity(av, bv, s, path ++ [key]),
+            else: term(av, bv, s, path ++ [key])
+
+        {av, bv} ->
+          error(s, :o5_map_key, path ++ [key], av, bv)
+      end
+    end)
+  end
+
+  defp attributes(a, b, _typed, state, path), do: term(a, b, state, path)
 
   defp context(context, twin_context, state, path) do
     private = Map.get(context, :private, %{})
@@ -1741,7 +1804,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          2,
          2,
          1
-       ]), do: true
+       ]),
+       do: true
 
   defp encoded_parameters?(_, _), do: false
 
@@ -1802,7 +1866,9 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     end
   end
 
-  defp parameters(a, b, state, path), do: error(state, :query_parameters, path, a, b)
+  defp parameters(a, b, state, path) do
+    if a === b, do: state, else: error(state, :query_parameters, path, a, b)
+  end
   defp column_value(a, b, "operation_hash", state, path), do: derived_operation(a, b, state, path)
 
   defp column_value({:uuid, a}, {:uuid, b}, _name, state, path),
@@ -1828,17 +1894,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
   defp column_value(a, b, _name, state, path), do: term(a, b, state, path)
 
-  defp response_slot(%{at: %{mfa: {AshOnetime.Admission, f, _}}}, path)
-       when f in [
-              :persist_encoded,
-              :persist_completion,
-              :validate_complete,
-              :persist_and_validate
-            ] do
-    case List.last(path) do
-      key when key in [:codec, :digest, :payload] -> key
-      _ -> nil
-    end
+  defp response_slot(%{at: %{mfa: {AshOnetime.Admission, f, _}}}, [
+         :event, 2, 2, n, key
+       ]) when key in [:codec, :digest, :payload] do
+    if (f in [:persist_encoded, :persist_completion] and n == 1) or
+         (f == :validate_complete and n == 2),
+      do: key
   end
 
   defp response_slot(%{at: %{mfa: {AshOnetime.Store, f, _}}}, [:event, 2, 2, n])
@@ -1861,21 +1922,24 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          2,
          2,
          n
-       ]), do: %{0 => :codec, 1 => :digest, 2 => :payload}[n]
+       ]),
+       do: %{0 => :codec, 1 => :digest, 2 => :payload}[n]
 
   defp response_slot(%{at: %{mfa: {AshOnetime.Store.Postgres, :insert_payload, 4}}}, [
          :event,
          2,
          2,
          3
-       ]), do: :payload
+       ]),
+       do: :payload
 
   defp response_slot(%{at: %{mfa: {AshOnetime.Store.Postgres, :update_complete, 7}}}, [
          :event,
          2,
          2,
          n
-       ]), do: %{3 => :codec, 4 => :digest}[n]
+       ]),
+       do: %{3 => :codec, 4 => :digest}[n]
 
   defp response_slot(%{at: %{mfa: {m, :fixed_digest_equal?, 2}}}, [:event, 2, 2, n])
        when m in [AshOnetime.Admission, AshOnetime.Store.Postgres] and n in [0, 1], do: :digest
@@ -1894,12 +1958,14 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     end
   end
 
-  defp response_slot(%{at: %{mfa: {:crypto, f, 2}, stack: stack}}, [:event, 2, 2, n])
+  defp response_slot(%{at: %{mfa: {:crypto, f, 2}, stack: stack}} = state, [:event, 2, 2, n])
        when f in [:hash_equals, :hash_equals_nif] and n in [0, 1] do
-    if Enum.any?(stack, fn {m, f, a} ->
-         m in [AshOnetime.Admission, AshOnetime.Store.Postgres, AshOnetime.Cache] and
-           f in [:fixed_digest_equal?, :fixed_equal?] and a == 2
-       end), do: :digest
+    if not cache_fingerprint_comparison?(state) and
+         Enum.any?(stack, fn {m, f, a} ->
+           m in [AshOnetime.Admission, AshOnetime.Store.Postgres, AshOnetime.Cache] and
+             f in [:fixed_digest_equal?, :fixed_equal?] and a == 2
+         end),
+       do: :digest
   end
 
   defp response_slot(%{at: %{mfa: {AshOnetime.Store.Postgres, :load_payload, 2}}}, [:event, 3, 1]),
@@ -1910,10 +1976,13 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          2,
          2,
          1
-       ]), do: :payload
+       ]),
+       do: :payload
 
-  defp response_slot(%{at: %{mfa: {AshOnetime.Cache, :fixed_equal?, 2}}}, [:event, 2, 2, n])
-       when n in [0, 1], do: :digest
+  defp response_slot(%{at: %{mfa: {AshOnetime.Cache, :fixed_equal?, 2}}} = state, [:event, 2, 2, n])
+       when n in [0, 1] do
+    if not cache_fingerprint_comparison?(state), do: :digest
+  end
 
   defp response_slot(%{at: %{mfa: {AshOnetime.Cache, :store, 3}}}, [:event, 2, 2, 2]),
     do: :payload
@@ -1921,18 +1990,84 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp response_slot(
          %{at: %{mfa: {AshOnetime.Store.Postgres, :"-complete_transaction/7-fun-1-", 4}}},
          [:event, 2, 2, 2]
-       ), do: :payload
+       ),
+       do: :payload
 
   defp response_slot(
          %{at: %{mfa: {AshOnetime.Store.Postgres, :"-complete_transaction/7-fun-2-", 7}}},
          [:event, 2, 2, n]
-       ), do: %{2 => :codec, 3 => :digest}[n]
+       ),
+       do: %{2 => :codec, 3 => :digest}[n]
 
   defp response_slot(%{at: %{mfa: {AshOnetime.Store.Result, _, _}}}, path) do
     if List.last(path) == :payload, do: :payload
   end
 
   defp response_slot(_, _), do: nil
+
+  defp cache_fingerprint_comparison?(state) do
+    # valid_entry?'s first equality checks the request fingerprint; its later
+    # equalities check response digests. The source frame and occurrence select
+    # the slot, never the compared bytes.
+    Enum.all?([:run, :twin], fn side ->
+      index = at_index(state.at, if(side == :run, do: :run_index, else: :twin_index))
+
+      if is_integer(index) do
+        events = Enum.take(state[side].run.events, index + 1)
+
+        start =
+          Enum.find_index(Enum.reverse(events), fn
+            %{event: {_, :call, {AshOnetime.Cache, :valid_entry?, _}}} -> true
+            _ -> false
+          end)
+
+        if start do
+          events
+          |> Enum.take(-start - 1)
+          |> Enum.count(&match?(%{event: {_, :call, {AshOnetime.Cache, :fixed_equal?, _}}}, &1))
+          |> Kernel.==(1)
+        else
+          false
+        end
+      else
+        false
+      end
+    end)
+  end
+
+  defp row_state(state, a, b),
+    do: %{state | current: Map.put(state.current || %{}, :row_states, {a, b})}
+
+  defp wire_claim_state(columns) when is_list(columns) do
+    names = Enum.map(columns, fn
+      {:data_column, _, _, _, name, _, _, _, _, _} -> name
+      _ -> :undeclared_column
+    end)
+
+    if names == Registry.database_statements().claim.columns do
+      Enum.find_value(columns, fn
+        {:data_column, _, _, _, "state", _, _, _, _, value} -> value
+        _ -> nil
+      end)
+    end
+  end
+
+  defp wire_claim_state(_), do: nil
+
+  defp nullable_response?(%{current: %{row_states: {a, b}}})
+       when a in [:admitted, :processing, :collision, :failure, "processing", "collision"] and a == b,
+       do: true
+
+  defp nullable_response?(%{current: %{run: a, twin: b}}) do
+    case {a.event, b.event} do
+      {{_, :call, {AshOnetime.Admission, :validate_collision_payload, [status, _]}},
+       {_, :call, {AshOnetime.Admission, :validate_collision_payload, [status, _]}}}
+      when status in [:processing, :collision] -> true
+      _ -> false
+    end
+  end
+
+  defp nullable_response?(_), do: false
 
   defp response_value(a, b, key, state, path) do
     expected = fn side, derivations ->
@@ -1959,7 +2094,11 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     ea = expected.(:run, rd)
     eb = expected.(:twin, td)
 
-    if a === ea and b === eb,
+    # NULL belongs to a processing/collision row or its checked payload call.
+    # Completed copies stay bound to encode, including a missing payload.
+    empty? = a === nil and b === nil and nullable_response?(state)
+
+    if empty? or (a === ea and b === eb),
       do: state,
       else: error(state, :response_copy, path, a, b)
   end
@@ -1993,7 +2132,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          2,
          2,
          1
-       ]), do: true
+       ]),
+       do: true
 
   defp cache_arguments?(_, _), do: false
 
@@ -2016,7 +2156,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          2,
          0,
          1
-       ]), do: true
+       ]),
+       do: true
 
   defp cache_key_slot?(%{at: %{mfa: {:ets, :insert, 2}, stack: stack}}, [:event, 2, 2, 1, 0]),
     do: {AshOnetime.Cache.Ets, :handle_call, 3} in stack
@@ -2090,8 +2231,10 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     statements = Registry.database_statements()
     claim? = table == statements.claim.table
     columns = (Map.keys(a) ++ Map.keys(b)) |> Enum.uniq() |> Enum.sort()
+    previous = state.current
+    state = if claim?, do: row_state(state, a["state"], b["state"]), else: state
 
-    Enum.reduce(columns, state, fn column, s ->
+    state = Enum.reduce(columns, state, fn column, s ->
       case {Map.fetch(a, column), Map.fetch(b, column)} do
         {{:ok, av}, {:ok, bv}} ->
           cond do
@@ -2119,6 +2262,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
           error(s, :o5_map_key, path ++ [column], av, bv)
       end
     end)
+
+    %{state | current: previous}
   end
 
   defp peer_snapshot_origin(row, table, database) do
@@ -2171,7 +2316,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          2,
          2,
          1
-       ]), do: true
+       ]),
+       do: true
 
   defp scalar_operation?(_, _), do: false
 
@@ -2189,7 +2335,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          2,
          2,
          0
-       ]), do: true
+       ]),
+       do: true
 
   defp scalar_uuid?(%{mfa: {AshOnetime.ExternalRecovery, :safe_execute, 5}}, [:event, 2, 2, 1]),
     do: true
@@ -2199,14 +2346,16 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          2,
          2,
          3
-       ]), do: true
+       ]),
+       do: true
 
   defp scalar_uuid?(%{mfa: {AshOnetime.ExternalRecovery, :execute_then_settle, 7}}, [
          :event,
          2,
          2,
          4
-       ]), do: true
+       ]),
+       do: true
 
   defp scalar_uuid?(%{mfa: {AshOnetime.Store.Postgres, :select_claim, 4}}, [:event, 2, 2, 3]),
     do: true
@@ -2216,14 +2365,16 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          2,
          2,
          2
-       ]), do: true
+       ]),
+       do: true
 
   defp scalar_uuid?(%{mfa: {AshOnetime.Test.ExitBoundary.External, :execute, 3}}, [
          :event,
          2,
          2,
          0
-       ]), do: true
+       ]),
+       do: true
 
   defp scalar_uuid?(%{mfa: {AshOnetime.ExternalEffect, :put_result, 3}}, [:event, 2, 2, 1]),
     do: true
@@ -2261,7 +2412,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          2,
          2,
          4
-       ]), do: true
+       ]),
+       do: true
 
   defp scalar_uuid?(%{mfa: {AshOnetime.ExternalRecovery, :safe_recover, 4}}, [:event, 2, 2, 1]),
     do: true
@@ -2271,7 +2423,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          2,
          2,
          0
-       ]), do: true
+       ]),
+       do: true
 
   defp scalar_uuid?(_, _), do: false
 

@@ -39,6 +39,7 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
     {role, state} = role(e.pid, state)
     phase = Map.get(state.phase, role, Map.get(side, :origin_phase_override, :pre_arm))
     phase = Registry.phase(e.event, phase)
+    phase = Registry.hook_phase(e.event, phase, side.hooks, side.hook_frames)
 
     stack =
       Enum.reject(

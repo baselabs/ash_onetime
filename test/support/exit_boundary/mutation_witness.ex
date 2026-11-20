@@ -74,7 +74,8 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
          _,
          _,
          _
-       ), do: true
+       ),
+       do: true
 
   defp location(
          :r6,
@@ -119,7 +120,8 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
          _,
          _,
          %{rule: :o3}
-       ), do: true
+       ),
+       do: true
 
   defp location(:r12, %{event: {_, :call, {Task, :async, [fun]}}}, _, _, %{rule: :o3})
        when is_function(fun), do: true

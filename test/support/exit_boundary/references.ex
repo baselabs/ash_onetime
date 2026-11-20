@@ -94,7 +94,9 @@ defmodule AshOnetime.Test.ExitBoundary.References do
             metadata,
             %{},
             {:cache, fn _ -> :ok end, {id, "SELECT 1"}},
-            [], log: false)
+            [],
+            log: false
+          )
         end,
         target
       )

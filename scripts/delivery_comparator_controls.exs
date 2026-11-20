@@ -97,6 +97,58 @@ defmodule AshOnetime.DeliveryComparatorControls do
       opts: []
     },
     %{
+      id: :pc_attribute_copy_run,
+      path: "lib/ash_onetime/admission.ex",
+      original: "        %Ash.Changeset{} -> [subject.attributes | surfaces]\n",
+      mutated:
+        "        %Ash.Changeset{} -> [if(subject.resource == AshOnetime.Test.ExitBoundary.Withheld, do: Map.put(subject.attributes, :id, \"00000000-0000-4000-8000-000000000099\"), else: subject.attributes) | surfaces]\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      kind: :comparison,
+      rules: [:attribute_copy],
+      opts: []
+    },
+    %{
+      id: :pc_attribute_copy_twin,
+      path: "lib/ash_onetime/admission.ex",
+      original: "        %Ash.Changeset{} -> [subject.attributes | surfaces]\n",
+      mutated:
+        "        %Ash.Changeset{} -> [if(subject.resource == AshOnetime.Test.ExitBoundary.Returned, do: Map.put(subject.attributes, :id, \"00000000-0000-4000-8000-000000000099\"), else: subject.attributes) | surfaces]\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      kind: :comparison,
+      rules: [:attribute_copy],
+      opts: []
+    },
+    %{
+      id: :pc_o2b_argument_run,
+      path: "lib/ash_onetime/admission.ex",
+      original: "           Enum.find(subject.action.arguments, &(&1.name == name)) do\n",
+      mutated:
+        "           Enum.find(if(subject.resource == AshOnetime.Test.ExitBoundary.Withheld, do: Enum.map(subject.action.arguments, &%{&1 | description: \"runtime alteration\"}), else: subject.action.arguments), &(&1.name == name)) do\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      kind: :comparison,
+      rules: [:o2b_argument],
+      opts: []
+    },
+    %{
+      id: :pc_o2b_argument_twin,
+      path: "lib/ash_onetime/admission.ex",
+      original: "           Enum.find(subject.action.arguments, &(&1.name == name)) do\n",
+      mutated:
+        "           Enum.find(if(subject.resource == AshOnetime.Test.ExitBoundary.Returned, do: Enum.map(subject.action.arguments, &%{&1 | description: \"runtime alteration\"}), else: subject.action.arguments), &(&1.name == name)) do\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      kind: :comparison,
+      rules: [:o2b_argument],
+      opts: []
+    },
+    %{
       id: :pc_o2c_code,
       path: "lib/ash_onetime/change.ex",
       original:

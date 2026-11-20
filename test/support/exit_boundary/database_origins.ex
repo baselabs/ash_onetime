@@ -429,7 +429,8 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   defp wire_event?(
          {port, :send, {:inet_async, port, _ref, {:ok, {:pg_transport, _, _, _}}}, _pid}
-       ), do: is_port(port)
+       ),
+       do: is_port(port)
 
   defp wire_event?({_pid, :receive, {:tcp, port, {:pg_transport, _, _, _}}}), do: is_port(port)
 
@@ -438,7 +439,8 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   defp wire_event?({_pid, :call, {module, function, [port, {:pg_transport, _, _, _} | _]}})
        when module in [:erlang, :erts_internal, :prim_inet, :gen_tcp] and
-              function in [:port_command, :send], do: is_port(port)
+              function in [:port_command, :send],
+       do: is_port(port)
 
   defp wire_event?({_pid, :return_from, {module, function, _}, {:ok, {:pg_transport, _, _, _}}})
        when module in [:prim_inet, :gen_tcp] and function in [:recv, :recv0], do: true

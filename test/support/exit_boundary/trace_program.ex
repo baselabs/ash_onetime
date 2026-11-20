@@ -129,7 +129,8 @@ defmodule AshOnetime.Test.ExitBoundary.TraceProgram do
               :cell,
               :put_private,
               :reference
-            ], do: []
+            ],
+       do: []
 
   defp program({Delivery, :put_cell, 1}, _, _, _),
     do: [{:erlang, :make_ref, 0}, {Delivery, :put_private, 3}]
@@ -215,7 +216,8 @@ defmodule AshOnetime.Test.ExitBoundary.TraceProgram do
               :"-context/4-fun-0-",
               :"-seal/3-fun-0-",
               :"-seal/3-fun-1-"
-            ], do: []
+            ],
+       do: []
 
   defp program({Envelope, :seal, 3}, [_, values, _], _, _),
     do:

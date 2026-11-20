@@ -81,7 +81,10 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
             {:erts_internal, :port_command},
             {:prim_inet, :send},
             {:gen_tcp, :send}
-          ], do: :frontend, else: :backend)
+          ],
+          do: :frontend,
+          else: :backend
+        )
       )
 
     case messages(bytes, connection, []) do

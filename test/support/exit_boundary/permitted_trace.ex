@@ -1041,7 +1041,8 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
   defp delivery_origin?(%{stack: [{Delivery, :armed_call, 4} | _]}, {:crypto, :generate_key, 2}, [
          :ecdh,
          :x25519
-       ]), do: true
+       ]),
+       do: true
 
   defp delivery_origin?(
          %{stack: [{Delivery, function, _} | _]},

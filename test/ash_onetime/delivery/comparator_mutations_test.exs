@@ -62,7 +62,10 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
             source: if(first, do: Diagnostics.location(first)),
             raw_canary_hits: hits,
             difference: Diagnostics.safe(first)
-          }, label: "R_FIRST_DIVERGENCE", limit: :infinity)
+          },
+          label: "R_FIRST_DIVERGENCE",
+          limit: :infinity
+        )
       end
 
       quiet? = hits == []

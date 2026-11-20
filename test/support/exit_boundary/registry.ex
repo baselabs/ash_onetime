@@ -123,6 +123,16 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
       rename: %{Withheld => Returned, External => ReturnedExternal}
     },
     %{
+      id: :attribute_copy,
+      source: {AshOnetime.Admission, :reject_reserved, 1},
+      locations: [
+        {{AshOnetime.Admission, :reserved_surface?, 1}, 0},
+        {{AshOnetime.Admission, :"-reserved_surface?/1-fun-0-", 2}, 1}
+      ],
+      expression: :ordered_subject_surfaces,
+      compute: {AshOnetime.Test.ExitBoundary.AttributeCopies, :build, 2}
+    },
+    %{
       id: :o2a_operation,
       source: {AshOnetime.Fingerprint, :compute, 1},
       locations: [:operation_hash],
@@ -169,6 +179,13 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
       expression: :declaration,
       readers: @declarations,
       fields: {AshOnetime.Test.ExitBoundary.DeclarationSlots, :all, 0}
+    },
+    %{
+      id: :o2b_argument,
+      source: {Ash.Resource.Info, :action, 2},
+      locations: [:compiled_action_argument],
+      expression: :named_argument,
+      compute: {Ash.Resource.Info, :action, 2}
     },
     %{
       id: :o2c,
@@ -361,6 +378,26 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
       when tag in [:return_from, :exception_from], do: :post
 
   def phase(_, current), do: current
+
+  def hook_phase({_, :return_from, mfa, _}, current, hooks, frames) do
+    canonical = Map.get(frames, mfa)
+
+    if canonical do
+      Enum.find_value(hooks, current, fn {slot, hook} ->
+        if Map.get(frames, AshOnetime.Test.ExitBoundary.Hooks.trace_mfa(hook)) == canonical do
+          case slot do
+            {:before_action, 0} -> :sealed
+            {:around_action, 0} -> :post
+            {:after_action, 1} -> :done
+          end
+        end
+      end)
+    else
+      current
+    end
+  end
+
+  def hook_phase(_, current, _hooks, _frames), do: current
 
   def frames do
     @generators ++
