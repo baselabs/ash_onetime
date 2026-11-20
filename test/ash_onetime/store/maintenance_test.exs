@@ -508,8 +508,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
       claim =
         dst_transaction(c, zone, fn target ->
+          identity = struct!(AshOnetime.Store.Claim, Map.take(Map.from_struct(claim), [
+            :strategy, :id, :logical_partition, :operation_hash, :scope_hash, :key_hash,
+            :admitted_at, :retain_until, :inserted_at
+          ]))
           assert %Result{status: :processing, claim: loaded} =
-                   Postgres.load(target, claim, lock_timeout_ms: 300)
+                   Postgres.load(target, identity, lock_timeout_ms: 300)
 
           assert is_nil(loaded.retention_seconds)
           loaded
