@@ -215,10 +215,8 @@ for partitioning <- [nil, 2] do
       test "#{partitioning || "plain"}: trust refuses untrusted logical capability subscription=#{subscription}",
            c do
         if c.logical_subscription do
-          subscribe!(c, c.apply_role,
-            run_as_owner: true,
-            operation: {"ash_onetime_idempotency_claims", "INSERT"}
-          )
+          # No replicated operation: isolate ownership after membership revocation.
+          subscribe!(c, c.apply_role, run_as_owner: true)
 
           SQL.query!(c.sub.admin, "REVOKE pg_create_subscription FROM #{q(c.apply_role)}", [])
         else

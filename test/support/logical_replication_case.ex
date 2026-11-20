@@ -240,11 +240,13 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
     database = scalar(c.sub.admin, "SELECT current_database()")
     SQL.query!(c.sub.admin, "GRANT CREATE ON DATABASE #{q(database)} TO #{q(role)}", [])
 
-    if role == c.apply_role do
-      {table, privilege} = Keyword.fetch!(options, :operation)
+    if operation = Keyword.get(options, :operation) do
+      {table, privilege} = operation
       # Native apply checks the actual leaf's ACL. UPDATE and DELETE also read
       # the target to find its replica identity; the outcome bound reads claims.
-      privileges = if privilege in ["UPDATE", "DELETE"], do: "#{privilege},SELECT", else: privilege
+      privileges =
+        if privilege in ["UPDATE", "DELETE"], do: "#{privilege},SELECT", else: privilege
+
       grants = [{table, privileges}]
 
       grants =
@@ -252,21 +254,18 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
           do: [{"ash_onetime_idempotency_claims", "SELECT"} | grants],
           else: grants
 
-      for {target, privileges} <- grants do
-        relations =
-          SQL.query!(
-            c.sub.admin,
-            "WITH RECURSIVE relations(oid) AS (SELECT $1::text::regclass::oid UNION SELECT i.inhrelid FROM pg_inherits i JOIN relations r ON i.inhparent=r.oid) SELECT n.nspname,c.relname FROM relations r JOIN pg_class c ON c.oid=r.oid JOIN pg_namespace n ON n.oid=c.relnamespace",
-            [rel(c.sub, target)]
-          ).rows
-
-        for [schema, name] <- relations do
-          SQL.query!(
-            c.sub.admin,
-            "GRANT #{privileges} ON #{q(schema)}.#{q(name)} TO #{q(role)}",
-            []
-          )
-        end
+      for {target, privileges} <- grants,
+          [schema, name] <-
+            SQL.query!(
+              c.sub.admin,
+              "WITH RECURSIVE relations(oid) AS (SELECT $1::text::regclass::oid UNION SELECT i.inhrelid FROM pg_inherits i JOIN relations r ON i.inhparent=r.oid) SELECT n.nspname,c.relname FROM relations r JOIN pg_class c ON c.oid=r.oid JOIN pg_namespace n ON n.oid=c.relnamespace",
+              [rel(c.sub, target)]
+            ).rows do
+        SQL.query!(
+          c.sub.admin,
+          "GRANT #{privileges} ON #{q(schema)}.#{q(name)} TO #{q(role)}",
+          []
+        )
       end
     end
 
