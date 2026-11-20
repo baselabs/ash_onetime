@@ -8,9 +8,25 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   # checking every later copy. The captured events are passed through unchanged.
   def edits(:k) do
     [
-      %{path: "test/support/exit_boundary/permitted_trace.ex", original: "    state =\n      if key == :ref, do: bind(state, :key, {Delivery, :crypto.hash(:sha256, value)}), else: state\n\n", mutated: ""},
-      %{path: "test/support/exit_boundary/permitted_trace.ex", original: "  defp returned(state, _e, {:erlang, :make_ref, 0}, [], value, _side),", mutated: "  defp returned(state, e, {Delivery, :key, 1}, _, value, _side) do\n    if Map.has_key?(state.bound, :key),\n      do: exact(state, e, :key_copy, value, state.bound.key),\n      else: bind(state, :key, value)\n  end\n\n  defp returned(state, _e, {:erlang, :make_ref, 0}, [], value, _side),"},
-      %{path: "test/support/exit_boundary/trace_program.ex", original: "  defp expected_return({Delivery, :key, 1}, [ref], _, _),\n    do: {:value, {Delivery, :crypto.hash(:sha256, ref)}}\n", mutated: "  defp expected_return({Delivery, :key, 1}, [_ref], _, b),\n    do: {:value, b.key}\n"}
+      %{
+        path: "test/support/exit_boundary/permitted_trace.ex",
+        original:
+          "    state =\n      if key == :ref, do: bind(state, :key, {Delivery, :crypto.hash(:sha256, value)}), else: state\n\n",
+        mutated: ""
+      },
+      %{
+        path: "test/support/exit_boundary/permitted_trace.ex",
+        original: "  defp returned(state, _e, {:erlang, :make_ref, 0}, [], value, _side),",
+        mutated:
+          "  defp returned(state, e, {Delivery, :key, 1}, _, value, _side) do\n    if Map.has_key?(state.bound, :key),\n      do: exact(state, e, :key_copy, value, state.bound.key),\n      else: bind(state, :key, value)\n  end\n\n  defp returned(state, _e, {:erlang, :make_ref, 0}, [], value, _side),"
+      },
+      %{
+        path: "test/support/exit_boundary/trace_program.ex",
+        original:
+          "  defp expected_return({Delivery, :key, 1}, [ref], _, _),\n    do: {:value, {Delivery, :crypto.hash(:sha256, ref)}}\n",
+        mutated:
+          "  defp expected_return({Delivery, :key, 1}, [_ref], _, b),\n    do: {:value, b.key}\n"
+      }
     ]
   end
 

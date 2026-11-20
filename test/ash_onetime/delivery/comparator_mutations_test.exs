@@ -135,9 +135,15 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
       next = List.first(disabled.errors)
 
       IO.inspect(
-        %{rule: rule, mutation: mutation.id, active: Diagnostics.safe(active_first),
-          next: Diagnostics.safe(next), remaining: length(disabled.errors)},
-        label: "COMPARATOR_MUTANT", limit: :infinity
+        %{
+          rule: rule,
+          mutation: mutation.id,
+          active: Diagnostics.safe(active_first),
+          next: Diagnostics.safe(next),
+          remaining: length(disabled.errors)
+        },
+        label: "COMPARATOR_MUTANT",
+        limit: :infinity
       )
 
       case {rule, mutation.id} do
