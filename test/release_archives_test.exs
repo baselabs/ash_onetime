@@ -226,11 +226,18 @@ defmodule AshOnetime.ReleaseArchivesTest do
   end
 
   defp write_release(context, commit) do
+    # The BEAM removes empty values from a spawned process's environment. Set the value
+    # inside Python so an empty GITHUB_SHA reaches the writer as empty, rather than unset.
     python(
       context.directory,
-      "module['write_release'](Path(sys.argv[2]), sys.argv[3])",
-      [context.root, @version],
-      [{"GITHUB_SHA", commit}]
+      """
+      import os
+      if len(sys.argv) > 4:
+          os.environ["GITHUB_SHA"] = sys.argv[4]
+      module['write_release'](Path(sys.argv[2]), sys.argv[3])
+      """,
+      [context.root, @version] ++ List.wrap(commit),
+      [{"GITHUB_SHA", nil}]
     )
   end
 
