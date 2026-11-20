@@ -1,0 +1,196 @@
+name: Work
+
+# Every push to a work branch runs the whole test suite, the whole mutation battery (in the same
+# shards as ci.yml) and the lock check on that branch head, before a landing candidate exists. It is never a verdict:
+# no job is named qualified, ci.yml never calls it, and it cannot move main. Sessions never
+# dispatch workflows, so a push starts it; there are no inputs.
+#
+# It refuses main and kci/ candidates. Any code a job runs can write the cache through the
+# runner's token, so a run must hold only its own branch's cache scope: main's scope and a
+# candidate's scope are what qualification runs restore. It restores the cache warmer's
+# caches and saves none.
+#
+# Locks: each Ash cell has its own committed lock, mix.lock for the floating requirement and
+# locks/ash-floor/mix.lock for the declared floor (mix.exs selects it). A lock is resolved
+# where it is edited and committed with the mix.exs change. The lock job fetches each cell
+# --check-locked, audits it, and fails when either lock is not current; it resolves nothing.
+on:
+  push:
+    branches-ignore: [main, 'kci/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+  ASH_ONETIME_SUPERUSER_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
+
+jobs:
+  toolchain:
+    name: Refuse main and candidates; read toolchains
+    runs-on: ubuntu-24.04
+    # Same steps as ci.yml's toolchain job, slowest green 7 s, run 44145457629. Five minutes is
+    # the floor for any job.
+    timeout-minutes: 5
+    outputs:
+      elixir: ${{ steps.versions.outputs.elixir }}
+      otp: ${{ steps.versions.outputs.otp }}
+      ash_floor: ${{ steps.versions.outputs.ash_floor }}
+      postgres_image: ${{ steps.versions.outputs.postgres_image }}
+      postgres_client: ${{ steps.versions.outputs.postgres_client }}
+      pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
+    steps:
+      # The default branch is read from the repository, as in every workflow here.
+      - name: Refuse the default branch, candidates and anything not a branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref }}
+        run: |
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          case "$REF" in
+            "refs/heads/$default_branch" | refs/heads/kci/*)
+              echo "::error::work runs refuse $REF: main and kci/ scopes feed qualification"
+              exit 1 ;;
+            refs/heads/*) ;;
+            *)
+              echo "::error::work runs only on branches, not $REF"
+              exit 1 ;;
+          esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read defaults and service pins at the branch head
+        id: versions
+        uses: ./.github/actions/toolchain
+
+  lock:
+    name: Lock check
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    # Slowest green: 2 min 49 s, run 44201990085; about twice that.
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/beam
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      # Each cell is fetched and then audited before the next, because Mix checks deps/
+      # against the cell's lock. deps.audit reads <path>/mix.lock, so it is pointed at each
+      # cell's lock directory.
+      - name: Check and audit both cells' committed locks
+        env:
+          ASH_FLOOR: ${{ needs.toolchain.outputs.ash_floor }}
+        run: |
+          for cell in latest "$ASH_FLOOR"; do
+            export ASH_ONETIME_ASH_VERSION="$cell"
+            if ! mix deps.get --check-locked; then
+              echo "::error::the lock for Ash $cell is not current; resolve it with mix deps.get (ASH_ONETIME_ASH_VERSION=$cell) where mix.exs changed and commit it with that change"
+              exit 1
+            fi
+            mix hex.audit
+            lock_dir=$(mix run --no-start --no-compile --no-deps-check -e 'IO.write(Path.dirname(Mix.Project.config()[:lockfile]))')
+            mix deps.audit --path "$lock_dir"
+          done
+
+  tests:
+    name: Test suite
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    # Slowest green: 20 min, run 44190116854, cold; about twice that.
+    timeout-minutes: 40
+
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-work-tests
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-work-tests"
+      ASH_ONETIME_RLS_PRUNE_TESTS: "1"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/postgres-client
+        with:
+          version: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+      - uses: ./.github/actions/beam
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      # Restore only; the cache warmer on the default branch writes the release cache.
+      - uses: ./.github/actions/mix-cache
+        with:
+          mode: restore
+          cell: release
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      - run: mix deps.get --check-locked
+      - run: mix compile --warnings-as-errors
+      - run: MIX_ENV='test' mix compile --warnings-as-errors
+      - run: mix test
+
+  mutations:
+    name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    # Slowest green shard: 25 min 59 s, run 44212940459, which restored a cache; slowest cold:
+    # 24 min 58 s, Work run 44216676477 (the same composite). About twice the slower.
+    timeout-minutes: 52
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same shards as ci.yml.
+        shard: [1, 2, 3, 4]
+
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-work-mutations-${{ strategy.job-index }}
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-work-mutations-${{ strategy.job-index }}"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/mutations
+        with:
+          cache: restore
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+          shard: ${{ matrix.shard }}/${{ strategy.job-total }}

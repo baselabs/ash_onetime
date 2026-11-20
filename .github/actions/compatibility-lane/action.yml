@@ -1,0 +1,67 @@
+name: BEAM compatibility lane
+description: Run the beam compatibility lane battery for qualification and upstream drift
+inputs:
+  elixir:
+    description: Exact Elixir build from the toolchain job
+    required: true
+  otp:
+    description: Exact Erlang/OTP build from the toolchain job
+    required: true
+  postgres-client:
+    description: PGDG PostgreSQL client package version from the toolchain job
+    required: true
+  pgdg-key:
+    description: PGDG apt signing key fingerprint from the toolchain job
+    required: true
+  cache:
+    description: >-
+      restore (qualification restores the cache warmer's compatibility cache) or none
+      (the drift report, which reads and writes no cache)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Refuse an unknown cache input
+      shell: bash
+      env:
+        CACHE: ${{ inputs.cache }}
+      run: |
+        case "$CACHE" in
+          restore | none) ;;
+          *) echo "::error::cache must be restore or none, not $CACHE"; exit 1 ;;
+        esac
+
+    - uses: ./.github/actions/postgres-client
+      with:
+        version: ${{ inputs.postgres-client }}
+        pgdg-key: ${{ inputs.pgdg-key }}
+
+    - uses: ./.github/actions/beam
+      with:
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
+
+    # Restore only, and never in the drift report; the cache warmer on the default branch
+    # writes this lane's cache.
+    - if: inputs.cache == 'restore'
+      uses: ./.github/actions/mix-cache
+      with:
+        mode: restore
+        cell: compatibility
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
+
+    - shell: bash
+      run: mix deps.get --check-locked
+    - shell: bash
+      run: mix format --check-formatted
+    - shell: bash
+      run: mix compile --warnings-as-errors
+    - shell: bash
+      run: mix hex.audit
+    - shell: bash
+      run: mix test
+      env:
+        ASH_ONETIME_RLS_PRUNE_TESTS: "1"
+    - shell: bash
+      run: mix credo --strict

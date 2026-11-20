@@ -1,0 +1,86 @@
+name: Release gates
+description: >-
+  Run the release gates for qualification and upstream drift; the mutation battery is its own
+  jobs (the mutations composite)
+inputs:
+  elixir:
+    description: Exact Elixir build from the toolchain job
+    required: true
+  otp:
+    description: Exact Erlang/OTP build from the toolchain job
+    required: true
+  postgres-client:
+    description: PGDG PostgreSQL client package version from the toolchain job
+    required: true
+  pgdg-key:
+    description: PGDG apt signing key fingerprint from the toolchain job
+    required: true
+  cache:
+    description: >-
+      restore (qualification restores the cache warmer's release cache) or none
+      (the drift report, which reads and writes no cache)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Refuse an unknown cache input
+      shell: bash
+      env:
+        CACHE: ${{ inputs.cache }}
+      run: |
+        case "$CACHE" in
+          restore | none) ;;
+          *) echo "::error::cache must be restore or none, not $CACHE"; exit 1 ;;
+        esac
+
+    - uses: ./.github/actions/postgres-client
+      with:
+        version: ${{ inputs.postgres-client }}
+        pgdg-key: ${{ inputs.pgdg-key }}
+
+    - uses: ./.github/actions/beam
+      with:
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
+
+    # Restore only, and never in the drift report; the cache warmer on the default branch
+    # writes the release cache.
+    - if: inputs.cache == 'restore'
+      uses: ./.github/actions/mix-cache
+      with:
+        mode: restore
+        cell: release
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
+
+    - shell: bash
+      run: mix deps.get --check-locked
+    - shell: bash
+      run: mix compile --warnings-as-errors
+    # Fails on any direct dependency with a resolvable newer release.
+    - name: Dependency currency
+      shell: bash
+      run: mix run --no-start scripts/check_deps_currency.exs
+    # The package and docs archives publish.yml uploads, built and inspected the same way.
+    - name: Build and inspect the release archives
+      shell: bash
+      run: python3 scripts/release_archives.py build "$RUNNER_TEMP/ash-onetime-release-archives"
+    # Check the committed test Repo migrations against AshPostgres code generation.
+    - name: Ash codegen freshness
+      shell: bash
+      run: MIX_ENV='test' mix ash.codegen --check
+    # Check the shipped DSL reference against the declared schema.
+    - name: DSL cheat-sheet freshness
+      shell: bash
+      run: mix spark.cheat_sheets --check --extensions AshOnetime.Resource
+    - name: Execute Livebook source cells
+      shell: bash
+      run: elixir scripts/check_livebooks.exs --local
+    # Optional-integration matrix: which integrations compile per consumer dep set,
+    # that no optional dep leaks into the runtime application closure, and two
+    # conflict proofs — exact advised pins (igniter == 0.8.3, mint == 1.10.1)
+    # must FAIL to resolve, proving the security floors bind in a real consumer
+    # resolution (ADR 0004).
+    - name: Optional integration matrix
+      shell: bash
+      run: MIX_ENV='test' mix run scripts/check_optional_matrix.exs

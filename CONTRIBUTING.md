@@ -3,15 +3,16 @@
 The tests require a dedicated PostgreSQL 18 instance: `DATABASE_URL` must name
 `ash_onetime_test` on `127.0.0.1`, as `postgres`, on a non-default port.
 The URL guard cannot detect unrelated databases: never use a shared server.
-Maintenance tests make cluster-wide grants and require a proven per-run container:
-set `TEST_ENV_RUN` to a name whose container `/etc/hostname` is `<name>-packages-pg`.
-The box route and CI supply that isolated server.
+Maintenance tests make cluster-wide grants and require a proven throwaway server: start it
+with a hostname that begins `ao-` and set `ASH_ONETIME_TEST_SERVER` to that hostname. The
+tests read `/etc/hostname` from the server and refuse a mismatch. In GitHub Actions the
+hostname must also carry the run and attempt (`ao-<run_id>-<run_attempt>-`), which CI's
+per-job service containers do.
 
 The repository ships no database container. Point `.env` at a PostgreSQL 18 you
 already run as a dedicated instance: copy `.env.example` to `.env`, set `PGPORT` to
-that server's non-standard port and keep the port inside `DATABASE_URL` in sync;
-`.env` also carries `HEX_API_KEY` when publishing. If the server is unreachable, fix
-or report it; do not start a second database on another port.
+that server's non-standard port and keep the port inside `DATABASE_URL` in sync. If the
+server is unreachable, fix or report it; do not start a second database on another port.
 
 ```sh
 cp .env.example .env   # then set PGPORT and DATABASE_URL's port to your server's port
@@ -37,26 +38,40 @@ mix hex.audit
 mix hex.build
 ```
 
-Run these additional commands before publishing a release:
+CI's release-gates and mutation-battery jobs also run these on every candidate:
 
 ```sh
 mix run --no-start scripts/check_deps_currency.exs
 mix spark.cheat_sheets --check --extensions AshOnetime.Resource
-mix docs --warnings-as-errors
 MIX_ENV=test mix ash.codegen --check                      # committed test-repo codegen freshness
 MIX_ENV=test mix run scripts/check_mutations.exs -- all   # with DATABASE_URL exported as in your .env
+                                                          # CI runs it as shards: -- --shard I/N all
 elixir scripts/check_livebooks.exs --local                # executes source cells against PostgreSQL
-mix run scripts/check_package.exs                         # after the gate's mix hex.build
+python3 scripts/release_archives.py build _build/release # package and docs archives, inspected
 mix run scripts/check_optional_matrix.exs
 ```
 
 To reset notebook installs, remove `_build/livebook-install` (or your `MIX_INSTALL_DIR`).
 Each notebook removes its UUID-named schema after verification.
 
-After publishing, run `elixir scripts/check_livebooks.exs --published` with the same
-`DATABASE_URL`. The published mode starts from Hex rather than the checkout, then executes all
-notebook cells against PostgreSQL; it is the executable consumer check for the artifact users
-will install.
+Infra dispatches releases through the `Publish to Hex` workflow after the version commit
+qualifies on the default branch. No one publishes from a workstation. The workflow requires
+an existing package on Hex, an untagged version and dated release notes. It builds and inspects
+the package and reproducible docs archives before the one keyed step uploads only missing
+archives, without loading a Mix project. It refuses retired releases or differing bytes and
+never replaces a served archive. If Hex holds either upload for approval, infra finishes it by
+dispatching again on the same commit after approval.
+
+The publish job uploads one `release-assets` artifact containing the package archive, docs
+archive, `SHA256SUMS` and `NOTES.md`. Infra reads both archives back, compares the package
+with that artifact, tags the published commit and creates the GitHub release from those files.
+Consumers verify files from that GitHub release; the workflow artifact expires. No workflow
+creates a GitHub release or runs on a tag.
+
+The separate, keyless `published-livebooks` job waits until the archives are served, then runs
+`elixir scripts/check_livebooks.exs --published` against its own PostgreSQL service. It starts
+from Hex rather than the checkout and executes all notebook cells against the package users
+will install. Qualification executes the notebooks only with `--local`.
 
 Open work is tracked in [GitHub issues](https://github.com/baselabs/ash_onetime/issues).
 
