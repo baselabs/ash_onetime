@@ -2,7 +2,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Comparator
 
-  def rules, do: [:k]
+  def rules, do: [:k, :inv, :completion]
 
   # Disable K's expression at its source, while still binding that return and
   # checking every later copy. The captured events are passed through unchanged.
@@ -26,6 +26,44 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
           "  defp expected_return({Delivery, :key, 1}, [ref], _, _),\n    do: {:value, {Delivery, :crypto.hash(:sha256, ref)}}\n",
         mutated:
           "  defp expected_return({Delivery, :key, 1}, [_ref], _, b),\n    do: {:value, b.key}\n"
+      }
+    ]
+  end
+
+  # Bind inv at its first claimed put instead of its entropy return. Every
+  # later inv copy is still checked against that one captured value.
+  def edits(:inv) do
+    [
+      %{
+        path: "test/support/exit_boundary/permitted_trace.ex",
+        original: "    state = bind(state, key, value)\n",
+        mutated: "    state = if key == :ref, do: bind(state, key, value), else: state\n"
+      },
+      %{
+        path: "test/support/exit_boundary/permitted_trace.ex",
+        original: "      case {function, rest} do\n",
+        mutated:
+          "      state = case {function, rest, Enum.find(e.stack, fn {m, _, _} -> m == Delivery end)} do\n        {:put, [{:claimed, inv, _}], {Delivery, :claim_entry, 6}} -> bind(state, :inv, inv)\n        _ -> state\n      end\n\n      case {function, rest} do\n"
+      }
+    ]
+  end
+
+  # Disable the store-to-completion grounding, bind the first done tuple,
+  # and retain every later readback copy and its real reference computation.
+  def edits(:completion) do
+    [
+      %{
+        path: "test/support/exit_boundary/permitted_trace.ex",
+        original:
+          "          state = exact(state, e, :dictionary_binding, value, expected)\n",
+        mutated:
+          "          {state, expected} =\n            case {value, expected} do\n              {{:done, inv, :executed, envelope, {target, claim}},\n               {:done, expected_inv, :executed, expected_envelope, _}}\n              when inv === expected_inv and envelope === expected_envelope ->\n                state =\n                  state\n                  |> bind(:target, target)\n                  |> bind(:c_admit, claim)\n                  |> bind(:completion, {target, claim})\n\n                {state, value}\n\n              _ ->\n                {state, expected}\n            end\n\n          state = exact(state, e, :dictionary_binding, value, expected)\n"
+      },
+      %{
+        path: "test/support/exit_boundary/readback.ex",
+        original:
+          "        prepared = Map.get_lazy(side, :readback_reference, fn -> capture(side, bound) end)\n",
+        mutated: "        prepared = capture(side, bound)\n"
       }
     ]
   end
@@ -55,7 +93,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         for {path, source} <- originals, do: File.write!(path, source)
 
         for {path, source} <- originals do
-          unless File.read!(path) === source, do: raise("comparator source restoration failed: #{path}")
+          unless File.read!(path) === source,
+            do: raise("comparator source restoration failed: #{path}")
         end
 
         for {path, source} <- originals, do: Code.compile_string(source, path)

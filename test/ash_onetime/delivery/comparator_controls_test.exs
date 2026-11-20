@@ -21,6 +21,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @tag :comparator_control
   test "C-tick: the twin TTL read falls in the next second", context do
     context = Map.merge(context, %{run_first?: true, between_sides: &next_second/1})
+
     witness =
       Enum.reduce_while(1..10, nil, fn attempt, _ ->
         pair = observe(context, row!(:issue, :execute), Values.set()[:va])
@@ -28,7 +29,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         twin = ttl_reads(pair.twin)
         assert run != [] and twin != []
         delta = DateTime.to_unix(hd(twin)) - DateTime.to_unix(List.last(run))
-        IO.inspect(%{attempt: attempt, run: run, twin: twin, seconds: delta}, label: "C_TICK_READS")
+
+        IO.inspect(%{attempt: attempt, run: run, twin: twin, seconds: delta},
+          label: "C_TICK_READS"
+        )
+
         assert_green(pair)
 
         if delta == 1, do: {:halt, {run, twin}}, else: {:cont, nil}

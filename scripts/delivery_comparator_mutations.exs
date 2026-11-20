@@ -550,12 +550,27 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       label: "R-iso-K",
       path: "lib/ash_onetime/delivery.ex",
       original: "  def key(ref), do: {__MODULE__, :crypto.hash(:sha256, ref)}\n",
-      mutated: "  def key(ref) do\n    <<head::binary-size(31), last>> = :crypto.hash(:sha256, ref)\n    digest = if byte_size(ref) == 16, do: <<head::binary, Bitwise.bxor(last, 1)>>, else: <<head::binary, last>>\n    {__MODULE__, digest}\n  end\n",
+      mutated:
+        "  def key(ref) do\n    <<head::binary-size(31), last>> = :crypto.hash(:sha256, ref)\n    digest = if byte_size(ref) == 16, do: <<head::binary, Bitwise.bxor(last, 1)>>, else: <<head::binary, last>>\n    {__MODULE__, digest}\n  end\n",
       action: :issue,
       branch: :execute,
       fault: nil,
       value: :va,
       first: {AshOnetime.Delivery, :key, 1},
+      extra: nil
+    },
+    %{
+      id: :r_iso_inv,
+      label: "R-iso-inv",
+      path: "lib/ash_onetime/delivery.ex",
+      original: "      inv = :crypto.strong_rand_bytes(16)\n",
+      mutated:
+        "      inv = :crypto.strong_rand_bytes(16)\n      <<head::binary-size(15), last>> = inv\n      inv = if byte_size(ref) == 16, do: <<head::binary, Bitwise.bxor(last, 1)>>, else: inv\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      value: :va,
+      first: {:erlang, :put, 2},
       extra: nil
     }
   ]

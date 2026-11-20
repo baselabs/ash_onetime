@@ -969,8 +969,11 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   end
 
   defp term(%AshOnetime.Resource.Response{} = a, %AshOnetime.Resource.Response{} = b, state, path) do
-    expected_run = Registry.compute(:o2b_response, [state.run.resource, state.row.action]).response
-    expected_twin = Registry.compute(:o2b_response, [state.twin.resource, state.row.action]).response
+    expected_run =
+      Registry.compute(:o2b_response, [state.run.resource, state.row.action]).response
+
+    expected_twin =
+      Registry.compute(:o2b_response, [state.twin.resource, state.row.action]).response
 
     if a === expected_run and b === expected_twin,
       do: state,

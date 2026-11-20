@@ -47,7 +47,8 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
       @tag :u12
     end
 
-    test "#{AshOnetime.DeliveryComparatorMutations.label(mutation)}: named first divergence", context do
+    test "#{AshOnetime.DeliveryComparatorMutations.label(mutation)}: named first divergence",
+         context do
       mutation = unquote(Macro.escape(mutation))
       prepare_runtime(mutation, context)
       row = row!(mutation.action, mutation.branch, mutation.fault)
@@ -150,9 +151,19 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         {:k, :r_iso_k} ->
           assert disabled.errors == [], "R-iso-K must pass with only K's expression disabled"
 
+        {:inv, :r_iso_inv} ->
+          assert disabled.errors == [], "R-iso-inv must pass with only inv's source binding disabled"
+
+        {:completion, :r4} ->
+          assert disabled.errors == [], "R4 must pass with only completion's source binding disabled"
+
         {:k, :r2} ->
           assert next != nil, "R2's independent multiplicity/order protection must remain"
-          refute match?(%{at: %{mfa: {AshOnetime.Delivery, :key, 1}}, rule: :permitted_return}, next)
+
+          refute match?(
+                   %{at: %{mfa: {AshOnetime.Delivery, :key, 1}}, rule: :permitted_return},
+                   next
+                 )
 
         _ ->
           assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
