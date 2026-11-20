@@ -4,6 +4,7 @@ for partitioning <- [nil, 2] do
               "Claims#{partitioning || "Plain"}"
             ) do
     use AshOnetime.Test.ExternalStateCase, async: false
+    alias AshOnetime.Store.Claim
     @moduletag hash_partitions: partitioning
     @moduletag :external_state_lock_matrix_mutation
 
@@ -121,7 +122,7 @@ for partitioning <- [nil, 2] do
     @tag :enforcement_nonce_select_lock_mutation
     test "#{partitioning || "plain"}: nonce load waits for the native row lock", c do
       {:ok, request} =
-        AshOnetime.Store.Claim.nonce(
+        Claim.nonce(
           operation_hash: :crypto.hash(:sha256, "nonce-lock-operation"),
           scope_hash: :crypto.hash(:sha256, "nonce-lock-scope"),
           key_hash: :crypto.hash(:sha256, "nonce-select-lock"),

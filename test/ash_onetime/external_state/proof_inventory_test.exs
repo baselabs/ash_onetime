@@ -7,9 +7,9 @@ defmodule AshOnetime.ExternalState.ProofInventorySourcesTest do
   setup_all do
     Code.require_file("../../../scripts/mutation_failures.exs", __DIR__)
     {:__block__, _, nodes} = Code.string_to_quoted!(File.read!("scripts/check_mutations.exs"))
-    module = Enum.find(nodes, &match?({:defmodule, _, _}, &1))
-    Code.compile_quoted(module)
-    %{manifest: apply(AshOnetime.MutationCheck, :manifest, [])}
+    module_ast = Enum.find(nodes, &match?({:defmodule, _, _}, &1))
+    [{module, _binary}] = Code.compile_quoted(module_ast)
+    %{manifest: module.manifest()}
   end
 
   @tag :external_state_inventory_rendered

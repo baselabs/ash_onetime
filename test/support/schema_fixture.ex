@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.SchemaFixture do
   @moduledoc false
   alias AshOnetime.Test.Repo
+  alias Ecto.Adapters.SQL
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: Generator
 
   def install!(c, "inventory_facts") do
@@ -35,7 +36,7 @@ defmodule AshOnetime.Test.SchemaFixture do
     if c[:hash_partitions] &&
          table in ["ash_onetime_idempotency_claims", "ash_onetime_nonce_claims"] do
       for remainder <- 0..(c.hash_partitions - 1) do
-        Ecto.Adapters.SQL.query!(
+        SQL.query!(
           c.owner_repo,
           "CREATE TABLE \"#{c.schema}\".\"#{table}_p#{remainder}\" PARTITION OF \"#{c.schema}\".\"#{table}\" FOR VALUES WITH (MODULUS #{c.hash_partitions}, REMAINDER #{remainder})",
           []
@@ -44,7 +45,7 @@ defmodule AshOnetime.Test.SchemaFixture do
     end
 
     if table == "ash_onetime_response_payloads" do
-      Ecto.Adapters.SQL.query!(
+      SQL.query!(
         c.owner_repo,
         "CREATE TABLE \"#{c.schema}\".ash_onetime_response_payloads_default PARTITION OF \"#{c.schema}\".ash_onetime_response_payloads DEFAULT",
         []

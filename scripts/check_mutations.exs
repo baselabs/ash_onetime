@@ -537,17 +537,17 @@ defmodule AshOnetime.MutationCheck do
       tag: "external_state_lock_matrix_mutation",
       test_name: "plain: P1 a late outcome commits while the caller holds its claim",
       assertion: "assert",
-      assertion_line: 102,
+      assertion_line: 103,
       required_failures: [
         %{
           test_name: "plain: P1 a late outcome commits while the caller holds its claim",
           assertion: "assert",
-          assertion_line: 102
+          assertion_line: 103
         },
         %{
           test_name: "2: P1 a late outcome commits while the caller holds its claim",
           assertion: "assert",
-          assertion_line: 102
+          assertion_line: 103
         }
       ]
     },
@@ -559,17 +559,17 @@ defmodule AshOnetime.MutationCheck do
       tag: "external_state_lock_matrix_mutation",
       test_name: "plain: P14 a late outcome commits while the caller holds its claim",
       assertion: "assert",
-      assertion_line: 102,
+      assertion_line: 103,
       required_failures: [
         %{
           test_name: "plain: P14 a late outcome commits while the caller holds its claim",
           assertion: "assert",
-          assertion_line: 102
+          assertion_line: 103
         },
         %{
           test_name: "2: P14 a late outcome commits while the caller holds its claim",
           assertion: "assert",
-          assertion_line: 102
+          assertion_line: 103
         }
       ]
     },
@@ -1429,19 +1429,19 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "plain: P7 expiry processes a claim while an uncommitted outcome holds KEY SHARE",
       assertion: "assert",
-      assertion_line: 45,
+      assertion_line: 46,
       required_failures: [
         %{
           test_name:
             "plain: P7 expiry processes a claim while an uncommitted outcome holds KEY SHARE",
           assertion: "assert",
-          assertion_line: 45
+          assertion_line: 46
         },
         %{
           test_name:
             "2: P7 expiry processes a claim while an uncommitted outcome holds KEY SHARE",
           assertion: "assert",
-          assertion_line: 45
+          assertion_line: 46
         }
       ]
     },
@@ -2390,11 +2390,11 @@ defmodule AshOnetime.MutationCheck do
     "external-replay-lock-timeout" => %{
       tag: "external_replay_lock_timeout_mutation",
       path: "lib/ash_onetime/store/postgres.ex",
-      original: "                 nil,\n                 Keyword.get(options, :lock_timeout_ms)",
+      original: "               nil,\n               Keyword.get(options, :lock_timeout_ms)",
       test: "test/ash_onetime/external_contention_test.exs",
       test_name: "immediate replay bounds its first claim lock and reports request in progress",
       assertion: "assert_receive {:external_done, ^caller,",
-      mutated: "                 nil,\n                 nil",
+      mutated: "               nil,\n               nil",
       assertion_line: 124
     },
     "claim-load-timeout-restore" => %{
@@ -2505,17 +2505,17 @@ defmodule AshOnetime.MutationCheck do
       test_name: "plain: maintenance upgrade authenticates the current relation shape",
       assertion: "assert error.postgres.message ==",
       mutated: "NULL; -- bypass historical validation",
-      assertion_line: 61,
+      assertion_line: 59,
       required_failures: [
         %{
           test_name: "plain: maintenance upgrade authenticates the current relation shape",
           assertion: "assert error.postgres.message ==",
-          assertion_line: 61
+          assertion_line: 59
         },
         %{
           test_name: "2: maintenance upgrade authenticates the current relation shape",
           assertion: "assert error.postgres.message ==",
-          assertion_line: 61
+          assertion_line: 59
         }
       ]
     },
@@ -4715,19 +4715,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name: "plain: nonce load waits for the native row lock",
                  assertion:
                    "assert_receive {:nonce_load, %Result{status: :failure, reason: :lock_timeout}}",
-                 assertion_line: 159,
+                 assertion_line: 160,
                  required_failures: [
                    %{
                      test_name: "plain: nonce load waits for the native row lock",
                      assertion:
                        "assert_receive {:nonce_load, %Result{status: :failure, reason: :lock_timeout}}",
-                     assertion_line: 159
+                     assertion_line: 160
                    },
                    %{
                      test_name: "2: nonce load waits for the native row lock",
                      assertion:
                        "assert_receive {:nonce_load, %Result{status: :failure, reason: :lock_timeout}}",
-                     assertion_line: 159
+                     assertion_line: 160
                    }
                  ]
                },

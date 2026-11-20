@@ -208,9 +208,9 @@ jobs:
     name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # No green run yet for the expanded whole-manifest battery with twelve shards.
-    # Measure this split on its first cold green run.
-    timeout-minutes: 90 # no green run yet
+    # Slowest cold shard: 20 min 34 s, Work 44830843006 (all 557 rows passed).
+    # About twice that duration; Work and qualification share the same composite.
+    timeout-minutes: 42
     strategy:
       fail-fast: false
       matrix:

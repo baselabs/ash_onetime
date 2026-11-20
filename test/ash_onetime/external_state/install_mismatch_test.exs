@@ -47,11 +47,9 @@ for partitioning <- [nil, 2] do
 
       error =
         assert_raise Postgrex.Error, fn ->
-          AshOnetime.Test.SchemaFixture.migrate!(
+          SchemaFixture.migrate!(
             c,
-            Mix.Tasks.AshOnetime.Gen.Migrations.render_maintenance_upgrade(Repo,
-              maintenance_role: c.maintainer
-            ),
+            Generator.render_maintenance_upgrade(Repo, maintenance_role: c.maintainer),
             20_261_116_000_002
           )
         end
