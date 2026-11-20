@@ -16,6 +16,7 @@ runs:
         POSTGRES_USER: postgres
         POSTGRES_PASSWORD: postgres
         POSTGRES_DB: ash_onetime_test
+        POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
       run: |
         set -euo pipefail
         container="${ASH_ONETIME_TEST_SERVER:?}-logical"
@@ -41,7 +42,7 @@ runs:
         esac
 
         docker run --detach --name "$container" --hostname "$container" \
-          --env POSTGRES_USER --env POSTGRES_PASSWORD --env POSTGRES_DB \
+          --env POSTGRES_USER --env POSTGRES_PASSWORD --env POSTGRES_DB --env POSTGRES_INITDB_ARGS \
           --publish 127.0.0.1:18842:5432 "$postgres_image" \
           -c wal_level=logical -c logging_collector=on -c log_destination=csvlog
         for ((attempt=0; attempt<60; attempt++)); do
