@@ -120,7 +120,15 @@ for partitioning <- [nil, 2] do
 
     @tag :enforcement_nonce_select_lock_mutation
     test "#{partitioning || "plain"}: nonce load waits for the native row lock", c do
-      request = AshOnetime.Test.StoreCase.nonce_request("nonce-select-lock")
+      {:ok, request} = AshOnetime.Store.Claim.nonce(
+        operation_hash: :crypto.hash(:sha256, "nonce-lock-operation"),
+        scope_hash: :crypto.hash(:sha256, "nonce-lock-scope"),
+        key_hash: :crypto.hash(:sha256, "nonce-select-lock"),
+        verified: [%AshOnetime.Verified{key: "nonce-select-lock", issued_at: DateTime.utc_now(), verifier_id: "native"}],
+        max_age: 60,
+        clock_skew: 0,
+        clock: AshOnetime.Clock
+      )
 
       assert {:ok, %Result{status: :admitted, claim: claim}} =
                runtime_transaction(c, fn -> Postgres.claim(target(c), request) end)

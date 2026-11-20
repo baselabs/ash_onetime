@@ -2976,7 +2976,7 @@ defmodule AshOnetime.MutationCheck do
       tag: "documentation_fallback_mutation",
       test_name: "introductory error examples handle every documented code without losing errors",
       assertion: "assert {:ok, {result, _binding}} = evaluated",
-      assertion_line: 21
+      assertion_line: 37
     },
     "errors-guide-error-fallback" => %{
       path: "documentation/errors.md",
@@ -2986,7 +2986,7 @@ defmodule AshOnetime.MutationCheck do
       tag: "documentation_fallback_mutation",
       test_name: "introductory error examples handle every documented code without losing errors",
       assertion: "assert {:ok, {result, _binding}} = evaluated",
-      assertion_line: 21
+      assertion_line: 37
     },
     "charge-recipe-error-fallback" => %{
       path: "documentation/recipes.md",
@@ -3000,7 +3000,7 @@ defmodule AshOnetime.MutationCheck do
       tag: "documentation_fallback_mutation",
       test_name: "introductory error examples handle every documented code without losing errors",
       assertion: "assert {:ok, {result, _binding}} = evaluated",
-      assertion_line: 21
+      assertion_line: 37
     },
     "redemption-recipe-error-fallback" => %{
       path: "documentation/recipes.md",
@@ -3014,7 +3014,7 @@ defmodule AshOnetime.MutationCheck do
       tag: "documentation_fallback_mutation",
       test_name: "introductory error examples handle every documented code without losing errors",
       assertion: "assert {:ok, {result, _binding}} = evaluated",
-      assertion_line: 21
+      assertion_line: 37
     },
     "transaction-store-rollback-propagation" => %{
       path: "lib/ash_onetime/store/postgres.ex",
@@ -4709,19 +4709,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name: "plain: nonce load waits for the native row lock",
                  assertion:
                    "assert_receive {:nonce_load, %Result{status: :failure, reason: :lock_timeout}}",
-                 assertion_line: 144,
+                 assertion_line: 152,
                  required_failures: [
                    %{
                      test_name: "plain: nonce load waits for the native row lock",
                      assertion:
                        "assert_receive {:nonce_load, %Result{status: :failure, reason: :lock_timeout}}",
-                     assertion_line: 144
+                     assertion_line: 152
                    },
                    %{
                      test_name: "2: nonce load waits for the native row lock",
                      assertion:
                        "assert_receive {:nonce_load, %Result{status: :failure, reason: :lock_timeout}}",
-                     assertion_line: 144
+                     assertion_line: 152
                    }
                  ]
                },
