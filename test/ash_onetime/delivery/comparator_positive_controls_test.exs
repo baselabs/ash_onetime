@@ -121,7 +121,8 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
                  hooks: MapSet.new(),
                  copies: MapSet.new(),
                  frames: MapSet.new()
-               }, "U13 baseline must have every live witness before the dead-slot mutation"
+               },
+               "U13 baseline must have every live witness before the dead-slot mutation"
 
         pairs
       after

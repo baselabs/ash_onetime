@@ -4,7 +4,6 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
   alias AshOnetime.Delivery.Envelope
 
   alias AshOnetime.Test.ExitBoundary.{
-    Consumer,
     Hold,
     Origins,
     Producer,
@@ -63,6 +62,15 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
        when rule in [:return, :permitted_return],
        do: result.amount === rem(byte_size(b.values.long), 2) and {:ok, result} !== b.raw_return
 
+  defp location(
+         :r_iso_o2,
+         %{event: {_, :return_from, {AshOnetime.Admission, :prepare_resolved, 2}, {:ok, state}}},
+         _,
+         b,
+         %{rule: :o2_uuid}
+       ),
+       do: state.request.id === b.built_subject.data.id
+
   defp location(:r1, %{event: {_, :call, {:erlang, :put, [:m, 0]}}}, events, b, _),
     do: after_seal?(events, b)
 
@@ -76,12 +84,13 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
        do: key !== b.key and inv === b.inv and envelope === b.envelope
 
   defp location(
-         :r3,
+         id,
          %{event: {_, :call, {:erlang, :put, [key, {:sealed, inv, envelope}]}}},
          _,
          b,
          _
-       ),
+       )
+       when id in [:r3, :r_set_len, :r_set_bit, :r_set_par],
        do: key === b.key and inv !== b.inv and envelope === b.envelope
 
   defp location(
@@ -126,21 +135,26 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
          b,
          _
        ),
-    do: {AshOnetime.Change, :complete, 2} in stack and
-          Enum.any?(dictionary, fn
-            {key, {:sealed, inv, envelope}} -> {key, inv, envelope} === {b.key, b.inv, b.envelope}
-            _ -> false
-          end)
+       do:
+         {AshOnetime.Change, :complete, 2} in stack and
+           Enum.any?(dictionary, fn
+             {key, {:sealed, inv, envelope}} ->
+               {key, inv, envelope} === {b.key, b.inv, b.envelope}
+
+             _ ->
+               false
+           end)
 
   defp location(
          :r_iso_context,
-         %{event: {_, :call, {Consumer, _, [subject | _]}}},
+         %{event: {_, :call, {AshOnetime.Admission, :dispatch_reservation, [subject | _]}}},
          _,
          b,
          %{rule: :context}
        ),
-    do: get_in(subject.context, [:private, :ash_onetime_delivery]) ===
-          %{ref: b.ref, n: rem(:binary.first(b.ref), 2)}
+       do:
+         get_in(subject.context, [:private, :ash_onetime_delivery]) ===
+           %{ref: b.ref, n: rem(:binary.first(b.ref), 2)}
 
   defp location(:r9, %{index: index, event: {_, :call, {Producer, :produce, _}}}, events, b, _),
     do:
@@ -164,36 +178,51 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
 
   defp location(
          :r11,
-         %{event: {_, :call, {:telemetry, :execute, [_, %{duration: _}, _]}}},
+         %{event: {_, :call, {Process, :get, [key]}}},
+         _,
+         b,
+         _
+       ),
+       do: key === b.key
+
+  defp location(
+         :r_iso_o3,
+         %{event: {_, :call, {AshOnetime.Telemetry, :external_recovery, _}}},
          _,
          _,
          %{rule: :o3}
        ),
        do: true
 
-  defp location(:r12, %{event: {_, :call, {Task, :async, [fun]}}}, _, _, %{rule: :o3})
-       when is_function(fun), do: true
+  defp location(
+         id,
+         %{event: {_, :return_from, {:erlang, :get, 0}, dictionary}, stack: stack},
+         _,
+         b,
+         %{rule: :o5}
+       ) when id in [:r12, :r13, :r15] do
+    source =
+      case id do
+        :r12 -> {AshOnetime.Cache, :store, 3}
+        :r13 -> {AshOnetime.Store.Postgres, :update_complete, 7}
+        :r15 -> {AshOnetime.Admission, :hold_reference, 2}
+      end
 
-  defp location(:r13, event, events, _, _),
-    do:
-      wire_column?(event, events, fn
-        {:parse, _, sql, _, _} -> String.contains?(sql, "interval '1 microsecond' * $10")
+    source in stack and
+      Enum.any?(dictionary, fn
+        {key, {:sealed, inv, envelope}} -> {key, inv, envelope} === {b.key, b.inv, b.envelope}
         _ -> false
       end)
+  end
 
-  defp location(:r14, %{index: index, event: {_, :call, {Envelope, :context, _}}}, events, _, _),
-    do:
-      not Enum.any?(
-        events,
-        &(&1.index < index and
-            match?(
-              %{event: {_, :call, {Process, :get, _}}, stack: [{Delivery, :open, 7} | _]},
-              &1
-            ))
-      )
-
-  defp location(:r15, %{event: {_, :call, {Hold, :reference, [_, metadata]}}}, _, _, _),
-    do: Map.has_key?(metadata, :reference)
+  defp location(
+         :r14,
+         %{event: {_, :call, {Envelope, :context, args}}, stack: stack},
+         _,
+         b,
+         %{rule: :permitted_call_order, twin: {AshOnetime.Store, :committed_completion, 2}}
+       ),
+       do: {Delivery, :open, 7} in stack and Enum.take(args, 2) === [b.ref, b.inv]
 
   defp location(:r16, %{event: {_, :exception_from, {Delivery, :armed_call, 4}, _}}, _, _, _),
     do: true

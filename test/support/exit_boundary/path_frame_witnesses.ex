@@ -39,7 +39,7 @@ defmodule AshOnetime.Test.ExitBoundary.PathFrameWitnesses do
           Compiled.with_source(String.replace(source, header, guarded, global: false), path, fn ->
             for row <- Scenarios.rows(),
                 row.branch == :execute,
-                (row.type == :action) == (type == :action) do
+                row.type == :action == (type == :action) do
               row = Map.put(row, :frame_stage, stage)
               pair = Scenarios.observe(row, values, context)
               stacks = Completeness.stacks(pair.run.run.events)

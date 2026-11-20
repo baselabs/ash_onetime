@@ -220,6 +220,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       captured = pair[name].run
       assert exit_observation(captured.pattern_probe) == exit_observation(captured.events)
       assert length(captured.pattern_probe) > length(captured.events)
+      IO.inspect(%{side: name, full: length(captured.pattern_probe), reduced: length(captured.events)},
+        label: "U10_SAME_INVOCATION_EXIT_EQUALITY"
+      )
     end
 
     assert_green(pair)
@@ -330,7 +333,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp assert_pool_monitor_origins(pair) do
     run = Origins.build(pair.run)
     twin = Origins.build(pair.twin)
-    pairing = Comparator.compare(pair).pairing
+    comparison = Comparator.compare(pair)
 
     sources =
       for {key = {_role, _phase, stack, {module, function, _}, _ordinal}, origin} <- run.origins,
@@ -341,10 +344,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert sources != [], "U8 did not observe the pool holder's monitor origins"
 
     for {key, origin} <- sources do
-      assert Map.has_key?(twin.origins, key),
-             "U8: a pool monitor role has no twin occurrence: #{inspect(%{key: key, index: origin.index})}"
+      {expected, pairing} =
+        if proof = Map.get(comparison.readback_sources, origin.index) do
+          assert proof.key == key and proof.value === origin.value,
+                 "U8: readback proof must identify the same native monitor occurrence"
 
-      expected = Map.fetch!(twin.origins, key).value
+          assert proof.twin != nil, "U8: readback monitor has no reference occurrence"
+          {proof.twin.value, proof.pairing}
+        else
+          assert Map.has_key?(twin.origins, key),
+                 "U8: a pool monitor role has no twin occurrence: #{inspect(%{key: key, index: origin.index})}"
+
+          {Map.fetch!(twin.origins, key).value, comparison.pairing}
+        end
+
       assert Map.fetch!(pairing.forward, origin.value) == expected
       assert Map.fetch!(pairing.reverse, expected) == origin.value
     end

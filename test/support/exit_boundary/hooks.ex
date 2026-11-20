@@ -5,6 +5,7 @@ defmodule AshOnetime.Test.ExitBoundary.Hooks do
   def reference(resource, action, type) do
     {installer, _, _} = Registry.installer(type)
     key = {:hooks, resource, action, type, installer.module_info(:md5)}
+
     AshOnetime.Test.ExitBoundary.References.memo(key, fn ->
       build_reference(resource, action, type)
     end)

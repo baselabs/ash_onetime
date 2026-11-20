@@ -123,7 +123,20 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
             %{error | at: at}
           end)
 
-        %{claimed: MapSet.new(observed, & &1.index), errors: errors}
+        reference_origins = Origins.build(twin_side).origins
+
+        sources =
+          for {key, origin} <- Origins.build(run_side).origins, into: %{} do
+            {Enum.fetch!(observed, origin.index).index,
+             %{
+               key: key,
+               value: origin.value,
+               twin: Map.get(reference_origins, key),
+               pairing: result.pairing
+             }}
+          end
+
+        %{claimed: MapSet.new(observed, & &1.index), errors: errors, sources: sources}
     end
   end
 

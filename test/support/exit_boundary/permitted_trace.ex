@@ -147,6 +147,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
 
       m == Producer and f == :produce ->
         state
+        |> exact(e, :host_arguments, args, state.bound[:host_arguments])
         |> valid(e, :host_multiplicity, state.host_calls == 0)
         |> Map.update!(:host_calls, &(&1 + 1))
         |> claim(e)
@@ -618,6 +619,16 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
   end
 
   defp returned(state, _e, _, _, _, _side), do: state
+
+  defp check_frame(state, _e, {Delivery, :produce, 4}, [handle, _module, subject, trusted], _side) do
+    context =
+      trusted
+      |> Map.take([:actor, :tenant])
+      |> Map.reject(fn {_name, value} -> is_nil(value) end)
+      |> Map.merge(%{resource: handle.resource, action: handle.action})
+
+    bind(state, :host_arguments, [subject, context])
+  end
 
   defp check_frame(state, e, {Delivery, :key, 1}, [ref], _side),
     do: exact(state, e, :key_reference, ref, state.bound[:ref])

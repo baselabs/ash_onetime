@@ -201,7 +201,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       path: "lib/ash_onetime/delivery.ex",
       original: "        Process.put(key, {:done, inv, :executed, envelope, {target, claim}})\n",
       mutated:
-        "        claim = %{claim | retain_until: DateTime.add(claim.retain_until, byte_size(envelope), :microsecond)}\n        Process.put(key, {:done, inv, :executed, envelope, {target, claim}})\n",
+        "        claim = %{claim | retain_until: DateTime.add(claim.retain_until, byte_size(envelope), :microsecond, Calendar.UTCOnlyTimeZoneDatabase)}\n        Process.put(key, {:done, inv, :executed, envelope, {target, claim}})\n",
       action: :issue,
       branch: :execute,
       fault: nil,
@@ -302,7 +302,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       branch: :execute,
       fault: nil,
       value: :vd,
-      first: {:telemetry, :execute, 3},
+      first: {Process, :get, 1},
       extra: nil
     },
     %{
@@ -315,7 +315,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       branch: :execute,
       fault: nil,
       value: :vd,
-      first: {Task, :async, 1},
+      first: {:erlang, :get, 0},
       extra: nil
     },
     %{
@@ -329,7 +329,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       branch: :execute,
       fault: nil,
       value: :vd,
-      first: {:erlang, :port_command, 3},
+      first: {:erlang, :get, 0},
       extra: nil
     },
     %{
@@ -356,7 +356,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       branch: :execute,
       fault: nil,
       value: :vd,
-      first: {AshOnetime.Test.ExitBoundary.Hold, :reference, 2},
+      first: {:erlang, :get, 0},
       extra: nil
     },
     %{
@@ -546,6 +546,57 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       extra: nil
     },
     %{
+      id: :r_set_len,
+      label: "R-set-len",
+      path: "lib/ash_onetime/delivery.ex",
+      original: "      Process.put(key, {:sealed, inv, envelope})\n",
+      mutated:
+        AshOnetime.DeliveryComparatorHash.inline("hd(ordered)", "mutation_hash") <>
+          "      mutation_inv = if rem(byte_size(Enum.at(ordered, 1)), 2) == 1, do: binary_part(mutation_hash, 0, 16), else: inv\n      Process.put(key, {:sealed, mutation_inv, envelope})\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      value: :va,
+      first: {:erlang, :put, 2},
+      set_pair: [:va, :vd],
+      set_condition: :len,
+      extra: nil
+    },
+    %{
+      id: :r_set_bit,
+      label: "R-set-bit",
+      path: "lib/ash_onetime/delivery.ex",
+      original: "      Process.put(key, {:sealed, inv, envelope})\n",
+      mutated:
+        AshOnetime.DeliveryComparatorHash.inline("hd(ordered)", "mutation_hash") <>
+          "      mutation_inv = if Bitwise.band(:binary.first(hd(ordered)), 1) == 1, do: binary_part(mutation_hash, 0, 16), else: inv\n      Process.put(key, {:sealed, mutation_inv, envelope})\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      value: :va,
+      first: {:erlang, :put, 2},
+      set_pair: [:va, :vb],
+      set_condition: :bit,
+      extra: nil
+    },
+    %{
+      id: :r_set_par,
+      label: "R-set-par",
+      path: "lib/ash_onetime/delivery.ex",
+      original: "      Process.put(key, {:sealed, inv, envelope})\n",
+      mutated:
+        AshOnetime.DeliveryComparatorHash.inline("hd(ordered)", "mutation_hash") <>
+          "      <<mutation_parity::64>> = hd(ordered)\n      mutation_parity = Bitwise.bxor(mutation_parity, Bitwise.bsr(mutation_parity, 32))\n      mutation_parity = Bitwise.bxor(mutation_parity, Bitwise.bsr(mutation_parity, 16))\n      mutation_parity = Bitwise.bxor(mutation_parity, Bitwise.bsr(mutation_parity, 8))\n      mutation_parity = Bitwise.bxor(mutation_parity, Bitwise.bsr(mutation_parity, 4))\n      mutation_parity = Bitwise.bxor(mutation_parity, Bitwise.bsr(mutation_parity, 2))\n      mutation_parity = Bitwise.bxor(mutation_parity, Bitwise.bsr(mutation_parity, 1))\n      mutation_inv = if Bitwise.band(mutation_parity, 1) == 1, do: binary_part(mutation_hash, 0, 16), else: inv\n      Process.put(key, {:sealed, mutation_inv, envelope})\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      value: :va,
+      first: {:erlang, :put, 2},
+      set_pair: [:va, :vc],
+      set_condition: :par,
+      extra: nil
+    },
+    %{
       id: :r_iso_k,
       label: "R-iso-K",
       path: "lib/ash_onetime/delivery.ex",
@@ -577,14 +628,42 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       id: :r_iso_context,
       label: "R-iso-context",
       path: "lib/ash_onetime/change.ex",
-      original: "  defp complete(changeset, callback) do\n",
+      original: "  defp reserve(changeset, protection, context, delivery) do\n",
       mutated:
-        "  defp complete(changeset, callback) do\n    changeset = case changeset.context do\n      %{private: %{ash_onetime_delivery: %{ref: ref} = delivery} = private} = context when is_binary(ref) ->\n        private = %{private | ash_onetime_delivery: Map.put(delivery, :n, rem(:binary.first(ref), 2))}\n        %{changeset | context: %{context | private: private}}\n      _ -> changeset\n    end\n",
+        "  defp reserve(changeset, protection, context, delivery) do\n    changeset = case changeset.context do\n      %{private: %{ash_onetime_delivery: %{ref: mutation_ref} = mutation_delivery} = mutation_private} = mutation_context when is_binary(mutation_ref) ->\n        mutation_private = %{mutation_private | ash_onetime_delivery: Map.put(mutation_delivery, :n, rem(:binary.first(mutation_ref), 2))}\n        %{changeset | context: %{mutation_context | private: mutation_private}}\n      _ -> changeset\n    end\n",
       action: :issue,
       branch: :execute,
       fault: nil,
       value: :va,
-      first: {AshOnetime.Test.ExitBoundary.Consumer, :after_action, 2},
+      first: {AshOnetime.Admission, :dispatch_reservation, 4},
+      extra: nil
+    },
+    %{
+      id: :r_iso_o3,
+      label: "R-iso-O3",
+      path: "lib/ash_onetime/external_recovery.ex",
+      original:
+        "    _result =\n      Telemetry.external_recovery(\n        System.monotonic_time() - started,\n",
+      mutated:
+        "    duration = System.monotonic_time() - started\n    duration = if state.resource == AshOnetime.Test.ExitBoundary.Withheld, do: duration + 1 + rem(abs(started), 2), else: duration\n    _result =\n      Telemetry.external_recovery(\n        duration,\n",
+      action: :external_issue,
+      branch: :execute,
+      fault: nil,
+      value: :va,
+      first: {AshOnetime.Telemetry, :external_recovery, 5},
+      extra: nil
+    },
+    %{
+      id: :r_iso_o2,
+      label: "R-iso-O2",
+      path: "lib/ash_onetime/admission.ex",
+      original: "         {:ok, target} <- target(subject) do\n      {:ok,\n       %State{\n",
+      mutated: "         {:ok, target} <- target(subject) do\n      request = if subject.resource == AshOnetime.Test.ExitBoundary.Withheld, do: %{request | id: subject.data.id}, else: request\n      {:ok,\n       %State{\n",
+      action: :rotate,
+      branch: :execute,
+      fault: nil,
+      value: :va,
+      first: {AshOnetime.Admission, :prepare_resolved, 2},
       extra: nil
     },
     %{
@@ -606,20 +685,25 @@ defmodule AshOnetime.DeliveryComparatorMutations do
 
   def rows, do: @rows
   def label(row), do: Map.get(row, :label, String.upcase(Atom.to_string(row.id)))
-  # These change an existing scalar or order only when length parity is one.
-  # Adding an event, a byte, or a map key still changes the observation when its
-  # payload is zero, so those R rows cannot be C-set's neutral Va control.
-  def parity_rows, do: Enum.filter(@rows, &(&1.id in [:r11, :r12, :r14, :r15]))
+  def set_rows, do: Enum.filter(@rows, &Map.has_key?(&1, :set_pair))
+
+  def set_active?(%{set_condition: :len}, values), do: rem(byte_size(values.long), 2) == 1
+  def set_active?(%{set_condition: :bit}, values), do: rem(:binary.first(values.short), 2) == 1
+
+  def set_active?(%{set_condition: :par}, values) do
+    ones = for <<byte <- values.short>>, bit <- Integer.digits(byte, 2), do: bit
+    rem(Enum.sum(ones), 2) == 1
+  end
 
   def set_checks do
-    Map.new(parity_rows(), fn row ->
+    Map.new(set_rows(), fn row ->
       name = Atom.to_string(row.id)
 
       {name <> "-c-set",
        Map.merge(row, %{
          test: "test/ash_onetime/delivery/comparator_mutations_test.exs",
          tag: name <> "_c_set",
-         test_name: String.upcase(name) <> ": C-set uses the opposite length parity",
+         test_name: label(row) <> ": C-set input pair",
          assertion: String.upcase(name) <> "_C_SET_NAMED_FIRST_DIVERGENCE"
        })}
     end)

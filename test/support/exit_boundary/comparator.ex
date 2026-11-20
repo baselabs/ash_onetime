@@ -280,6 +280,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       clock_count: map_size(ri.reads),
       events: {length(ri.events), length(ti.events)},
       pairing: state.pairing,
+      readback_sources: Map.get(readback, :sources, %{}),
       databases: state.databases,
       derivations: state.derivations,
       clocks: state.clocks
@@ -1161,6 +1162,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       end)
 
     state = %{state | current: previous}
+    {a, state} = claim_clock_copies(a, :run, state, path)
+    {b, state} = claim_clock_copies(b, :twin, state, path)
     fields = [:id, :operation_hash, :response_codec, :response_digest]
     term(Map.drop(Map.from_struct(a), fields), Map.drop(Map.from_struct(b), fields), state, path)
   end
@@ -2522,6 +2525,27 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
             Map.fetch(state.pairing.reverse, b) === {:ok, a}),
        do: state,
        else: error(state, :o2_identity, path, a, b)
+  end
+
+  # Whole-return copies have no event index at which DatabaseOrigins can project
+  # them. A typed Claim still has to equal its own captured wire fields first.
+  defp claim_clock_copies(claim, side, state, path) do
+    database = elem(state.databases, if(side == :run, do: 0, else: 1))
+
+    case DatabaseOrigins.claim(claim, database) do
+      {:ok, fields} ->
+        Enum.reduce(fields, {claim, state}, fn {key, expected}, {copy, s} ->
+          token = {:database_expression, {:claim_column, key}}
+          actual = Map.fetch!(copy, key)
+
+          if actual === expected or actual === token,
+            do: {Map.put(copy, key, token), s},
+            else: {copy, error(s, :o4_claim_copy, path ++ [side, key], actual, expected)}
+        end)
+
+      :error ->
+        {claim, error(state, :o4_claim_origin, path ++ [side], claim.id, :captured_wire_claim)}
+    end
   end
 
   defp list([], [], state, _, _), do: state

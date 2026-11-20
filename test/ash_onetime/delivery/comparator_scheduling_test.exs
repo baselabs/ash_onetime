@@ -9,10 +9,16 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
     @tag u9_path: name
     @tag u9_group: Integer.to_string(div(ordinal, 5))
     test "U9 and U11: twenty C-pos observations of #{name}", context do
-      started = System.monotonic_time(:millisecond)
       row = unquote(Macro.escape(row))
       context = with_references(context, [row])
       values = Values.set()[:va]
+
+      # The first real path prepares Ecto/Postgrex's query cache. U11 measures
+      # repeated execution on that prepared substrate; each observation still
+      # captures its actual historical cache and compares every generated origin.
+      warm = Scenarios.observe(row, values, context)
+      assert Comparator.compare(warm).errors == [], "U9 path preparation must compare green"
+      started = System.monotonic_time(:millisecond)
 
       profiles =
         for repetition <- 1..20 do

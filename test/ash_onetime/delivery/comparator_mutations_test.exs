@@ -50,9 +50,16 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
     test "#{AshOnetime.DeliveryComparatorMutations.label(mutation)}: named first divergence",
          context do
       mutation = unquote(Macro.escape(mutation))
+
       with_runtime(mutation, context, fn ->
         row = row!(mutation.action, mutation.branch, mutation.fault)
-        pair = observe(context, row, Keyword.fetch!(Values.set(), mutation.value))
+        values = Values.set()
+        label =
+          if Map.has_key?(mutation, :set_pair),
+            do: Enum.find(mutation.set_pair, &AshOnetime.DeliveryComparatorMutations.set_active?(mutation, values[&1])),
+            else: mutation.value
+
+        pair = observe(context, row, Keyword.fetch!(values, label))
         hits = Search.hits(pair.run)
         comparison = Comparator.compare(pair)
         first = List.first(comparison.errors)
@@ -92,42 +99,43 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
     end
   end
 
-  for mutation <- AshOnetime.DeliveryComparatorMutations.parity_rows() do
+  for mutation <- AshOnetime.DeliveryComparatorMutations.set_rows() do
     @tag :c_set
     @tag String.to_atom(Atom.to_string(mutation.id) <> "_c_set")
-    test "#{String.upcase(Atom.to_string(mutation.id))}: C-set uses the opposite length parity",
-         context do
+    test "#{AshOnetime.DeliveryComparatorMutations.label(mutation)}: C-set input pair", context do
       mutation = unquote(Macro.escape(mutation))
       row = row!(mutation.action, mutation.branch, mutation.fault)
       values = Values.set()
+      expected = Enum.map(mutation.set_pair, &AshOnetime.DeliveryComparatorMutations.set_active?(mutation, values[&1]))
+      assert Enum.count(expected, & &1) == 1, "C-set pair must exercise both sides of its condition"
 
-      for label <- [:va, :vd] do
-        pair = observe(context, row, Keyword.fetch!(values, label))
-        hits = Search.hits(pair.run)
-        assert hits == [], "C-set requires a quiet raw-canary search"
-        comparison = Comparator.compare(pair)
-        first = List.first(comparison.errors)
+      observed =
+        for label <- mutation.set_pair do
+          pair = observe(context, row, Keyword.fetch!(values, label))
+          assert Search.hits(pair.run) == [], "C-set requires a quiet raw-canary search"
+          comparison = Comparator.compare(pair)
+          first = List.first(comparison.errors)
 
-        IO.inspect(%{mutation: mutation.id, tuple: label, first: Diagnostics.safe(first)},
-          label: "C_SET_NATIVE_COMPARISON",
-          limit: :infinity
-        )
+          IO.inspect(%{mutation: mutation.id, tuple: label, first: Diagnostics.safe(first)},
+            label: "C_SET_NATIVE_COMPARISON",
+            limit: :infinity
+          )
 
-        if label == :va do
-          neutral? = comparison.errors == []
-          assert neutral?, "C-set: Va must pass with the production parity mutation enabled"
-        else
           if first do
             assert MutationWitness.named?(mutation, first, pair, comparison),
-                   "C-set: an earlier or different divergence is not the parity witness"
+                   "C-set: an earlier or different divergence is not the conditional witness"
           end
 
-          clear? = comparison.errors == []
-
-          assert clear?,
-                 String.upcase(Atom.to_string(mutation.id)) <> "_C_SET_NAMED_FIRST_DIVERGENCE"
+          first != nil
         end
-      end
+
+      # Both tuples pass after exact source restoration. With the production
+      # mutation installed, exactly the condition's chosen tuple must be red.
+      assert observed == [false, false] or observed == expected,
+             "C-set mutation must diverge on exactly its selected tuple"
+
+      assert observed == [false, false],
+             String.upcase(Atom.to_string(mutation.id)) <> "_C_SET_NAMED_FIRST_DIVERGENCE"
     end
   end
 
@@ -172,6 +180,19 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         {:context, :r8} ->
           assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
                  "R8's earlier dictionary-read divergence must remain under the CONTEXT mutant"
+
+        {:o3, :r_iso_o3} ->
+          assert disabled.errors == [], "R-iso-O3 must pass with only its duration formula disabled"
+
+        {:o2, :r_iso_o2} ->
+          assert disabled.errors == [], "R-iso-O2 must pass with only UUID pairing disabled"
+
+        {:o3, :r11} ->
+          assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
+                 "R11's earlier dictionary read must remain under the O3 duration mutant"
+
+        {:host_multiplicity, :r9} ->
+          assert disabled.errors == [], "R9 must pass with only host-call multiplicity disabled"
 
         {:return, :r_iso_return} ->
           assert disabled.errors == [],

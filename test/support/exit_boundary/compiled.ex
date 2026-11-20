@@ -5,7 +5,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
   # Keep the installed BEAM and its debug readers on the same source revision
   # while a hosted test exercises a guarded production edit.
   def with_source(source, path, callback) do
-    previous = Code.compiler_options(ignore_module_conflict: true)
+    previous = Code.compiler_options(ignore_module_conflict: true, debug_info: true)
 
     modules =
       for [_, name] <- Regex.scan(~r/^defmodule ([A-Za-z0-9_.]+) do$/m, source) do
