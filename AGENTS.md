@@ -56,15 +56,19 @@ Re-read it whenever you touch a workflow, a Dockerfile, a release script or a se
   them.
 - **Publication.** Infra dispatches `publish.yml` on the qualified default-branch commit. It
   publishes only a new version of an existing Hex package, with a dated changelog section and
-  no existing version tag. Build and inspect the package and reproducible docs archives before
+  no existing version tag. Build and inspect the package and docs archives before
   the keyed step; that step only uploads missing archives with `mix run --no-mix-exs` from an
   empty directory. A held release is finished by a second dispatch on the same commit after
-  approval. Matching served archives are reused; retired releases and differing bytes are
-  refused, never replaced. Read both archives back without a key. The publish job exports
-  the package, docs, checksums and notes as one `release-assets` artifact for infra to compare
-  and attach to the GitHub release. No workflow creates a release or runs on a tag. The
-  `published-livebooks` job needs the publish job, uses the same actor restriction, and holds
-  no environment or key. Qualification uses only local package consumers.
+  approval. Package bytes must match any staged or served release; retired releases are
+  refused. Docs bytes are never compared: readable served docs are kept, missing docs uploaded.
+  Every docs build writes root `release.json` with package, version and the run's commit.
+  Keyless read-back requires `index.html` and that provenance naming this package and version
+  and the dispatched commit or an ancestor on the default branch; it outputs that published
+  commit. Only ready runs export `release-assets`: the package, downloaded served docs,
+  recomputed checksums and checkout changelog notes, for infra to attach to the GitHub release
+  on the published commit. A held run exports none. No archive is replaced. No workflow creates
+  a release or runs on a tag. The `published-livebooks` job needs the publish job, uses the same
+  actor restriction, and holds no environment or key. Qualification uses only local package consumers.
 - **You write your own workflow changes; infra-1 reviews them.** Before landing a change to
   `.github/`, a Dockerfile, a release script or anything that touches a secret, send infra-1 the
   branch and head and wait for its review. Take any CI/CD, runner, box or key problem to
