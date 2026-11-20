@@ -30,8 +30,6 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
   @flags [:send, :receive, :procs, :call, :set_on_spawn, :strict_monotonic_timestamp]
   @port_flags [:send, :receive, :strict_monotonic_timestamp]
-  @timer_starts [send_after: 3, send_after: 4, start_timer: 3, start_timer: 4]
-  @timer_cancels [cancel_timer: 1, cancel_timer: 2]
 
   defmodule Snapshot do
     @moduledoc false

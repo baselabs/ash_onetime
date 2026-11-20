@@ -3517,7 +3517,7 @@ defmodule AshOnetime.MutationCheck do
     end
 
     invalid_red_outputs = [
-      "invalid box-mix lane declaration\nFailed: 1 test",
+      "invalid test lane declaration\nFailed: 1 test",
       "Running ExUnit\nFailed: 1 test",
       "Running ExUnit\nFinished in 0.1 seconds\nResult: 0 passed\nFailed: 1 test",
       "Running ExUnit\nFinished in 0.1 seconds\nResult: 0/1 passed\nFailed: 1 test\nSIGTERM received"

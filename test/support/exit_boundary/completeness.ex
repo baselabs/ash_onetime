@@ -1,6 +1,6 @@
 defmodule AshOnetime.Test.ExitBoundary.Completeness do
   @moduledoc false
-  alias AshOnetime.Test.ExitBoundary.{ContextCopies, Declarations, Hooks, PathFrames, Registry, Returned, Withheld}
+  alias AshOnetime.Test.ExitBoundary.{ContextCopies, Declarations, PathFrames, Registry, Returned, Withheld}
 
   # This is an audit of the declared slots against independently captured terms.
   # Missing entries and entries with no witness both fail; neither side of the audit
