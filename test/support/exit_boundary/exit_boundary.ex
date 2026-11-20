@@ -39,7 +39,10 @@ defmodule AshOnetime.Test.ExitBoundary do
       await_ready(root, monitor)
 
       frames = Capture.frames(spec.host, spec.callbacks) ++ Map.get(spec, :frames, [])
-      collector = Collector.start(frames, @deadline, include_pure?: Map.get(spec, :include_pure?, false))
+
+      collector =
+        Collector.start(frames, @deadline, include_pure?: Map.get(spec, :include_pure?, false))
+
       :ok = Collector.arm(collector, root)
       {result, :post_drain} = await_result(root, monitor)
 
@@ -100,13 +103,15 @@ defmodule AshOnetime.Test.ExitBoundary do
   defp preload!(spec) do
     applications = Application.loaded_applications()
     key = {__MODULE__, :preloaded, applications}
+
     unless Process.get(key) do
-    for {app, _description, _version} <- applications,
-        {:ok, modules} <- [:application.get_key(app, :modules)],
-        module <- modules do
-      Code.ensure_loaded(module)
-    end
-    Process.put(key, true)
+      for {app, _description, _version} <- applications,
+          {:ok, modules} <- [:application.get_key(app, :modules)],
+          module <- modules do
+        Code.ensure_loaded(module)
+      end
+
+      Process.put(key, true)
     end
 
     for module <- spec.host ++ spec.callbacks, do: Code.ensure_loaded!(module)

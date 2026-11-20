@@ -6,6 +6,7 @@ defmodule AshOnetime.Test.ExitBoundary.Values do
     a = %{short: :crypto.strong_rand_bytes(8), long: :crypto.strong_rand_bytes(32)}
     bits = %{short: :rand.uniform(64) - 1, long: :rand.uniform(256) - 1}
     Process.put({__MODULE__, :flipped_bits}, bits)
+
     [
       {:va, a},
       {:vb, Map.new(a, fn {k, v} -> {k, for(<<b <- v>>, into: <<>>, do: <<bxor(b, 255)>>)} end)},

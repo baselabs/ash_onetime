@@ -38,5 +38,4 @@ defmodule AshOnetime.Test.ExitBoundary.Persisted do
       {table, %{added: added, removed: removed}}
     end
   end
-
 end

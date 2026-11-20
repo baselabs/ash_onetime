@@ -67,5 +67,4 @@ defmodule AshOnetime.Test.ExitBoundary.Pair do
     do: Ash.destroy(changeset, opts)
 
   def call(%Ash.ActionInput{} = input, opts), do: Ash.run_action(input, opts)
-
 end

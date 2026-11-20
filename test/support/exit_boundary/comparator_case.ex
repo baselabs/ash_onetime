@@ -38,11 +38,20 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorCase do
     Repo.put_dynamic_repo(repo)
     ExternalPeer.install!(context.prefix)
 
-    SQL.query!(repo,
-      ~s[CREATE TABLE IF NOT EXISTS "#{context.prefix}".ash_onetime_boundary_records (id uuid PRIMARY KEY, amount bigint NOT NULL, retired boolean NOT NULL DEFAULT false)], [])
+    SQL.query!(
+      repo,
+      ~s[CREATE TABLE IF NOT EXISTS "#{context.prefix}".ash_onetime_boundary_records (id uuid PRIMARY KEY, amount bigint NOT NULL, retired boolean NOT NULL DEFAULT false)],
+      []
+    )
 
-    peer = start_supervised!({Postgrex,
-      Keyword.merge(ExternalPeer.database_options(), idle_interval: 3_600_000, prepare: :unnamed)})
+    peer =
+      start_supervised!(
+        {Postgrex,
+         Keyword.merge(ExternalPeer.database_options(),
+           idle_interval: 3_600_000,
+           prepare: :unnamed
+         )}
+      )
 
     warm_pool!(repo, size)
     {:ok, repo: repo, peer: peer, pool_size: size}
@@ -52,16 +61,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorCase do
     parent = self()
     tag = make_ref()
 
-    tasks = for _ <- 1..size do
-      Task.async(fn ->
-        Repo.put_dynamic_repo(repo)
-        Repo.checkout(fn ->
-          SQL.query!(repo, "SELECT 1", [])
-          send(parent, {tag, self()})
-          receive do: ({^tag, :release} -> :ok)
+    tasks =
+      for _ <- 1..size do
+        Task.async(fn ->
+          Repo.put_dynamic_repo(repo)
+
+          Repo.checkout(fn ->
+            SQL.query!(repo, "SELECT 1", [])
+            send(parent, {tag, self()})
+            receive do: ({^tag, :release} -> :ok)
+          end)
         end)
-      end)
-    end
+      end
 
     for _ <- tasks do
       receive do
@@ -78,8 +89,13 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorCase do
 
   def with_references(context, rows \\ Scenarios.rows()) do
     actions = rows |> Enum.map(& &1.action) |> Enum.uniq()
-    references = for resource <- [Withheld, Returned], action <- actions, into: %{},
-      do: {{resource, action}, References.operation(resource, action)}
+
+    references =
+      for resource <- [Withheld, Returned],
+          action <- actions,
+          into: %{},
+          do: {{resource, action}, References.operation(resource, action)}
+
     Map.put(context, :operation_references, references)
   end
 
@@ -89,7 +105,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorCase do
   end
 
   def row!(action, branch, fault \\ nil) do
-    Enum.find(Scenarios.rows(), &(&1.action == action and &1.branch == branch and &1.fault == fault)) ||
+    Enum.find(
+      Scenarios.rows(),
+      &(&1.action == action and &1.branch == branch and &1.fault == fault)
+    ) ||
       raise "no comparator path for #{inspect({action, branch, fault})}"
   end
 end

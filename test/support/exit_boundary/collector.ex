@@ -27,7 +27,6 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   #
   # Nothing here formats an event: a failure names counts and classes, never a term.
 
-
   @flags [:send, :receive, :procs, :call, :set_on_spawn, :strict_monotonic_timestamp]
   @port_flags [:send, :receive, :strict_monotonic_timestamp]
 
@@ -338,9 +337,11 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
        when tag in [:return_from, :exception_from],
        do: %{state | returned?: true}
 
-  defp boundary(%{root: root, test: observer} = state,
-         {root, :send, {:result, root, _result, _residue}, observer}),
-    do: %{state | published?: true}
+  defp boundary(
+         %{root: root, test: observer} = state,
+         {root, :send, {:result, root, _result, _residue}, observer}
+       ),
+       do: %{state | published?: true}
 
   defp boundary(state, _event), do: state
 end

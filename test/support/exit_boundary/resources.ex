@@ -7,8 +7,10 @@ defmodule AshOnetime.Test.ExitBoundary.Faults do
   @fault {__MODULE__, :fault}
   @peer {__MODULE__, :peer}
 
-  def plant(short, long) when is_binary(short) and is_binary(long) and byte_size(short) == 8 and byte_size(long) <= 65_536,
-    do: Process.put(@canaries, %{short: short, long: long})
+  def plant(short, long)
+      when is_binary(short) and is_binary(long) and byte_size(short) == 8 and
+             byte_size(long) <= 65_536,
+      do: Process.put(@canaries, %{short: short, long: long})
 
   def canaries, do: Process.get(@canaries) || %{short: random(8), long: random(32)}
   def put(fault), do: Process.put(@fault, fault)
@@ -81,29 +83,34 @@ defmodule AshOnetime.Test.ExitBoundary.External do
     if Faults.fault() == {:interrupt, :before_execute} do
       {:error, :outcome_unknown}
     else
-    result =
-      ExternalPeer.execute(subject.to_tenant, operation_key, %{effect: "boundary"},
-        connection: Faults.peer()
-      )
+      result =
+        ExternalPeer.execute(subject.to_tenant, operation_key, %{effect: "boundary"},
+          connection: Faults.peer()
+        )
 
-    Faults.pause(:after_execute)
+      Faults.pause(:after_execute)
 
-    if Faults.fault() == :finalize_replay, do: AshOnetime.Test.ExitBoundary.FinalizeReplay.complete(subject, operation_key)
+      if Faults.fault() == :finalize_replay,
+        do: AshOnetime.Test.ExitBoundary.FinalizeReplay.complete(subject, operation_key)
 
-    case Faults.fault() do
-      :execute_unknown -> {:error, :outcome_unknown}
-      {:interrupt, :after_execute} -> {:error, :outcome_unknown}
-      _none -> {:ok, result, Faults.canaries()}
-    end
+      case Faults.fault() do
+        :execute_unknown -> {:error, :outcome_unknown}
+        {:interrupt, :after_execute} -> {:error, :outcome_unknown}
+        _none -> {:ok, result, Faults.canaries()}
+      end
     end
   end
 
   @impl true
   def recover(operation_key, subject, _context) do
     case Faults.fault() do
-      {:interrupt, _} -> :unknown
-      _ -> ExternalPeer.recover(subject.to_tenant, operation_key, :authoritative,
-        connection: Faults.peer())
+      {:interrupt, _} ->
+        :unknown
+
+      _ ->
+        ExternalPeer.recover(subject.to_tenant, operation_key, :authoritative,
+          connection: Faults.peer()
+        )
     end
   end
 end
@@ -123,29 +130,34 @@ defmodule AshOnetime.Test.ExitBoundary.ReturnedExternal do
     if Faults.fault() == {:interrupt, :before_execute} do
       {:error, :outcome_unknown}
     else
-    result =
-      ExternalPeer.execute(subject.to_tenant, operation_key, %{effect: "boundary"},
-        connection: Faults.peer()
-      )
+      result =
+        ExternalPeer.execute(subject.to_tenant, operation_key, %{effect: "boundary"},
+          connection: Faults.peer()
+        )
 
-    Faults.pause(:after_execute)
+      Faults.pause(:after_execute)
 
-    if Faults.fault() == :finalize_replay, do: AshOnetime.Test.ExitBoundary.FinalizeReplay.complete(subject, operation_key)
+      if Faults.fault() == :finalize_replay,
+        do: AshOnetime.Test.ExitBoundary.FinalizeReplay.complete(subject, operation_key)
 
-    case Faults.fault() do
-      :execute_unknown -> {:error, :outcome_unknown}
-      {:interrupt, :after_execute} -> {:error, :outcome_unknown}
-      _none -> {:ok, result}
-    end
+      case Faults.fault() do
+        :execute_unknown -> {:error, :outcome_unknown}
+        {:interrupt, :after_execute} -> {:error, :outcome_unknown}
+        _none -> {:ok, result}
+      end
     end
   end
 
   @impl true
   def recover(operation_key, subject, _context) do
     case Faults.fault() do
-      {:interrupt, _} -> :unknown
-      _ -> ExternalPeer.recover(subject.to_tenant, operation_key, :authoritative,
-        connection: Faults.peer())
+      {:interrupt, _} ->
+        :unknown
+
+      _ ->
+        ExternalPeer.recover(subject.to_tenant, operation_key, :authoritative,
+          connection: Faults.peer()
+        )
     end
   end
 end

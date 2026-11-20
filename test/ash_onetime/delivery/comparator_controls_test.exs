@@ -1,8 +1,22 @@
 defmodule AshOnetime.Delivery.ComparatorControlsTest do
   use AshOnetime.Test.ExitBoundary.ComparatorCase, async: false
-  alias AshOnetime.Test.ExitBoundary.{Comparator, Completeness, ContextCopies, Declarations,
-    Origins, PermittedTrace, Registry, Returned, Scenarios, Search, TransportReferences,
-    Values, Wire, Withheld}
+
+  alias AshOnetime.Test.ExitBoundary.{
+    Comparator,
+    Completeness,
+    ContextCopies,
+    Declarations,
+    Origins,
+    PermittedTrace,
+    Registry,
+    Returned,
+    Scenarios,
+    Search,
+    TransportReferences,
+    Values,
+    Wire,
+    Withheld
+  }
 
   @tag :comparator_control
   test "C-tick: the twin TTL read falls in the next second", context do
@@ -19,7 +33,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     @tag :comparator_control
     @tag pool_size: size
     test "C-anchor and U8: different pool anchors, pool size #{size}", context do
-      context = Map.put(context, :between_sides, fn _side -> warm_pool!(context.repo, unquote(size)) end)
+      context =
+        Map.put(context, :between_sides, fn _side -> warm_pool!(context.repo, unquote(size)) end)
+
       pair = observe(context, row!(:external_issue, :execute), Values.set()[:va])
       run = anchors(pair.run)
       twin = anchors(pair.twin)
@@ -34,15 +50,18 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     test "C-interleave and U8: independent roles interleave, pool size #{size}", context do
       row = row!(:external_issue, :execute)
       context = with_references(context, [row])
-      result = Enum.reduce_while(1..10, false, fn _, _ ->
-        pair = Scenarios.observe(row, Values.set()[:va], context)
-        assert_green(pair)
-        assert_pool_monitor_origins(pair)
-        run = role_order(pair.run)
-        twin = role_order(pair.twin)
-        assert length(Enum.uniq(run)) > 1
-        if run != twin, do: {:halt, true}, else: {:cont, false}
-      end)
+
+      result =
+        Enum.reduce_while(1..10, false, fn _, _ ->
+          pair = Scenarios.observe(row, Values.set()[:va], context)
+          assert_green(pair)
+          assert_pool_monitor_origins(pair)
+          run = role_order(pair.run)
+          twin = role_order(pair.twin)
+          assert length(Enum.uniq(run)) > 1
+          if run != twin, do: {:halt, true}, else: {:cont, false}
+        end)
+
       assert result, "C-interleave did not witness a different cross-role interleaving"
     end
   end
@@ -51,13 +70,23 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   test "U1: the re-raise keeps the term, erases, and leaves armed_call", context do
     pair = observe(context, row!(:issue, :consumer_failure, :after_throw), Values.set()[:va])
     root = pair.run.run.snapshot.root
-    tail = pair.run.run.events |> Enum.map(& &1.event) |> Enum.drop_while(fn
-      {^root, :exception_from, {AshOnetime.Delivery, :armed, 4}, _} -> false
-      _ -> true
-    end)
+
+    tail =
+      pair.run.run.events
+      |> Enum.map(& &1.event)
+      |> Enum.drop_while(fn
+        {^root, :exception_from, {AshOnetime.Delivery, :armed, 4}, _} -> false
+        _ -> true
+      end)
+
     assert match?([{^root, :exception_from, {AshOnetime.Delivery, :armed, 4}, _} | _], tail)
     assert Enum.any?(tail, &match?({^root, :call, {:erlang, :erase, [_]}}, &1))
-    assert Enum.any?(tail, &match?({^root, :exception_from, {AshOnetime.Delivery, :armed_call, 4}, _}, &1))
+
+    assert Enum.any?(
+             tail,
+             &match?({^root, :exception_from, {AshOnetime.Delivery, :armed_call, 4}, _}, &1)
+           )
+
     raises = Enum.filter(tail, &match?({^root, :call, {:erlang, :raise, [_, _, _]}}, &1))
     IO.inspect(Enum.map(tail, fn e -> {elem(e, 1), event_mfa(e)} end), label: "U1_RERAISE")
     assert raises == []
@@ -67,29 +96,57 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @tag :u2
   @tag :u4
   test "U2 and U4: hold release reaches GREATEST and its next wire row", context do
-    row = row!(:external_issue, :execute) |> Map.put(:fault, :held) |> Map.put(:release_hold?, true)
+    row =
+      row!(:external_issue, :execute) |> Map.put(:fault, :held) |> Map.put(:release_hold?, true)
+
     pair = observe(context, row, Values.set()[:va])
     events = pair.run.run.events
-    assert Enum.any?(events, &match?(%{event: {_, :call, {AshOnetime.Store.Postgres, :release_query, [_, "boundary-hold"]}}}, &1))
+
+    assert Enum.any?(
+             events,
+             &match?(
+               %{
+                 event:
+                   {_, :call, {AshOnetime.Store.Postgres, :release_query, [_, "boundary-hold"]}}
+               },
+               &1
+             )
+           )
+
     assert Enum.any?(events, fn
-      %{event: {_, :call, {Postgrex, :query, [_connection, sql, _, _]}}} -> String.contains?(sql, "GREATEST(")
-      _ -> false
-    end)
+             %{event: {_, :call, {Postgrex, :query, [_connection, sql, _, _]}}} ->
+               String.contains?(sql, "GREATEST(")
+
+             _ ->
+               false
+           end)
+
     wire = pair.run |> Origins.build() |> TransportReferences.build() |> Wire.build()
     rows = wire |> Enum.flat_map(&wire_terms(&1.event, :data_row))
+
     assert Enum.any?(rows, fn {:data_row, columns} ->
-      Enum.any?(columns, fn
-        {:data_column, sql, _, _, "retain_until", _, _, 1184, 1, {:timestamptz, _}} -> String.starts_with?(sql, "SELECT id, logical_partition")
-        _ -> false
-      end)
-    end)
+             Enum.any?(columns, fn
+               {:data_column, sql, _, _, "retain_until", _, _, 1184, 1, {:timestamptz, _}} ->
+                 String.starts_with?(sql, "SELECT id, logical_partition")
+
+               _ ->
+                 false
+             end)
+           end)
+
     assert_green(pair)
   end
 
   @tag :u5
   test "U5: entry, transaction refusal, and direct claim are closed traces", context do
-    rows = [row!(:issue, :execute), row!(:mint, :execute),
-      row!(:issue, :transaction, :commit), row!(:issue, :transaction, :rollback), row!(:mint, :direct)]
+    rows = [
+      row!(:issue, :execute),
+      row!(:mint, :execute),
+      row!(:issue, :transaction, :commit),
+      row!(:issue, :transaction, :rollback),
+      row!(:mint, :direct)
+    ]
+
     for row <- rows do
       pair = observe(context, row, Values.set()[:va])
       indexed = Origins.build(pair.run)
@@ -103,19 +160,31 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @tag :u6
   test "U6 and U4: Bind and DataRow columns have protocol type OIDs", context do
     pair = observe(context, row!(:external_issue, :execute), Values.set()[:va])
+
     for side <- [pair.run, pair.twin] do
       wire = side |> Origins.build() |> TransportReferences.build() |> Wire.build()
       binds = Enum.flat_map(wire, &wire_terms(&1.event, :bind_column))
       rows = Enum.flat_map(wire, &wire_terms(&1.event, :data_column))
       assert binds != [] and rows != []
-      assert Enum.all?(binds, fn {:bind_column, _, oid, format, _} -> is_integer(oid) and format in [0, 1] end)
-      assert Enum.all?(rows, fn {:data_column, sql, {ordinal, _}, _, _, {:table_oid, oid}, _, type, format, _} ->
-        is_binary(sql) and is_integer(ordinal) and is_integer(oid) and is_integer(type) and format in [0, 1]
-      end)
-      clocks = for {:data_column, _, _, _, field, _, _, type, _, _} <- rows,
-        field in ["admitted_at", "retain_until", "inserted_at"], do: type
+
+      assert Enum.all?(binds, fn {:bind_column, _, oid, format, _} ->
+               is_integer(oid) and format in [0, 1]
+             end)
+
+      assert Enum.all?(rows, fn {:data_column, sql, {ordinal, _}, _, _, {:table_oid, oid}, _,
+                                 type, format, _} ->
+               is_binary(sql) and is_integer(ordinal) and is_integer(oid) and is_integer(type) and
+                 format in [0, 1]
+             end)
+
+      clocks =
+        for {:data_column, _, _, _, field, _, _, type, _, _} <- rows,
+            field in ["admitted_at", "retain_until", "inserted_at"],
+            do: type
+
       assert clocks != [] and Enum.all?(clocks, &(&1 == 1184))
     end
+
     assert_green(pair)
   end
 
@@ -133,35 +202,77 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     values = Values.set()[:va]
     before = observe(Map.put(context, :include_pure?, true), row, values)
     after_pair = observe(context, row, values)
+
     for name <- [:run, :twin] do
       assert exit_counts(before[name]) == exit_counts(after_pair[name])
       assert length(before[name].run.events) > length(after_pair[name].run.events)
     end
+
     assert_green(after_pair)
   end
 
   @tag :u13
   @tag :u14
-  test "U13 and U14: compiled fields, hooks, context copies, and anchored frames have witnesses", context do
+  test "U13 and U14: compiled fields, hooks, context copies, and anchored frames have witnesses",
+       context do
     declarations = Declarations.pair(Withheld, Returned)
     assert declarations.errors == [], "U13: undeclared or dead compiled declaration slots"
-    rows = Enum.filter(Scenarios.rows(), &(&1.branch == :consumer_failure and &1.fault == :after_raise)) ++
-      [row!(:issue, :transaction, :rollback), row!(:mint, :transaction, :rollback)]
+
+    rows =
+      Enum.filter(
+        Scenarios.rows(),
+        &(&1.branch == :consumer_failure and &1.fault == :after_raise)
+      ) ++
+        [row!(:issue, :transaction, :rollback), row!(:mint, :transaction, :rollback)]
+
     context = with_references(context, rows)
-    pairs = for row <- rows do
-      pair = Scenarios.observe(row, Values.set()[:va], context)
-      assert_green(pair)
-      IO.inspect(%{action: row.action, branch: row.branch,
-        run: Enum.map(Enum.uniq(Completeness.stacks(pair.run.run.events)), &Enum.map(&1, fn {m, f, a, location} -> {m, f, if(is_list(a), do: length(a), else: a), location} end)),
-        twin: Enum.map(Enum.uniq(Completeness.stacks(pair.twin.run.events)), &Enum.map(&1, fn {m, f, a, location} -> {m, f, if(is_list(a), do: length(a), else: a), location} end))}, label: "U14_ANCHORS", limit: :infinity)
-      pair
-    end
-    assert Completeness.check(pairs) == %{declarations: [], hooks: MapSet.new(), copies: MapSet.new(), frames: MapSet.new()},
-      "U13: a hook, context copy, or path frame has no differing captured witness"
-    assert ContextCopies.slots() == [{AshOnetime.GenericAction, :run, 3}, {AshOnetime.GenericAction, :run_original, 3}]
+
+    pairs =
+      for row <- rows do
+        pair = Scenarios.observe(row, Values.set()[:va], context)
+        assert_green(pair)
+
+        IO.inspect(
+          %{
+            action: row.action,
+            branch: row.branch,
+            run:
+              Enum.map(
+                Enum.uniq(Completeness.stacks(pair.run.run.events)),
+                &Enum.map(&1, fn {m, f, a, location} ->
+                  {m, f, if(is_list(a), do: length(a), else: a), location}
+                end)
+              ),
+            twin:
+              Enum.map(
+                Enum.uniq(Completeness.stacks(pair.twin.run.events)),
+                &Enum.map(&1, fn {m, f, a, location} ->
+                  {m, f, if(is_list(a), do: length(a), else: a), location}
+                end)
+              )
+          }, label: "U14_ANCHORS", limit: :infinity)
+
+        pair
+      end
+
+    assert Completeness.check(pairs) == %{
+             declarations: [],
+             hooks: MapSet.new(),
+             copies: MapSet.new(),
+             frames: MapSet.new()
+           },
+           "U13: a hook, context copy, or path frame has no differing captured witness"
+
+    assert ContextCopies.slots() == [
+             {AshOnetime.GenericAction, :run, 3},
+             {AshOnetime.GenericAction, :run_original, 3}
+           ]
+
     assert Enum.all?(pairs, fn pair ->
-      Enum.all?(pair.run.hooks, fn {slot, hook} -> hook.identity != pair.twin.hooks[slot].identity end)
-    end)
+             Enum.all?(pair.run.hooks, fn {slot, hook} ->
+               hook.identity != pair.twin.hooks[slot].identity
+             end)
+           end)
   end
 
   defp assert_green(pair) do
@@ -179,37 +290,51 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp ttl_reads(side) do
     for %{event: {_, :return_from, {DateTime, :utc_now, _}, now}, stack: stack} <- side.run.events,
-      {AshOnetime.Cache, :ttl_seconds, 1} in stack, do: now
+        {AshOnetime.Cache, :ttl_seconds, 1} in stack,
+        do: now
   end
 
   defp anchors(side) do
     indexed = Origins.build(side)
-    for {holder, clock} <- side.historical.pool_clocks, Map.has_key?(indexed.roles, holder),
-      into: %{}, do: {{indexed.roles[holder], :checkin}, clock}
+
+    for {holder, clock} <- side.historical.pool_clocks,
+        Map.has_key?(indexed.roles, holder),
+        into: %{},
+        do: {{indexed.roles[holder], :checkin}, clock}
   end
 
   defp role_order(side), do: Origins.build(side).events |> Enum.map(& &1.role)
+
   defp assert_pool_monitor_origins(pair) do
     run = Origins.build(pair.run)
     twin = Origins.build(pair.twin)
     pairing = Comparator.compare(pair).pairing
-    sources = for {key = {_role, _phase, stack, {module, function, _}, _ordinal}, origin} <- run.origins,
-      module == :erlang and function == :monitor,
-      Enum.any?(stack, fn {m, _, _} -> m == DBConnection.Holder end), do: {key, origin}
+
+    sources =
+      for {key = {_role, _phase, stack, {module, function, _}, _ordinal}, origin} <- run.origins,
+          module == :erlang and function == :monitor,
+          Enum.any?(stack, fn {m, _, _} -> m == DBConnection.Holder end),
+          do: {key, origin}
+
     assert sources != [], "U8 did not observe the pool holder's monitor origins"
+
     for {key, origin} <- sources do
       assert Map.has_key?(twin.origins, key), "U8: a pool monitor role has no twin occurrence"
       expected = Map.fetch!(twin.origins, key).value
       assert Map.fetch!(pairing.forward, origin.value) == expected
       assert Map.fetch!(pairing.reverse, expected) == origin.value
     end
+
     values = Enum.map(sources, fn {_, source} -> source.value end)
     assert length(Enum.uniq(values)) == length(values), "U8: monitor occurrences alias"
   end
+
   defp exit_counts(side) do
-    side.run.events |> Enum.filter(&(String.match?(Atom.to_string(&1.class), ~r/^e[0-9]+$/)))
+    side.run.events
+    |> Enum.filter(&String.match?(Atom.to_string(&1.class), ~r/^e[0-9]+$/))
     |> Enum.frequencies_by(&{&1.class, &1.mfa, elem(&1.event, 1)})
   end
+
   defp event_mfa({_, :call, {m, f, args}}), do: {m, f, length(args)}
   defp event_mfa({_, tag, mfa, _}) when tag in [:return_from, :exception_from], do: mfa
   defp event_mfa(_), do: nil
@@ -218,8 +343,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     own = if tuple_size(value) > 0 and elem(value, 0) == tag, do: [value], else: []
     own ++ Enum.flat_map(Tuple.to_list(value), &wire_terms(&1, tag))
   end
+
   defp wire_terms([], _tag), do: []
   defp wire_terms([head | tail], tag), do: wire_terms(head, tag) ++ wire_terms(tail, tag)
-  defp wire_terms(value, tag) when is_map(value), do: value |> Map.to_list() |> Enum.flat_map(&wire_terms(&1, tag))
+
+  defp wire_terms(value, tag) when is_map(value),
+    do: value |> Map.to_list() |> Enum.flat_map(&wire_terms(&1, tag))
+
   defp wire_terms(_, _), do: []
 end

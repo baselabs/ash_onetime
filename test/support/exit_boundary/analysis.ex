@@ -11,8 +11,11 @@ defmodule AshOnetime.Test.ExitBoundary.Analysis do
   def descriptor(%{class: class, event: event}), do: {class, elem(event, 1)}
 
   def hits(events, needles, allowed?) do
-    for event <- events, not allowed?.(event), contains?(event.event, needles), uniq: true,
-      do: descriptor(event)
+    for event <- events,
+        not allowed?.(event),
+        contains?(event.event, needles),
+        uniq: true,
+        do: descriptor(event)
   end
 
   @doc """

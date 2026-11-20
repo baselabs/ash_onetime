@@ -3326,7 +3326,8 @@ defmodule AshOnetime.MutationCheck do
     "all" => Map.keys(@mutations),
     "r-table" => Enum.map(AshOnetime.DeliveryComparatorMutations.rows(), &Atom.to_string(&1.id)),
     "c-set" => Map.keys(AshOnetime.DeliveryComparatorMutations.set_checks()),
-    "comparator-positive-controls" => Enum.map(AshOnetime.DeliveryComparatorControls.rows(), &Atom.to_string(&1.id)),
+    "comparator-positive-controls" =>
+      Enum.map(AshOnetime.DeliveryComparatorControls.rows(), &Atom.to_string(&1.id)),
     "external-rollback" => ["external-rollback-readback"],
     "defects-batch" => [
       "M-doctor-fact-schema",
@@ -3524,17 +3525,23 @@ defmodule AshOnetime.MutationCheck do
     ]
 
     Enum.each(invalid_red_outputs, fn output ->
-      rejected? = try do
-        assert_exunit_failure!("self-test", output)
-        false
-      rescue
-        RuntimeError -> true
-      end
+      rejected? =
+        try do
+          assert_exunit_failure!("self-test", output)
+          false
+        rescue
+          RuntimeError -> true
+        end
 
-      unless rejected?, do: raise("mutation checker self-test: incomplete red receipt was accepted")
+      unless rejected?,
+        do: raise("mutation checker self-test: incomplete red receipt was accepted")
     end)
 
-    assert_exunit_failure!("self-test", "Running ExUnit\nFinished in 0.1 seconds\nResult: 0/1 passed\nFailed: 1 test")
+    assert_exunit_failure!(
+      "self-test",
+      "Running ExUnit\nFinished in 0.1 seconds\nResult: 0/1 passed\nFailed: 1 test"
+    )
+
     IO.puts("mutation checker self-test: a red requires an executed failing ExUnit result")
   end
 
