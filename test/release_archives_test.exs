@@ -270,7 +270,7 @@ defmodule AshOnetime.ReleaseArchivesTest do
       @version,
       "--repository",
       context.directory,
-      "--commit",
+      "--dispatched",
       dispatched || context.head
     ])
   end

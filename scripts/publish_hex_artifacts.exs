@@ -191,7 +191,16 @@ defmodule AshOnetime.PublishHexArtifacts do
     {result, status} =
       System.cmd(
         "python3",
-        [script, "verify-docs", docs, version, "--repository", repository, "--commit", commit],
+        [
+          script,
+          "verify-docs",
+          docs,
+          version,
+          "--repository",
+          repository,
+          "--dispatched",
+          commit
+        ],
         stderr_to_stdout: true
       )
 

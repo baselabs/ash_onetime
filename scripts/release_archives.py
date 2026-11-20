@@ -11,14 +11,15 @@
     python3 scripts/release_archives.py notes ASSETS_DIR
         Write NOTES.md from the dated CHANGELOG.md section for the version; refuse when the
         section is missing, undated or still Unreleased.
-    python3 scripts/release_archives.py verify-docs DOCS VERSION --repository PATH --commit SHA
+    python3 scripts/release_archives.py verify-docs DOCS VERSION --repository PATH --dispatched SHA
         Inspect served docs and print their published commit, which must be SHA or its ancestor.
     python3 scripts/release_archives.py checksums ASSETS_DIR
         Recompute SHA256SUMS after read-back replaces the local docs with the served archive.
 
 The release gates run build on every candidate and publish.yml runs build and notes before
-its keyed step, so publication uploads bytes from the path qualification exercises. Run it
-from the repository root; build runs Mix, so it runs in CI only.
+its keyed step, so publication uploads bytes from the path qualification exercises. Only
+verify-docs runs outside the repository root, using its explicit repository path. Build runs
+Mix, so it runs in CI only.
 """
 
 import datetime
@@ -187,7 +188,7 @@ def main(arguments):
             build(Path(assets))
         case ["notes", assets]:
             notes(Path(assets))
-        case ["verify-docs", docs, release, "--repository", repository, "--commit", commit]:
+        case ["verify-docs", docs, release, "--repository", repository, "--dispatched", commit]:
             print(verify_docs(Path(docs), release, Path(repository), commit))
         case ["checksums", assets]:
             checksums(Path(assets))
