@@ -556,15 +556,7 @@ defmodule AshOnetime.Store.Postgres do
   @max_partition_drops 128
 
   @spec cleanup(Target.t(), pos_integer(), non_neg_integer()) ::
-          {:ok,
-           %{
-             idempotency: non_neg_integer(),
-             nonce: non_neg_integer(),
-             payload_partitions: non_neg_integer(),
-             payload_partitions_kept: non_neg_integer(),
-             payload_partitions_refused: %{optional(atom()) => non_neg_integer()}
-           }}
-          | Result.t()
+          {:ok, AshOnetime.Store.cleanup_counts()} | Result.t()
   def cleanup(%Target{} = target, batch_size, partition_limit)
       # rule:cleanup-partition-limit-guard
       when is_integer(batch_size) and batch_size > 0 and batch_size <= 10_000 and
