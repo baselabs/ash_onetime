@@ -3584,7 +3584,7 @@ defmodule AshOnetime.MutationCheck do
   defp audit_shards! do
     all = @groups |> Map.fetch!("all") |> Enum.sort()
 
-    for total <- 1..8 do
+    for total <- 1..16 do
       shards = Enum.map(1..total, &shard(all, &1, total))
 
       unless shards |> List.flatten() |> Enum.sort() == all do
