@@ -38,6 +38,32 @@ defmodule AshOnetime.ExternalState.ProofInventorySourcesTest do
   end
 
   @tag :external_state_inventory_missing_row
+  test "rendered inventory keeps markers across interpolated SQL fragments" do
+    source = ~S'''
+    defmodule InventoryInterpolation do
+      def up do
+        execute("""
+        -- rule:interpolated-check
+        CREATE TABLE #{table()} (value integer CHECK (value > 0));
+        -- rule:interpolated-refusal
+        DO $$ BEGIN RAISE EXCEPTION 'bad %', #{value()}; END $$;
+        """)
+      end
+    end
+    '''
+    manifest = %{"interpolated-check" => %{}, "interpolated-refusal" => %{}}
+    assert :ok = AshOnetime.MutationInventory.assert_rendered!(manifest, %{}, [{"interpolation", source}])
+    unmarked = String.replace(source, "-- rule:interpolated-check", "-- check")
+    assert_raise RuntimeError, ~r/unmarked enforcing site.*CHECK/, fn ->
+      AshOnetime.MutationInventory.assert_rendered!(manifest, %{}, [{"interpolation", unmarked}])
+    end
+    nested = ~S|"#{sql("RAISE EXCEPTION 'unmarked'")}"|
+    assert_raise RuntimeError, ~r/unmarked enforcing site.*RAISE/, fn ->
+      AshOnetime.MutationInventory.assert_rendered!(%{}, %{}, [{"nested interpolation", nested}])
+    end
+  end
+
+  @tag :external_state_inventory_missing_row
   test "the inventory refuses a missing row inside the multi-rule claim trigger", c do
     sources = %{
       "priv/templates/migrations/external_state/claims.sql" =>

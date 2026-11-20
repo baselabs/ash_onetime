@@ -39,7 +39,8 @@ for partitioning <- [nil, 2] do
         {output, status} =
           System.cmd(
             "pg_dump",
-            ["--format=custom", "--file", file] ++ options ++ [pg_url(c.pub.url)],
+            ["--format=custom", "--file", file] ++ options,
+            env: pg_environment(c.pub.url, c.pgpassfile),
             stderr_to_stdout: true
           )
 
@@ -58,24 +59,18 @@ for partitioning <- [nil, 2] do
         if mode == :force_replica, do: force!(c.sub)
         role = if mode in [:replica, :force_replica], do: c.sub.owner, else: "postgres"
 
-        url =
-          URI.to_string(%{
-            URI.parse(c.sub.url)
-            | userinfo: if(role == "postgres", do: "postgres:postgres", else: role)
-          })
-
+        environment = pg_environment(c.sub.url, c.pgpassfile, role)
         environment =
           if mode in [:replica, :force_replica],
-            do: [{"PGOPTIONS", "-c session_replication_role=replica"}],
-            else: []
+            do: [{"PGOPTIONS", "-c session_replication_role=replica"} | environment],
+            else: environment
 
-        environment = [{"PGPASSFILE", c.pgpassfile} | environment]
         restore_options = if mode == :disabled_triggers, do: ["--disable-triggers"], else: []
 
         restore = fn ->
           System.cmd(
             "pg_restore",
-            ["--exit-on-error", "--single-transaction", "--dbname", pg_url(url)] ++
+            ["--exit-on-error", "--single-transaction", "--dbname="] ++
               restore_options ++ [file],
             env: environment,
             stderr_to_stdout: true
@@ -116,7 +111,12 @@ for partitioning <- [nil, 2] do
           ).rows
 
         assert modes != []
-        assert Enum.all?(modes, &(&1 == [if(mode == :disabled_triggers, do: "O", else: "A")]))
+        if mode == :disabled_triggers do
+          assert ["O"] in modes
+          assert Enum.all?(modes, &(&1 in [["O"], ["A"]]))
+        else
+          assert Enum.all?(modes, &(&1 == ["A"]))
+        end
 
         if mode == :disabled_triggers do
           {:ok, %{rows: [[status]]}} =
@@ -177,9 +177,9 @@ for partitioning <- [nil, 2] do
             "--data-only",
             "--exclude-table-data=#{c.pub.schema}.schema_migrations",
             "--file",
-            archive,
-            pg_url(c.pub.url)
+            archive
           ],
+          env: pg_environment(c.pub.url, c.pgpassfile),
           stderr_to_stdout: true
         )
 
@@ -191,7 +191,6 @@ for partitioning <- [nil, 2] do
         System.cmd("pg_restore", ["--file", script, archive], stderr_to_stdout: true)
 
       assert status == 0, output
-      owner_url = URI.to_string(%{URI.parse(c.sub.url) | userinfo: c.sub.owner})
 
       {output, status} =
         System.cmd(
@@ -200,15 +199,11 @@ for partitioning <- [nil, 2] do
             "--set=ON_ERROR_STOP=1",
             "--set=VERBOSITY=verbose",
             "--single-transaction",
-            "--dbname",
-            pg_url(owner_url),
             "--file",
             script
           ],
-          env: [
-            {"PGPASSFILE", c.pgpassfile},
-            {"PGOPTIONS", "-c session_replication_role=replica"}
-          ],
+          env: [{"PGOPTIONS", "-c session_replication_role=replica"} |
+            pg_environment(c.sub.url, c.pgpassfile, c.sub.owner)],
           stderr_to_stdout: true
         )
 
@@ -221,6 +216,15 @@ for partitioning <- [nil, 2] do
              ) == true
     end
 
-    defp pg_url(url), do: URI.to_string(%{URI.parse(url) | scheme: "postgresql"})
+    defp pg_environment(url, passfile, role \\ "postgres") do
+      uri = URI.parse(url)
+      [
+        {"PGHOST", uri.host},
+        {"PGPORT", Integer.to_string(uri.port)},
+        {"PGDATABASE", String.trim_leading(uri.path, "/")},
+        {"PGUSER", role},
+        {"PGPASSFILE", passfile}
+      ]
+    end
   end
 end

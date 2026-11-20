@@ -347,6 +347,7 @@ defmodule AshOnetime.ArchitectureTest do
       render_fact_tables: 2,
       render_logical_partition_upgrade: 2,
       render_maintenance_upgrade: 2,
+      render_external_state_upgrade: 2,
       render_operation_hold_upgrade: 2,
       run: 1,
       timestamp: 0

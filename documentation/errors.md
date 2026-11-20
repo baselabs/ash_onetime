@@ -21,9 +21,7 @@ case Ash.create(changeset) do
       :request_in_progress -> {:conflict, "request is already processing"}  # 425 Too Early also fits
       :verification_failed -> {:unauthorized, "verification failed"}
       :verification_timeout -> {:service_unavailable, "verification timed out"}
-<!--
 # rule:errors-guide-error-fallback
--->
       _code -> {:error, error}
     end
 end

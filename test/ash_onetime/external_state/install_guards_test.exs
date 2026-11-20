@@ -72,11 +72,18 @@ for partitioning <- [nil, 2] do
                 []
               )
 
+              SQL.query!(Repo, "GRANT USAGE ON SCHEMA #{q(c.schema)} TO #{q(c.owner)},#{q(c.migrator)}", [])
+              SQL.query!(Repo, "GRANT CREATE ON SCHEMA #{q(c.schema)} TO #{q(c.migrator)}", [])
+
               on_exit(fn ->
                 SQL.query!(Repo, "ALTER SCHEMA #{q(c.schema)} OWNER TO #{q(c.owner)}", [])
               end)
 
-              {c, c.maintainer}
+              migrator = connection!(c, :owner, 2, after_connect: fn connection ->
+                Postgrex.query!(connection, "SET jit=off", [])
+              end)
+
+              {%{c | owner_repo: migrator}, c.maintainer}
 
             "install-function-ownership" ->
               identity = rel(c, "ash_onetime_cleanup_eligible") <> "(timestamptz)"

@@ -119,9 +119,7 @@ case Ash.create(changeset) do
       :nonce_already_used -> {:conflict, "nonce was already used"}
       :key_reused_with_different_request -> {:conflict, "key reused with a different request"}
       :request_in_progress -> {:conflict, "request is already processing"}
-<!--
 # rule:getting-started-error-fallback
--->
       _code -> {:error, error}
     end
 end

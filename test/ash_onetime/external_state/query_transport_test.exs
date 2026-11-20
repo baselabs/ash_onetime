@@ -99,15 +99,28 @@ for partitioning <- [nil, 2] do
         SQL.query!(c.owner_repo, "DROP FUNCTION #{rel(c, "slow_insert")}()", [])
       end)
 
-      result =
-        Postgres.claim_committed(target(native), request!("slow-client"), lock_timeout_ms: 3000)
+      native_target = target(native)
+      previous = Repo.put_dynamic_repo(pool)
+      parent = self()
 
-      assert %Result{
+      try do
+        Repo.transaction(fn ->
+          send(parent, {:bounded_store_result, Postgres.claim(native_target, request!("slow-client"))})
+        end, timeout: 250)
+      rescue
+        _error in [Postgrex.Error, DBConnection.ConnectionError] -> :terminated_transaction
+      catch
+        :exit, _reason -> :terminated_transaction
+      after
+        Repo.put_dynamic_repo(previous)
+      end
+
+      assert_receive {:bounded_store_result, %Result{
                status: :failure,
                reason: :disconnected,
                admission_dispatch: :unknown,
                transaction: :unknown
-             } = result
+             }}, 5_000
     end
 
     @tag :enforcement_query_other_error_mutation
@@ -124,6 +137,7 @@ for partitioning <- [nil, 2] do
           {copy_state, finish_copy} =
             Collectable.into(SQL.stream(c.runtime_repo, "COPY #{table}(value) FROM STDIN", []))
 
+          copy_state = finish_copy.(copy_state, {:cont, "1\n"})
           result = Postgres.claim(target(c), request!("copy-connection"))
           send(parent, {:copy_store_result, result})
           finish_copy.(copy_state, :halt)

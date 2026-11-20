@@ -38,7 +38,7 @@ for partitioning <- [nil, 2] do
       ]
       test "#{partitioning || "plain"}: #{@rule} preserves its native policy attribute", c do
         source = File.read!(@source)
-        [command] = Regex.run(~r/EXECUTE format\('\s*-- rule:#{@site}-policy\n[\s\S]*?;/, source)
+        [command] = Regex.run(~r/EXECUTE format\('\s*-- rule:#{@site}(?:-policy)?\n[\s\S]*?;/, source)
 
         SQL.query!(
           c.owner_repo,

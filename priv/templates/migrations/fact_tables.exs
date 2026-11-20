@@ -63,8 +63,10 @@ defmodule <%= inspect(module) %> do
       FOR EACH ROW EXECUTE FUNCTION #{q("ash_onetime_fact_append_only")}()
       """)
 
-      # rule:M-firing-fact
-      execute("ALTER TABLE #{q(table)} ENABLE ALWAYS TRIGGER #{quote_identifier(table <> "_append_only")}")
+      execute("""
+      -- rule:M-firing-fact
+      ALTER TABLE #{q(table)} ENABLE ALWAYS TRIGGER #{quote_identifier(table <> "_append_only")}
+      """)
     end
   end
 

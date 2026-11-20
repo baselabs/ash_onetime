@@ -60,6 +60,8 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
       File.chmod!(pgpassfile, 0o600)
       uri = URI.parse(url)
       IO.binwrite(file, "127.0.0.1:#{uri.port}:*:#{owner}:#{password}\n")
+      [admin_user, admin_password] = String.split(uri.userinfo, ":", parts: 2)
+      IO.binwrite(file, "127.0.0.1:#{uri.port}:*:#{admin_user}:#{admin_password}\n")
     end)
 
     slot = "ao_slot_#{suffix}"
@@ -355,18 +357,12 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
   defp field_value(field), do: field |> Enum.reverse() |> IO.iodata_to_binary()
 
   def force!(installation) do
-    for table <- ~w(ash_onetime_idempotency_claims ash_onetime_effect_outcomes) do
-      SQL.query!(
-        installation.admin,
-        "ALTER TABLE #{rel(installation, table)} ENABLE ROW LEVEL SECURITY",
-        []
-      )
-
-      SQL.query!(
-        installation.admin,
-        "ALTER TABLE #{rel(installation, table)} FORCE ROW LEVEL SECURITY",
-        []
-      )
+    for root <- ~w(ash_onetime_idempotency_claims ash_onetime_effect_outcomes),
+        [table] <- SQL.query!(installation.admin,
+          "WITH RECURSIVE relations(oid) AS (SELECT $1::text::regclass::oid UNION ALL SELECT i.inhrelid FROM pg_inherits i JOIN relations r ON i.inhparent=r.oid) SELECT oid::regclass::text FROM relations",
+          [rel(installation, root)]).rows do
+      SQL.query!(installation.admin, "ALTER TABLE #{table} ENABLE ROW LEVEL SECURITY", [])
+      SQL.query!(installation.admin, "ALTER TABLE #{table} FORCE ROW LEVEL SECURITY", [])
     end
   end
 

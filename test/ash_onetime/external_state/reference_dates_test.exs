@@ -38,6 +38,8 @@ for partitioning <- [nil, 2] do
                      Generator.render_operation_hold_upgrade(Repo, []),
                      12
                    )
+        else
+          assert :ok = install(c)
         end
 
         body = """
@@ -72,7 +74,7 @@ for partitioning <- [nil, 2] do
 
         result =
           if @rule == "reference-date-encoding-refusal" do
-            install(c)
+            SQL.query(c.owner_repo, "SELECT #{routine(c, "ash_onetime_maintenance_reference")}(false)", [])
           else
             try do
               SchemaFixture.migrate!(c, Generator.render_external_state_upgrade(Repo, []), 13)

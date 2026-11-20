@@ -109,7 +109,8 @@ defmodule AshOnetime.ExternalContentionTest do
         started = System.monotonic_time(:millisecond)
         send(caller, {:replay_lock_continue, reference})
         assert {backend_pid, [_ | _], query} = wait_for_blocked_query(context.prefix)
-        assert String.starts_with?(String.downcase(query), "select claims.id")
+        assert String.starts_with?(String.downcase(query), "select 1 from")
+        assert String.contains?(String.downcase(query), "for no key update of claims")
 
         assert %{rows: [[true]]} =
                  Postgrex.query!(

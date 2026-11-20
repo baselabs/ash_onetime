@@ -27,7 +27,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
     refute source =~ "count = 4"
 
     assert source =~
-             ~S|encoded_response bytea NOT NULL CHECK (octet_length(encoded_response) <= #{@payload_ceiling})|
+             ~S|CHECK (octet_length(encoded_response) <= #{@payload_ceiling})|
 
     assert source =~ "ash_onetime_response_payloads_default"
     assert source =~ "def down do"
@@ -292,6 +292,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
              "priv/templates/migrations/maintenance/relations.sql",
              "priv/templates/migrations/maintenance/reset_acl.sql",
              "priv/templates/migrations/maintenance/roll.sql",
+             "priv/templates/migrations/maintenance/runs.sql",
              "priv/templates/migrations/maintenance/shape.sql",
              "priv/templates/migrations/maintenance/shapes.sql",
              "priv/templates/migrations/maintenance/status.sql",

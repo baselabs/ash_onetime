@@ -140,6 +140,7 @@ defmodule AshOnetime.PhoenixDocumentationTest do
   defp status_number!(:unauthorized), do: 401
   defp status_number!(:not_found), do: 404
   defp status_number!(:conflict), do: 409
+  defp status_number!(:gone), do: 410
   defp status_number!(:unprocessable_entity), do: 422
   defp status_number!(:internal_server_error), do: 500
   defp status_number!(:service_unavailable), do: 503

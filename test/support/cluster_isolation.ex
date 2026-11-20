@@ -36,6 +36,7 @@ defmodule AshOnetime.Test.ClusterIsolation do
   end
 
   defp required_prefix do
+    # rule:maintenance-effective-cluster-isolation-run
     if System.get_env("GITHUB_ACTIONS") == "true" do
       "ao-#{System.fetch_env!("GITHUB_RUN_ID")}-#{System.fetch_env!("GITHUB_RUN_ATTEMPT")}-"
     else

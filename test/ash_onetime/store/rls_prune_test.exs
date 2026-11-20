@@ -890,6 +890,8 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
             prune_counts!(Postgres.for_repo(Repo, target_prefix), 100, 4)
           end)
+        rescue
+          error in Postgrex.Error -> {:error, error}
         end)
       end
 
@@ -902,8 +904,9 @@ defmodule AshOnetime.Store.RLSPruneTest do
       send(task_a.pid, :go)
       send(task_b.pid, :go)
 
-      assert {:ok, {:ok, a}} = Task.await(task_a, 10_000)
-      assert {:ok, {:ok, b}} = Task.await(task_b, 10_000)
+      results = [Task.await(task_a, 10_000), Task.await(task_b, 10_000)]
+      assert Enum.all?(results, &match?({:ok, {:ok, _}}, &1))
+      [{:ok, {:ok, a}}, {:ok, {:ok, b}}] = results
       assert {a.payload_partitions_refused, b.payload_partitions_refused} == {%{}, %{}}
       assert Enum.sort([a.payload_partitions, b.payload_partitions]) == [0, 2]
       Repo.put_dynamic_repo(Repo)

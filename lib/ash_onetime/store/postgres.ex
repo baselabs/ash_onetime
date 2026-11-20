@@ -1120,8 +1120,10 @@ defmodule AshOnetime.Store.Postgres do
         {:error, %Result{} = result} -> {:error, result}
       end
     else
+      # rule:nonce-select-lock
       select_claim_result(target, strategy, sql <> " FOR #{lock_mode} OF claims", parameters)
     end
+    # -- end-rule:load-after-claim-lock
   end
 
   defp select_claim_result(target, strategy, sql, parameters) do
@@ -1202,12 +1204,6 @@ defmodule AshOnetime.Store.Postgres do
       -- rule:completion-once
       AND id = $8::uuid AND state = 'processing'#{attempt_bind}
       AND $10::bigint IS NOT DISTINCT FROM $10::bigint
-      AND (
-        SELECT pg_catalog.count(*)
-        FROM #{relation(target, "ash_onetime_response_payloads")}
-        -- rule:completion-invariant-rollback
-        WHERE logical_partition = $4 AND claim_id = $8::uuid
-      ) = 1
       AND EXISTS (
         SELECT 1
         FROM #{relation(target, "ash_onetime_response_payloads")}
