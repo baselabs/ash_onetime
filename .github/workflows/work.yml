@@ -108,8 +108,8 @@ jobs:
     name: Compile, docs, format, types and precommit
     needs: toolchain
     runs-on: ubuntu-24.04
-    # No green run yet for this separate work-branch quality job.
-    timeout-minutes: 90 # no green run yet
+    # Cold green: 9 min 35 s, Work 44838423147; about twice that.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
