@@ -26,6 +26,29 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
               do: {side, Origins.build(pair[side]).origins |> Map.keys() |> Enum.sort()}
         end
 
+      expected = hd(profiles)
+
+      if index = Enum.find_index(profiles, &(&1 != expected)) do
+        actual = Enum.at(profiles, index)
+
+        for side <- [:run, :twin] do
+          before = MapSet.new(expected[side])
+          after_keys = MapSet.new(actual[side])
+
+          IO.inspect(
+            %{
+              path: unquote(name),
+              repetition: index + 1,
+              side: side,
+              missing: MapSet.difference(before, after_keys) |> Enum.sort(),
+              added: MapSet.difference(after_keys, before) |> Enum.sort()
+            },
+            label: "U11_ORIGIN_KEY_DIFF",
+            limit: :infinity
+          )
+        end
+      end
+
       assert length(Enum.uniq(profiles)) == 1,
              "U11: producer origin keys changed across repetitions"
 
