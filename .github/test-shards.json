@@ -10,6 +10,25 @@
         "vd",
         "ve",
         "vf"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
       ]
     },
     {
@@ -19,15 +38,90 @@
         "va",
         "vb",
         "vc"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
       ]
     },
     {
-      "name": "external_issue_def",
+      "name": "external_issue_df",
       "action": "external_issue",
       "values": [
         "vd",
-        "ve",
         "vf"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ]
+    },
+    {
+      "name": "external_issue_e_first",
+      "action": "external_issue",
+      "values": [
+        "ve"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "name": "external_issue_e_last",
+      "action": "external_issue",
+      "values": [
+        "ve"
+      ],
+      "path_indices": [
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
       ]
     },
     {
@@ -40,6 +134,25 @@
         "vd",
         "ve",
         "vf"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
       ]
     },
     {
@@ -49,15 +162,90 @@
         "va",
         "vb",
         "vc"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
       ]
     },
     {
-      "name": "external_rotate_def",
+      "name": "external_rotate_df",
       "action": "external_rotate",
       "values": [
         "vd",
-        "ve",
         "vf"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ]
+    },
+    {
+      "name": "external_rotate_e_first",
+      "action": "external_rotate",
+      "values": [
+        "ve"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "name": "external_rotate_e_last",
+      "action": "external_rotate",
+      "values": [
+        "ve"
+      ],
+      "path_indices": [
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
       ]
     },
     {
@@ -70,6 +258,25 @@
         "vd",
         "ve",
         "vf"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
       ]
     },
     {
@@ -79,15 +286,90 @@
         "va",
         "vb",
         "vc"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
       ]
     },
     {
-      "name": "external_revoke_def",
+      "name": "external_revoke_df",
       "action": "external_revoke",
       "values": [
         "vd",
-        "ve",
         "vf"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ]
+    },
+    {
+      "name": "external_revoke_e_first",
+      "action": "external_revoke",
+      "values": [
+        "ve"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "name": "external_revoke_e_last",
+      "action": "external_revoke",
+      "values": [
+        "ve"
+      ],
+      "path_indices": [
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
       ]
     },
     {
@@ -100,6 +382,25 @@
         "vd",
         "ve",
         "vf"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
       ]
     },
     {
@@ -109,15 +410,90 @@
         "va",
         "vb",
         "vc"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
       ]
     },
     {
-      "name": "external_retire_def",
+      "name": "external_retire_df",
       "action": "external_retire",
       "values": [
         "vd",
-        "ve",
         "vf"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ]
+    },
+    {
+      "name": "external_retire_e_first",
+      "action": "external_retire",
+      "values": [
+        "ve"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "name": "external_retire_e_last",
+      "action": "external_retire",
+      "values": [
+        "ve"
+      ],
+      "path_indices": [
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
       ]
     },
     {
@@ -130,6 +506,25 @@
         "vd",
         "ve",
         "vf"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
       ]
     },
     {
@@ -139,15 +534,90 @@
         "va",
         "vb",
         "vc"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
       ]
     },
     {
-      "name": "external_mint_def",
+      "name": "external_mint_df",
       "action": "external_mint",
       "values": [
         "vd",
-        "ve",
         "vf"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ]
+    },
+    {
+      "name": "external_mint_e_first",
+      "action": "external_mint",
+      "values": [
+        "ve"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "name": "external_mint_e_last",
+      "action": "external_mint",
+      "values": [
+        "ve"
+      ],
+      "path_indices": [
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
       ]
     }
   ],

@@ -18,9 +18,13 @@ def configuration():
     if {shard["action"] for shard in routes} != expected:
         raise ValueError("matrix shards must cover every local and external route")
     for action in expected:
-        values = [value for shard in routes if shard["action"] == action for value in shard["values"]]
-        if sorted(values) != ["va", "vb", "vc", "vd", "ve", "vf"]:
-            raise ValueError(f"matrix shards must cover each value tuple once for {action}")
+        path_count = 18 if action.startswith("external_") else 17
+        pairs = [(path, value) for shard in routes if shard["action"] == action
+                 for path in shard["path_indices"] for value in shard["values"]]
+        wanted = [(path, value) for path in range(path_count)
+                  for value in ["va", "vb", "vc", "vd", "ve", "vf"]]
+        if sorted(pairs) != sorted(wanted):
+            raise ValueError(f"matrix shards must cover each path and value tuple once for {action}")
     groups = [group for shard in data["scheduling_shards"] for group in shard["groups"]]
     if sorted(groups, key=int) != [str(n) for n in range(35)]:
         raise ValueError("each of the 35 scheduling groups must occur once")
