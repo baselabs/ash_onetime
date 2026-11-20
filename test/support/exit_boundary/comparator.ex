@@ -281,6 +281,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     }
   end
 
+  # Whole-observation comparisons (entry, return and store) need not have a
+  # paired event index. An absent occurrence has no projected clock/database slot
+  # and its closure environment therefore stays in the exact comparison.
+  defp at_index(at, key) when is_map(at), do: Map.get(at, key)
+  defp at_index(_at, _key), do: nil
+
   defp error_order(%{at: %{run_index: n}}) when is_integer(n), do: {0, n}
   defp error_order(%{at: %{twin_index: n}}) when is_integer(n), do: {0, n}
   defp error_order(%{at: {:prior, _}}), do: {-1, 0}
@@ -1023,8 +1029,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
        when status in [:cache, :cached] do
     {rq, tq} = state.queries
 
-    if MapSet.member?(rq.cache_events, state.at.run_index) and
-         MapSet.member?(tq.cache_events, state.at.twin_index) do
+    if MapSet.member?(rq.cache_events, at_index(state.at, :run_index)) and
+         MapSet.member?(tq.cache_events, at_index(state.at, :twin_index)) do
       state = term(key, twin_key, state, path ++ [0])
       state = term(selection, twin_selection, state, path ++ [2])
       term(prepared, twin_prepared, state, path ++ [3])
@@ -1039,8 +1045,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
               (is_binary(twin_query) or is_struct(twin_query, Postgrex.Query)) do
     {rq, tq} = state.queries
 
-    if MapSet.member?(rq.cache_events, Map.get(state.at || %{}, :run_index)) and
-         MapSet.member?(tq.cache_events, Map.get(state.at || %{}, :twin_index)) do
+    if MapSet.member?(rq.cache_events, at_index(state.at, :run_index)) and
+         MapSet.member?(tq.cache_events, at_index(state.at, :twin_index)) do
       state = identity(id, other, state, path ++ [0])
       term(query, twin_query, state, path ++ [1])
     else
@@ -1235,15 +1241,15 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     ai =
       Map.update!(ai, :env, fn env ->
         env
-        |> ClockExpressions.project_at(state.at.run_index, base, rc)
-        |> DatabaseOrigins.project_at(state.at.run_index, base, rdb)
+        |> ClockExpressions.project_at(at_index(state.at, :run_index), base, rc)
+        |> DatabaseOrigins.project_at(at_index(state.at, :run_index), base, rdb)
       end)
 
     bi =
       Map.update!(bi, :env, fn env ->
         env
-        |> ClockExpressions.project_at(state.at.twin_index, base, tc)
-        |> DatabaseOrigins.project_at(state.at.twin_index, base, tdb)
+        |> ClockExpressions.project_at(at_index(state.at, :twin_index), base, tc)
+        |> DatabaseOrigins.project_at(at_index(state.at, :twin_index), base, tdb)
       end)
 
     keys = [:module, :name, :arity, :new_uniq, :index, :type, :pid]

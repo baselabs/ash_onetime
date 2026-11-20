@@ -276,9 +276,9 @@ defmodule AshOnetime.DeliveryComparatorControls do
       id: :pc_u13_dead_hook,
       path: "test/support/exit_boundary/registry.ex",
       original:
-        "      slots: %{action: [before_action: 0, after_action: 1], crud: [around_action: 0]}},\n",
+        "      slots: %{action: [before_action: 0, after_action: 1], crud: [around_action: 0]}\n",
       mutated:
-        "      slots: %{action: [before_action: 0, after_action: 1, after_action: 0], crud: [around_action: 0]}},\n",
+        "      slots: %{action: [before_action: 0, after_action: 1, after_action: 0], crud: [around_action: 0]}\n",
       action: :issue,
       branch: :consumer_failure,
       fault: :after_raise,
@@ -290,9 +290,9 @@ defmodule AshOnetime.DeliveryComparatorControls do
       id: :pc_u13_dead_copy,
       path: "test/support/exit_boundary/registry.ex",
       original:
-        "      slots: [{AshOnetime.GenericAction, :run, 3}, {AshOnetime.GenericAction, :run_original, 3}]},\n",
+        "      slots: [{AshOnetime.GenericAction, :run, 3}, {AshOnetime.GenericAction, :run_original, 3}]\n",
       mutated:
-        "      slots: [{AshOnetime.GenericAction, :run, 3}, {AshOnetime.GenericAction, :run_original, 3}, {AshOnetime.GenericAction, :never_copied, 3}]},\n",
+        "      slots: [{AshOnetime.GenericAction, :run, 3}, {AshOnetime.GenericAction, :run_original, 3}, {AshOnetime.GenericAction, :never_copied, 3}]\n",
       action: :issue,
       branch: :consumer_failure,
       fault: :after_raise,
