@@ -1,3 +1,6 @@
+Code.require_file("delivery_comparator_mutations.exs", __DIR__)
+Code.require_file("delivery_comparator_controls.exs", __DIR__)
+
 defmodule AshOnetime.MutationCheck do
   @moduledoc false
 
@@ -3256,14 +3259,14 @@ defmodule AshOnetime.MutationCheck do
                    }
                  else
                    %{
-                     test: "test/ash_onetime/delivery/exit_boundary_test.exs",
-                     tag: "exit_boundary_core",
-                     test_name: "create, local: an execute delivers once",
+                     test: "test/ash_onetime/delivery/comparator_mutations_test.exs",
+                     tag: "exit_boundary_search",
+                     test_name: "rule 3: no plaintext crosses an undeclared exit",
                      assertion: "run: a canary crossed the boundary",
                      required_failures: [
-                       {"create, local: an execute delivers once",
+                       {"rule 3: no plaintext crosses an undeclared exit",
                         "run: a canary crossed the boundary"},
-                       {"create, local: an execute delivers once", "{:e#{n}, "}
+                       {"rule 3: no plaintext crosses an undeclared exit", "{:e#{n}, "}
                      ]
                    }
                  end
@@ -3282,195 +3285,11 @@ defmodule AshOnetime.MutationCheck do
                )
              end)
 
-  # §2.7.8, the M-table: each defect moves the values or the envelope somewhere the
-  # boundary checks must name. A value-carrying defect moves the values with every byte
-  # inverted, so the canary search misses it and the named check (X1, X2, X3) has to
-  # catch it; an envelope defect moves the envelope as sealed, for the envelope search.
-  @m_leak "Enum.map_join(Map.values(values), fn v -> for <<b <- v>>, into: <<>>, do: <<255 - b>> end)"
-  @m_core {"create, local: an execute delivers once", "exit_boundary_core"}
-  @m_seal "      {:ok, values} -> seal(handle, values)"
-  @m_completion "    completion = persist_encoded(state, encoded, reference)\n"
-  @m_open "        with :complete <- Store.committed_completion(target, claim),\n"
+  @committed_readback "        with :complete <- Store.committed_completion(target, claim),\n"
 
-  @m_table %{
-    # Only the producer holds the values, and the checker edits one site, so the payload
-    # defect asks the producer again for what it produced.
-    "m1-payload" =>
-      {:core, "lib/ash_onetime/admission.ex", @m_completion,
-       """
-           encoded =
-             case AshOnetime.Resource.Info.protection(state.resource, state.action) do
-               %{executing_only: [_ | _], produce: producer} when not is_nil(producer) ->
-                 {:ok, values} = producer.produce(nil, %{})
-                 payload = encoded.payload <> #{@m_leak}
-                 %{encoded | payload: payload, digest: :crypto.hash(:sha256, payload)}
-
-               _other ->
-                 encoded
-             end
-
-       """ <> @m_completion, "X1: the persisted projections differ"},
-    "m2-cache" =>
-      {:core, "lib/ash_onetime/delivery.ex", @m_seal,
-       """
-             {:ok, values} ->
-               {:ok, %{cache: %{module: cache}}} = AshOnetime.Admission.state(subject)
-
-               cache.put(
-                 :crypto.hash(:sha256, handle.inv),
-                 %AshOnetime.Cache.Entry{payload: #{@m_leak}},
-                 60
-               )
-
-               seal(handle, values)
-       """, "X2: the emitted events differ"},
-    "m3-hold" =>
-      {:core, "lib/ash_onetime/delivery.ex", @m_seal,
-       """
-             {:ok, values} ->
-               {:ok, %{hold: hold}} = AshOnetime.Admission.state(subject)
-               hold.reference(#{@m_leak}, %{resource: handle.resource, action: handle.action})
-               seal(handle, values)
-       """, "X2: the emitted events differ"},
-    "m9-reraise" =>
-      {{"create, local: producer failures are contained", "exit_boundary_failures"},
-       "lib/ash_onetime/delivery.ex", "    _exception -> {:error, invalid()}",
-       "    exception -> reraise exception, __STACKTRACE__", "run: a canary crossed the boundary"},
-    "m11-error-message" =>
-      {:core, "lib/ash_onetime/delivery.ex", @m_seal,
-       "      {:ok, values} -> {:error, AshOnetime.Error.new(:executing_only_invalid, Enum.join(Map.values(values)))}",
-       "run: a canary crossed the boundary"},
-    "m12-context" =>
-      {:core, "lib/ash_onetime/change.ex",
-       """
-                    :ok <- produce(admitted, handle, protection, context) do
-                 admitted
-                 |> complete(callback)
-       """,
-       """
-                    :ok <- produce(admitted, handle, protection, context) do
-                 {:ok, values} = protection.produce.produce(admitted, %{})
-
-                 admitted
-                 |> Ash.Changeset.set_context(%{ash_onetime_leak: #{@m_leak}})
-                 |> complete(callback)
-       """, "X2: the emitted events differ"},
-    "m13a-dictionary" =>
-      {:core, "lib/ash_onetime/delivery.ex", @m_seal,
-       """
-             {:ok, values} ->
-               Process.put({:ash_onetime_plaintext, handle.inv}, #{@m_leak})
-               seal(handle, values)
-       """, "X2: the emitted events differ"},
-    "m13b-after-delete" =>
-      {:core, "lib/ash_onetime/delivery.ex", "    after\n      Process.delete(key)\n",
-       "    after\n      :ok\n", "run: delivery entries left in the caller"},
-    "m16-metadata" =>
-      {:core, "lib/ash_onetime/delivery.ex",
-       "    with {:ok, delivery} <- open.(), do: {:ok, result, delivery}",
-       """
-           with {:ok, %{values: values} = delivery} <- open.() do
-             {:ok, Ash.Resource.put_metadata(result, :ash_onetime_leak, #{@m_leak}), delivery}
-           end
-       """, "X3: the caller's results differ"},
-    "m17-task" =>
-      {:core, "lib/ash_onetime/delivery.ex", "    case module.produce(subject, context) do",
-       "    case Task.await(Task.async(fn -> module.produce(subject, context) end)) do",
-       "X2: the emitted events differ"},
-    "m19-envelope-payload" =>
-      {:core, "lib/ash_onetime/admission.ex", @m_completion,
-       """
-           encoded =
-             case for({{AshOnetime.Delivery, _}, {:sealed, _, e}} <- Process.get(), do: e) do
-               [envelope | _] ->
-                 payload = encoded.payload <> envelope
-                 %{encoded | payload: payload, digest: :crypto.hash(:sha256, payload)}
-
-               [] ->
-                 encoded
-             end
-
-       """ <> @m_completion, "run: an envelope crossed the boundary"},
-    "m20-envelope-message" =>
-      {:core, "lib/ash_onetime/delivery.ex", @m_open,
-       "        Process.send_after(self(), {:ash_onetime_envelope, envelope}, 0)\n\n" <> @m_open,
-       "run: an envelope crossed the boundary"},
-    "m21-envelope-port" =>
-      {:core, "lib/ash_onetime/delivery.ex", @m_open,
-       """
-               leak_port = Port.open({:spawn, "cat"}, [:binary])
-               :erlang.port_set_data(leak_port, envelope)
-               Port.close(leak_port)
-
-       """ <> @m_open, "run: an envelope crossed the boundary"},
-    "m22-envelope-monitor" =>
-      {:core, "lib/ash_onetime/delivery.ex", @m_open,
-       """
-               leak_waiter = spawn(fn -> receive do: (:stop -> :ok) end)
-               leak_monitor = :erlang.monitor(:process, leak_waiter, tag: envelope)
-               send(leak_waiter, :stop)
-               receive do: ({^envelope, ^leak_monitor, :process, ^leak_waiter, _} -> :ok)
-
-       """ <> @m_open, "run: an envelope crossed the boundary"}
-  }
-
-  @mutations Enum.reduce(@m_table, @mutations, fn {name,
-                                                   {owner, path, original, mutated, assertion}},
-                                                  mutations ->
-               {test_name, tag} = if owner == :core, do: @m_core, else: owner
-
-               Map.put(mutations, name, %{
-                 path: path,
-                 original: original,
-                 mutated: mutated,
-                 test: "test/ash_onetime/delivery/exit_boundary_test.exs",
-                 tag: tag,
-                 test_name: test_name,
-                 assertion: assertion,
-                 required_failures: [{test_name, assertion}]
-               })
-             end)
-
-  # Independent-review tripwires. These mutate one existing semantic value or
-  # multiplicity in the fixtures feeding the actual X1/X2/X3 comparators. The first,
-  # second and fourth use inverted canaries that evade the raw canary search.
-  @review_mutations %{
-    "review-existing-field" =>
-      {"overwrite an existing result field", ~s(run = %{twin | note: "existing note"}),
-       "run = %{twin | note: for(<<b <- secret>>, into: <<>>, do: <<255 - b>>)}",
-       "X3: an existing result field changed"},
-    "review-same-width-binary" =>
-      {"replace an opaque binary at the same width",
-       ~s[run = :crypto.hash(:sha256, "public payload")],
-       "run = for <<b <- secret>>, into: <<>>, do: <<255 - b>>",
-       "X1: a same-width opaque binary changed"},
-    "review-repeated-event" =>
-      {"repeat an existing event", "run = [event]", "run = [event, event]",
-       "X2: an existing event was repeated"},
-    "review-frame-argument" =>
-      {"retain a package frame argument", "run = [frame]",
-       "run = [put_elem(frame, 2, [for(<<b <- secret>>, into: <<>>, do: <<255 - b>>)])]",
-       "X3: a package frame argument changed"},
-    "review-protection-setting" =>
-      {"retain a protection setting", "run = %{twin | retention: 3600}",
-       "run = %{twin | retention: 3601}", "X2: a protection setting changed"}
-  }
-  @mutations Enum.reduce(@review_mutations, @mutations, fn {name,
-                                                            {test, original, mutated, assertion}},
-                                                           acc ->
-               Map.put(acc, name, %{
-                 path: "test/ash_onetime/delivery/exit_boundary_semantics_test.exs",
-                 original: original,
-                 mutated: mutated,
-                 test: "test/ash_onetime/delivery/exit_boundary_semantics_test.exs",
-                 tag: "exit_boundary_review",
-                 test_name: "review mutation: " <> test,
-                 assertion: assertion
-               })
-             end)
   @mutations Map.put(@mutations, "external-rollback-readback", %{
                path: "lib/ash_onetime/delivery.ex",
-               original: @m_open,
+               original: @committed_readback,
                mutated: "        with :complete <- :complete,\n",
                test: "test/ash_onetime/delivery/external_rollback_test.exs",
                tag: "executing_only_external_rollback",
@@ -3484,6 +3303,10 @@ defmodule AshOnetime.MutationCheck do
                  end
              })
 
+  @mutations Map.merge(@mutations, AshOnetime.DeliveryComparatorMutations.checks())
+  @mutations Map.merge(@mutations, AshOnetime.DeliveryComparatorMutations.set_checks())
+  @mutations Map.merge(@mutations, AshOnetime.DeliveryComparatorControls.checks())
+
   # `all` is computed from @mutations rather than hand-listed, which is what STRUCTURALLY prevents
   # the orphan class (a newly added mutation is in `all` by construction — CONTRIBUTING and the CI
   # release-checks job both run `-- all`). The self-test below is a REGRESSION GUARD, not present
@@ -3492,7 +3315,9 @@ defmodule AshOnetime.MutationCheck do
   # that once orphaned the ARCH mutations. The named subsets below stay for fast, focused local runs.
   @groups %{
     "all" => Map.keys(@mutations),
-    "exit-boundary-review" => Map.keys(@review_mutations),
+    "r-table" => Enum.map(AshOnetime.DeliveryComparatorMutations.rows(), &Atom.to_string(&1.id)),
+    "c-set" => Map.keys(AshOnetime.DeliveryComparatorMutations.set_checks()),
+    "comparator-positive-controls" => Enum.map(AshOnetime.DeliveryComparatorControls.rows(), &Atom.to_string(&1.id)),
     "external-rollback" => ["external-rollback-readback"],
     "defects-batch" => [
       "M-doctor-fact-schema",
@@ -3566,22 +3391,6 @@ defmodule AshOnetime.MutationCheck do
     "delivery-task-route" =>
       Enum.map(~w[transaction timeout async engine generic], &("delivery-task-" <> &1)),
     "exit-boundary" => Enum.map(1..24, &"exit-boundary-e#{&1}"),
-    "m-table" => [
-      "m1-payload",
-      "m2-cache",
-      "m3-hold",
-      "m9-reraise",
-      "m11-error-message",
-      "m12-context",
-      "m13a-dictionary",
-      "m13b-after-delete",
-      "m16-metadata",
-      "m17-task",
-      "m19-envelope-payload",
-      "m20-envelope-message",
-      "m21-envelope-port",
-      "m22-envelope-monitor"
-    ],
     "response-allowlist" => ["response-field-guard"],
     "return-type" => ["return-contract"],
     "dsl-verifiers" => [
@@ -3696,6 +3505,27 @@ defmodule AshOnetime.MutationCheck do
       IO.puts(:stderr, "mutation checker self-test failed: restoration receipt guard opened")
       System.halt(1)
     end
+
+    invalid_red_outputs = [
+      "invalid box-mix lane declaration\nFailed: 1 test",
+      "Running ExUnit\nFailed: 1 test",
+      "Running ExUnit\nFinished in 0.1 seconds\nResult: 0 passed\nFailed: 1 test",
+      "Running ExUnit\nFinished in 0.1 seconds\nResult: 0/1 passed\nFailed: 1 test\nSIGTERM received"
+    ]
+
+    Enum.each(invalid_red_outputs, fn output ->
+      rejected? = try do
+        assert_exunit_failure!("self-test", output)
+        false
+      rescue
+        RuntimeError -> true
+      end
+
+      unless rejected?, do: raise("mutation checker self-test: incomplete red receipt was accepted")
+    end)
+
+    assert_exunit_failure!("self-test", "Running ExUnit\nFinished in 0.1 seconds\nResult: 0/1 passed\nFailed: 1 test")
+    IO.puts("mutation checker self-test: a red requires an executed failing ExUnit result")
   end
 
   def main(["--" | names]), do: main(names)
@@ -3780,26 +3610,12 @@ defmodule AshOnetime.MutationCheck do
     IO.puts("mutation #{name}: mutant command output follows")
     IO.puts(red_output)
 
-    if red_status == 0 do
-      unless Regex.match?(~r/Result: [1-9][0-9]* passed/, red_output) do
-        raise "mutation #{name} ran no owned test: it was skipped or excluded on this substrate"
-      end
-
-      raise "mutation #{name} survived its owned test"
-    end
-
-    unless Enum.all?(required_failures, fn {test_name, assertion} ->
-             String.contains?(red_output, test_name) and String.contains?(red_output, assertion)
-           end) do
-      raise "mutation #{name} failed without every required named assertion"
-    end
-
-    assert_summary!(name, :mutant, red_output, Map.get(mutation, :red_summary))
-
     unless File.read!(mutation.path) == original_source do
       raise "mutation #{name} did not restore exact source bytes"
     end
 
+    # Always prove restoration, including when the probe itself was invalid or
+    # failed at an earlier location. Such a probe still cannot count as a kill.
     {restored_output, restored_status} = run_test(mutation)
     IO.puts("mutation #{name}: restored command output follows")
     IO.puts(restored_output)
@@ -3809,8 +3625,25 @@ defmodule AshOnetime.MutationCheck do
     end
 
     assert_exunit_execution!(name, restored_output)
-
     assert_summary!(name, :restored, restored_output, Map.get(mutation, :green_summary))
+
+    if red_status == 0 do
+      unless Regex.match?(~r/Result: [1-9][0-9]* passed/, red_output) do
+        raise "mutation #{name} ran no owned test: it was skipped or excluded on this substrate"
+      end
+
+      raise "mutation #{name} survived its owned test"
+    end
+
+    assert_exunit_failure!(name, red_output)
+
+    unless Enum.all?(required_failures, fn {test_name, assertion} ->
+             String.contains?(red_output, test_name) and String.contains?(red_output, assertion)
+           end) do
+      raise "mutation #{name} failed without every required named assertion"
+    end
+
+    assert_summary!(name, :mutant, red_output, Map.get(mutation, :red_summary))
 
     IO.puts("mutation #{name}: RED confirmed; exact source bytes restored; tagged test GREEN")
   end
@@ -3852,11 +3685,24 @@ defmodule AshOnetime.MutationCheck do
     end
   end
 
+  defp assert_exunit_failure!(name, output) do
+    unless completed_exunit_result?(output) and
+             Regex.match?(~r/^Result: [0-9]+\/[1-9][0-9]* passed(?:,|$)/m, output) and
+             Regex.match?(~r/^Failed: [1-9][0-9]* tests?$/m, output) do
+      raise "mutation #{name} did not execute a complete failing ExUnit result"
+    end
+  end
+
   defp executed_exunit_result?(output) do
+    completed_exunit_result?(output) and
+      Regex.match?(~r/Result: [1-9][0-9]* passed/, output) and
+      not String.contains?(output, "Failed:")
+  end
+
+  defp completed_exunit_result?(output) do
     String.contains?(output, "Running ExUnit") and
       String.contains?(output, "Finished in") and
-      Regex.match?(~r/Result: [1-9][0-9]* passed/, output) and
-      not String.contains?(output, "Failed:") and
+      Regex.match?(~r/^Result: [0-9]+(?:\/[0-9]+)? passed(?:,|$)/m, output) and
       not String.contains?(output, "SIGTERM received")
   end
 
@@ -3893,7 +3739,7 @@ defmodule AshOnetime.MutationCheck do
   defp probe_fixture!(_name, _mutation), do: :ok
 
   defp run_test(mutation) do
-    env = mutation_environment()
+    env = Map.get(mutation, :environment, []) ++ mutation_environment()
 
     System.cmd(
       "mix",

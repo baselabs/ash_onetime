@@ -12,8 +12,6 @@ defmodule AshOnetime.Test.ExitBoundary.Root do
   # for, sends the result and its residue count to the test, and stays until the
   # collector has reached the terminal boundary.
 
-  @delivery AshOnetime.Delivery
-
   def start(test) do
     receive do
       {:setup, ^test, setup, invoke, control} ->
@@ -23,13 +21,13 @@ defmodule AshOnetime.Test.ExitBoundary.Root do
         receive do
           {:go, collector} ->
             result = caught(invoke, state)
-            residue = Enum.count(Process.get_keys(), &match?({@delivery, _}, &1))
             :erlang.send_after(1, self(), {:control_timer, control})
-            send(test, {:result, self(), result, residue})
 
             receive do
               {:control_timer, ^control} -> :ok
             end
+
+            send(test, {:result, self(), result, :post_drain})
 
             receive do
               {:stop, ^collector} -> :ok

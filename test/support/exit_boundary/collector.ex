@@ -14,7 +14,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   #    arrived from the processes and ports that emitted them. The port operations'
   #    `erts_internal` functions are traced with `return_trace`: an operation the port
   #    runs later returns a reference, and its result comes as a `{reference, result}`
-  #    message (`Analysis` claims it as part of the operation).
+  #    message paired by the scheduling registry.
   # 2. Every pid from `:spawn` and `:spawned` events is recorded and monitored.
   # 3. The terminal boundary: the boundary function returned, every descendant is down,
   #    every port the run opened is closed with its `:closed` event seen, and every timer
@@ -27,19 +27,9 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   #
   # Nothing here formats an event: a failure names counts and classes, never a term.
 
-  alias AshOnetime.Test.ExitBoundary.Classifier
 
   @flags [:send, :receive, :procs, :call, :set_on_spawn, :strict_monotonic_timestamp]
   @port_flags [:send, :receive, :strict_monotonic_timestamp]
-  @port_operations [
-    port_command: 3,
-    port_control: 3,
-    port_call: 3,
-    port_connect: 2,
-    port_close: 1,
-    port_info: 1,
-    port_info: 2
-  ]
   @timer_starts [send_after: 3, send_after: 4, start_timer: 3, start_timer: 4]
   @timer_cancels [cancel_timer: 1, cancel_timer: 2]
 
@@ -49,7 +39,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     # timestamp;
     # `root` is the caller; `pids` every recorded process; `opened` the ports the run
     # opened; `timers` the ledger, each entry terminal.
-    defstruct [:events, :root, :pids, :opened, :timers, :loaded_before]
+    defstruct [:events, :root, :pids, :opened, :timers, :loaded_before, :residue]
   end
 
   @doc """
@@ -57,9 +47,9 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   patterns traced with `exception_trace`. Returns the collector pid; the caller then
   hands it the root with `arm/2`.
   """
-  def start(frames, deadline) do
+  def start(frames, deadline, options \\ []) do
     test = self()
-    collector = spawn(fn -> init(test, frames, deadline) end)
+    collector = spawn(fn -> init(test, frames, deadline, options) end)
 
     receive do
       {:collector_ready, ^collector} -> collector
@@ -87,12 +77,12 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     end
   end
 
-  defp init(test, frames, deadline) do
+  defp init(test, frames, deadline, options) do
     loaded_before = MapSet.new(:code.all_loaded(), &elem(&1, 0))
     session = :trace.session_create(:ash_onetime_exit_boundary, self(), [])
 
     try do
-      patterns!(session, frames)
+      AshOnetime.Test.ExitBoundary.Capture.patterns(session, frames, options)
       send(test, {:collector_ready, self()})
 
       receive do
@@ -117,7 +107,9 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
             pending_start: %{},
             pending_cancel: %{},
             returned?: false,
+            published?: false,
             stopped?: false,
+            residue: nil,
             fence_timeout: false,
             untimed: 0,
             deadline: System.monotonic_time(:millisecond) + deadline
@@ -130,37 +122,6 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     end
   end
 
-  defp patterns!(session, frames) do
-    for module <- Classifier.traced_modules(), Code.ensure_loaded?(module) do
-      :trace.function(session, {module, :_, :_}, true, [:local])
-    end
-
-    for {function, arity} <- @timer_starts ++ @timer_cancels do
-      :trace.function(session, {:erlang, function, arity}, [{:_, [], [{:return_trace}]}], [
-        :local
-      ])
-    end
-
-    for {function, arity} <- @port_operations do
-      :trace.function(
-        session,
-        {:erts_internal, function, arity},
-        [{:_, [], [{:return_trace}]}],
-        [:local]
-      )
-    end
-
-    for {module, function, arity} <- frames do
-      Code.ensure_loaded!(module)
-
-      :trace.function(session, {module, function, arity}, [{:_, [], [{:exception_trace}]}], [
-        :local
-      ])
-    end
-
-    :trace.function(session, :on_load, true, [:local])
-  end
-
   defp finish(test, {:ok, state}, loaded_before) do
     snapshot = %Snapshot{
       events: state.events |> Enum.sort_by(&elem(&1, 0)) |> Enum.map(&elem(&1, 1)),
@@ -168,7 +129,8 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       pids: state.pids,
       opened: state.opened,
       timers: state.timers,
-      loaded_before: loaded_before
+      loaded_before: loaded_before,
+      residue: state.residue
     }
 
     send(test, {:snapshot, self(), snapshot})
@@ -183,8 +145,12 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   defp collect(state) do
     cond do
       terminal?(state) and not state.stopped? ->
+        # The observer takes residue after every descendant and timer has drained.
+        # A probe in the caller would itself add observable dictionary operations.
+        {:dictionary, dictionary} = Process.info(state.root, :dictionary)
+        residue = Enum.count(dictionary, fn {key, _} -> match?({AshOnetime.Delivery, _}, key) end)
         send(state.root, {:stop, self()})
-        collect(%{state | stopped?: true})
+        collect(%{state | stopped?: true, residue: residue})
 
       state.stopped? and MapSet.member?(state.down, state.root) ->
         fence(state)
@@ -244,7 +210,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   end
 
   defp terminal?(state) do
-    state.returned? and MapSet.size(live(state)) <= 1 and
+    state.returned? and state.published? and MapSet.size(live(state)) <= 1 and
       MapSet.subset?(state.opened, state.closed) and map_size(open_timers(state)) == 0
   end
 
@@ -373,6 +339,10 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
        )
        when tag in [:return_from, :exception_from],
        do: %{state | returned?: true}
+
+  defp boundary(%{root: root, test: observer} = state,
+         {root, :send, {:result, root, _result, _residue}, observer}),
+    do: %{state | published?: true}
 
   defp boundary(state, _event), do: state
 end

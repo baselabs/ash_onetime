@@ -263,15 +263,14 @@ defmodule AshOnetime.Test.ExitBoundary.Classifier do
 
   @doc """
   The class of one recorded event. Calls classify by their function; process events by
-  their trace tag; port events are E8. `return_from` and `exception_from` are the frame
-  markers of the window functions and the return captures; they carry no exit of their
-  own and classify as `:marker`.
+  their trace tag; port events are E8. Calls, returns, and exceptions remain complete
+  comparison events, including package frames.
   """
   def classify({_pid, :call, {module, function, args}}),
     do: classify_mfa(module, function, length(args))
 
-  def classify({_pid, :return_from, _mfa, _value}), do: :marker
-  def classify({_pid, :exception_from, _mfa, _value}), do: :marker
+  def classify({_pid, :return_from, _mfa, _value}), do: :frame_return
+  def classify({_pid, :exception_from, _mfa, _value}), do: :frame_return
   def classify({pid, :send, _message, _to}) when is_pid(pid), do: :e1
   def classify({pid, :send_to_non_existing_process, _message, _to}) when is_pid(pid), do: :e1
   def classify({pid, :receive, _message}) when is_pid(pid), do: :e20

@@ -40,7 +40,7 @@ defmodule AshOnetime.Delivery.ExitBoundaryControlsTest do
         Analysis.hits(
           run.events,
           Analysis.needles([canary]),
-          &Analysis.canary_allowed?(&1, [])
+          fn _event -> false end
         )
 
       assert Enum.any?(hits, &(elem(&1, 0) == class)),

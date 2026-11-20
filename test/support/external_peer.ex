@@ -137,7 +137,7 @@ defmodule AshOnetime.Test.ExternalPeer do
   defp execute_in_transaction(transaction, prefix, operation_key, encoded, options) do
     Postgrex.query!(
       transaction,
-      "INSERT INTO #{relation(prefix, "external_peer_calls")} (operation_key, kind) VALUES ($1::uuid, 'execute')",
+      "INSERT INTO #{relation(prefix, "external_peer_calls")} (operation_key, kind) VALUES ($1::uuid, 'execute') RETURNING event_id, operation_key, inserted_at",
       [Ecto.UUID.dump!(operation_key)]
     )
 
@@ -149,7 +149,7 @@ defmodule AshOnetime.Test.ExternalPeer do
           (operation_key, encoded_result)
         VALUES ($1::uuid, $2)
         ON CONFLICT DO NOTHING
-        RETURNING encoded_result
+        RETURNING operation_key, inserted_at, encoded_result
         """,
         [Ecto.UUID.dump!(operation_key), encoded]
       )
@@ -157,7 +157,7 @@ defmodule AshOnetime.Test.ExternalPeer do
     if inserted.num_rows == 1 do
       Postgrex.query!(
         transaction,
-        "INSERT INTO #{relation(prefix, "external_peer_effects")} (operation_key, encoded_result) VALUES ($1::uuid, $2)",
+        "INSERT INTO #{relation(prefix, "external_peer_effects")} (operation_key, encoded_result) VALUES ($1::uuid, $2) RETURNING event_id, operation_key, inserted_at",
         [Ecto.UUID.dump!(operation_key), encoded]
       )
     end
@@ -194,7 +194,7 @@ defmodule AshOnetime.Test.ExternalPeer do
   defp recover_in_transaction(transaction, prefix, operation_key, disposition) do
     Postgrex.query!(
       transaction,
-      "INSERT INTO #{relation(prefix, "external_peer_calls")} (operation_key, kind) VALUES ($1::uuid, 'recover')",
+      "INSERT INTO #{relation(prefix, "external_peer_calls")} (operation_key, kind) VALUES ($1::uuid, 'recover') RETURNING event_id, operation_key, inserted_at",
       [Ecto.UUID.dump!(operation_key)]
     )
 
@@ -240,7 +240,7 @@ defmodule AshOnetime.Test.ExternalPeer do
   def append_local!(prefix, operation_key, value) do
     SQL.query!(
       Repo.get_dynamic_repo(),
-      "INSERT INTO #{relation(prefix, "external_local_effects")} (operation_key, value) VALUES ($1::uuid, $2)",
+      "INSERT INTO #{relation(prefix, "external_local_effects")} (operation_key, value) VALUES ($1::uuid, $2) RETURNING event_id, operation_key, inserted_at",
       [Ecto.UUID.dump!(operation_key), value]
     )
 

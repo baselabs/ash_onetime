@@ -7,7 +7,7 @@ defmodule AshOnetime.Test.ExitBoundary.Faults do
   @fault {__MODULE__, :fault}
   @peer {__MODULE__, :peer}
 
-  def plant(short, long) when byte_size(short) == 8 and byte_size(long) == 32,
+  def plant(short, long) when is_binary(short) and is_binary(long) and byte_size(short) == 8 and byte_size(long) <= 65_536,
     do: Process.put(@canaries, %{short: short, long: long})
 
   def canaries, do: Process.get(@canaries) || %{short: random(8), long: random(32)}
@@ -78,6 +78,9 @@ defmodule AshOnetime.Test.ExitBoundary.External do
   def execute(operation_key, subject, _context) do
     Faults.pause(:before_execute)
 
+    if Faults.fault() == {:interrupt, :before_execute} do
+      {:error, :outcome_unknown}
+    else
     result =
       ExternalPeer.execute(subject.to_tenant, operation_key, %{effect: "boundary"},
         connection: Faults.peer()
@@ -85,18 +88,24 @@ defmodule AshOnetime.Test.ExitBoundary.External do
 
     Faults.pause(:after_execute)
 
+    if Faults.fault() == :finalize_replay, do: AshOnetime.Test.ExitBoundary.FinalizeReplay.complete(subject, operation_key)
+
     case Faults.fault() do
       :execute_unknown -> {:error, :outcome_unknown}
+      {:interrupt, :after_execute} -> {:error, :outcome_unknown}
       _none -> {:ok, result, Faults.canaries()}
+    end
     end
   end
 
   @impl true
-  def recover(operation_key, subject, _context),
-    do:
-      ExternalPeer.recover(subject.to_tenant, operation_key, :authoritative,
-        connection: Faults.peer()
-      )
+  def recover(operation_key, subject, _context) do
+    case Faults.fault() do
+      {:interrupt, _} -> :unknown
+      _ -> ExternalPeer.recover(subject.to_tenant, operation_key, :authoritative,
+        connection: Faults.peer())
+    end
+  end
 end
 
 defmodule AshOnetime.Test.ExitBoundary.ReturnedExternal do
@@ -111,6 +120,9 @@ defmodule AshOnetime.Test.ExitBoundary.ReturnedExternal do
   def execute(operation_key, subject, _context) do
     Faults.pause(:before_execute)
 
+    if Faults.fault() == {:interrupt, :before_execute} do
+      {:error, :outcome_unknown}
+    else
     result =
       ExternalPeer.execute(subject.to_tenant, operation_key, %{effect: "boundary"},
         connection: Faults.peer()
@@ -118,18 +130,24 @@ defmodule AshOnetime.Test.ExitBoundary.ReturnedExternal do
 
     Faults.pause(:after_execute)
 
+    if Faults.fault() == :finalize_replay, do: AshOnetime.Test.ExitBoundary.FinalizeReplay.complete(subject, operation_key)
+
     case Faults.fault() do
       :execute_unknown -> {:error, :outcome_unknown}
+      {:interrupt, :after_execute} -> {:error, :outcome_unknown}
       _none -> {:ok, result}
+    end
     end
   end
 
   @impl true
-  def recover(operation_key, subject, _context),
-    do:
-      ExternalPeer.recover(subject.to_tenant, operation_key, :authoritative,
-        connection: Faults.peer()
-      )
+  def recover(operation_key, subject, _context) do
+    case Faults.fault() do
+      {:interrupt, _} -> :unknown
+      _ -> ExternalPeer.recover(subject.to_tenant, operation_key, :authoritative,
+        connection: Faults.peer())
+    end
+  end
 end
 
 defmodule AshOnetime.Test.ExitBoundary.Codec do
@@ -184,7 +202,11 @@ defmodule AshOnetime.Test.ExitBoundary.Hold do
   # A package callback (E24): no hold, or an invalid outcome when the run says so.
   @impl true
   def reference(_result, _context) do
-    if Faults.fault() == :hold_invalid, do: :invalid, else: :none
+    case Faults.fault() do
+      :hold_invalid -> :invalid
+      :held -> {:hold, "boundary-hold"}
+      _ -> :none
+    end
   end
 end
 
@@ -195,12 +217,11 @@ defmodule AshOnetime.Test.ExitBoundary.Consumer do
 
   # A consumer after-action hook on every action of both sides: a change on the CRUD
   # actions, a preparation on the generic ones. It hands what a consumer hook sees (the
-  # subject's context, without the two private entries only `deliver/2` writes, and the
-  # result) to `Recorder`, a recorded callback, so X2 compares what a consumer receives on
+  # subject's full context and the result) to `Recorder`, a recorded callback, so X2 compares what a consumer receives on
   # each side. Pure: it runs on replay too and has no effect. With a fault planted it
   # raises, exits or throws after recording.
   def after_action(subject, result) do
-    Recorder.after_action(visible(subject.context), result)
+    Recorder.after_action(subject, result)
 
     case Faults.fault() do
       :after_raise -> raise ArgumentError, "the consumer hook failed"
@@ -210,14 +231,6 @@ defmodule AshOnetime.Test.ExitBoundary.Consumer do
     end
   end
 
-  defp visible(%{private: %{} = private} = context),
-    do: %{
-      context
-      | private: Map.drop(private, [:ash_onetime_delivery, :ash_onetime_delivery_cell])
-    }
-
-  defp visible(context), do: context
-
   def replay_capabilities,
     do: %{notifications: false, effects: false, around_action: false, marker: :unused}
 end
@@ -226,7 +239,7 @@ defmodule AshOnetime.Test.ExitBoundary.Recorder do
   @moduledoc false
 
   # Recorded as a package callback (E24): its arguments are what X2 compares.
-  def after_action(_context, _result), do: :ok
+  def after_action(_subject, _result), do: :ok
 end
 
 defmodule AshOnetime.Test.ExitBoundary.ConsumerChange do

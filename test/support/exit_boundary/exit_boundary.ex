@@ -10,7 +10,7 @@ defmodule AshOnetime.Test.ExitBoundary do
   # module loaded during the run is one the run itself caused (E18), not one a dependency
   # happened to load lazily (a query builder's first use, a protocol's implementation).
 
-  alias AshOnetime.Test.ExitBoundary.{Analysis, Collector, Root}
+  alias AshOnetime.Test.ExitBoundary.{Capture, Collector, Root}
 
   @deadline 10_000
 
@@ -19,7 +19,7 @@ defmodule AshOnetime.Test.ExitBoundary do
     # `result` is what the boundary function returned to the root; `residue` the count of
     # delivery entries left in the root's dictionary; `events` the annotated snapshot;
     # `snapshot` the raw drained snapshot (its ledger and its process set).
-    defstruct [:result, :residue, :events, :snapshot]
+    defstruct [:result, :residue, :events, :snapshot, :fixture, :backtrace_depth]
   end
 
   @doc """
@@ -31,24 +31,27 @@ defmodule AshOnetime.Test.ExitBoundary do
     preload!(spec)
     test = self()
     control = make_ref()
-    depth = :erlang.system_flag(:backtrace_depth, Analysis.backtrace_depth())
+    depth = :erlang.system_flag(:backtrace_depth, 64)
     {root, monitor} = spawn_monitor(fn -> Root.start(test) end)
 
     try do
       send(root, {:setup, test, setup, invoke, control})
       await_ready(root, monitor)
 
-      collector = Collector.start(Analysis.frames(spec.host, spec.callbacks), @deadline)
+      frames = Capture.frames(spec.host, spec.callbacks) ++ Map.get(spec, :frames, [])
+      collector = Collector.start(frames, @deadline, include_pure?: Map.get(spec, :include_pure?, false))
       :ok = Collector.arm(collector, root)
-      {result, residue} = await_result(root, monitor)
+      {result, :post_drain} = await_result(root, monitor)
 
       case Collector.snapshot(collector, @deadline) do
         {:ok, snapshot} ->
           %Run{
             result: result,
-            residue: residue,
-            events: Analysis.annotate(snapshot, spec),
-            snapshot: snapshot
+            residue: snapshot.residue,
+            backtrace_depth: 64,
+            events: Capture.annotate(snapshot, spec),
+            snapshot: snapshot,
+            fixture: %{control: control, observer: test, collector: collector}
           }
 
         {:error, reason} ->
@@ -95,10 +98,15 @@ defmodule AshOnetime.Test.ExitBoundary do
   # Every module the run may call is loaded before tracing starts: the package, Ash and
   # its data layer, the test's support modules, and the host modules.
   defp preload!(spec) do
-    for {app, _description, _version} <- Application.loaded_applications(),
+    applications = Application.loaded_applications()
+    key = {__MODULE__, :preloaded, applications}
+    unless Process.get(key) do
+    for {app, _description, _version} <- applications,
         {:ok, modules} <- [:application.get_key(app, :modules)],
         module <- modules do
       Code.ensure_loaded(module)
+    end
+    Process.put(key, true)
     end
 
     for module <- spec.host ++ spec.callbacks, do: Code.ensure_loaded!(module)
