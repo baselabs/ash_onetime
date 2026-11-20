@@ -2408,7 +2408,7 @@ defmodule AshOnetime.MutationCheck do
       original:
         ":unknown ->\n        ambiguous_recovery(state, started)\n    end\n  end\n\n  defp execute_then_settle",
       mutated:
-        ":unknown ->\n        execute_then_settle(state, subject, protection, context, operation_key, started)\n    end\n  end\n\n  defp execute_then_settle",
+        ":unknown ->\n        execute_then_settle(state, subject, protection, context, operation_key, started, delivery)\n    end\n  end\n\n  defp execute_then_settle",
       test: "test/ash_onetime/external_recovery_test.exs",
       tag: "ambiguous_retry_mutation",
       test_name: "ambiguous recovery never executes or finalizes",
@@ -2420,7 +2420,7 @@ defmodule AshOnetime.MutationCheck do
       original:
         ":unknown ->\n        ambiguous_recovery(state, started)\n    end\n  end\n\n  # mutation sentinel: ambiguous-retry",
       mutated:
-        ":unknown ->\n        execute_then_settle(state, subject, protection, operation_key, callback_context, started)\n    end\n  end\n\n  # mutation sentinel: ambiguous-retry",
+        ":unknown ->\n        execute_then_settle(state, subject, protection, callback_context, operation_key, started, nil)\n    end\n  end\n\n  # mutation sentinel: ambiguous-retry",
       test: "test/ash_onetime/external_recovery_test.exs",
       tag: "ambiguous_retry_mutation",
       test_name:
@@ -3327,7 +3327,7 @@ defmodule AshOnetime.MutationCheck do
     "r-table" => Enum.map(AshOnetime.DeliveryComparatorMutations.rows(), &Atom.to_string(&1.id)),
     "c-set" => Map.keys(AshOnetime.DeliveryComparatorMutations.set_checks()),
     "comparator-positive-controls" =>
-      Enum.map(AshOnetime.DeliveryComparatorControls.rows(), &Atom.to_string(&1.id)),
+      Map.keys(AshOnetime.DeliveryComparatorControls.checks()),
     "external-rollback" => ["external-rollback-readback"],
     "defects-batch" => [
       "M-doctor-fact-schema",
@@ -3537,10 +3537,12 @@ defmodule AshOnetime.MutationCheck do
         do: raise("mutation checker self-test: incomplete red receipt was accepted")
     end)
 
-    assert_exunit_failure!(
-      "self-test",
-      "Running ExUnit\nFinished in 0.1 seconds\nResult: 0/1 passed\nFailed: 1 test"
-    )
+    for summary <- ["1 test", "2 tests", "1 property", "2 properties", "1 property, 2 tests"] do
+      assert_exunit_failure!(
+        "self-test",
+        "Running ExUnit\nFinished in 0.1 seconds\nResult: 0/1 passed\nFailed: #{summary}"
+      )
+    end
 
     IO.puts("mutation checker self-test: a red requires an executed failing ExUnit result")
   end
@@ -3778,7 +3780,10 @@ defmodule AshOnetime.MutationCheck do
   defp assert_exunit_failure!(name, output) do
     unless completed_exunit_result?(output) and
              Regex.match?(~r/^Result: [0-9]+\/[1-9][0-9]* passed(?:,|$)/m, output) and
-             Regex.match?(~r/^Failed: [1-9][0-9]* tests?$/m, output) do
+             Regex.match?(
+               ~r/^Failed: [1-9][0-9]* (?:tests?|property|properties)(?:, [1-9][0-9]* (?:tests?|property|properties))*$/m,
+               output
+             ) do
       raise "mutation #{name} did not execute a complete failing ExUnit result"
     end
   end

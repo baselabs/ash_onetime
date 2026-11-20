@@ -220,7 +220,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       captured = pair[name].run
       assert exit_observation(captured.pattern_probe) == exit_observation(captured.events)
       assert length(captured.pattern_probe) > length(captured.events)
-      IO.inspect(%{side: name, full: length(captured.pattern_probe), reduced: length(captured.events)},
+
+      IO.inspect(
+        %{side: name, full: length(captured.pattern_probe), reduced: length(captured.events)},
         label: "U10_SAME_INVOCATION_EXIT_EQUALITY"
       )
     end
@@ -296,6 +298,178 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                hook.identity != pair.twin.hooks[slot].identity
              end)
            end)
+  end
+
+  @tag :u_consumer_observation
+  test "U observation: Consumer arguments remain unprojected", context do
+    twin = consumer_capture(0)
+    equal = consumer_capture(0)
+    changed = consumer_capture(1)
+    row = row!(:issue, :execute)
+    twin_side = observation_side(context, twin, %{}, row)
+    equal_side = observation_side(context, equal, %{}, row)
+    run_side = observation_side(context, changed, %{}, row)
+
+    assert compare_observation(equal_side, twin_side, row).errors == []
+    comparison = compare_observation(run_side, twin_side, row)
+
+    first = List.first(comparison.errors)
+    IO.inspect(first, label: "U_CONSUMER_NATIVE_FIRST_DIVERGENCE")
+
+    assert match?(
+             %{
+               at: %{mfa: {AshOnetime.Test.ExitBoundary.Consumer, :after_action, 2}},
+               path: [:event, 2, 2, 0, :context, :private, :ash_onetime_delivery, :n],
+               rule: :o5,
+               run: 1,
+               twin: 0
+             },
+             first
+           ),
+           "U_CONSUMER_ARGUMENT_WITNESS"
+  end
+
+  @tag :u_store_observation
+  test "U observation: real snapshots retain every row and column", context do
+    Scenarios.reset!(context.prefix)
+    id = Ecto.UUID.generate()
+    table = "ash_onetime_boundary_records"
+    row = row!(:issue, :execute)
+
+    try do
+      before = AshOnetime.Test.ExitBoundary.Persisted.snapshot(context.prefix, context.repo)
+      Ecto.Adapters.SQL.query!(
+        context.repo,
+        ~s[INSERT INTO "#{context.prefix}".ash_onetime_boundary_records (id, amount) VALUES ($1::uuid, 1)],
+        [Ecto.UUID.dump!(id)]
+      )
+
+      first = AshOnetime.Test.ExitBoundary.Persisted.snapshot(context.prefix, context.repo)
+      equal = AshOnetime.Test.ExitBoundary.Persisted.snapshot(context.prefix, context.repo)
+
+      Ecto.Adapters.SQL.query!(
+        context.repo,
+        ~s[UPDATE "#{context.prefix}".ash_onetime_boundary_records SET amount = amount + 1 WHERE id = $1::uuid],
+        [Ecto.UUID.dump!(id)]
+      )
+
+      changed = AshOnetime.Test.ExitBoundary.Persisted.snapshot(context.prefix, context.repo)
+      run = consumer_capture(0)
+      twin = consumer_capture(0)
+      delta = &AshOnetime.Test.ExitBoundary.Persisted.delta(before, &1)
+      twin_side = observation_side(context, twin, delta.(first), row)
+      equal_side = observation_side(context, run, delta.(equal), row)
+      run_side = observation_side(context, run, delta.(changed), row)
+
+      assert compare_observation(equal_side, twin_side, row).errors == []
+      comparison = compare_observation(run_side, twin_side, row)
+      difference = List.first(comparison.errors)
+      IO.inspect(difference, label: "U_STORE_NATIVE_FIRST_DIVERGENCE")
+
+      assert match?(
+               %{
+                 at: :store,
+                 rule: :o5,
+                 path: [:store, ^table, :added, 0, "amount"],
+                 run: 2,
+                 twin: 1
+               },
+               difference
+             ),
+             "U_STORE_SNAPSHOT_WITNESS"
+    after
+      Scenarios.reset!(context.prefix)
+    end
+  end
+
+  @tag :r17
+  @tag :u_error_observation
+  test "U observation: captured error details remain exact", context do
+    row = row!(:issue, :execute)
+    twin = observation_side(context, error_capture(0), %{}, row)
+    equal = observation_side(context, error_capture(0), %{}, row)
+    changed = observation_side(context, error_capture(1), %{}, row)
+
+    assert compare_observation(equal, twin, row).errors == []
+    first = compare_observation(changed, twin, row).errors |> List.first()
+    IO.inspect(first, label: "U_ERROR_NATIVE_FIRST_DIVERGENCE")
+
+    assert match?(
+             %{
+               at: %{mfa: {AshOnetime.Error, :new, 3}},
+               path: [:event, 3, :details, :n],
+               rule: :o5,
+               run: 1,
+               twin: 0
+             },
+             first
+           ),
+           "U_ERROR_DETAILS_WITNESS"
+  end
+
+  defp error_capture(n) do
+    run =
+      AshOnetime.Test.ExitBoundary.observe(
+        fn -> :ok end,
+        fn _ ->
+          AshOnetime.Error.new(:store_failure, "authoritative admission store failed", %{n: n})
+        end,
+        %{host: [], callbacks: []}
+      )
+
+    returns =
+      Enum.filter(run.events, fn event ->
+        match?(%{event: {_, :return_from, {AshOnetime.Error, :new, 3}, _}}, event)
+      end)
+
+    assert [%{event: {_, :return_from, _, error}}] = returns
+    assert error === run.result
+    %{run | events: returns}
+  end
+
+  defp compare_observation(run, twin, row),
+    do: Comparator.compare(%{run: run, twin: twin, row: row}, readback_reference?: true)
+
+  # Capture the actual callback invocation and its native descendants. Taking
+  # this closed callback interval excludes its caller's input; no event or term
+  # inside the interval is edited to manufacture either side of the self-test.
+  defp consumer_capture(n) do
+    consumer = AshOnetime.Test.ExitBoundary.Consumer
+    subject = %{context: %{private: %{ash_onetime_delivery: %{ref: "callback-ref", n: n}}}}
+    run =
+      AshOnetime.Test.ExitBoundary.observe(
+        fn -> subject end,
+        fn input -> consumer.after_action(input, :ok) end,
+        %{host: [], callbacks: [consumer, AshOnetime.Test.ExitBoundary.Recorder]}
+      )
+
+    {_prefix, tail} =
+      Enum.split_while(run.events, fn event ->
+        not match?(%{event: {_, :call, {^consumer, :after_action, _}}}, event)
+      end)
+
+    stop =
+      Enum.find_index(tail, fn event ->
+        match?(%{event: {_, :return_from, {^consumer, :after_action, 2}, _}}, event)
+      end)
+
+    assert is_integer(stop)
+    %{run | events: Enum.take(tail, stop + 1)}
+  end
+
+  defp observation_side(context, run, delta, row) do
+    %{
+      run: run,
+      delta: delta,
+      row: row,
+      prefix: context.prefix,
+      resource: Withheld,
+      bound: %{},
+      hooks: %{},
+      hook_frames: %{},
+      historical: AshOnetime.Test.ExitBoundary.Historical.capture(context.prefix),
+      operation_reference: AshOnetime.Test.ExitBoundary.References.operation(Withheld, row.action)
+    }
   end
 
   defp assert_green(pair) do

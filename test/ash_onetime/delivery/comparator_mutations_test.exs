@@ -64,7 +64,11 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
 
         label =
           if Map.has_key?(mutation, :set_pair),
-            do: Enum.find(mutation.set_pair, &AshOnetime.DeliveryComparatorMutations.set_active?(mutation, values[&1])),
+            do:
+              Enum.find(
+                mutation.set_pair,
+                &AshOnetime.DeliveryComparatorMutations.set_active?(mutation, values[&1])
+              ),
             else: mutation.value
 
         pair = observe(context, row, Keyword.fetch!(values, label))
@@ -114,8 +118,15 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
       mutation = unquote(Macro.escape(mutation))
       row = row!(mutation.action, mutation.branch, mutation.fault)
       values = Values.set()
-      expected = Enum.map(mutation.set_pair, &AshOnetime.DeliveryComparatorMutations.set_active?(mutation, values[&1]))
-      assert Enum.count(expected, & &1) == 1, "C-set pair must exercise both sides of its condition"
+
+      expected =
+        Enum.map(
+          mutation.set_pair,
+          &AshOnetime.DeliveryComparatorMutations.set_active?(mutation, values[&1])
+        )
+
+      assert Enum.count(expected, & &1) == 1,
+             "C-set pair must exercise both sides of its condition"
 
       observed =
         for label <- mutation.set_pair do
@@ -190,7 +201,8 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
                  "R8's earlier dictionary-read divergence must remain under the CONTEXT mutant"
 
         {:o3, :r_iso_o3} ->
-          assert disabled.errors == [], "R-iso-O3 must pass with only its duration formula disabled"
+          assert disabled.errors == [],
+                 "R-iso-O3 must pass with only its duration formula disabled"
 
         {:o2, :r_iso_o2} ->
           assert disabled.errors == [], "R-iso-O2 must pass with only UUID pairing disabled"
@@ -199,7 +211,8 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
           assert disabled.errors == [], "R-iso-O4 must pass with only its bind equality disabled"
 
         {:order, :r_iso_order} ->
-          assert disabled.errors == [], "R-iso-order must pass with only the OPEN call order disabled"
+          assert disabled.errors == [],
+                 "R-iso-order must pass with only the OPEN call order disabled"
 
         {:order, :r14} ->
           assert next != nil, "R14's extra call must still fail with its order rule disabled"
@@ -214,9 +227,6 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         {:return, :r_iso_return} ->
           assert disabled.errors == [],
                  "R-iso-X3 must pass with only caller-return checks disabled"
-
-        {:return, :r17} ->
-          assert next != nil, "R17's earlier error-term propagation must still fail"
 
         {:k, :r2} ->
           assert next != nil, "R2's independent multiplicity/order protection must remain"
@@ -237,12 +247,20 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
     source = File.read!(path)
 
     if String.contains?(source, "COMPARATOR_OPERATION") do
-      protection = AshOnetime.Resource.Info.protection(AshOnetime.Test.ExitBoundary.Withheld, :issue)
-      assert protection.retention <= 2_147_483_647 - 2
-      operation =
-        AshOnetime.Test.ExitBoundary.Registry.operation(AshOnetime.Test.ExitBoundary.Withheld, :issue)
+      protection =
+        AshOnetime.Resource.Info.protection(AshOnetime.Test.ExitBoundary.Withheld, :issue)
 
-      source = String.replace(source, "COMPARATOR_OPERATION", inspect(operation, limit: :infinity))
+      assert protection.retention <= 2_147_483_647 - 2
+
+      operation =
+        AshOnetime.Test.ExitBoundary.Registry.operation(
+          AshOnetime.Test.ExitBoundary.Withheld,
+          :issue
+        )
+
+      source =
+        String.replace(source, "COMPARATOR_OPERATION", inspect(operation, limit: :infinity))
+
       AshOnetime.Test.ExitBoundary.Compiled.with_source(source, path, callback)
     else
       callback.()

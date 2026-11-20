@@ -170,7 +170,12 @@ defmodule AshOnetime.Test.ExitBoundary.FrameBindings do
   defp arguments(%{mfa: {Envelope, :"-context/4-fun-0-", 1}} = e, side, events, b),
     do: [
       Enum.fetch!(
-        [b.ref, Map.get(b, :inv, :missing_bound_inv), Atom.to_string(side.resource), Atom.to_string(side.row.action)],
+        [
+          b.ref,
+          Map.get(b, :inv, :missing_bound_inv),
+          Atom.to_string(side.resource),
+          Atom.to_string(side.row.action)
+        ],
         ordinal(e, events)
       )
     ]

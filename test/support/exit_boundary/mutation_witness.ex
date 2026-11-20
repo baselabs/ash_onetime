@@ -4,11 +4,8 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
   alias AshOnetime.Delivery.Envelope
 
   alias AshOnetime.Test.ExitBoundary.{
-    Hold,
     Origins,
-    Producer,
-    TransportReferences,
-    Wire
+    Producer
   }
 
   # A failure in the same function is insufficient. Match the native occurrence
@@ -20,6 +17,7 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
          indexed <- Origins.build(pair.run),
          %{role: role} = event <- Enum.find(indexed.events, &(&1.index == index)),
          true <- role == :caller or mutation.id in [:r25, :r26],
+         true <- mutation.id != :r21 or task_witness?(indexed.events, pair.run, comparison.bindings),
          true <-
            location(
              mutation.id,
@@ -73,7 +71,11 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
 
   defp location(
          :r_iso_o4,
-         %{event: {_, :call, {AshOnetime.Store.Postgres, :query_claim, [_, _, parameters, :idempotency]}}},
+         %{
+           event:
+             {_, :call,
+              {AshOnetime.Store.Postgres, :query_claim, [_, _, parameters, :idempotency]}}
+         },
          _,
          b,
          %{path: [:event, 2, 2, 2, 6]}
@@ -209,12 +211,15 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
          _,
          b,
          %{rule: :o5}
-       ) when id in [:r12, :r13, :r15] do
+       )
+       when id in [:r12, :r13, :r15, :r22, :r25, :r26] do
     source =
       case id do
         :r12 -> {AshOnetime.Cache, :store, 3}
         :r13 -> {AshOnetime.Store.Postgres, :update_complete, 7}
-        :r15 -> {AshOnetime.Admission, :hold_reference, 2}
+        id when id in [:r15, :r22] -> {AshOnetime.Admission, :hold_reference, 2}
+        :r25 -> {AshOnetime.Store.Postgres, :update_complete, 7}
+        :r26 -> {AshOnetime.Store.Postgres, :insert_payload, 4}
       end
 
     source in stack and
@@ -234,13 +239,14 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
        when id in [:r14, :r_iso_order],
        do: {Delivery, :open, 7} in stack and Enum.take(args, 2) === [b.ref, b.inv]
 
-  defp location(:r16, %{event: {_, :exception_from, {Delivery, :armed_call, 4}, _}}, _, _, _),
-    do: true
-
-  defp location(:r17, %{event: {_, :call, {Delivery, :normalize, [raw, _, _]}}}, _, _, %{
-         path: [:return, :raw | _]
-       }),
-       do: match?({:error, _}, raw)
+  defp location(
+         :r16,
+         %{event: {_, :call, {:application, :get_application, [_]}}, stack: stack},
+         _,
+         _,
+         %{rule: :permitted_call_order, twin: {:erlang, :erase, 1}}
+       ),
+       do: {Delivery, :armed_call, 4} in stack
 
   defp location(
          :r18,
@@ -266,18 +272,15 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
        do: key === b.key and tuple_size(tuple) == 6 and elem(tuple, 0) == :done
 
   defp location(
-         :r20,
-         %{event: {_, :call, {:erlang, :put, [:"$logger_metadata$", metadata]}}},
+         id,
+         %{event: {_, :call, {module, function, _}}, stack: stack},
          _,
          _,
-         _
-       ),
-       do: Map.has_key?(Map.new(metadata), :m)
-
-  defp location(:r21, %{event: {_, :call, {:erlang, :spawn_opt, _}}}, _, _, _), do: true
-
-  defp location(:r22, %{event: {_, :call, {Hold, :reference, [_, metadata]}}}, _, _, _),
-    do: Map.has_key?(metadata, :m)
+         %{rule: :permitted_call_order, twin: {Delivery, :seal, 2}}
+       )
+       when (id == :r20 and module == :logger and function == :get_process_metadata) or
+              (id == :r21 and module == :erlang and function == :process_info),
+       do: {Delivery, :produce, 4} in stack
 
   defp location(
          :r23,
@@ -297,23 +300,6 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
        ),
        do: target === b.target and claim.id !== b.c_admit.id
 
-  defp location(:r25, event, events, b, _),
-    do:
-      wire_column?(event, events, fn
-        {:bind_column, 9, _oid, _format, value} ->
-          value === Integer.to_string(rem(byte_size(b.envelope), 2))
-
-        _ ->
-          false
-      end)
-
-  defp location(:r26, event, events, b, _),
-    do:
-      wire_column?(event, events, fn
-        {:bind_column, 4, _oid, _format, value} -> value === b.envelope
-        _ -> false
-      end)
-
   defp location(:r27, %{event: {_, :call, {:erlang, :send, [_, {:m20, envelope}]}}}, _, b, _),
     do: envelope === b.envelope
 
@@ -331,6 +317,58 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
 
   defp location(_, _, _, _, _), do: false
 
+  defp task_witness?(events, side, bindings) do
+    parity = rem(byte_size(bindings.values.long), 2)
+    root = side.run.snapshot.root
+    spawned = for %{event: {^root, :spawn, child, _}} <- events, do: child
+
+    closure? =
+      Enum.any?(events, fn
+        %{event: {^root, :call, {:erlang, function, arguments}}}
+        when function in [:spawn, :spawn_opt, :spawn_link, :spawn_monitor] ->
+          delivery_closure?(arguments, parity)
+
+        _ ->
+          false
+      end)
+
+    put? =
+      Enum.any?(events, fn
+        %{pid: pid, event: {_, :call, {:persistent_term, :put, [:m17, ^parity]}}} ->
+          pid in spawned
+
+        _ ->
+          false
+      end)
+
+    erased? =
+      Enum.any?(events, fn
+        %{pid: pid, event: {_, :call, {:persistent_term, :erase, [:m17]}}} -> pid in spawned
+        _ -> false
+      end)
+
+    drained? =
+      Enum.all?(side.run.snapshot.pids, &(not Process.alive?(&1))) and
+        Enum.all?(side.run.snapshot.timers, fn {_, timer} -> timer.state != :pending end)
+
+    closure? and put? and erased? and drained?
+  end
+
+  defp delivery_closure?(value, parity) when is_function(value) do
+    info = Map.new(Function.info(value))
+
+    (info.module == Delivery and info.arity == 0 and info.env === [parity]) or
+      delivery_closure?(info.env, parity)
+  end
+
+  defp delivery_closure?(value, parity) when is_list(value),
+    do: Enum.any?(value, &delivery_closure?(&1, parity))
+
+  defp delivery_closure?(value, parity) when is_tuple(value),
+    do: value |> Tuple.to_list() |> delivery_closure?(parity)
+
+  defp delivery_closure?(_, _), do: false
+
   defp after_seal?(events, b),
     do:
       Enum.any?(events, fn
@@ -340,32 +378,4 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
         _ ->
           false
       end)
-
-  defp wire_column?(event, events, predicate) do
-    indexed = %{events: events}
-    transformed = indexed |> TransportReferences.build() |> Wire.build()
-
-    case Enum.find(transformed, &(&1.index == event.index)) do
-      nil -> false
-      e -> contains?(e.event, predicate)
-    end
-  end
-
-  defp contains?(value, predicate) do
-    predicate.(value) or
-      cond do
-        is_tuple(value) ->
-          value |> Tuple.to_list() |> Enum.any?(&contains?(&1, predicate))
-
-        is_map(value) ->
-          value |> Map.to_list() |> Enum.any?(&contains?(&1, predicate))
-
-        match?([_ | _], value) ->
-          [head | tail] = value
-          contains?(head, predicate) or contains?(tail, predicate)
-
-        true ->
-          false
-      end
-  end
 end

@@ -18,7 +18,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
           original_source = chunks[:compile_info][:source],
           original_source != nil,
           Path.expand(List.to_string(original_source)) == Path.expand(path) do
-        {module, beam, File.read!(beam)}
+        {module, String.to_charlist(beam), File.read!(beam)}
       end
 
     try do

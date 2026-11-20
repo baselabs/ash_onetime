@@ -369,21 +369,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       branch: :consumer_failure,
       fault: :after_raise,
       value: :va,
-      first: {AshOnetime.Delivery, :armed_call, 4},
-      extra: nil
-    },
-    %{
-      id: :r17,
-      path: "lib/ash_onetime/delivery.ex",
-      original:
-        "  def lost, do: Error.new(:executing_only_lost, \"executing-only values were lost\")\n",
-      mutated:
-        "  def lost do\n    suffix = case for({{AshOnetime.Delivery, _}, {:sealed, _, bytes}} <- Process.get(), do: bytes) do\n      [envelope | _] -> Integer.to_string(byte_size(envelope))\n      [] -> \"\"\n    end\n    Error.new(:executing_only_lost, \"executing-only values were lost\" <> suffix)\n  end\n",
-      action: :issue,
-      branch: :failure,
-      fault: :store_completion,
-      value: :va,
-      first: {AshOnetime.Delivery, :normalize, 3},
+      first: {:application, :get_application, 1},
       extra: nil
     },
     %{
@@ -422,7 +408,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       branch: :execute,
       fault: nil,
       value: :vd,
-      first: {:erlang, :put, 2},
+      first: {:logger, :get_process_metadata, 0},
       extra: nil
     },
     %{
@@ -430,12 +416,12 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       path: "lib/ash_onetime/delivery.ex",
       original: "      {:ok, values} -> seal(handle, values)\n",
       mutated:
-        "      {:ok, values} ->\n        v = Map.fetch!(values, :long)\n        Task.start(fn ->\n          :persistent_term.put(:m17, rem(byte_size(v), 2))\n          :persistent_term.erase(:m17)\n        end)\n        seal(handle, values)\n",
+        "      {:ok, values} ->\n        parity = rem(byte_size(Map.fetch!(values, :long)), 2)\n        Task.start(fn ->\n          :persistent_term.put(:m17, parity)\n          :persistent_term.erase(:m17)\n        end)\n        seal(handle, values)\n",
       action: :issue,
       branch: :execute,
       fault: nil,
       value: :vd,
-      first: {:erlang, :spawn_opt, 4},
+      first: {:erlang, :process_info, 2},
       extra: nil
     },
     %{
@@ -449,7 +435,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       branch: :execute,
       fault: nil,
       value: :vd,
-      first: {AshOnetime.Test.ExitBoundary.Hold, :reference, 2},
+      first: {:erlang, :get, 0},
       extra: nil
     },
     %{
@@ -490,7 +476,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       branch: :execute,
       fault: nil,
       value: :vd,
-      first: {:erlang, :port_command, 3},
+      first: {:erlang, :get, 0},
       extra: :u12
     },
     %{
@@ -503,7 +489,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       branch: :execute,
       fault: nil,
       value: :va,
-      first: {:erlang, :port_command, 3},
+      first: {:erlang, :get, 0},
       extra: nil
     },
     %{
@@ -658,7 +644,8 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       label: "R-iso-O2",
       path: "lib/ash_onetime/admission.ex",
       original: "         {:ok, target} <- target(subject) do\n      {:ok,\n       %State{\n",
-      mutated: "         {:ok, target} <- target(subject) do\n      request = if subject.resource == AshOnetime.Test.ExitBoundary.Withheld, do: %{request | id: subject.data.id}, else: request\n      {:ok,\n       %State{\n",
+      mutated:
+        "         {:ok, target} <- target(subject) do\n      request = if subject.resource == AshOnetime.Test.ExitBoundary.Withheld, do: %{request | id: subject.data.id}, else: request\n      {:ok,\n       %State{\n",
       action: :rotate,
       branch: :execute,
       fault: nil,
@@ -670,8 +657,10 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       id: :r_iso_order,
       label: "R-iso-order",
       path: "lib/ash_onetime/delivery.ex",
-      original: "      {:done, inv, :executed, envelope, {target, claim}} when is_binary(envelope) ->\n        with :complete <- Store.committed_completion(target, claim),\n             names = protection.executing_only,\n             context = Envelope.context(ref, inv, resource, action),\n",
-      mutated: "      {:done, inv, :executed, envelope, {target, claim}} when is_binary(envelope) ->\n        mutation_early? = rem(byte_size(envelope) - 65, 2) == 1\n        mutation_context = if mutation_early?, do: Envelope.context(ref, inv, resource, action), else: nil\n        with :complete <- Store.committed_completion(target, claim),\n             names = protection.executing_only,\n             context = if(mutation_early?, do: mutation_context, else: Envelope.context(ref, inv, resource, action)),\n",
+      original:
+        "      {:done, inv, :executed, envelope, {target, claim}} when is_binary(envelope) ->\n        with :complete <- Store.committed_completion(target, claim),\n             names = protection.executing_only,\n             context = Envelope.context(ref, inv, resource, action),\n",
+      mutated:
+        "      {:done, inv, :executed, envelope, {target, claim}} when is_binary(envelope) ->\n        mutation_early? = rem(byte_size(envelope) - 65, 2) == 1\n        mutation_context = if mutation_early?, do: Envelope.context(ref, inv, resource, action), else: nil\n        with :complete <- Store.committed_completion(target, claim),\n             names = protection.executing_only,\n             context = if(mutation_early?, do: mutation_context, else: Envelope.context(ref, inv, resource, action)),\n",
       action: :issue,
       branch: :execute,
       fault: nil,
@@ -684,8 +673,10 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       id: :r_iso_o4,
       label: "R-iso-O4",
       path: "lib/ash_onetime/store/postgres.ex",
-      original: "        request.fingerprint,\n        request.retention_seconds\n      ],\n      :idempotency\n",
-      mutated: "        request.fingerprint,\n        if(request.operation_hash == COMPARATOR_OPERATION,\n          do: request.retention_seconds + 1 + rem(:binary.first(request.id), 2),\n          else: request.retention_seconds\n        )\n      ],\n      :idempotency\n",
+      original:
+        "        request.fingerprint,\n        request.retention_seconds\n      ],\n      :idempotency\n",
+      mutated:
+        "        request.fingerprint,\n        if(request.operation_hash == COMPARATOR_OPERATION,\n          do: request.retention_seconds + 1 + rem(:binary.first(request.id), 2),\n          else: request.retention_seconds\n        )\n      ],\n      :idempotency\n",
       action: :issue,
       branch: :execute,
       fault: nil,

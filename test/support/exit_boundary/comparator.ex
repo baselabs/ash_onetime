@@ -1774,8 +1774,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       if String.starts_with?(sql, "INSERT INTO ") and
            String.contains?(sql, "ash_onetime_idempotency_claims") and
            String.contains?(sql, "transaction_timestamp() + ($7::bigint * interval '1 second')"),
-        do: Map.put(assignments, 7, "claim_retention_seconds"),
-        else: assignments
+         do: Map.put(assignments, 7, "claim_retention_seconds"),
+         else: assignments
 
     case Regex.run(~r/INSERT INTO .*?\((.*?)\)\s*VALUES\s*\((.*?)\)/s, sql) do
       [_, names, expressions] ->
@@ -2577,18 +2577,25 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
     id =
       case hd(parameters) do
-        {:bind_column, 1, 2950, _, {:uuid, id}} -> id
+        {:bind_column, 1, 2950, _, {:uuid, id}} ->
+          id
+
         first when encoded? ->
           {:ok, id} = encoded_parameter(first, 2950)
           id
-        <<_::128>> = id -> Ecto.UUID.load!(id)
-        id -> id
+
+        <<_::128>> = id ->
+          Ecto.UUID.load!(id)
+
+        id ->
+          id
       end
 
-    value = case value do
-      <<seconds::signed-64>> -> seconds
-      seconds -> seconds
-    end
+    value =
+      case value do
+        <<seconds::signed-64>> -> seconds
+        seconds -> seconds
+      end
 
     case Map.fetch(database.claim_binds, {sql, id}) do
       {:ok, ^value} -> state
@@ -2597,10 +2604,18 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   end
 
   defp event_value(value, []), do: value
+
+  defp event_value(value, [:function, :env | rest]) when is_function(value) do
+    {:env, environment} = Function.info(value, :env)
+    event_value(environment, rest)
+  end
+
   defp event_value(value, [key | rest]) when is_tuple(value),
     do: event_value(elem(value, key), rest)
+
   defp event_value(value, [key | rest]) when is_list(value),
     do: event_value(Enum.fetch!(value, key), rest)
+
   defp event_value(value, [key | rest]) when is_map(value),
     do: event_value(Map.fetch!(value, key), rest)
 

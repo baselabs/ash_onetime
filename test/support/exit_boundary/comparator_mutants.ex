@@ -2,7 +2,20 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Comparator
 
-  def rules, do: [:k, :inv, :completion, :crypto, :context, :o2, :o3, :o4, :order, :return, :host_multiplicity]
+  def rules,
+    do: [
+      :k,
+      :inv,
+      :completion,
+      :crypto,
+      :context,
+      :o2,
+      :o3,
+      :o4,
+      :order,
+      :return,
+      :host_multiplicity
+    ]
 
   # Disable K's expression at its source, while still binding that return and
   # checking every later copy. The captured events are passed through unchanged.
@@ -209,36 +222,45 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   def edits(:host_multiplicity) do
     [
-    %{
-      path: "test/support/exit_boundary/host_call.ex",
-      original: "  def indexes(events) do\n    case Enum.find(events, &(&1.mfa in @calls and elem(&1.event, 1) == :call)) do\n      nil ->\n        MapSet.new()\n\n      start ->\n        stop =\n          Enum.find(\n            events,\n            &(&1.pid == start.pid and &1.index > start.index and\n                &1.mfa == start.mfa and length(&1.stack) == length(start.stack) + 1 and\n                elem(&1.event, 1) in [:return_from, :exception_from])\n          )\n\n        if stop do\n          events\n          |> Enum.filter(fn e ->\n            e.pid == start.pid and e.index > start.index and e.index < stop.index and\n              start.mfa in e.stack and not peer?(e)\n          end)\n          |> MapSet.new(& &1.index)\n        else\n          MapSet.new()\n        end\n    end\n  end\n\n",
-      mutated: "  def indexes(events) do\n    events\n    |> Enum.filter(&(&1.mfa in @calls and elem(&1.event, 1) == :call))\n    |> Enum.reduce(MapSet.new(), fn start, owned ->\n      stop = Enum.find(events, fn event ->\n        event.pid == start.pid and event.index > start.index and event.mfa == start.mfa and\n          length(event.stack) == length(start.stack) + 1 and\n          elem(event.event, 1) in [:return_from, :exception_from]\n      end)\n\n      if stop do\n        for event <- events,\n            event.pid == start.pid and event.index > start.index and event.index < stop.index,\n            start.mfa in event.stack and not peer?(event),\n            reduce: owned do\n          acc -> MapSet.put(acc, event.index)\n        end\n      else\n        owned\n      end\n    end)\n  end\n\n"
-    },
-    %{
-      path: "test/support/exit_boundary/permitted_trace.ex",
-      original: "        |> valid(e, :host_multiplicity, state.host_calls == 0)\n",
-      mutated: ""
-    },
-    %{
-      path: "test/support/exit_boundary/permitted_trace.ex",
-      original: "        {_, :call, {Producer, :produce, _}} ->\n          if row.branch == :producer_failure, do: :produce_failure, else: :local\n",
-      mutated: "        {_, :call, {Producer, :produce, _}} ->\n          if state.host_calls == 0 do\n            if row.branch == :producer_failure, do: :produce_failure, else: :local\n          end\n"
-    },
-    %{
-      path: "test/support/exit_boundary/permitted_trace.ex",
-      original: "  defp finish(state, side) do\n    state =\n      exact(\n        state,\n        %{index: :terminal, role: :caller},\n        :permitted_segment_order,\n        Enum.map(state.segments, &elem(&1, 0)),\n        state.allowed\n      )\n\n    expected =\n      if not side.row.external? and\n           side.row.branch not in [:transaction, :direct, :replay, :recovered] and\n           side.row.fault != :codec_decode, do: 1, else: 0\n\n    exact(\n      state,\n      %{index: :terminal, role: :caller},\n      :host_multiplicity,\n      state.host_calls,\n      expected\n    )\n  end\n\n",
-      mutated: "  defp finish(state, _side) do\n    exact(\n      state,\n      %{index: :terminal, role: :caller},\n      :permitted_segment_order,\n      Enum.map(state.segments, &elem(&1, 0)),\n      state.allowed\n    )\n  end\n\n"
-    },
-    %{
-      path: "test/support/exit_boundary/trace_program.ex",
-      original: "      children = children(events, e)\n",
-      mutated: "      children = children(events, e) |> Enum.reject(fn child ->\n        e.mfa == {Delivery, :produce, 4} and\n          child.mfa == {AshOnetime.Test.ExitBoundary.Producer, :produce, 2}\n      end)\n"
-    },
-    %{
-      path: "test/support/exit_boundary/trace_program.ex",
-      original: "  defp program({Delivery, :produce, 4}, [_, module, _, _], %{row: %{fault: fault}}, _) do\n    tail = if fault in [:producer_error, :producer_raise], do: :invalid, else: :seal\n\n    List.duplicate({Delivery, :\"-produce/4-fun-0-\", 1}, 2) ++\n      [{module, :produce, 2}, {Delivery, tail, if(tail == :seal, do: 2, else: 0)}]\n  end\n",
-      mutated: "  defp program({Delivery, :produce, 4}, [_, _module, _, _], %{row: %{fault: fault}}, _) do\n    tail = if fault in [:producer_error, :producer_raise], do: :invalid, else: :seal\n\n    List.duplicate({Delivery, :\"-produce/4-fun-0-\", 1}, 2) ++\n      [{Delivery, tail, if(tail == :seal, do: 2, else: 0)}]\n  end\n"
-    }
+      %{
+        path: "test/support/exit_boundary/host_call.ex",
+        original:
+          "  def indexes(events) do\n    case Enum.find(events, &(&1.mfa in @calls and elem(&1.event, 1) == :call)) do\n      nil ->\n        MapSet.new()\n\n      start ->\n        stop =\n          Enum.find(\n            events,\n            &(&1.pid == start.pid and &1.index > start.index and\n                &1.mfa == start.mfa and length(&1.stack) == length(start.stack) + 1 and\n                elem(&1.event, 1) in [:return_from, :exception_from])\n          )\n\n        if stop do\n          events\n          |> Enum.filter(fn e ->\n            e.pid == start.pid and e.index > start.index and e.index < stop.index and\n              start.mfa in e.stack and not peer?(e)\n          end)\n          |> MapSet.new(& &1.index)\n        else\n          MapSet.new()\n        end\n    end\n  end\n\n",
+        mutated:
+          "  def indexes(events) do\n    events\n    |> Enum.filter(&(&1.mfa in @calls and elem(&1.event, 1) == :call))\n    |> Enum.reduce(MapSet.new(), fn start, owned ->\n      stop = Enum.find(events, fn event ->\n        event.pid == start.pid and event.index > start.index and event.mfa == start.mfa and\n          length(event.stack) == length(start.stack) + 1 and\n          elem(event.event, 1) in [:return_from, :exception_from]\n      end)\n\n      if stop do\n        for event <- events,\n            event.pid == start.pid and event.index > start.index and event.index < stop.index,\n            start.mfa in event.stack and not peer?(event),\n            reduce: owned do\n          acc -> MapSet.put(acc, event.index)\n        end\n      else\n        owned\n      end\n    end)\n  end\n\n"
+      },
+      %{
+        path: "test/support/exit_boundary/permitted_trace.ex",
+        original: "        |> valid(e, :host_multiplicity, state.host_calls == 0)\n",
+        mutated: ""
+      },
+      %{
+        path: "test/support/exit_boundary/permitted_trace.ex",
+        original:
+          "        {_, :call, {Producer, :produce, _}} ->\n          if row.branch == :producer_failure, do: :produce_failure, else: :local\n",
+        mutated:
+          "        {_, :call, {Producer, :produce, _}} ->\n          if state.host_calls == 0 do\n            if row.branch == :producer_failure, do: :produce_failure, else: :local\n          end\n"
+      },
+      %{
+        path: "test/support/exit_boundary/permitted_trace.ex",
+        original:
+          "  defp finish(state, side) do\n    state =\n      exact(\n        state,\n        %{index: :terminal, role: :caller},\n        :permitted_segment_order,\n        Enum.map(state.segments, &elem(&1, 0)),\n        state.allowed\n      )\n\n    expected =\n      if not side.row.external? and\n           side.row.branch not in [:transaction, :direct, :replay, :recovered] and\n           side.row.fault != :codec_decode, do: 1, else: 0\n\n    exact(\n      state,\n      %{index: :terminal, role: :caller},\n      :host_multiplicity,\n      state.host_calls,\n      expected\n    )\n  end\n\n",
+        mutated:
+          "  defp finish(state, _side) do\n    exact(\n      state,\n      %{index: :terminal, role: :caller},\n      :permitted_segment_order,\n      Enum.map(state.segments, &elem(&1, 0)),\n      state.allowed\n    )\n  end\n\n"
+      },
+      %{
+        path: "test/support/exit_boundary/trace_program.ex",
+        original: "      children = children(events, e)\n",
+        mutated:
+          "      children = children(events, e) |> Enum.reject(fn child ->\n        e.mfa == {Delivery, :produce, 4} and\n          child.mfa == {AshOnetime.Test.ExitBoundary.Producer, :produce, 2}\n      end)\n"
+      },
+      %{
+        path: "test/support/exit_boundary/trace_program.ex",
+        original:
+          "  defp program({Delivery, :produce, 4}, [_, module, _, _], %{row: %{fault: fault}}, _) do\n    tail = if fault in [:producer_error, :producer_raise], do: :invalid, else: :seal\n\n    List.duplicate({Delivery, :\"-produce/4-fun-0-\", 1}, 2) ++\n      [{module, :produce, 2}, {Delivery, tail, if(tail == :seal, do: 2, else: 0)}]\n  end\n",
+        mutated:
+          "  defp program({Delivery, :produce, 4}, [_, _module, _, _], %{row: %{fault: fault}}, _) do\n    tail = if fault in [:producer_error, :producer_raise], do: :invalid, else: :seal\n\n    List.duplicate({Delivery, :\"-produce/4-fun-0-\", 1}, 2) ++\n      [{Delivery, tail, if(tail == :seal, do: 2, else: 0)}]\n  end\n"
+      }
     ]
   end
 
@@ -246,8 +268,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/comparator.ex",
-        original: "  defp uuid_identity(a, b, state, path) do\n    normalize = fn\n      <<_::128>> = uuid -> Ecto.UUID.load!(uuid)\n      uuid -> uuid\n    end\n\n    a = normalize.(a)\n    b = normalize.(b)\n\n    exact? =\n      a === b and\n        Map.get(state.pairing.uuid_forward, a, a) === b and\n        Map.get(state.pairing.uuid_reverse, b, b) === a\n\n    if exact? or\n         (Map.fetch(state.pairing.uuid_forward, a) === {:ok, b} and\n            Map.fetch(state.pairing.uuid_reverse, b) === {:ok, a}),\n       do: state,\n       else: error(state, :o2_uuid, path, a, b)\n  end\n\n",
-        mutated: "  defp uuid_identity(a, b, state, path) do\n    normalize = fn\n      <<_::128>> = uuid -> Ecto.UUID.load!(uuid)\n      uuid -> uuid\n    end\n\n    a = normalize.(a)\n    b = normalize.(b)\n\n    case {Ecto.UUID.dump(a), Ecto.UUID.dump(b)} do\n      {{:ok, _}, {:ok, _}} -> state\n      _ -> error(state, :o2_uuid, path, a, b)\n    end\n  end\n\n"
+        original:
+          "  defp uuid_identity(a, b, state, path) do\n    normalize = fn\n      <<_::128>> = uuid -> Ecto.UUID.load!(uuid)\n      uuid -> uuid\n    end\n\n    a = normalize.(a)\n    b = normalize.(b)\n\n    exact? =\n      a === b and\n        Map.get(state.pairing.uuid_forward, a, a) === b and\n        Map.get(state.pairing.uuid_reverse, b, b) === a\n\n    if exact? or\n         (Map.fetch(state.pairing.uuid_forward, a) === {:ok, b} and\n            Map.fetch(state.pairing.uuid_reverse, b) === {:ok, a}),\n       do: state,\n       else: error(state, :o2_uuid, path, a, b)\n  end\n\n",
+        mutated:
+          "  defp uuid_identity(a, b, state, path) do\n    normalize = fn\n      <<_::128>> = uuid -> Ecto.UUID.load!(uuid)\n      uuid -> uuid\n    end\n\n    a = normalize.(a)\n    b = normalize.(b)\n\n    case {Ecto.UUID.dump(a), Ecto.UUID.dump(b)} do\n      {{:ok, _}, {:ok, _}} -> state\n      _ -> error(state, :o2_uuid, path, a, b)\n    end\n  end\n\n"
       }
     ]
   end
@@ -256,8 +280,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/comparator.ex",
-        original: "  defp column_value(a, b, \"claim_retention_seconds\", state, path) do\n    state = claim_bind_copy(a, :run, state, path)\n    state = claim_bind_copy(b, :twin, state, path)\n    term(a, b, state, path)\n  end\n\n",
-        mutated: "  defp column_value(a, b, \"claim_retention_seconds\", state, path) do\n    state = claim_bind_copy(a, :run, state, path)\n    state = claim_bind_copy(b, :twin, state, path)\n    state\n  end\n\n"
+        original:
+          "  defp column_value(a, b, \"claim_retention_seconds\", state, path) do\n    state = claim_bind_copy(a, :run, state, path)\n    state = claim_bind_copy(b, :twin, state, path)\n    term(a, b, state, path)\n  end\n\n",
+        mutated:
+          "  defp column_value(a, b, \"claim_retention_seconds\", state, path) do\n    state = claim_bind_copy(a, :run, state, path)\n    state = claim_bind_copy(b, :twin, state, path)\n    state\n  end\n\n"
       }
     ]
   end
@@ -266,8 +292,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/trace_program.ex",
-        original: "      order_errors =\n        if expected == :ordinary or actual === expected,\n",
-        mutated: "      order_errors =\n        if expected == :ordinary or actual === expected or\n             (e.mfa == {Delivery, :open, 7} and\n                expected == [{Process, :get, 1}, {AshOnetime.Store, :committed_completion, 2},\n                  {Envelope, :context, 4}, {Envelope, :open, 5}] and\n                actual == [{Process, :get, 1}, {Envelope, :context, 4},\n                  {AshOnetime.Store, :committed_completion, 2}, {Envelope, :open, 5}]),\n"
+        original:
+          "      order_errors =\n        if expected == :ordinary or actual === expected,\n",
+        mutated:
+          "      order_errors =\n        if expected == :ordinary or actual === expected or\n             (e.mfa == {Delivery, :open, 7} and\n                expected == [{Process, :get, 1}, {AshOnetime.Store, :committed_completion, 2},\n                  {Envelope, :context, 4}, {Envelope, :open, 5}] and\n                actual == [{Process, :get, 1}, {Envelope, :context, 4},\n                  {AshOnetime.Store, :committed_completion, 2}, {Envelope, :open, 5}]),\n"
       }
     ]
   end

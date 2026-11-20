@@ -450,6 +450,38 @@ defmodule AshOnetime.DeliveryComparatorControls do
 
   def rows, do: @rows
 
+  def observation_checks do
+    %{
+      "u_consumer_observation" => %{
+        path: "test/support/exit_boundary/comparator.ex",
+        original: "  defp canonical_event({pid, :call, {m, f, args}}, side) do\n",
+        mutated: "  defp canonical_event(\n         {pid, :call, {AshOnetime.Test.ExitBoundary.Consumer, :after_action, [subject, result]}},\n         _side\n       ) do\n    private = Map.drop(subject.context.private, [:ash_onetime_delivery, :ash_onetime_delivery_cell])\n    subject = %{subject | context: %{subject.context | private: private}}\n    {pid, :call, {AshOnetime.Test.ExitBoundary.Consumer, :after_action, [subject, result]}}\n  end\n\n  defp canonical_event({pid, :call, {m, f, args}}, side) do\n",
+        test: "test/ash_onetime/delivery/comparator_controls_test.exs",
+        tag: "u_consumer_observation",
+        test_name: "U observation: Consumer arguments remain unprojected",
+        assertion: "U_CONSUMER_ARGUMENT_WITNESS"
+      },
+      "u_error_observation" => %{
+        path: "test/support/exit_boundary/comparator.ex",
+        original: "  defp term(%AshOnetime.Resource.Response{} = a, %AshOnetime.Resource.Response{} = b, state, path) do\n",
+        mutated: "  defp term(%AshOnetime.Error{} = a, %AshOnetime.Error{} = b, state, path) do\n    term(Map.delete(Map.from_struct(a), :details), Map.delete(Map.from_struct(b), :details), state, path)\n  end\n\n  defp term(%AshOnetime.Resource.Response{} = a, %AshOnetime.Resource.Response{} = b, state, path) do\n",
+        test: "test/ash_onetime/delivery/comparator_controls_test.exs",
+        tag: "u_error_observation",
+        test_name: "U observation: captured error details remain exact",
+        assertion: "U_ERROR_DETAILS_WITNESS"
+      },
+      "u_store_observation" => %{
+        path: "test/support/exit_boundary/comparator.ex",
+        original: "    state = store(run.delta, twin.delta, %{state | at: :store})\n",
+        mutated: "    state = %{state | at: :store}\n",
+        test: "test/ash_onetime/delivery/comparator_controls_test.exs",
+        tag: "u_store_observation",
+        test_name: "U observation: real snapshots retain every row and column",
+        assertion: "U_STORE_SNAPSHOT_WITNESS"
+      }
+    }
+  end
+
   def checks do
     Map.new(@rows, fn row ->
       name = Atom.to_string(row.id)
@@ -462,5 +494,6 @@ defmodule AshOnetime.DeliveryComparatorControls do
          assertion: String.upcase(name) <> "_QUALIFIED_ORIGIN_REJECTED"
        })}
     end)
+    |> Map.merge(observation_checks())
   end
 end
