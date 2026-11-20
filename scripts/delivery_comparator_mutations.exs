@@ -242,9 +242,9 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       id: :r7,
       path: "lib/ash_onetime/delivery/envelope.ex",
       original:
-        "        {:ok, <<@version, ephemeral_public::binary, tag::binary, ciphertext::binary>>}\n",
+        "      encrypt(recipient, Enum.map_join(values, &<<byte_size(&1)::32, &1::binary>>), context)\n",
       mutated:
-        "        {:ok, <<@version, ephemeral_public::binary, tag::binary, ciphertext::binary, rem(byte_size(plaintext), 2)>>}\n",
+        "      case encrypt(recipient, Enum.map_join(values, &<<byte_size(&1)::32, &1::binary>>), context) do\n        {:ok, envelope} -> {:ok, <<envelope::binary, rem(byte_size(Enum.at(values, 1)), 2)>>}\n        other -> other\n      end\n",
       action: :issue,
       branch: :execute,
       fault: nil,
