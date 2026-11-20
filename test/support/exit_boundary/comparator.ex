@@ -984,7 +984,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       else: error(state, :o2b_action, path, a, b)
   end
 
-  defp term(%Ash.Resource.Actions.Argument{} = a, %Ash.Resource.Actions.Argument{} = b, state, path) do
+  defp term(
+         %Ash.Resource.Actions.Argument{} = a,
+         %Ash.Resource.Actions.Argument{} = b,
+         state,
+         path
+       ) do
     run_action = Registry.compute(:o2b_argument, [state.run.resource, state.row.action])
     twin_action = Registry.compute(:o2b_argument, [state.twin.resource, state.row.action])
     expected_run = Enum.find(run_action.arguments, &(&1.name == a.name))
@@ -1231,11 +1236,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
             twin_row = Map.new(Enum.zip(b.columns, br))
             s = row_state(s, run_row["state"], twin_row["state"])
 
-            s = Enum.zip(ar, br)
-            |> Enum.with_index()
-            |> Enum.reduce(s, fn {{av, bv}, k}, s ->
-              column_value(av, bv, Enum.at(a.columns, k), s, path ++ [:rows, n, k])
-            end)
+            s =
+              Enum.zip(ar, br)
+              |> Enum.with_index()
+              |> Enum.reduce(s, fn {{av, bv}, k}, s ->
+                column_value(av, bv, Enum.at(a.columns, k), s, path ++ [:rows, n, k])
+              end)
 
             %{s | current: previous}
           else
@@ -1349,7 +1355,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         {%{value: ^a, typed: typed}, %{value: ^b, typed: typed}} ->
           attributes(a, b, typed, state, path)
 
-        _ -> error(state, :attribute_copy, path, a, b)
+        _ ->
+          error(state, :attribute_copy, path, a, b)
       end
     else
       map(a, b, state, path)
@@ -1382,11 +1389,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
             previous = state.current
             state = row_state(state, Enum.at(a, 6), Enum.at(b, 6))
 
-            state = Enum.zip(a, b)
-            |> Enum.with_index()
-            |> Enum.reduce(state, fn {{av, bv}, n}, s ->
-              column_value(av, bv, Enum.at(columns, n), s, path ++ [n])
-            end)
+            state =
+              Enum.zip(a, b)
+              |> Enum.with_index()
+              |> Enum.reduce(state, fn {{av, bv}, n}, s ->
+                column_value(av, bv, Enum.at(columns, n), s, path ++ [n])
+              end)
 
             %{state | current: previous}
           else
@@ -1540,6 +1548,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     # list element, and the list's length, still goes through the exact comparison.
     a = replace_hooks(a, slots, state.row)
     b = replace_hooks(b, slots, state.row)
+
     term(
       Map.drop(Map.from_struct(a), [:context | fields]),
       Map.drop(Map.from_struct(b), [:context | fields]),
@@ -1869,6 +1878,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp parameters(a, b, state, path) do
     if a === b, do: state, else: error(state, :query_parameters, path, a, b)
   end
+
   defp column_value(a, b, "operation_hash", state, path), do: derived_operation(a, b, state, path)
 
   defp column_value({:uuid, a}, {:uuid, b}, _name, state, path),
@@ -1895,11 +1905,16 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp column_value(a, b, _name, state, path), do: term(a, b, state, path)
 
   defp response_slot(%{at: %{mfa: {AshOnetime.Admission, f, _}}}, [
-         :event, 2, 2, n, key
-       ]) when key in [:codec, :digest, :payload] do
+         :event,
+         2,
+         2,
+         n,
+         key
+       ])
+       when key in [:codec, :digest, :payload] do
     if (f in [:persist_encoded, :persist_completion] and n == 1) or
          (f == :validate_complete and n == 2),
-      do: key
+       do: key
   end
 
   defp response_slot(%{at: %{mfa: {AshOnetime.Store, f, _}}}, [:event, 2, 2, n])
@@ -1979,7 +1994,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
        ]),
        do: :payload
 
-  defp response_slot(%{at: %{mfa: {AshOnetime.Cache, :fixed_equal?, 2}}} = state, [:event, 2, 2, n])
+  defp response_slot(%{at: %{mfa: {AshOnetime.Cache, :fixed_equal?, 2}}} = state, [
+         :event,
+         2,
+         2,
+         n
+       ])
        when n in [0, 1] do
     if not cache_fingerprint_comparison?(state), do: :digest
   end
@@ -2039,10 +2059,11 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     do: %{state | current: Map.put(state.current || %{}, :row_states, {a, b})}
 
   defp wire_claim_state(columns) when is_list(columns) do
-    names = Enum.map(columns, fn
-      {:data_column, _, _, _, name, _, _, _, _, _} -> name
-      _ -> :undeclared_column
-    end)
+    names =
+      Enum.map(columns, fn
+        {:data_column, _, _, _, name, _, _, _, _, _} -> name
+        _ -> :undeclared_column
+      end)
 
     if names == Registry.database_statements().claim.columns do
       Enum.find_value(columns, fn
@@ -2055,15 +2076,19 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp wire_claim_state(_), do: nil
 
   defp nullable_response?(%{current: %{row_states: {a, b}}})
-       when a in [:admitted, :processing, :collision, :failure, "processing", "collision"] and a == b,
+       when a in [:admitted, :processing, :collision, :failure, "processing", "collision"] and
+              a == b,
        do: true
 
   defp nullable_response?(%{current: %{run: a, twin: b}}) do
     case {a.event, b.event} do
       {{_, :call, {AshOnetime.Admission, :validate_collision_payload, [status, _]}},
        {_, :call, {AshOnetime.Admission, :validate_collision_payload, [status, _]}}}
-      when status in [:processing, :collision] -> true
-      _ -> false
+      when status in [:processing, :collision] ->
+        true
+
+      _ ->
+        false
     end
   end
 
@@ -2234,34 +2259,35 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     previous = state.current
     state = if claim?, do: row_state(state, a["state"], b["state"]), else: state
 
-    state = Enum.reduce(columns, state, fn column, s ->
-      case {Map.fetch(a, column), Map.fetch(b, column)} do
-        {{:ok, av}, {:ok, bv}} ->
-          cond do
-            claim? and column in (statements.claim.clocks ++ ["response_partition"]) ->
-              ea = snapshot_origin(a, column, rdb)
-              eb = snapshot_origin(b, column, tdb)
+    state =
+      Enum.reduce(columns, state, fn column, s ->
+        case {Map.fetch(a, column), Map.fetch(b, column)} do
+          {{:ok, av}, {:ok, bv}} ->
+            cond do
+              claim? and column in (statements.claim.clocks ++ ["response_partition"]) ->
+                ea = snapshot_origin(a, column, rdb)
+                eb = snapshot_origin(b, column, tdb)
 
-              if av === ea and bv === eb,
-                do: s,
-                else: error(s, :o4_snapshot_copy, path ++ [column], av, bv)
+                if av === ea and bv === eb,
+                  do: s,
+                  else: error(s, :o4_snapshot_copy, path ++ [column], av, bv)
 
-            table in statements.peer.tables and column in statements.peer.clocks ->
-              ea = peer_snapshot_origin(a, table, rdb)
-              eb = peer_snapshot_origin(b, table, tdb)
+              table in statements.peer.tables and column in statements.peer.clocks ->
+                ea = peer_snapshot_origin(a, table, rdb)
+                eb = peer_snapshot_origin(b, table, tdb)
 
-              if av === ea and bv === eb,
-                do: s,
-                else: error(s, :o4_peer_snapshot, path ++ [column], av, bv)
+                if av === ea and bv === eb,
+                  do: s,
+                  else: error(s, :o4_peer_snapshot, path ++ [column], av, bv)
 
-            true ->
-              column_value(av, bv, column, s, path ++ [column])
-          end
+              true ->
+                column_value(av, bv, column, s, path ++ [column])
+            end
 
-        {av, bv} ->
-          error(s, :o5_map_key, path ++ [column], av, bv)
-      end
-    end)
+          {av, bv} ->
+            error(s, :o5_map_key, path ++ [column], av, bv)
+        end
+      end)
 
     %{state | current: previous}
   end

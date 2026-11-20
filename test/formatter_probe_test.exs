@@ -3,7 +3,9 @@ defmodule AshOnetime.FormatterProbeTest do
 
   @tag :format_probe
   test "compare native and configured formatting of multiline keyword constructs" do
-    {configured, options} = Mix.Tasks.Format.formatter_for_file("test/support/exit_boundary/comparator.ex")
+    {configured, options} =
+      Mix.Tasks.Format.formatter_for_file("test/support/exit_boundary/comparator.ex")
+
     native = fn text -> IO.iodata_to_binary([Code.format_string!(text, options), ?\n]) end
 
     inputs = [
@@ -30,15 +32,23 @@ defmodule AshOnetime.FormatterProbeTest do
       """
     ]
 
-    for {name, input} <- inputs, {engine, formatter} <- [native: native, configured: configured] do
+    for {name, input} <- inputs,
+        {engine, formatter} <- [native: native, configured: configured] do
       first = formatter.(input)
       second = formatter.(first)
       third = formatter.(second)
 
       IO.inspect(
-        %{fixture: name, engine: engine, first: first, second: second,
-          first_stable?: first == second, second_stable?: second == third},
-        label: "FORMATTER_PROBE", limit: :infinity
+        %{
+          fixture: name,
+          engine: engine,
+          first: first,
+          second: second,
+          first_stable?: first == second,
+          second_stable?: second == third
+        },
+        label: "FORMATTER_PROBE",
+        limit: :infinity
       )
     end
   end

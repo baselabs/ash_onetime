@@ -3,7 +3,7 @@ defmodule AshOnetime.Test.ExitBoundary.AttributeCopies do
   alias AshOnetime.Test.ExitBoundary.Registry
   @source {AshOnetime.Admission, :reject_reserved, 1}
   @reader {AshOnetime.Admission, :reserved_surface?, 1}
-  @callback {AshOnetime.Admission, :"-reserved_surface?/1-fun-0-", 2}
+  @callback_frame {AshOnetime.Admission, :"-reserved_surface?/1-fun-0-", 2}
 
   # reject_reserved enumerates these source fields in this order. Bind copies to
   # that enumeration, including callbacks, rather than recognizing map keys.
@@ -21,14 +21,19 @@ defmodule AshOnetime.Test.ExitBoundary.AttributeCopies do
 
           sources =
             Enum.map(fields, fn field ->
-              %{value: Map.get(subject, field, %{}), typed: if(field == :attributes, do: typed, else: [])}
+              %{
+                value: Map.get(subject, field, %{}),
+                typed: if(field == :attributes, do: typed, else: [])
+              }
             end)
 
           put_in(s.active[pid], %{sources: sources, ordinal: 0, current: nil})
 
         {pid, :call, {AshOnetime.Admission, :reserved_surface?, [_]}} ->
           case Map.get(s.active, pid) do
-            nil -> s
+            nil ->
+              s
+
             frame ->
               source = Enum.at(frame.sources, frame.ordinal)
               s = put_in(s.slots[{e.index, 0}], source)
@@ -41,15 +46,18 @@ defmodule AshOnetime.Test.ExitBoundary.AttributeCopies do
             nil -> s
           end
 
-        {pid, :return_from, @source, _} -> %{s | active: Map.delete(s.active, pid)}
-        _ -> s
+        {pid, :return_from, @source, _} ->
+          %{s | active: Map.delete(s.active, pid)}
+
+        _ ->
+          s
       end
     end)
     |> Map.fetch!(:slots)
   end
 
   def slot(%{mfa: mfa}, [:event, 2, 2, argument])
-      when (mfa == @reader and argument == 0) or (mfa == @callback and argument == 1),
+      when (mfa == @reader and argument == 0) or (mfa == @callback_frame and argument == 1),
       do: argument
 
   def slot(_, _), do: nil
