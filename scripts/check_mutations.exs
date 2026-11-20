@@ -3612,6 +3612,19 @@ defmodule AshOnetime.MutationCheck do
   defp run(names) do
     case validate(names) do
       :ok ->
+        names =
+          Enum.sort_by(names, fn name ->
+            priority =
+              cond do
+                name in @groups["r-table"] -> 0
+                name in @groups["c-set"] -> 1
+                name in @groups["comparator-positive-controls"] -> 2
+                true -> 3
+              end
+
+            {priority, name}
+          end)
+
         case Enum.flat_map(names, &run_collecting_failure/1) do
           [] ->
             IO.puts("mutation checks passed: #{Enum.join(names, ", ")}")
