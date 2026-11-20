@@ -1081,6 +1081,7 @@ defmodule AshOnetime.Admission do
     :crypto.hash_equals(claim.operation_hash, request.operation_hash) and
       :crypto.hash_equals(claim.scope_hash, request.scope_hash) and
       :crypto.hash_equals(claim.key_hash, request.key_hash)
+
     # -- end-rule:operation-identity
   end
 

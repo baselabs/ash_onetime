@@ -121,18 +121,26 @@ for partitioning <- [nil, 2] do
     @tag :enforcement_nonce_select_lock_mutation
     test "#{partitioning || "plain"}: nonce load waits for the native row lock", c do
       request = AshOnetime.Test.StoreCase.nonce_request("nonce-select-lock")
+
       assert {:ok, %Result{status: :admitted, claim: claim}} =
-        runtime_transaction(c, fn -> Postgres.claim(target(c), request) end)
-      {holder, _, _} = hold(c, :runtime, fn repo ->
-        SQL.query!(repo,
-          "SELECT id FROM #{rel(c, "ash_onetime_nonce_claims")} WHERE id=$1::uuid FOR UPDATE",
-          [Ecto.UUID.dump!(claim.id)])
-      end)
+               runtime_transaction(c, fn -> Postgres.claim(target(c), request) end)
+
+      {holder, _, _} =
+        hold(c, :runtime, fn repo ->
+          SQL.query!(
+            repo,
+            "SELECT id FROM #{rel(c, "ash_onetime_nonce_claims")} WHERE id=$1::uuid FOR UPDATE",
+            [Ecto.UUID.dump!(claim.id)]
+          )
+        end)
+
       try do
         parent = self()
+
         runtime_transaction(c, fn ->
           send(parent, {:nonce_load, Postgres.load(target(c), claim, lock_timeout_ms: 300)})
         end)
+
         assert_receive {:nonce_load, %Result{status: :failure, reason: :lock_timeout}}, 1000
       after
         release(holder)

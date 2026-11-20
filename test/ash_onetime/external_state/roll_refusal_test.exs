@@ -22,6 +22,7 @@ for partitioning <- [nil, 2] do
         )
 
         SQL.query!(c.owner_repo, "INSERT INTO #{rel(c, "ddl_phase")} VALUES (0)", [])
+
         on_exit(fn ->
           SQL.query!(c.owner_repo, "DROP TABLE #{rel(c, "ddl_phase")}", [])
           SQL.query!(c.owner_repo, "DROP FUNCTION #{rel(c, "reforce_default")}()", [])

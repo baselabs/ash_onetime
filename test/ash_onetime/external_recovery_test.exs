@@ -159,6 +159,7 @@ defmodule AshOnetime.ExternalRecoveryTest do
     # finalize never runs, so there is no local effect and no second execute.
     {worker, monitor} =
       run_worker(context, :execute_unknown_recover_unknown, "ambiguous-execute", 19)
+
     assert_receive {:external_action_result, ^worker, result}, 5_000
     assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 1_000
 

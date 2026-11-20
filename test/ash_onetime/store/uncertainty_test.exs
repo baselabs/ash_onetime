@@ -153,7 +153,13 @@ defmodule AshOnetime.Store.UncertaintyTest do
     assert collision.operation_hash == request_a.operation_hash
 
     assert {:ok, deadline} =
-             Postgres.nonce_retention_deadline(target, request_a.operation_hash, request_a.scope_hash, request_a.key_hash)
+             Postgres.nonce_retention_deadline(
+               target,
+               request_a.operation_hash,
+               request_a.scope_hash,
+               request_a.key_hash
+             )
+
     assert deadline == claim_a.retain_until
   end
 

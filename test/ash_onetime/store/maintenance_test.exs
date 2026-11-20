@@ -506,12 +506,14 @@ defmodule AshOnetime.Store.MaintenanceTest do
           claim
         end)
 
-      claim = dst_transaction(c, zone, fn target ->
-        assert %Result{status: :processing, claim: loaded} =
-                 Postgres.load(target, claim, lock_timeout_ms: 300)
-        assert is_nil(loaded.retention_seconds)
-        loaded
-      end)
+      claim =
+        dst_transaction(c, zone, fn target ->
+          assert %Result{status: :processing, claim: loaded} =
+                   Postgres.load(target, claim, lock_timeout_ms: 300)
+
+          assert is_nil(loaded.retention_seconds)
+          loaded
+        end)
 
       dst_transaction(c, zone, fn target ->
         assert %Result{status: :complete} =

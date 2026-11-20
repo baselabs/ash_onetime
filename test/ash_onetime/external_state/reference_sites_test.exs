@@ -19,9 +19,22 @@ for partitioning <- [nil, 2] do
            c do
         result = install(c)
         assert result == :ok
-        reference = scalar(c.owner_repo, "SELECT #{routine(c, "ash_onetime_maintenance_reference")}(false)")
-        root = if @rule in ~w(reference-always-delete reference-always-claim-update), do: "ash_onetime_idempotency_claims", else: "ash_onetime_effect_outcomes"
-        actual = scalar(c.owner_repo, "SELECT #{routine(c, "ash_onetime_maintenance_shape")}($1::text::regclass)", [rel(c, root)])
+
+        reference =
+          scalar(c.owner_repo, "SELECT #{routine(c, "ash_onetime_maintenance_reference")}(false)")
+
+        root =
+          if @rule in ~w(reference-always-delete reference-always-claim-update),
+            do: "ash_onetime_idempotency_claims",
+            else: "ash_onetime_effect_outcomes"
+
+        actual =
+          scalar(
+            c.owner_repo,
+            "SELECT #{routine(c, "ash_onetime_maintenance_shape")}($1::text::regclass)",
+            [rel(c, root)]
+          )
+
         assert reference[root] == actual
       end
     end

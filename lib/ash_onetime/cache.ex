@@ -149,6 +149,7 @@ defmodule AshOnetime.Cache do
       fixed_equal?(entry.digest, claim.response_digest) and is_binary(entry.payload) and
       byte_size(entry.payload) <= maximum and
       fixed_equal?(:crypto.hash(:sha256, entry.payload), claim.response_digest)
+
     # -- end-rule:cache-fingerprint-conjunct
   end
 

@@ -60,6 +60,7 @@ for partitioning <- [nil, 2] do
         role = if mode in [:replica, :force_replica], do: c.sub.owner, else: "postgres"
 
         environment = pg_environment(c.sub.url, c.pgpassfile, role)
+
         environment =
           if mode in [:replica, :force_replica],
             do: [{"PGOPTIONS", "-c session_replication_role=replica"} | environment],
@@ -111,6 +112,7 @@ for partitioning <- [nil, 2] do
           ).rows
 
         assert modes != []
+
         if mode == :disabled_triggers do
           assert ["O"] in modes
           assert Enum.all?(modes, &(&1 in [["O"], ["A"]]))
@@ -202,8 +204,10 @@ for partitioning <- [nil, 2] do
             "--file",
             script
           ],
-          env: [{"PGOPTIONS", "-c session_replication_role=replica"} |
-            pg_environment(c.sub.url, c.pgpassfile, c.sub.owner)],
+          env: [
+            {"PGOPTIONS", "-c session_replication_role=replica"}
+            | pg_environment(c.sub.url, c.pgpassfile, c.sub.owner)
+          ],
           stderr_to_stdout: true
         )
 
@@ -218,6 +222,7 @@ for partitioning <- [nil, 2] do
 
     defp pg_environment(url, passfile, role \\ "postgres") do
       uri = URI.parse(url)
+
       [
         {"PGHOST", uri.host},
         {"PGPORT", Integer.to_string(uri.port)},

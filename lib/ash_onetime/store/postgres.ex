@@ -1123,6 +1123,7 @@ defmodule AshOnetime.Store.Postgres do
       # rule:nonce-select-lock
       select_claim_result(target, strategy, sql <> " FOR #{lock_mode} OF claims", parameters)
     end
+
     # -- end-rule:load-after-claim-lock
   end
 

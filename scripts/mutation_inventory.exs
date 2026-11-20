@@ -255,18 +255,25 @@ defmodule AshOnetime.MutationInventory do
     {_, strings} =
       Macro.prewalk(ast, [], fn
         {:<<>>, _, parts}, acc ->
-          value = Enum.map_join(parts, fn
-            part when is_binary(part) -> part
-            _interpolation -> "__interpolated__"
-          end)
-          nested = Enum.flat_map(parts, fn
-            part when is_binary(part) -> []
-            expression -> literals(expression)
-          end)
+          value =
+            Enum.map_join(parts, fn
+              part when is_binary(part) -> part
+              _interpolation -> "__interpolated__"
+            end)
+
+          nested =
+            Enum.flat_map(parts, fn
+              part when is_binary(part) -> []
+              expression -> literals(expression)
+            end)
+
           {nil, [value | nested ++ acc]}
 
-        value, acc when is_binary(value) -> {value, [value | acc]}
-        node, acc -> {node, acc}
+        value, acc when is_binary(value) ->
+          {value, [value | acc]}
+
+        node, acc ->
+          {node, acc}
       end)
 
     strings

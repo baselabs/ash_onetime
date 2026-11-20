@@ -74,7 +74,11 @@ for partitioning <- [nil, 2] do
 
         result =
           if @rule == "reference-date-encoding-refusal" do
-            SQL.query(c.owner_repo, "SELECT #{routine(c, "ash_onetime_maintenance_reference")}(false)", [])
+            SQL.query(
+              c.owner_repo,
+              "SELECT #{routine(c, "ash_onetime_maintenance_reference")}(false)",
+              []
+            )
           else
             try do
               SchemaFixture.migrate!(c, Generator.render_external_state_upgrade(Repo, []), 13)

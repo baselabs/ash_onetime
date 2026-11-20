@@ -879,19 +879,21 @@ defmodule AshOnetime.Store.RLSPruneTest do
         Task.async(fn ->
           Repo.put_dynamic_repo(repo)
 
-          Repo.transaction(fn ->
-            Enum.each(setup_sql, &query!(repo, &1))
-            query!(repo, "DELETE FROM #{prefix}.ash_onetime_response_payloads WHERE false")
-            send(parent, {:row_locked, self()})
+          try do
+            Repo.transaction(fn ->
+              Enum.each(setup_sql, &query!(repo, &1))
+              query!(repo, "DELETE FROM #{prefix}.ash_onetime_response_payloads WHERE false")
+              send(parent, {:row_locked, self()})
 
-            receive do
-              :go -> :ok
-            end
+              receive do
+                :go -> :ok
+              end
 
-            prune_counts!(Postgres.for_repo(Repo, target_prefix), 100, 4)
-          end)
-        rescue
-          error in Postgrex.Error -> {:error, error}
+              prune_counts!(Postgres.for_repo(Repo, target_prefix), 100, 4)
+            end)
+          rescue
+            error in Postgrex.Error -> {:error, error}
+          end
         end)
       end
 

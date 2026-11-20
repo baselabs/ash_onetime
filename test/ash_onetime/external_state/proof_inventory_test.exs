@@ -51,13 +51,22 @@ defmodule AshOnetime.ExternalState.ProofInventorySourcesTest do
       end
     end
     '''
+
     manifest = %{"interpolated-check" => %{}, "interpolated-refusal" => %{}}
-    assert :ok = AshOnetime.MutationInventory.assert_rendered!(manifest, %{}, [{"interpolation", source}])
+
+    assert :ok =
+             AshOnetime.MutationInventory.assert_rendered!(manifest, %{}, [
+               {"interpolation", source}
+             ])
+
     unmarked = String.replace(source, "-- rule:interpolated-check", "-- check")
+
     assert_raise RuntimeError, ~r/unmarked enforcing site.*CHECK/, fn ->
       AshOnetime.MutationInventory.assert_rendered!(manifest, %{}, [{"interpolation", unmarked}])
     end
+
     nested = ~S|"#{sql("RAISE EXCEPTION 'unmarked'")}"|
+
     assert_raise RuntimeError, ~r/unmarked enforcing site.*RAISE/, fn ->
       AshOnetime.MutationInventory.assert_rendered!(%{}, %{}, [{"nested interpolation", nested}])
     end

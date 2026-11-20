@@ -104,9 +104,15 @@ for partitioning <- [nil, 2] do
       parent = self()
 
       try do
-        Repo.transaction(fn ->
-          send(parent, {:bounded_store_result, Postgres.claim(native_target, request!("slow-client"))})
-        end, timeout: 250)
+        Repo.transaction(
+          fn ->
+            send(
+              parent,
+              {:bounded_store_result, Postgres.claim(native_target, request!("slow-client"))}
+            )
+          end,
+          timeout: 250
+        )
       rescue
         _error in [Postgrex.Error, DBConnection.ConnectionError] -> :terminated_transaction
       catch
@@ -115,12 +121,14 @@ for partitioning <- [nil, 2] do
         Repo.put_dynamic_repo(previous)
       end
 
-      assert_receive {:bounded_store_result, %Result{
-               status: :failure,
-               reason: :disconnected,
-               admission_dispatch: :unknown,
-               transaction: :unknown
-             }}, 5_000
+      assert_receive {:bounded_store_result,
+                      %Result{
+                        status: :failure,
+                        reason: :disconnected,
+                        admission_dispatch: :unknown,
+                        transaction: :unknown
+                      }},
+                     5_000
     end
 
     @tag :enforcement_query_other_error_mutation

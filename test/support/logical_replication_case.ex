@@ -358,9 +358,12 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
 
   def force!(installation) do
     for root <- ~w(ash_onetime_idempotency_claims ash_onetime_effect_outcomes),
-        [table] <- SQL.query!(installation.admin,
-          "WITH RECURSIVE relations(oid) AS (SELECT $1::text::regclass::oid UNION ALL SELECT i.inhrelid FROM pg_inherits i JOIN relations r ON i.inhparent=r.oid) SELECT oid::regclass::text FROM relations",
-          [rel(installation, root)]).rows do
+        [table] <-
+          SQL.query!(
+            installation.admin,
+            "WITH RECURSIVE relations(oid) AS (SELECT $1::text::regclass::oid UNION ALL SELECT i.inhrelid FROM pg_inherits i JOIN relations r ON i.inhparent=r.oid) SELECT oid::regclass::text FROM relations",
+            [rel(installation, root)]
+          ).rows do
       SQL.query!(installation.admin, "ALTER TABLE #{table} ENABLE ROW LEVEL SECURITY", [])
       SQL.query!(installation.admin, "ALTER TABLE #{table} FORCE ROW LEVEL SECURITY", [])
     end
