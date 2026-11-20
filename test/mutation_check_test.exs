@@ -19,5 +19,8 @@ defmodule AshOnetime.MutationCheckTest do
 
     assert output =~ "mutation checker self-test: restoration requires an executed ExUnit result"
     assert output =~ "mutation checker self-test: a red requires an executed failing ExUnit result"
+
+    assert output =~
+             "mutation checker self-test: every shard count partitions the battery exactly"
   end
 end

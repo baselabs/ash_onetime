@@ -15,6 +15,7 @@ defmodule AshOnetime.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      lockfile: lockfile(),
       description: description(),
       package: package(),
       docs: docs(),
@@ -91,6 +92,16 @@ defmodule AshOnetime.MixProject do
       version when version in [nil, "", "latest"] -> ">= #{@ash_floor} and < 4.0.0"
       version -> pinned_ash_requirement(version)
     end
+  end
+
+  # Each Ash cell CI runs has its own committed lock, so every fetch is --check-locked:
+  # mix.lock for the floating requirement and locks/ash-floor/mix.lock for the declared floor.
+  # Each is resolved with mix deps.get where mix.exs changes and committed with it; the Work
+  # workflow's lock job only checks and audits them. Neither is written by hand.
+  defp lockfile do
+    if System.get_env("ASH_ONETIME_ASH_VERSION") == @ash_floor,
+      do: "locks/ash-floor/mix.lock",
+      else: "mix.lock"
   end
 
   defp pinned_ash_requirement(version) do

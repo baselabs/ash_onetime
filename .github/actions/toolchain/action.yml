@@ -1,0 +1,83 @@
+name: Read suite toolchains
+description: Validate and read the shared BEAM toolchains, declared Ash floor and service pins
+outputs:
+  elixir:
+    description: Default Elixir build
+    value: ${{ steps.versions.outputs.elixir }}
+  otp:
+    description: Default Erlang/OTP build
+    value: ${{ steps.versions.outputs.otp }}
+  beam_lanes:
+    description: Additional Elixir and Erlang/OTP pairs as JSON
+    value: ${{ steps.versions.outputs.beam_lanes }}
+  ash_floor:
+    description: Declared Ash security floor from mix.exs
+    value: ${{ steps.ash-floor.outputs.ash_floor }}
+  postgres_image:
+    description: PostgreSQL server image pinned by digest in .github/service-pins
+    value: ${{ steps.service-pins.outputs.postgres_image }}
+  postgres_client:
+    description: PGDG PostgreSQL client package version from .github/service-pins
+    value: ${{ steps.service-pins.outputs.postgres_client }}
+  pgdg_key:
+    description: PGDG apt signing key fingerprint from .github/service-pins
+    value: ${{ steps.service-pins.outputs.pgdg_key }}
+runs:
+  using: composite
+  steps:
+    - name: Validate the shared toolchain reader
+      shell: bash
+      run: sh scripts/toolchain.sh --self-test
+    - name: Read defaults and compatibility lanes
+      id: versions
+      shell: bash
+      run: sh scripts/toolchain.sh >> "$GITHUB_OUTPUT"
+    - name: Read the declared Ash security floor
+      id: ash-floor
+      shell: bash
+      run: |
+        python3 - <<'PYTHON'
+        import os
+        import re
+        from pathlib import Path
+
+        declarations = re.findall(r'^[ \t]*@ash_floor\b[^\n]*$', Path('mix.exs').read_text(), re.MULTILINE)
+        if len(declarations) != 1:
+            raise SystemExit('Expected exactly one @ash_floor declaration in mix.exs')
+        floor = re.fullmatch(r'[ \t]*@ash_floor[ \t]+"([0-9]+\.[0-9]+\.[0-9]+)"[ \t]*', declarations[0])
+        if floor is None:
+            raise SystemExit('Expected @ash_floor to declare a stable version string')
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write(f'ash_floor={floor[1]}\n')
+        PYTHON
+    - name: Read the service pins
+      id: service-pins
+      shell: bash
+      run: |
+        python3 - <<'PYTHON'
+        import os
+        import re
+        from pathlib import Path
+
+        patterns = {
+            'postgres_image': r'postgres@sha256:[0-9a-f]{64}',
+            'postgres_client': r'[0-9]+\.[0-9]+-[0-9]+\.pgdg24\.04\+[0-9]+',
+            'pgdg_key': r'[0-9A-F]{40}',
+        }
+        entries = {}
+        for line in Path('.github/service-pins').read_text().splitlines():
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            name, separator, value = line.partition('=')
+            if not separator or name not in patterns or name in entries:
+                raise SystemExit(f'Unexpected or repeated entry in .github/service-pins: {line}')
+            if re.fullmatch(patterns[name], value) is None:
+                raise SystemExit(f'{name} in .github/service-pins is not an exact pin: {value}')
+            entries[name] = value
+        missing = sorted(set(patterns) - set(entries))
+        if missing:
+            raise SystemExit('Missing from .github/service-pins: ' + ', '.join(missing))
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            for name, value in entries.items():
+                output.write(f'{name}={value}\n')
+        PYTHON

@@ -1,0 +1,99 @@
+name: Ash compatibility
+description: Run the ash compatibility battery for qualification and upstream drift
+inputs:
+  elixir:
+    description: Exact Elixir build from the toolchain job
+    required: true
+  otp:
+    description: Exact Erlang/OTP build from the toolchain job
+    required: true
+  ash:
+    description: Ash floor or latest matrix cell
+    required: true
+  resolution:
+    description: >-
+      locked (qualification: the cell's committed lock, --check-locked, cached) or upstream
+      (drift: every dependency resolved fresh, no cache)
+    required: true
+  postgres-client:
+    description: PGDG PostgreSQL client package version from the toolchain job
+    required: true
+  pgdg-key:
+    description: PGDG apt signing key fingerprint from the toolchain job
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/postgres-client
+      with:
+        version: ${{ inputs.postgres-client }}
+        pgdg-key: ${{ inputs.pgdg-key }}
+
+    - uses: ./.github/actions/beam
+      with:
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
+
+    - name: Refuse an unknown resolution
+      shell: bash
+      env:
+        RESOLUTION: ${{ inputs.resolution }}
+      run: |
+        case "$RESOLUTION" in
+          locked | upstream) ;;
+          *) echo "::error::resolution must be locked or upstream, not $RESOLUTION"; exit 1 ;;
+        esac
+
+    # Restore only; the cache warmer on the default branch writes this cell's cache.
+    - if: inputs.resolution == 'locked'
+      uses: ./.github/actions/mix-cache
+      with:
+        mode: restore
+        cell: ash${{ inputs.ash }}
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
+
+    - name: Fetch the cell's committed lock
+      if: inputs.resolution == 'locked'
+      shell: bash
+      run: mix deps.get --check-locked
+
+    # Drift only: it reports what the newest upstream releases do before any lock admits them.
+    # It qualifies nothing, and with no cache step nothing it resolves reaches a cache.
+    - name: Resolve every dependency fresh from upstream
+      if: inputs.resolution == 'upstream'
+      shell: bash
+      run: |
+        mix deps.unlock --all
+        mix deps.get
+
+    - shell: bash
+      run: mix format --check-formatted
+    - shell: bash
+      run: mix compile --warnings-as-errors
+    # hex.audit (not deps.audit) is what surfaces Hex security advisories such as
+    # EEF-CVE-2026-55736; it fails the build on any retired/advised dependency. Both audits
+    # read the cell's lock.
+    - shell: bash
+      run: mix hex.audit
+    # deps.audit reads <path>/mix.lock, so it is pointed at the directory of the lock mix.exs
+    # selected for this cell.
+    - name: mix deps.audit
+      shell: bash
+      run: |
+        lock_dir=$(mix run --no-start --no-compile --no-deps-check -e 'IO.write(Path.dirname(Mix.Project.config()[:lockfile]))')
+        mix deps.audit --path "$lock_dir"
+    - shell: bash
+      run: mix test
+      env:
+        ASH_ONETIME_RLS_PRUNE_TESTS: "1"
+    - shell: bash
+      run: mix credo --strict
+    - shell: bash
+      run: mix dialyzer
+    - shell: bash
+      run: MIX_ENV='test' mix dialyzer
+    - shell: bash
+      run: mix docs --warnings-as-errors
+    - shell: bash
+      run: mix hex.build

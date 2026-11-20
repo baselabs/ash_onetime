@@ -1544,8 +1544,16 @@ defmodule AshOnetime.Store.MaintenanceTest do
   @tag effective_review: true
   @tag effective_cluster_isolation_mutation: true
   test "cluster grant isolation refuses an unproven server", _c do
-    variables = ["TEST_ENV_RUN", "GITHUB_ACTIONS", "ASH_ONETIME_TEST_SERVER"]
+    variables = [
+      "ASH_ONETIME_TEST_SERVER",
+      "GITHUB_ACTIONS",
+      "GITHUB_RUN_ID",
+      "GITHUB_RUN_ATTEMPT"
+    ]
+
     previous = Map.new(variables, &{&1, System.get_env(&1)})
+    [[hostname]] = SQL.query!(Repo, "SELECT pg_read_file('/etc/hostname')", []).rows
+    server = String.trim(hostname)
 
     try do
       Enum.each(variables, &System.delete_env/1)
@@ -1554,7 +1562,16 @@ defmodule AshOnetime.Store.MaintenanceTest do
         ClusterIsolation.assert_per_run_server!()
       end
 
-      System.put_env("TEST_ENV_RUN", "not-this-server")
+      System.put_env("ASH_ONETIME_TEST_SERVER", "ao-not-this-server")
+
+      assert_raise RuntimeError, ~r/cluster-wide grants require a proven per-run/, fn ->
+        ClusterIsolation.assert_per_run_server!()
+      end
+
+      System.put_env("ASH_ONETIME_TEST_SERVER", server)
+      System.put_env("GITHUB_ACTIONS", "true")
+      System.put_env("GITHUB_RUN_ID", "0")
+      System.put_env("GITHUB_RUN_ATTEMPT", "0")
 
       assert_raise RuntimeError, ~r/cluster-wide grants require a proven per-run/, fn ->
         ClusterIsolation.assert_per_run_server!()

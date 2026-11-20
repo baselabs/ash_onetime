@@ -1,0 +1,82 @@
+name: Mix cache
+description: >-
+  The one definition of each Mix cache's key and paths. Qualification and work runs restore;
+  only the cache warmer on the default branch looks up and saves. The drift report reads and
+  writes no cache.
+inputs:
+  mode:
+    description: >-
+      restore (every job that builds), or lookup and save (the cache warmer only: lookup reports
+      whether the exact key exists without downloading it)
+    required: true
+  cell:
+    description: >-
+      The build this cache holds: ash<version> for an Ash compatibility cell (ash3.37.2,
+      ashlatest), compatibility for the second-toolchain lane, release for the release gates,
+      mutation battery and work runs
+    required: true
+  elixir:
+    description: Exact Elixir build from the toolchain job
+    required: true
+  otp:
+    description: Exact Erlang/OTP build from the toolchain job
+    required: true
+outputs:
+  hit:
+    description: true when restore or lookup found this exact key
+    value: ${{ steps.restore.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Refuse an unknown mode, and a save off the default branch
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        REF: ${{ github.ref }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        case "$MODE" in
+          restore | lookup) ;;
+          save)
+            default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+            if [ "$REF" != "refs/heads/$default_branch" ]; then
+              echo "::error::only refs/heads/$default_branch saves a cache, not $REF"
+              exit 1
+            fi ;;
+          *) echo "::error::mode must be restore, lookup or save, not $MODE"; exit 1 ;;
+        esac
+
+    # Every committed lock is in the key: the floor cell's lock is locks/ash-floor/mix.lock,
+    # which mix.exs selects for that cell.
+    - name: Name the cache
+      id: key
+      shell: bash
+      env:
+        PREFIX: mix-${{ runner.os }}-otp${{ inputs.otp }}-elixir${{ inputs.elixir }}-${{ inputs.cell }}-
+        LOCKS: ${{ hashFiles('mix.exs', 'mix.lock', 'locks/**/mix.lock') }}
+      run: |
+        echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
+        echo "key=$PREFIX$LOCKS" >> "$GITHUB_OUTPUT"
+
+    # A lookup takes no restore-keys: only the exact key counts as warm, and nothing is
+    # downloaded, so a build after a miss starts cold.
+    - name: Restore deps and build, or look the key up
+      id: restore
+      if: inputs.mode != 'save'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          deps
+          _build
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ inputs.mode == 'restore' && steps.key.outputs.prefix || '' }}
+        lookup-only: ${{ inputs.mode == 'lookup' }}
+
+    - name: Save deps and build
+      if: inputs.mode == 'save'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          deps
+          _build
+        key: ${{ steps.key.outputs.key }}

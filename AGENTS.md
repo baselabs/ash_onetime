@@ -16,12 +16,53 @@
 
 The lock and `.tool-versions` pin development releases; published ranges preserve supported floors.
 
-- Publishing, deploying and pushes to mirrors always need the owner's approval for that action.
 
 ## Build and test
 
-- Build: `mix compile --warnings-as-errors`, through the box route.
-- Covering tests: `mix test <paths>` through the box route against PostgreSQL 18 (`DATABASE_URL`; see `CONTRIBUTING.md`).
-- **Before a push.** `mix precommit`.
-- **Exceptions.** A release runs the release battery in `CONTRIBUTING.md` on the box.
+- **Where it runs.** Compile, tests, type checks and docs run in this repository's own GitHub Actions jobs on hosted runners, each with its own PostgreSQL 18 service container. Agents never run them on a workstation or on shared build machines.
+- Build: `mix compile --warnings-as-errors`.
+- **Covering tests.** Every push to a work branch runs the `Work` workflow on that head: the whole suite against PostgreSQL 18 (`DATABASE_URL` and `ASH_ONETIME_TEST_SERVER`; see `CONTRIBUTING.md`), the whole mutation battery and the lock check of both Ash cells' locks (`mix.lock` and `locks/ash-floor/mix.lock`), which fails when a committed lock is not current and resolves nothing. Resolve a lock with `mix deps.get` (with `ASH_ONETIME_ASH_VERSION` set to the floor for the floor cell) where `mix.exs` changes, and commit it with that change; resolving compiles nothing. Only the drift report resolves fresh from upstream. Never write lock entries by hand.
+- **Type check.** `mix dialyzer` and `MIX_ENV=test mix dialyzer`, in the same CI run.
+- **Release battery.** The additional release commands in `CONTRIBUTING.md` run in CI's release-gates job and
+  its mutation-battery shard jobs. No job may measure over 45 minutes or carry a limit over 90; a
+  longer job is split into jobs, never given a looser limit.
+- **Caches.** Every job restores Mix caches through `.github/actions/mix-cache`; only the `Cache warmer`
+  workflow on the default branch saves them.
 - **Landing.** CI runs the full suite on a candidate branch before `main` moves.
+
+## CI/CD and releases
+
+infra-1, the DevOps session, owns CI/CD, the build box, releases and their keys for every
+product. Its requirements are binding here: the section "What infra requires of every product"
+in `baselabs/docs/ci.md` of the infra repository, read from its default branch
+(`git -C ~/Developer/infra fetch -q origin && git -C ~/Developer/infra show origin/main:baselabs/docs/ci.md`).
+Re-read it whenever you touch a workflow, a Dockerfile, a release script or a secret.
+
+- **Your part ends at the default branch.** Land only through `kimosabe-land`. Never release,
+  deploy, publish, tag a version, dispatch a workflow, push an image by hand, or handle a
+  release, publish or CI key. When something should go out, send infra-1 one message: the
+  repository, the full commit, what goes out and anything it needs.
+- **Publication.** Infra dispatches `publish.yml` on the qualified default-branch commit. It
+  publishes only a new version of an existing Hex package, with a dated changelog section and
+  no existing version tag. Build and inspect the package and reproducible docs archives before
+  the keyed step; that step only uploads missing archives with `mix run --no-mix-exs` from an
+  empty directory. A held release is finished by a second dispatch on the same commit after
+  approval. Matching served archives are reused; retired releases and differing bytes are
+  refused, never replaced. Read both archives back without a key. The publish job exports
+  the package, docs, checksums and notes as one `release-assets` artifact for infra to compare
+  and attach to the GitHub release. No workflow creates a release or runs on a tag. The
+  `published-livebooks` job needs the publish job, uses the same actor restriction, and holds
+  no environment or key. Qualification uses only local package consumers.
+- **You write your own workflow changes; infra-1 reviews them.** Before landing a change to
+  `.github/`, a Dockerfile, a release script or anything that touches a secret, send infra-1 the
+  branch and head and wait for its review. Take any CI/CD, runner, box or key problem to
+  infra-1, never around it.
+- **The box.** This repository is public and never uses the build box or its runners. Wherever
+  the box is used: gate on `kimosabe-remote where` and your own routed run, never on `doctor`;
+  never list process arguments (no `ps` with `args` or `-f`, no `/proc/*/cmdline`; use
+  `ps -eo pid,etimes,pcpu,comm`). A secret never appears on a command line, in a log or in a
+  message; report an exposed one to infra-1 by where it sits, never by its value. Nothing that
+  compiles or tests runs on the owner's workstation.
+- **Messages to infra-1:** one message per result, complete enough to act on without a reply.
+  No acknowledgements and no status notes.
+- Every brief given to a child agent carries these rules.

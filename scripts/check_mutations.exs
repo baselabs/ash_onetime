@@ -449,6 +449,15 @@ defmodule AshOnetime.MutationCheck do
       test_name: "cluster grant isolation refuses an unproven server",
       assertion: "Expected exception RuntimeError"
     },
+    "maintenance-effective-cluster-isolation-run" => %{
+      path: "test/test_helper.exs",
+      original: "if System.get_env(\"GITHUB_ACTIONS\") == \"true\" do",
+      mutated: "if false do",
+      test: "test/ash_onetime/store/maintenance_test.exs",
+      tag: "effective_cluster_isolation_mutation",
+      test_name: "cluster grant isolation refuses an unproven server",
+      assertion: "Expected exception RuntimeError"
+    },
     "claim-load-payload-timeout-restore" => %{
       path: "lib/ash_onetime/store/postgres.ex",
       original:
@@ -3490,6 +3499,7 @@ defmodule AshOnetime.MutationCheck do
     end
 
     audit_registered_sites!()
+    audit_shards!()
 
     execution_guard_closed? =
       try do
@@ -3530,9 +3540,69 @@ defmodule AshOnetime.MutationCheck do
 
   def main(["--" | names]), do: main(names)
 
-  def main(names) do
-    names = Enum.flat_map(names, &Map.get(@groups, &1, [&1]))
+  # CI splits the battery into jobs: shard I of N runs every Nth of the requested mutations,
+  # sorted by name, starting at the Ith. Every shard count partitions the request exactly.
+  def main(["--shard", spec | names]) do
+    {index, total} = parse_shard!(spec)
+    names |> expand() |> shard(index, total) |> run()
+  rescue
+    exception ->
+      IO.puts(:stderr, Exception.message(exception))
+      System.halt(1)
+  end
 
+  def main(names), do: names |> expand() |> run()
+
+  defp expand(names), do: names |> Enum.flat_map(&Map.get(@groups, &1, [&1])) |> Enum.uniq()
+
+  defp shard(names, index, total) do
+    names
+    |> Enum.sort()
+    |> Enum.with_index()
+    |> Enum.filter(fn {_name, position} -> rem(position, total) == index - 1 end)
+    |> Enum.map(fn {name, _position} -> name end)
+  end
+
+  defp parse_shard!(spec) do
+    with [index, total] <- String.split(spec, "/"),
+         {index, ""} <- Integer.parse(index),
+         {total, ""} <- Integer.parse(total),
+         true <- total >= 1 and index >= 1 and index <= total do
+      {index, total}
+    else
+      _ -> raise "--shard takes I/N with 1 <= I <= N, not #{inspect(spec)}"
+    end
+  end
+
+  defp audit_shards! do
+    all = @groups |> Map.fetch!("all") |> Enum.sort()
+
+    for total <- 1..8 do
+      shards = Enum.map(1..total, &shard(all, &1, total))
+
+      unless shards |> List.flatten() |> Enum.sort() == all do
+        raise "mutation checker self-test failed: #{total} shards do not partition the battery"
+      end
+    end
+
+    for spec <- ["0/4", "5/4", "1/0", "1", "a/4", "1/4/2"] do
+      refused? =
+        try do
+          parse_shard!(spec)
+          false
+        rescue
+          RuntimeError -> true
+        end
+
+      unless refused? do
+        raise "mutation checker self-test failed: shard #{inspect(spec)} was accepted"
+      end
+    end
+
+    IO.puts("mutation checker self-test: every shard count partitions the battery exactly")
+  end
+
+  defp run(names) do
     case validate(names) do
       :ok ->
         case Enum.flat_map(names, &run_collecting_failure/1) do

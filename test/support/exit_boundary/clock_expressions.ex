@@ -1,6 +1,6 @@
 defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
   @moduledoc false
-  
+
   @starters [{AshOnetime.Admission, :reserve, 3},
     {AshOnetime.Admission, :reserve_committed, 3},
     {AshOnetime.Admission, :complete, 2},

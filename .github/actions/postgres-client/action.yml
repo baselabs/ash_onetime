@@ -1,0 +1,37 @@
+name: PostgreSQL client
+description: Install the pinned PostgreSQL client tools from PGDG and put them first on PATH
+inputs:
+  version:
+    description: Exact PGDG client package version from .github/service-pins
+    required: true
+  pgdg-key:
+    description: PGDG apt signing key fingerprint from .github/service-pins
+    required: true
+runs:
+  using: composite
+  steps:
+    # The runner image ships PostgreSQL 16 client tools and removes the PGDG source it
+    # installed them from. Dump-restore proofs need the server's major version.
+    - name: Install the pinned PostgreSQL client
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        PGDG_KEY: ${{ inputs.pgdg-key }}
+      run: |
+        major="${VERSION%%.*}"
+        key="$RUNNER_TEMP/pgdg.asc"
+        curl -fsSLo "$key" https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        actual=$(gpg --show-keys --with-colons "$key" | awk -F: '$1 == "fpr" { print $10; exit }')
+        if [ "$actual" != "$PGDG_KEY" ]; then
+          echo "PGDG signing key $actual is not the pinned $PGDG_KEY" >&2
+          exit 1
+        fi
+        sudo gpg --dearmor --yes -o /usr/share/keyrings/pgdg.gpg "$key"
+        rm -f "$key"
+        echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+          | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+        sudo apt-get update -q
+        sudo apt-get install -y -q --no-install-recommends "postgresql-client-$major=$VERSION" "libpq5=$VERSION"
+        bin="/usr/lib/postgresql/$major/bin"
+        "$bin/pg_dump" --version
+        echo "$bin" >> "$GITHUB_PATH"
