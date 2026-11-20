@@ -710,7 +710,7 @@ defmodule AshOnetime.Admission do
               verified: verified,
               max_age: Keyword.fetch!(protection.window, :max_age),
               clock_skew: Keyword.fetch!(protection.window, :clock_skew)
-            # rule:nonce-retention-forward
+              # rule:nonce-retention-forward
             ] ++ Keyword.take(protection.window, [:retain_for])
         )
     end
@@ -760,7 +760,8 @@ defmodule AshOnetime.Admission do
       {:error, Error.new(:response_expired, "stored response has expired")}
     else
       # rule:admission-classify-expired-mismatch
-      :fingerprint_mismatch -> # expired fingerprint classification
+      # expired fingerprint classification
+      :fingerprint_mismatch ->
         emit_fingerprint_mismatch(state)
 
         {:error,
@@ -790,7 +791,8 @@ defmodule AshOnetime.Admission do
       {:replay, replayed, replay_state}
     else
       # rule:admission-classify-complete-mismatch
-      :fingerprint_mismatch -> # complete fingerprint classification
+      # complete fingerprint classification
+      :fingerprint_mismatch ->
         emit_fingerprint_mismatch(state)
 
         {:error,
@@ -838,14 +840,16 @@ defmodule AshOnetime.Admission do
       end
     else
       # rule:admission-classify-processing-mismatch
-      :fingerprint_mismatch -> # processing fingerprint classification
+      # processing fingerprint classification
+      :fingerprint_mismatch ->
         emit_fingerprint_mismatch(state)
 
         {:error,
          Error.new(:key_reused_with_different_request, "key was reused with a different request")}
 
       # rule:admission-classify-processing-invalid
-      _other -> # processing malformed classification
+      # processing malformed classification
+      _other ->
         {:error, Error.new(:store_invariant, "store result violated an invariant")}
     end
   end
@@ -864,7 +868,8 @@ defmodule AshOnetime.Admission do
         {:error, Error.new(:nonce_already_used, "nonce was already used")}
 
       # rule:admission-classify-nonce-invalid
-      _other -> # nonce malformed classification
+      # nonce malformed classification
+      _other ->
         emit_conflict(state, :malformed)
         {:error, Error.new(:store_invariant, "store result violated an invariant")}
     end
@@ -1071,11 +1076,12 @@ defmodule AshOnetime.Admission do
 
   defp equal_locator_hashes?(claim, request) do
     # rule:operation-identity
+    # rule:scope-identity
+    # rule:key-identity
     :crypto.hash_equals(claim.operation_hash, request.operation_hash) and
-      # rule:scope-identity
       :crypto.hash_equals(claim.scope_hash, request.scope_hash) and
-      # rule:key-identity
       :crypto.hash_equals(claim.key_hash, request.key_hash)
+    # -- end-rule:operation-identity
   end
 
   defp fingerprint_disposition(%Claim{strategy: :one_time_nonce, fingerprint: nil}, %{

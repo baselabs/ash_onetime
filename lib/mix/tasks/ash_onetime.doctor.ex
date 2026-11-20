@@ -507,15 +507,15 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
          "package trigger #{schema}.#{table}.#{trigger} has firing mode #{mode}; use ALTER TABLE ... ENABLE ALWAYS TRIGGER #{trigger}"}
       end)
 
+    # rule:M-evt-doctor
     events =
-      # rule:M-evt-doctor
       Enum.map(facts.event_owners, fn [trigger, function, owner, holder] ->
         {:fail,
          "event trigger #{trigger}, function #{function}, owner #{owner}, holder #{holder || "none"} is untrusted"}
       end)
 
+    # rule:M-doctor-runtime
     runtime =
-      # rule:M-doctor-runtime
       Enum.flat_map(facts.runtime_owner, fn
         [role, true] -> [{:fail, "runtime role #{role} is owner-equivalent to the package owner"}]
         [_role, false] -> []

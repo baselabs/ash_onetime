@@ -141,14 +141,15 @@ defmodule AshOnetime.Cache do
   end
 
   defp valid_entry?(entry, claim, maximum) do
+    # rule:cache-fingerprint-conjunct
+    # rule:cache-codec-conjunct
+    # rule:cache-digest-conjunct
     valid_uuid?(entry.claim_id) and entry.claim_id == claim.id and
-      # rule:cache-fingerprint-conjunct
-      # rule:cache-codec-conjunct
       fixed_equal?(entry.fingerprint, claim.fingerprint) and entry.codec == claim.response_codec and
-      # rule:cache-digest-conjunct
       fixed_equal?(entry.digest, claim.response_digest) and is_binary(entry.payload) and
       byte_size(entry.payload) <= maximum and
       fixed_equal?(:crypto.hash(:sha256, entry.payload), claim.response_digest)
+    # -- end-rule:cache-fingerprint-conjunct
   end
 
   # Cache-key components use length prefixes to prevent concatenation ambiguity.

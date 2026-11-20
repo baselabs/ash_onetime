@@ -542,9 +542,9 @@ defmodule AshOnetime.Store.Postgres do
            }}
           | Result.t()
   def cleanup(%Target{} = target, batch_size, partition_limit)
+      # rule:cleanup-partition-limit-guard
       when is_integer(batch_size) and batch_size > 0 and batch_size <= 10_000 and
              is_integer(partition_limit) and partition_limit >= 0 and
-             # rule:cleanup-partition-limit-guard
              partition_limit <= @max_partition_drops do
     lock_budget = Application.get_env(:ash_onetime, :partition_prune_lock_timeout_ms, 2_000)
 
@@ -971,7 +971,7 @@ defmodule AshOnetime.Store.Postgres do
     if is_binary(payload) and byte_size(payload) <= @payload_ceiling and
          fixed_digest_equal?(:crypto.hash(:sha256, payload), claim.response_digest) do
       {:ok, Result.success(:complete, claim: claim, payload: payload)}
-    # rule:loaded-corrupt
+      # rule:loaded-corrupt
     else
       {:error, Result.failure(:corrupt_payload, :sent, :open)}
     end
@@ -1513,8 +1513,8 @@ defmodule AshOnetime.Store.Postgres do
       fn ->
         Process.put(@phase_key, :sent)
         # Arm the server timer in a separate top-level statement.
+        # rule:maintenance-caller-timeout
         with {:ok, _} <-
-               # rule:maintenance-caller-timeout
                SQL.query(target.dynamic_repo, "SET LOCAL statement_timeout = #{bound}", []),
              {:ok, sql} <- maintenance_sql(target, sql),
              {:ok, result} <-

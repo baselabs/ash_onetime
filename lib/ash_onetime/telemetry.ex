@@ -253,17 +253,17 @@ defmodule AshOnetime.Telemetry do
         result_class: result_class
       }
 
-# -- end-rule:telemetry-resolver_id
-# -- end-rule:telemetry-store_result
-# -- end-rule:telemetry-key_hash
-# -- end-rule:telemetry-scope_hash
-# -- end-rule:telemetry-fingerprint
-# -- end-rule:telemetry-exception
-# -- end-rule:telemetry-payload
-# -- end-rule:telemetry-signature
-# -- end-rule:telemetry-response
-# -- end-rule:telemetry-secret
-# -- end-rule:telemetry-key
+      # -- end-rule:telemetry-resolver_id
+      # -- end-rule:telemetry-store_result
+      # -- end-rule:telemetry-key_hash
+      # -- end-rule:telemetry-scope_hash
+      # -- end-rule:telemetry-fingerprint
+      # -- end-rule:telemetry-exception
+      # -- end-rule:telemetry-payload
+      # -- end-rule:telemetry-signature
+      # -- end-rule:telemetry-response
+      # -- end-rule:telemetry-secret
+      # -- end-rule:telemetry-key
       :telemetry.execute([:ash_onetime, event], measurements, metadata)
       :ok
     else

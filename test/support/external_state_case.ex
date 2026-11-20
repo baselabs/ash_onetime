@@ -237,6 +237,7 @@ defmodule AshOnetime.Test.ExternalStateCase do
 
   def owner_replica(c, action) do
     previous = Repo.put_dynamic_repo(c.owner_repo)
+
     try do
       Repo.transaction(fn ->
         SQL.query!(c.owner_repo, "SET LOCAL session_replication_role=replica", [])

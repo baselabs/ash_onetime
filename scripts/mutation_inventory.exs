@@ -57,7 +57,9 @@ defmodule AshOnetime.MutationInventory do
         end)
       end)
 
-    routine_errors = Enum.flat_map(rendered, fn {label, source} -> routine_errors(label, source) end)
+    routine_errors =
+      Enum.flat_map(rendered, fn {label, source} -> routine_errors(label, source) end)
+
     refuse!(Enum.sort(Enum.uniq(errors ++ rendered_errors ++ routine_errors)))
   end
 
@@ -198,7 +200,7 @@ defmodule AshOnetime.MutationInventory do
                       {branch, found}
                   end)
 
-                {node, (if branches == [], do: [meta], else: branches) ++ acc}
+                {node, if(branches == [], do: [meta], else: branches) ++ acc}
               else
                 {node, acc}
               end

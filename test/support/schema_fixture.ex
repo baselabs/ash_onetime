@@ -32,7 +32,8 @@ defmodule AshOnetime.Test.SchemaFixture do
     if is_nil(ddl), do: raise("generated table DDL is missing: #{table}")
     :ok = migrate_ddl!(c, ddl)
 
-    if c[:hash_partitions] && table in ["ash_onetime_idempotency_claims", "ash_onetime_nonce_claims"] do
+    if c[:hash_partitions] &&
+         table in ["ash_onetime_idempotency_claims", "ash_onetime_nonce_claims"] do
       for remainder <- 0..(c.hash_partitions - 1) do
         Ecto.Adapters.SQL.query!(
           c.owner_repo,
@@ -54,7 +55,9 @@ defmodule AshOnetime.Test.SchemaFixture do
   end
 
   defp migrate_ddl!(c, ddl) do
-    ceiling = if String.contains?(ddl, "@payload_ceiling"), do: "@payload_ceiling 16_777_216", else: ""
+    ceiling =
+      if String.contains?(ddl, "@payload_ceiling"), do: "@payload_ceiling 16_777_216", else: ""
+
     qualifier =
       if String.contains?(ddl, "\#{q("),
         do: "defp q(name), do: ~s(\"\#{prefix()}\".\"\#{name}\")\n",
@@ -63,7 +66,9 @@ defmodule AshOnetime.Test.SchemaFixture do
     source =
       "defmodule AshOnetime.Test.ConstraintFixture do\n" <>
         "use Ecto.Migration\n#{ceiling}\n" <>
-        "def up do\nexecute(\"\"\"\n" <> ddl <> "\n\"\"\")\nend\n" <>
+        "def up do\nexecute(\"\"\"\n" <>
+        ddl <>
+        "\n\"\"\")\nend\n" <>
         qualifier <> "end\n"
 
     migrate!(c, source)
@@ -87,7 +92,8 @@ defmodule AshOnetime.Test.SchemaFixture do
     previous = Repo.put_dynamic_repo(c.owner_repo)
 
     try do
-      :ok = apply(Ecto.Migrator, direction, [Repo, version, module, [prefix: c.schema, log: false]])
+      :ok =
+        apply(Ecto.Migrator, direction, [Repo, version, module, [prefix: c.schema, log: false]])
     after
       Repo.put_dynamic_repo(previous)
     end

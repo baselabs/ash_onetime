@@ -201,6 +201,7 @@ defmodule AshOnetime.PublishHexArtifacts do
 
   defp accepted!({:ok, {code, _headers, body}}, label) when code in 200..299 do
     IO.puts("Hex #{label}: inspected archive accepted")
+
     if is_map(body) && body["status"] == "staged" do
       IO.puts("::notice::Hex approval pending; #{@notice}")
       :staged

@@ -86,14 +86,19 @@ defmodule AshOnetime.ExternalState.ProofInventorySourcesTest do
       |> Enum.find(&(&1.name == "ash_onetime_roll_payload_partitions"))
       |> Map.fetch!(:body)
 
-    assert :ok = AshOnetime.MutationInventory.assert_rendered!(c.manifest, %{}, [{"roll", inspect(body, limit: :infinity, printable_limit: :infinity)}])
+    assert :ok =
+             AshOnetime.MutationInventory.assert_rendered!(c.manifest, %{}, [
+               {"roll", inspect(body, limit: :infinity, printable_limit: :infinity)}
+             ])
+
     unmarked = String.replace(body, "-- rule:roll-reraise", "-- exception propagation")
 
     assert_raise RuntimeError, ~r/unmarked enforcing site in roll/, fn ->
-      AshOnetime.MutationInventory.assert_rendered!(c.manifest, %{}, [{"roll", inspect(unmarked, limit: :infinity, printable_limit: :infinity)}])
+      AshOnetime.MutationInventory.assert_rendered!(c.manifest, %{}, [
+        {"roll", inspect(unmarked, limit: :infinity, printable_limit: :infinity)}
+      ])
     end
   end
-
 end
 
 for partitioning <- [nil, 2] do
