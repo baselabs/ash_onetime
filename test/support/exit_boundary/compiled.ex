@@ -7,10 +7,17 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
   def with_source(source, path, callback) do
     previous = Code.compiler_options(ignore_module_conflict: true, debug_info: true)
 
+    [_, name] = Regex.run(~r/^defmodule ([A-Za-z0-9_.]+) do$/m, source)
+    directory = name |> then(&Module.concat([&1])) |> :code.which() |> Path.dirname()
+
+    # Include modules emitted by defimpl/derive, using the compiled source
+    # metadata rather than guessing generated module names from the text.
     modules =
-      for [_, name] <- Regex.scan(~r/^defmodule ([A-Za-z0-9_.]+) do$/m, source) do
-        module = Module.concat([name])
-        beam = :code.which(module)
+      for beam <- Path.wildcard(Path.join(directory, "*.beam")),
+          {:ok, {module, chunks}} = :beam_lib.chunks(String.to_charlist(beam), [:compile_info]),
+          original_source = chunks[:compile_info][:source],
+          original_source != nil,
+          Path.expand(List.to_string(original_source)) == Path.expand(path) do
         {module, beam, File.read!(beam)}
       end
 

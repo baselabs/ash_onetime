@@ -1770,6 +1770,13 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       Regex.scan(~r/([a-z_]+)\s*=\s*\$(\d+)/, sql)
       |> Map.new(fn [_, name, n] -> {String.to_integer(n), name} end)
 
+    assignments =
+      if String.starts_with?(sql, "INSERT INTO ") and
+           String.contains?(sql, "ash_onetime_idempotency_claims") and
+           String.contains?(sql, "transaction_timestamp() + ($7::bigint * interval '1 second')"),
+        do: Map.put(assignments, 7, "claim_retention_seconds"),
+        else: assignments
+
     case Regex.run(~r/INSERT INTO .*?\((.*?)\)\s*VALUES\s*\((.*?)\)/s, sql) do
       [_, names, expressions] ->
         Enum.zip(String.split(names, ","), String.split(expressions, ","))
@@ -1892,6 +1899,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
   defp parameters(a, b, state, path) do
     if a === b, do: state, else: error(state, :query_parameters, path, a, b)
+  end
+
+  defp column_value(a, b, "claim_retention_seconds", state, path) do
+    state = claim_bind_copy(a, :run, state, path)
+    state = claim_bind_copy(b, :twin, state, path)
+    term(a, b, state, path)
   end
 
   defp column_value(a, b, "operation_hash", state, path), do: derived_operation(a, b, state, path)
@@ -2547,6 +2560,49 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         {claim, error(state, :o4_claim_origin, path ++ [side], claim.id, :captured_wire_claim)}
     end
   end
+
+  defp claim_bind_copy(value, side, state, path) do
+    source = state.current[side].event
+    database = elem(state.databases, if(side == :run, do: 0, else: 1))
+    sql = Map.fetch!(state.current, if(side == :run, do: :run_sql, else: :twin_sql))
+
+    {list_path, encoded?} =
+      case Enum.take(path, -1) do
+        [:value] -> {Enum.drop(path, -2), true}
+        [4] -> {Enum.drop(path, -2), false}
+        _ -> {Enum.drop(path, -1), false}
+      end
+
+    parameters = event_value(source, tl(list_path))
+
+    id =
+      case hd(parameters) do
+        {:bind_column, 1, 2950, _, {:uuid, id}} -> id
+        first when encoded? ->
+          {:ok, id} = encoded_parameter(first, 2950)
+          id
+        <<_::128>> = id -> Ecto.UUID.load!(id)
+        id -> id
+      end
+
+    value = case value do
+      <<seconds::signed-64>> -> seconds
+      seconds -> seconds
+    end
+
+    case Map.fetch(database.claim_binds, {sql, id}) do
+      {:ok, ^value} -> state
+      expected -> error(state, :o4_bind_copy, path ++ [side], value, expected)
+    end
+  end
+
+  defp event_value(value, []), do: value
+  defp event_value(value, [key | rest]) when is_tuple(value),
+    do: event_value(elem(value, key), rest)
+  defp event_value(value, [key | rest]) when is_list(value),
+    do: event_value(Enum.fetch!(value, key), rest)
+  defp event_value(value, [key | rest]) when is_map(value),
+    do: event_value(Map.fetch!(value, key), rest)
 
   defp list([], [], state, _, _), do: state
 

@@ -54,6 +54,14 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
       with_runtime(mutation, context, fn ->
         row = row!(mutation.action, mutation.branch, mutation.fault)
         values = Values.set()
+
+        if neutral = Map.get(mutation, :neutral_value) do
+          neutral_pair = observe(context, row, Keyword.fetch!(values, neutral))
+          assert Search.hits(neutral_pair.run) == []
+          assert Comparator.compare(neutral_pair).errors == [], "the neutral tuple must pass"
+          IO.inspect(%{mutation: mutation.id, tuple: neutral}, label: "R_NEUTRAL_TUPLE_GREEN")
+        end
+
         label =
           if Map.has_key?(mutation, :set_pair),
             do: Enum.find(mutation.set_pair, &AshOnetime.DeliveryComparatorMutations.set_active?(mutation, values[&1])),
@@ -187,6 +195,15 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         {:o2, :r_iso_o2} ->
           assert disabled.errors == [], "R-iso-O2 must pass with only UUID pairing disabled"
 
+        {:o4, :r_iso_o4} ->
+          assert disabled.errors == [], "R-iso-O4 must pass with only its bind equality disabled"
+
+        {:order, :r_iso_order} ->
+          assert disabled.errors == [], "R-iso-order must pass with only the OPEN call order disabled"
+
+        {:order, :r14} ->
+          assert next != nil, "R14's extra call must still fail with its order rule disabled"
+
         {:o3, :r11} ->
           assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
                  "R11's earlier dictionary read must remain under the O3 duration mutant"
@@ -213,6 +230,22 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
           assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
                  "#{mutation.id}: disabling #{rule} changed another rule's named divergence"
       end
+    end
+  end
+
+  defp with_runtime(%{id: :r_iso_o4, path: path}, _, callback) do
+    source = File.read!(path)
+
+    if String.contains?(source, "COMPARATOR_OPERATION") do
+      protection = AshOnetime.Resource.Info.protection(AshOnetime.Test.ExitBoundary.Withheld, :issue)
+      assert protection.retention <= 2_147_483_647 - 2
+      operation =
+        AshOnetime.Test.ExitBoundary.Registry.operation(AshOnetime.Test.ExitBoundary.Withheld, :issue)
+
+      source = String.replace(source, "COMPARATOR_OPERATION", inspect(operation, limit: :infinity))
+      AshOnetime.Test.ExitBoundary.Compiled.with_source(source, path, callback)
+    else
+      callback.()
     end
   end
 

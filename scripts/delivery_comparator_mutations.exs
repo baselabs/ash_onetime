@@ -667,6 +667,33 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       extra: nil
     },
     %{
+      id: :r_iso_order,
+      label: "R-iso-order",
+      path: "lib/ash_onetime/delivery.ex",
+      original: "      {:done, inv, :executed, envelope, {target, claim}} when is_binary(envelope) ->\n        with :complete <- Store.committed_completion(target, claim),\n             names = protection.executing_only,\n             context = Envelope.context(ref, inv, resource, action),\n",
+      mutated: "      {:done, inv, :executed, envelope, {target, claim}} when is_binary(envelope) ->\n        mutation_early? = rem(byte_size(envelope) - 65, 2) == 1\n        mutation_context = if mutation_early?, do: Envelope.context(ref, inv, resource, action), else: nil\n        with :complete <- Store.committed_completion(target, claim),\n             names = protection.executing_only,\n             context = if(mutation_early?, do: mutation_context, else: Envelope.context(ref, inv, resource, action)),\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      value: :vd,
+      neutral_value: :va,
+      first: {AshOnetime.Delivery.Envelope, :context, 4},
+      extra: nil
+    },
+    %{
+      id: :r_iso_o4,
+      label: "R-iso-O4",
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "        request.fingerprint,\n        request.retention_seconds\n      ],\n      :idempotency\n",
+      mutated: "        request.fingerprint,\n        if(request.operation_hash == COMPARATOR_OPERATION,\n          do: request.retention_seconds + 1 + rem(:binary.first(request.id), 2),\n          else: request.retention_seconds\n        )\n      ],\n      :idempotency\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      value: :va,
+      first: {AshOnetime.Store.Postgres, :query_claim, 4},
+      extra: nil
+    },
+    %{
       id: :r_iso_return,
       label: "R-iso-X3",
       path: "lib/ash_onetime.ex",

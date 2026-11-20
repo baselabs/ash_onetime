@@ -2,7 +2,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Comparator
 
-  def rules, do: [:k, :inv, :completion, :crypto, :context, :o2, :o3, :return, :host_multiplicity]
+  def rules, do: [:k, :inv, :completion, :crypto, :context, :o2, :o3, :o4, :order, :return, :host_multiplicity]
 
   # Disable K's expression at its source, while still binding that return and
   # checking every later copy. The captured events are passed through unchanged.
@@ -248,6 +248,26 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         path: "test/support/exit_boundary/comparator.ex",
         original: "  defp uuid_identity(a, b, state, path) do\n    normalize = fn\n      <<_::128>> = uuid -> Ecto.UUID.load!(uuid)\n      uuid -> uuid\n    end\n\n    a = normalize.(a)\n    b = normalize.(b)\n\n    exact? =\n      a === b and\n        Map.get(state.pairing.uuid_forward, a, a) === b and\n        Map.get(state.pairing.uuid_reverse, b, b) === a\n\n    if exact? or\n         (Map.fetch(state.pairing.uuid_forward, a) === {:ok, b} and\n            Map.fetch(state.pairing.uuid_reverse, b) === {:ok, a}),\n       do: state,\n       else: error(state, :o2_uuid, path, a, b)\n  end\n\n",
         mutated: "  defp uuid_identity(a, b, state, path) do\n    normalize = fn\n      <<_::128>> = uuid -> Ecto.UUID.load!(uuid)\n      uuid -> uuid\n    end\n\n    a = normalize.(a)\n    b = normalize.(b)\n\n    case {Ecto.UUID.dump(a), Ecto.UUID.dump(b)} do\n      {{:ok, _}, {:ok, _}} -> state\n      _ -> error(state, :o2_uuid, path, a, b)\n    end\n  end\n\n"
+      }
+    ]
+  end
+
+  def edits(:o4) do
+    [
+      %{
+        path: "test/support/exit_boundary/comparator.ex",
+        original: "  defp column_value(a, b, \"claim_retention_seconds\", state, path) do\n    state = claim_bind_copy(a, :run, state, path)\n    state = claim_bind_copy(b, :twin, state, path)\n    term(a, b, state, path)\n  end\n\n",
+        mutated: "  defp column_value(a, b, \"claim_retention_seconds\", state, path) do\n    state = claim_bind_copy(a, :run, state, path)\n    state = claim_bind_copy(b, :twin, state, path)\n    state\n  end\n\n"
+      }
+    ]
+  end
+
+  def edits(:order) do
+    [
+      %{
+        path: "test/support/exit_boundary/trace_program.ex",
+        original: "      order_errors =\n        if expected == :ordinary or actual === expected,\n",
+        mutated: "      order_errors =\n        if expected == :ordinary or actual === expected or\n             (e.mfa == {Delivery, :open, 7} and\n                expected == [{Process, :get, 1}, {AshOnetime.Store, :committed_completion, 2},\n                  {Envelope, :context, 4}, {Envelope, :open, 5}] and\n                actual == [{Process, :get, 1}, {Envelope, :context, 4},\n                  {AshOnetime.Store, :committed_completion, 2}, {Envelope, :open, 5}]),\n"
       }
     ]
   end

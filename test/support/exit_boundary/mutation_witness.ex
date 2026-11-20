@@ -71,6 +71,15 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
        ),
        do: state.request.id === b.built_subject.data.id
 
+  defp location(
+         :r_iso_o4,
+         %{event: {_, :call, {AshOnetime.Store.Postgres, :query_claim, [_, _, parameters, :idempotency]}}},
+         _,
+         b,
+         %{path: [:event, 2, 2, 2, 6]}
+       ),
+       do: Enum.at(parameters, 6) == 3_600 + 1 + rem(:binary.first(b.c_admit.id), 2)
+
   defp location(:r1, %{event: {_, :call, {:erlang, :put, [:m, 0]}}}, events, b, _),
     do: after_seal?(events, b)
 
@@ -216,12 +225,13 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
   end
 
   defp location(
-         :r14,
+         id,
          %{event: {_, :call, {Envelope, :context, args}}, stack: stack},
          _,
          b,
          %{rule: :permitted_call_order, twin: {AshOnetime.Store, :committed_completion, 2}}
-       ),
+       )
+       when id in [:r14, :r_iso_order],
        do: {Delivery, :open, 7} in stack and Enum.take(args, 2) === [b.ref, b.inv]
 
   defp location(:r16, %{event: {_, :exception_from, {Delivery, :armed_call, 4}, _}}, _, _, _),

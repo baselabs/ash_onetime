@@ -31,7 +31,9 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
       dates: %{},
       last_rows: %{},
       source_rows: %{},
-      releases: %{}
+      releases: %{},
+      wire_sql: %{},
+      claim_binds: %{}
     }
 
     Enum.reduce(events, initial, &event/2)
@@ -99,6 +101,28 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
   end
 
   defp release(_, s), do: s
+
+  defp data_rows({:parse, _name, sql, _count, _types}, _path, e, s),
+    do: put_in(s.wire_sql[e.role], sql)
+
+  defp data_rows({:bind, _portal, _statement, _formats, binds, _result_formats}, _path, e, s) do
+    sql = Map.get(s.wire_sql, e.role)
+
+    if is_binary(sql) and String.starts_with?(sql, "INSERT INTO ") and
+         String.contains?(sql, "ash_onetime_idempotency_claims") and length(binds) == 7 do
+      {:bind_column, 1, 2950, _, id} = hd(binds)
+      {:bind_column, 7, 20, _, retention} = Enum.at(binds, 6)
+      key = {sql, uuid(value(id))}
+
+      case Map.fetch(s.claim_binds, key) do
+        {:ok, ^retention} -> s
+        {:ok, previous} -> failure(s, e, :claim_bind_copy, retention, previous)
+        :error -> put_in(s.claim_binds[key], retention)
+      end
+    else
+      s
+    end
+  end
 
   defp data_rows({:data_row, columns}, path, e, s) when is_list(columns) and columns != [] do
     {:data_column, sql, {_ordinal, binds}, _, _, _, _, _, _, _} = hd(columns)

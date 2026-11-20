@@ -159,18 +159,18 @@ defmodule AshOnetime.Test.ExitBoundary.FrameBindings do
     do: [Enum.at(parent_arguments(e, events), 1), admission_state(e, events)]
 
   defp arguments(%{mfa: {Delivery, :complete_entry, 3}} = e, _, events, b),
-    do: [b.key, b.inv, admission_state(e, events)]
+    do: [b.key, Map.get(b, :inv, :missing_bound_inv), admission_state(e, events)]
 
   defp arguments(%{mfa: {Delivery, f, 0}}, _, _, _)
        when f in [:lost, :invalid, :refused, :in_transaction, :requires_call, :lost_class], do: []
 
   defp arguments(%{mfa: {Envelope, :context, 4}}, side, _, b),
-    do: [b.ref, b.inv, side.resource, side.row.action]
+    do: [b.ref, Map.get(b, :inv, :missing_bound_inv), side.resource, side.row.action]
 
   defp arguments(%{mfa: {Envelope, :"-context/4-fun-0-", 1}} = e, side, events, b),
     do: [
       Enum.fetch!(
-        [b.ref, b.inv, Atom.to_string(side.resource), Atom.to_string(side.row.action)],
+        [b.ref, Map.get(b, :inv, :missing_bound_inv), Atom.to_string(side.resource), Atom.to_string(side.row.action)],
         ordinal(e, events)
       )
     ]
