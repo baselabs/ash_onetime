@@ -1,0 +1,60 @@
+"""Read the shared hosted-test partition and run one declared comparator lane."""
+
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+
+def configuration():
+    data = json.loads(Path(".github/test-shards.json").read_text())
+    routes = data["matrix_routes"]
+    if len(routes) != 10 or len(set(routes)) != len(routes):
+        raise ValueError("each comparator route must occur once")
+    groups = [group for shard in data["scheduling_shards"] for group in shard["groups"]]
+    if sorted(groups, key=int) != [str(n) for n in range(35)]:
+        raise ValueError("each of the 35 scheduling groups must occur once")
+    names = [shard["name"] for shard in data["scheduling_shards"]]
+    if len(names) != len(set(names)) or any(not shard["groups"] for shard in data["scheduling_shards"]):
+        raise ValueError("scheduling shards must have unique names and nonempty groups")
+    if data["mutation_shards"] != list(range(1, len(data["mutation_shards"]) + 1)):
+        raise ValueError("mutation shards must cover 1 through the shard count")
+    return data
+
+
+def main(arguments):
+    data = configuration()
+    if arguments == ["--check"]:
+        print("Shared test shards cover all routes, scheduling groups and mutation shards once")
+        return 0
+    if arguments == ["--outputs"]:
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            for key, value in data.items():
+                output.write(f"{key}={json.dumps(value, separators=(',', ':'))}\n")
+        return 0
+
+    lane, selector = arguments
+    directory = "test/ash_onetime/delivery/"
+    command = ["mix", "test"]
+    if lane == "matrix" and selector in data["matrix_routes"]:
+        command += [directory + "comparator_matrix_test.exs", "--only", f"matrix_route:{selector}"]
+    elif lane == "scheduling":
+        shard = next(shard for shard in data["scheduling_shards"] if shard["name"] == selector)
+        command += [directory + "comparator_scheduling_test.exs"]
+        for group in shard["groups"]:
+            command += ["--only", f"u9_group:{group}"]
+    elif lane == "controls" and selector == "":
+        command += [directory + name for name in [
+            "comparator_controls_test.exs", "comparator_matrix_test.exs",
+            "comparator_mutations_test.exs", "comparator_positive_controls_test.exs",
+            "exit_boundary_controls_test.exs",
+        ]]
+        command += ["--exclude", "full_matrix"]
+    else:
+        raise ValueError("unknown comparator lane or selector")
+    return subprocess.run(command, check=False).returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

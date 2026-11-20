@@ -60,7 +60,7 @@ runs:
     - shell: bash
       run: mix hex.audit
     - shell: bash
-      run: mix test
+      run: mix test --exclude exit_boundary
       env:
         ASH_ONETIME_RLS_PRUNE_TESTS: "1"
     - shell: bash

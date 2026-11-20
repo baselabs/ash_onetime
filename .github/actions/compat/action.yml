@@ -84,7 +84,7 @@ runs:
         lock_dir=$(mix run --no-start --no-compile --no-deps-check -e 'IO.write(Path.dirname(Mix.Project.config()[:lockfile]))')
         mix deps.audit --path "$lock_dir"
     - shell: bash
-      run: mix test
+      run: mix test --exclude exit_boundary
       env:
         ASH_ONETIME_RLS_PRUNE_TESTS: "1"
     - shell: bash

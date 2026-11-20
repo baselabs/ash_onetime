@@ -18,6 +18,10 @@ on:
   push:
     branches-ignore: [main, 'kci/**']
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
 
@@ -43,6 +47,9 @@ jobs:
       postgres_image: ${{ steps.versions.outputs.postgres_image }}
       postgres_client: ${{ steps.versions.outputs.postgres_client }}
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
+      matrix_routes: ${{ steps.test-shards.outputs.matrix_routes }}
+      scheduling_shards: ${{ steps.test-shards.outputs.scheduling_shards }}
+      mutation_shards: ${{ steps.test-shards.outputs.mutation_shards }}
     steps:
       # The default branch is read from the repository, as in every workflow here.
       - name: Refuse the default branch, candidates and anything not a branch
@@ -66,6 +73,9 @@ jobs:
       - name: Read defaults and service pins at the branch head
         id: versions
         uses: ./.github/actions/toolchain
+      - name: Read shared test partitions
+        id: test-shards
+        run: python3 scripts/ci_test_shards.py --outputs
 
   lock:
     name: Lock check
@@ -148,7 +158,172 @@ jobs:
       - run: mix deps.get --check-locked
       - run: mix compile --warnings-as-errors
       - run: MIX_ENV='test' mix compile --warnings-as-errors
-      - run: mix test
+      - run: mix test --exclude exit_boundary
+
+  comparator-matrix:
+    name: "Comparator matrix (${{ matrix.route }})"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    strategy:
+      fail-fast: false
+      matrix:
+        route: ${{ fromJSON(needs.toolchain.outputs.matrix_routes) }}
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-matrix-${{ strategy.job-index }}
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-matrix-${{ strategy.job-index }}"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/comparator
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+          lane: matrix
+          selector: ${{ matrix.route }}
+
+  comparator-scheduling:
+    name: "Comparator scheduling (${{ matrix.name }})"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.toolchain.outputs.scheduling_shards) }}
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-scheduling-${{ strategy.job-index }}
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-scheduling-${{ strategy.job-index }}"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/comparator
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+          lane: scheduling
+          selector: ${{ matrix.name }}
+
+  comparator-controls:
+    name: "Comparator controls"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-controls
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-controls"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/comparator
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+          lane: controls
+
+  format:
+    name: Format check
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-format
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-format"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/beam
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      - uses: ./.github/actions/mix-cache
+        with:
+          mode: restore
+          cell: release
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      - run: mix deps.get --check-locked
+      - name: Check formatting
+        id: format
+        run: mix format --check-formatted
+      - name: Capture the formatter's proposed diff
+        if: failure() && steps.format.outcome == 'failure'
+        run: |
+          mix format
+          git diff --binary > "$RUNNER_TEMP/format.patch"
+      - name: Upload the formatting diff
+        if: failure() && steps.format.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: format-diff
+          path: ${{ runner.temp }}/format.patch
+          if-no-files-found: error
 
   mutations:
     name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
@@ -161,7 +336,7 @@ jobs:
       fail-fast: false
       matrix:
         # The same shards as ci.yml.
-        shard: [1, 2, 3, 4]
+        shard: ${{ fromJSON(needs.toolchain.outputs.mutation_shards) }}
 
     services:
       postgres:

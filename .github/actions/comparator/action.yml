@@ -1,0 +1,61 @@
+name: Delivery comparator
+description: Run one declared comparator partition on the job's PostgreSQL service
+inputs:
+  elixir:
+    description: Exact Elixir build
+    required: true
+  otp:
+    description: Exact Erlang/OTP build
+    required: true
+  postgres-client:
+    description: Pinned PostgreSQL client package version
+    required: true
+  pgdg-key:
+    description: PGDG apt signing key fingerprint
+    required: true
+  cache:
+    description: Restore qualified caches, or none for upstream drift
+    default: restore
+  lane:
+    description: matrix, scheduling or controls
+    required: true
+  selector:
+    description: Route or scheduling shard name; empty for controls
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Refuse an unknown cache input
+      shell: bash
+      env:
+        CACHE: ${{ inputs.cache }}
+      run: |
+        case "$CACHE" in
+          restore | none) ;;
+          *) echo "::error::cache must be restore or none"; exit 1 ;;
+        esac
+    - uses: ./.github/actions/postgres-client
+      with:
+        version: ${{ inputs.postgres-client }}
+        pgdg-key: ${{ inputs.pgdg-key }}
+    - uses: ./.github/actions/beam
+      with:
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
+    - if: inputs.cache == 'restore'
+      uses: ./.github/actions/mix-cache
+      with:
+        mode: restore
+        cell: release
+        elixir: ${{ inputs.elixir }}
+        otp: ${{ inputs.otp }}
+    - shell: bash
+      run: mix deps.get --check-locked
+    - shell: bash
+      run: MIX_ENV=test mix compile --warnings-as-errors
+    - name: Run the declared comparator partition
+      shell: bash
+      env:
+        LANE: ${{ inputs.lane }}
+        SELECTOR: ${{ inputs.selector }}
+      run: python3 scripts/ci_test_shards.py "$LANE" "$SELECTOR"

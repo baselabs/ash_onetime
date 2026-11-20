@@ -22,6 +22,10 @@ on:
     - cron: '17 6 * * 1'
   workflow_dispatch:
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
 
@@ -54,6 +58,9 @@ jobs:
       postgres_image: ${{ steps.versions.outputs.postgres_image }}
       postgres_client: ${{ steps.versions.outputs.postgres_client }}
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
+      matrix_routes: ${{ steps.test-shards.outputs.matrix_routes }}
+      scheduling_shards: ${{ steps.test-shards.outputs.scheduling_shards }}
+      mutation_shards: ${{ steps.test-shards.outputs.mutation_shards }}
       default_branch: ${{ steps.ref.outputs.default_branch }}
     steps:
       # The default branch is read from the repository, which every event can reach, rather than
@@ -78,6 +85,9 @@ jobs:
       - name: Read defaults, compatibility lanes, Ash floor, and service pins
         id: versions
         uses: ./.github/actions/toolchain
+      - name: Read shared test partitions
+        id: test-shards
+        run: python3 scripts/ci_test_shards.py --outputs
 
   compat:
     name: "Ash ${{ matrix.ash }}"
@@ -170,6 +180,124 @@ jobs:
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
 
+  comparator-matrix:
+    name: "Comparator matrix (${{ matrix.route }})"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    strategy:
+      fail-fast: false
+      matrix:
+        route: ${{ fromJSON(needs.toolchain.outputs.matrix_routes) }}
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-matrix-${{ strategy.job-index }}
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-matrix-${{ strategy.job-index }}"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.toolchain.outputs.default_branch }}
+          persist-credentials: false
+      - uses: ./.github/actions/comparator
+        with:
+          cache: none
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+          lane: matrix
+          selector: ${{ matrix.route }}
+
+  comparator-scheduling:
+    name: "Comparator scheduling (${{ matrix.name }})"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.toolchain.outputs.scheduling_shards) }}
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-scheduling-${{ strategy.job-index }}
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-scheduling-${{ strategy.job-index }}"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.toolchain.outputs.default_branch }}
+          persist-credentials: false
+      - uses: ./.github/actions/comparator
+        with:
+          cache: none
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+          lane: scheduling
+          selector: ${{ matrix.name }}
+
+  comparator-controls:
+    name: "Comparator controls"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-controls
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-controls"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.toolchain.outputs.default_branch }}
+          persist-credentials: false
+      - uses: ./.github/actions/comparator
+        with:
+          cache: none
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+          lane: controls
+
   mutations:
     name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
     needs: toolchain
@@ -181,7 +309,7 @@ jobs:
       fail-fast: false
       matrix:
         # The same shards as ci.yml.
-        shard: [1, 2, 3, 4]
+        shard: ${{ fromJSON(needs.toolchain.outputs.mutation_shards) }}
 
     services:
       postgres:

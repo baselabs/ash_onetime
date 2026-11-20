@@ -1,0 +1,147 @@
+{
+  "matrix_routes": [
+    "issue",
+    "external_issue",
+    "rotate",
+    "external_rotate",
+    "revoke",
+    "external_revoke",
+    "retire",
+    "external_retire",
+    "mint",
+    "external_mint"
+  ],
+  "scheduling_shards": [
+    {
+      "name": "1",
+      "groups": [
+        "0",
+        "34"
+      ]
+    },
+    {
+      "name": "2",
+      "groups": [
+        "1",
+        "33"
+      ]
+    },
+    {
+      "name": "3",
+      "groups": [
+        "2",
+        "32"
+      ]
+    },
+    {
+      "name": "4",
+      "groups": [
+        "3",
+        "31"
+      ]
+    },
+    {
+      "name": "5",
+      "groups": [
+        "4",
+        "30"
+      ]
+    },
+    {
+      "name": "6",
+      "groups": [
+        "5",
+        "29"
+      ]
+    },
+    {
+      "name": "7",
+      "groups": [
+        "6",
+        "28"
+      ]
+    },
+    {
+      "name": "8",
+      "groups": [
+        "7",
+        "27"
+      ]
+    },
+    {
+      "name": "9",
+      "groups": [
+        "8",
+        "26"
+      ]
+    },
+    {
+      "name": "10",
+      "groups": [
+        "9",
+        "25"
+      ]
+    },
+    {
+      "name": "11",
+      "groups": [
+        "10",
+        "24"
+      ]
+    },
+    {
+      "name": "12",
+      "groups": [
+        "11",
+        "23"
+      ]
+    },
+    {
+      "name": "13",
+      "groups": [
+        "12",
+        "22"
+      ]
+    },
+    {
+      "name": "14",
+      "groups": [
+        "13",
+        "21"
+      ]
+    },
+    {
+      "name": "15",
+      "groups": [
+        "14",
+        "20"
+      ]
+    },
+    {
+      "name": "16",
+      "groups": [
+        "15",
+        "19"
+      ]
+    },
+    {
+      "name": "17",
+      "groups": [
+        "16",
+        "18"
+      ]
+    },
+    {
+      "name": "18",
+      "groups": [
+        "17"
+      ]
+    }
+  ],
+  "mutation_shards": [
+    1,
+    2,
+    3,
+    4
+  ]
+}
