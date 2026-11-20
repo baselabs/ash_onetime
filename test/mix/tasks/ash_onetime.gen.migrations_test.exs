@@ -293,6 +293,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
              "priv/templates/migrations/maintenance/reset_acl.sql",
              "priv/templates/migrations/maintenance/roll.sql",
              "priv/templates/migrations/maintenance/runs.sql",
+             "priv/templates/migrations/maintenance/settings.sql",
              "priv/templates/migrations/maintenance/shape.sql",
              "priv/templates/migrations/maintenance/shapes.sql",
              "priv/templates/migrations/maintenance/status.sql",
