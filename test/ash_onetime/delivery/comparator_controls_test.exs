@@ -338,7 +338,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert sources != [], "U8 did not observe the pool holder's monitor origins"
 
     for {key, origin} <- sources do
-      assert Map.has_key?(twin.origins, key), "U8: a pool monitor role has no twin occurrence"
+      assert Map.has_key?(twin.origins, key),
+             "U8: a pool monitor role has no twin occurrence: #{inspect(%{key: key, index: origin.index})}"
       expected = Map.fetch!(twin.origins, key).value
       assert Map.fetch!(pairing.forward, origin.value) == expected
       assert Map.fetch!(pairing.reverse, expected) == origin.value

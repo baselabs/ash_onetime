@@ -81,9 +81,14 @@ defmodule AshOnetime.Test.ExitBoundary.Capture do
   end
 
   defp classify({_, :call, {module, function, args}} = event, _mfa, frames, callbacks, loaded) do
+    class = Classifier.classify(event)
+
     cond do
       module in callbacks ->
         :e24
+
+      class in Classifier.classes() ->
+        class
 
       Enum.any?(frames, fn {m, f, a} ->
         m == module and f in [:_, function] and a in [:_, length(args)]
@@ -94,7 +99,7 @@ defmodule AshOnetime.Test.ExitBoundary.Capture do
         :e18
 
       true ->
-        Classifier.classify(event)
+        class
     end
   end
 

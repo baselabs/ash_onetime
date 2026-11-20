@@ -185,7 +185,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/trace_program.ex",
         original:
-          "  defp bound_return(b, key) do\n    case Map.fetch(b, key) do\n      {:ok, value} -> {:value, value}\n      :error -> :paired\n    end\n  end\n\n  defp ordered(values), do: [values.short, values.long]\n\n",
+          "  defp bound_return(b, key) do\n    case Map.fetch(b, key) do\n      {:ok, value} -> {:value, value}\n      :error -> :paired\n    end\n  end\n\n",
         mutated:
           ""
       }
