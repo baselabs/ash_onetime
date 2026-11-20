@@ -72,63 +72,48 @@ for partitioning <- [nil, 2] do
     end
 
     @tag :enforcement_query_connection_error_mutation
-    test "#{partitioning || "plain"}: a native query exceeding the client bound stays disconnected",
+    test "#{partitioning || "plain"}: a terminated native client stays disconnected after dispatch",
          c do
-      pool = connection!(c, :runtime, 1, timeout: 250)
+      pool = connection!(c, :runtime, 1)
       native = %{c | runtime_repo: pool}
-
-      SQL.query!(
-        c.owner_repo,
-        "CREATE FUNCTION #{rel(c, "slow_insert")}() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN PERFORM pg_sleep(1); RETURN NEW; END'",
-        []
-      )
-
-      SQL.query!(
-        c.owner_repo,
-        "CREATE TRIGGER consumer_slow_insert BEFORE INSERT ON #{rel(c, "ash_onetime_idempotency_claims")} FOR EACH ROW EXECUTE FUNCTION #{rel(c, "slow_insert")}()",
-        []
-      )
-
-      on_exit(fn ->
-        SQL.query!(
-          c.owner_repo,
-          "DROP TRIGGER consumer_slow_insert ON #{rel(c, "ash_onetime_idempotency_claims")}",
-          []
-        )
-
-        SQL.query!(c.owner_repo, "DROP FUNCTION #{rel(c, "slow_insert")}()", [])
-      end)
-
       native_target = target(native)
-      previous = Repo.put_dynamic_repo(pool)
+      adapter_pool = Ecto.Adapter.lookup_meta(pool).pid
+
+      [{supervisor, child_id, connection}] =
+        for {_, supervisor, _, _} <-
+              DynamicSupervisor.which_children(DBConnection.ConnectionPool.Supervisor),
+            is_pid(supervisor),
+            {child_id = {Postgrex.Protocol, ^adapter_pool, _}, connection, _, _} <-
+              Supervisor.which_children(supervisor),
+            do: {supervisor, child_id, connection}
+
+      monitor = Process.monitor(connection)
       parent = self()
 
       try do
-        Repo.transaction(
-          fn ->
-            send(
-              parent,
-              {:bounded_store_result, Postgres.claim(native_target, request!("slow-client"))}
-            )
-          end,
-          timeout: 250
-        )
+        runtime_transaction(native, fn ->
+          assert [[role]] = SQL.query!(pool, "SELECT current_user", []).rows
+          assert role == c.runtime
+          :ok = Supervisor.terminate_child(supervisor, child_id)
+          assert_receive {:DOWN, ^monitor, :process, ^connection, _reason}, 5000
+          send(parent, {:lost_client_result, Postgres.claim(native_target, request!("lost-client"))})
+          send(parent, {:native_driver_result, SQL.query(pool, "SELECT 1", [])})
+        end)
       rescue
         _error in [Postgrex.Error, DBConnection.ConnectionError] -> :terminated_transaction
       catch
         :exit, _reason -> :terminated_transaction
-      after
-        Repo.put_dynamic_repo(previous)
       end
 
-      assert_receive {:bounded_store_result,
+      assert_receive {:native_driver_result, {:error, %DBConnection.ConnectionError{}}}, 5000
+      assert_receive {:lost_client_result,
                       %Result{
                         status: :failure,
                         reason: :disconnected,
                         admission_dispatch: :unknown,
                         transaction: :unknown
                       }},
-                     5_000
+                     5000
     end
 
     @tag :enforcement_query_other_error_mutation

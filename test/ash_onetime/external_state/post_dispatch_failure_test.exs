@@ -1,15 +1,20 @@
 for partitioning <- [nil, 2] do
   defmodule Module.concat(
-              AshOnetime.ExternalState.PreDispatchFailureTest,
+              AshOnetime.ExternalState.PostDispatchFailureTest,
               "Claims#{partitioning || "Plain"}"
             ) do
     use AshOnetime.Test.ExternalStateCase, async: false
     @moduletag hash_partitions: partitioning
 
     for termination <- [:idle_timeout, :same_role] do
-      @tag :enforcement_raised_before_dispatch_mutation
+      @tag [
+        {if(termination == :idle_timeout,
+           do: :enforcement_query_classify_idle_mutation,
+           else: :enforcement_query_classify_shutdown_mutation
+         ), true}
+      ]
       @tag termination: termination
-      test "#{partitioning || "plain"}: #{termination} of a checked out transaction stays disconnected",
+      test "#{partitioning || "plain"}: #{termination} surfaces at the first dispatched statement and stays disconnected",
            c do
         pool = connection!(c, :runtime, 1)
         observer = connection!(c, :runtime, 1)

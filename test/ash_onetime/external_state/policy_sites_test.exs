@@ -52,7 +52,9 @@ for partitioning <- [nil, 2] do
                 []
               )
 
-              on_exit(fn -> SQL.query!(c.owner_repo, "DROP TABLE #{rel(c, "policy_target")}", []) end)
+              on_exit(fn ->
+                SQL.query!(c.owner_repo, "DROP TABLE #{rel(c, "policy_target")}", [])
+              end)
 
               body = """
               DECLARE target record; owner_name name := #{literal(c.owner)}; install_schema name := #{literal(c.schema)};
@@ -74,19 +76,29 @@ for partitioning <- [nil, 2] do
                 ).rows
 
               if @attribute == "permissive",
-                  do: permissive,
-                  else:
-                    is_binary(check) and
-                      String.contains?(
-                        check,
-                        if(@name == "ash_onetime_claim_visibility",
-                          do: "ash_onetime_claim_visible(",
-                          else: "ash_onetime_maintenance_active()"
-                        )
+                do: permissive,
+                else:
+                  is_binary(check) and
+                    String.contains?(
+                      check,
+                      if(@name == "ash_onetime_claim_visibility",
+                        do: "ash_onetime_claim_visible(",
+                        else: "ash_onetime_maintenance_active()"
                       )
+                    )
+
             {:error, %Postgrex.Error{postgres: %{pg_code: "P0001", message: message}}} ->
               assert String.starts_with?(message, "maintenance_blinded: ")
-              assert String.contains?(message, "." <> @name)
+
+              if @name == "ash_onetime_claim_visibility" do
+                assert String.contains?(
+                         message,
+                         c.schema <> ".ash_onetime_effect_outcomes: invalid claim visibility"
+                       )
+              else
+                assert String.contains?(message, "." <> @name)
+              end
+
               false
           end
 
@@ -97,6 +109,7 @@ for partitioning <- [nil, 2] do
     @tag :enforcement_copy_policy_check_mutation
     test "#{partitioning || "plain"}: copying a policy preserves its explicit write check", c do
       assert :ok = install(c)
+
       SQL.query!(
         c.owner_repo,
         "CREATE POLICY consumer_write ON #{rel(c, "ash_onetime_response_payloads")} FOR INSERT TO #{q(c.runtime)} WITH CHECK (octet_length(encoded_response)>0)",

@@ -117,15 +117,17 @@ defmodule AshOnetime.Store.Postgres do
 
   @impl AshOnetime.Store
   def claim(%Target{} = target, %Request{} = request) do
-    with_checkout(target, fn ->
-      with :ok <- transaction_preconditions(target),
-           :ok <- validate_request(request) do
-        claim_attempt(target, request, 0)
-      else
-        {:error, %Result{} = result} -> result
-        {:error, reason} -> Result.failure(reason, :not_started, :open)
-      end
-    end)
+    with :ok <- validate_request(request) do
+      with_checkout(target, fn ->
+        with :ok <- transaction_preconditions(target) do
+          claim_attempt(target, request, 0)
+        else
+          {:error, %Result{} = result} -> result
+        end
+      end)
+    else
+      {:error, reason} -> Result.failure(reason, :not_started, :open)
+    end
   end
 
   def claim(_target, _request),
@@ -286,22 +288,25 @@ defmodule AshOnetime.Store.Postgres do
   @impl AshOnetime.Store
   def lock_for_effect(%Target{} = target, %Claim{strategy: :idempotency} = claim, options)
       when is_list(options) do
-    with_checkout(target, fn ->
-      with :ok <- transaction_preconditions(target),
-           :ok <- validate_claim_lock_timeout(Keyword.get(options, :lock_timeout_ms)),
-           {:ok, locked} <-
-             select_claim_under_timeout(
-               target,
-               claim,
-               claim.id,
-               Keyword.get(options, :lock_timeout_ms)
-             ) do
-        resolve_locked_claim(target, locked, claim)
-      else
-        {:error, %Result{} = result} -> result
-        {:error, :missing} -> Result.failure(:store_invariant, :sent, :open)
-      end
-    end)
+    with :ok <- validate_claim_lock_timeout(Keyword.get(options, :lock_timeout_ms)) do
+      with_checkout(target, fn ->
+        with :ok <- transaction_preconditions(target),
+             {:ok, locked} <-
+               select_claim_under_timeout(
+                 target,
+                 claim,
+                 claim.id,
+                 Keyword.get(options, :lock_timeout_ms)
+               ) do
+          resolve_locked_claim(target, locked, claim)
+        else
+          {:error, %Result{} = result} -> result
+          {:error, :missing} -> Result.failure(:store_invariant, :sent, :open)
+        end
+      end)
+    else
+      {:error, %Result{} = result} -> result
+    end
   end
 
   def lock_for_effect(_target, _claim, _options),
@@ -426,24 +431,27 @@ defmodule AshOnetime.Store.Postgres do
       when is_list(options) do
     lock_timeout_ms = Keyword.get(options, :lock_timeout_ms, 2_000)
 
-    with_checkout(target, fn ->
-      with :ok <- transaction_preconditions(target),
-           :ok <- validate_hold(hold_reference),
-           :ok <- validate_claim_lock_timeout(lock_timeout_ms) do
-        complete_transaction(
-          target,
-          claim,
-          codec,
-          digest,
-          encoded_response,
-          {:external, lock_timeout_ms},
-          hold_reference
-        )
-      else
-        {:error, %Result{} = result} -> result
-        {:error, _error} -> Result.failure(:invalid_request, :not_started, :open)
-      end
-    end)
+    with :ok <- validate_hold(hold_reference),
+         :ok <- validate_claim_lock_timeout(lock_timeout_ms) do
+      with_checkout(target, fn ->
+        with :ok <- transaction_preconditions(target) do
+          complete_transaction(
+            target,
+            claim,
+            codec,
+            digest,
+            encoded_response,
+            {:external, lock_timeout_ms},
+            hold_reference
+          )
+        else
+          {:error, %Result{} = result} -> result
+        end
+      end)
+    else
+      {:error, %Result{} = result} -> result
+      {:error, _error} -> Result.failure(:invalid_request, :not_started, :open)
+    end
   end
 
   def complete_external(
@@ -458,29 +466,33 @@ defmodule AshOnetime.Store.Postgres do
       do: Result.failure(:invalid_request, :not_started, :not_applicable)
 
   defp complete_mode(target, claim, codec, digest, payload, mode, hold_reference) do
-    with_checkout(target, fn ->
-      with :ok <- transaction_preconditions(target),
-           :ok <- validate_hold(hold_reference) do
-        complete_transaction(target, claim, codec, digest, payload, mode, hold_reference)
-      else
-        {:error, %Result{} = result} -> result
-        {:error, _error} -> Result.failure(:invalid_request, :not_started, :open)
-      end
-    end)
+    with :ok <- validate_hold(hold_reference) do
+      with_checkout(target, fn ->
+        with :ok <- transaction_preconditions(target) do
+          complete_transaction(target, claim, codec, digest, payload, mode, hold_reference)
+        else
+          {:error, %Result{} = result} -> result
+        end
+      end)
+    else
+      {:error, _error} -> Result.failure(:invalid_request, :not_started, :open)
+    end
   end
 
   @doc false
   @spec release(Target.t(), binary()) :: {:ok, non_neg_integer()} | Result.t()
   def release(%Target{} = target, reference) do
-    with_checkout(target, fn ->
-      with :ok <- AshOnetime.Hold.validate_reference(reference),
-           :ok <- transaction_preconditions(target) do
-        release_query(target, reference)
-      else
-        {:error, %Result{} = result} -> result
-        {:error, _error} -> Result.failure(:invalid_request, :not_started, :open)
-      end
-    end)
+    with :ok <- AshOnetime.Hold.validate_reference(reference) do
+      with_checkout(target, fn ->
+        with :ok <- transaction_preconditions(target) do
+          release_query(target, reference)
+        else
+          {:error, %Result{} = result} -> result
+        end
+      end)
+    else
+      {:error, _error} -> Result.failure(:invalid_request, :not_started, :open)
+    end
   end
 
   def release(_target, _reference),
@@ -506,24 +518,27 @@ defmodule AshOnetime.Store.Postgres do
 
   @impl AshOnetime.Store
   def load(%Target{} = target, %Claim{} = claim, options) when is_list(options) do
-    with_checkout(target, fn ->
-      with :ok <- transaction_preconditions(target),
-           :ok <- validate_claim_lock_timeout(Keyword.get(options, :lock_timeout_ms)),
-           {:ok, loaded} <-
-             select_claim_under_timeout(
-               target,
-               claim,
-               # rule:external-replay-lock-timeout
-               nil,
-               Keyword.get(options, :lock_timeout_ms)
-             ),
-           {:ok, result} <- loaded_result(target, copy_retention(loaded, claim)) do
-        result
-      else
-        {:error, %Result{} = result} -> result
-        {:error, :missing} -> Result.failure(:store_invariant, :sent, :open)
-      end
-    end)
+    with :ok <- validate_claim_lock_timeout(Keyword.get(options, :lock_timeout_ms)) do
+      with_checkout(target, fn ->
+        with :ok <- transaction_preconditions(target),
+             {:ok, loaded} <-
+               select_claim_under_timeout(
+                 target,
+                 claim,
+                 # rule:external-replay-lock-timeout
+                 nil,
+                 Keyword.get(options, :lock_timeout_ms)
+               ),
+             {:ok, result} <- loaded_result(target, copy_retention(loaded, claim)) do
+          result
+        else
+          {:error, %Result{} = result} -> result
+          {:error, :missing} -> Result.failure(:store_invariant, :sent, :open)
+        end
+      end)
+    else
+      {:error, %Result{} = result} -> result
+    end
   end
 
   def load(_target, _claim, _options),
@@ -1768,10 +1783,7 @@ defmodule AshOnetime.Store.Postgres do
     try do
       with_dynamic_repo(target, fn ->
         try do
-          target.repo_module.checkout(fn ->
-            Process.put(@phase_key, :checked_out)
-            callback.()
-          end)
+          target.repo_module.checkout(callback)
         rescue
           _exception -> classify_raised_failure()
         catch
@@ -1873,8 +1885,6 @@ defmodule AshOnetime.Store.Postgres do
       :not_started -> Result.failure(:checkout_unavailable, :not_started, :not_applicable)
       # rule:raised-after-dispatch
       :sent -> Result.failure(:dispatched_unknown, :unknown, :unknown)
-      # rule:raised-before-dispatch
-      :checked_out -> Result.failure(:disconnected, :unknown, :unknown)
     end
   end
 
