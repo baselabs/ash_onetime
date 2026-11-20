@@ -163,6 +163,12 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         {:crypto, id} when id in [:r6, :r7] ->
           assert next != nil, "#{mutation.id}: a compound crypto mutation must still fail"
 
+        {:return, :r_iso_return} ->
+          assert disabled.errors == [], "R-iso-X3 must pass with only caller-return checks disabled"
+
+        {:return, :r17} ->
+          assert next != nil, "R17's earlier error-term propagation must still fail"
+
         {:k, :r2} ->
           assert next != nil, "R2's independent multiplicity/order protection must remain"
 

@@ -53,6 +53,15 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
        ),
        do: key === b.key and public === b.pk and inv !== b.inv
 
+  defp location(
+         :r_iso_return,
+         %{event: {_, :return_from, {AshOnetime, :deliver, 2}, {:ok, result, %Delivery{}}}},
+         _,
+         b,
+         %{rule: rule}
+       ) when rule in [:return, :permitted_return],
+       do: result.amount === rem(byte_size(b.values.long), 2) and {:ok, result} !== b.raw_return
+
   defp location(:r1, %{event: {_, :call, {:erlang, :put, [:m, 0]}}}, events, b, _),
     do: after_seal?(events, b)
 

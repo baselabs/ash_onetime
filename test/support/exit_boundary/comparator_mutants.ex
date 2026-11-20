@@ -2,7 +2,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Comparator
 
-  def rules, do: [:k, :inv, :completion, :crypto]
+  def rules, do: [:k, :inv, :completion, :crypto, :return]
 
   # Disable K's expression at its source, while still binding that return and
   # checking every later copy. The captured events are passed through unchanged.
@@ -127,6 +127,67 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
           "    |> Enum.filter(&(elem(&1.event, 1) == :call and PermittedTrace.frame?(&1.mfa)))\n",
         mutated:
           "    |> Enum.filter(fn e ->\n      elem(e.event, 1) == :call and PermittedTrace.frame?(e.mfa) and\n        (elem(e.mfa, 0) != Envelope or e.mfa == {Envelope, :context, 4})\n    end)\n"
+      }
+    ]
+  end
+
+  # Disable caller-return construction and its copies; the store, trace,
+  # crypto transfers and all input arguments are still compared.
+  def edits(:return) do
+    [
+      %{
+        path: "test/support/exit_boundary/trace_program.ex",
+        original: "  alias AshOnetime.Test.ExitBoundary.{PermittedTrace, Returns}\n",
+        mutated: "  alias AshOnetime.Test.ExitBoundary.PermittedTrace\n"
+      },
+      %{
+        path: "test/support/exit_boundary/permitted_trace.ex",
+        original:
+          "  defp validate_delivery(state, e, result, side) do\n    state =\n      if Map.has_key?(state.bound, :delivered_return),\n        do: exact(state, e, :return, result, state.bound.delivered_return),\n        else: state\n\n    case result do\n      {:ok, _, %Delivery{outcome: :executed, values: values}} ->\n        exact(state, e, :delivery_values, values, side.values)\n\n      {:ok, _, %Delivery{outcome: outcome, values: values}}\n      when outcome in [:replayed, :recovered] ->\n        exact(state, e, :delivery_values, values, %{})\n\n      {:error, _} ->\n        state\n\n      _ ->\n        state\n    end\n  end\n\n",
+        mutated:
+          "  defp validate_delivery(state, _e, _result, _side), do: state\n\n"
+      },
+      %{
+        path: "test/support/exit_boundary/comparator.ex",
+        original:
+          "  defp exact_return(value, state) do\n    expected = state.run.bound.delivered_return\n\n    if value === expected,\n      do: state,\n      else: error(state, :return, [:return, :delivered], value, expected)\n  end\n\n",
+        mutated:
+          "  defp exact_return(_value, state), do: state\n\n"
+      },
+      %{
+        path: "test/support/exit_boundary/comparator.ex",
+        original:
+          "  defp raw_return(state, events) do\n    case Enum.find(\n           events,\n           &match?(%{event: {_, :call, {AshOnetime.Delivery, :normalize, [_, _, _]}}}, &1)\n         ) do\n      nil ->\n        state\n\n      %{event: {_, :call, {_, _, [raw, _, _]}}} = source ->\n        at = %{role: source.role, run_index: source.index, mfa: source.mfa, stack: source.stack}\n        term(raw, state.twin.run.result, %{state | at: at}, [:return, :raw])\n    end\n  end\n\n",
+        mutated:
+          "  defp raw_return(state, _events), do: state\n\n"
+      },
+      %{
+        path: "test/support/exit_boundary/comparator.ex",
+        original:
+          "    state =\n      case Returns.raw(run) do\n        {:found, raw} -> term(raw, twin.run.result, %{state | at: :return}, [:return, :raw])\n        nil -> term(run.run.result, twin.run.result, %{state | at: :return}, [:return])\n      end\n\n",
+        mutated:
+          ""
+      },
+      %{
+        path: "test/support/exit_boundary/trace_program.ex",
+        original:
+          "  defp expected_return({Delivery, f, _}, _, _, b) when f in [:armed_call, :armed, :finish],\n    do: bound_return(b, :delivered_return)\n\n  defp expected_return({AshOnetime, :deliver, _}, _, _, b), do: bound_return(b, :delivered_return)\n  defp expected_return({Delivery, :deliver, 2}, _, _, b), do: bound_return(b, :delivered_return)\n  defp expected_return({Delivery, :dispatch, 2}, _, _, b), do: {:value, b[:raw_return]}\n\n  defp expected_return({Delivery, :\"-armed/4-fun-0-\", 7}, _, side, _),\n    do: {:value, {:ok, Returns.delivery(side.row, side.values)}}\n\n  defp expected_return({Delivery, :open, 7}, _, side, _),\n    do: {:value, {:ok, Returns.delivery(side.row, side.values)}}\n\n",
+        mutated:
+          "  defp expected_return({Delivery, f, _}, _, _, _)\n       when f in [:armed_call, :armed, :finish, :deliver, :dispatch, :open, :\"-armed/4-fun-0-\"],\n       do: :paired\n\n  defp expected_return({AshOnetime, :deliver, _}, _, _, _), do: :paired\n\n"
+      },
+      %{
+        path: "test/support/exit_boundary/trace_program.ex",
+        original:
+          "  defp expected_return({Delivery, :normalize, 3}, [raw, type, opts], _, _) do\n    result = Returns.delivered(raw, type, opts, :delivery)\n\n    {:value,\n     if(match?({:error, _}, result),\n       do: result,\n       else: Tuple.delete_at(result, tuple_size(result) - 1)\n     )}\n  end\n\n",
+        mutated:
+          "  defp expected_return({Delivery, :normalize, 3}, _, _, _), do: :paired\n\n"
+      },
+      %{
+        path: "test/support/exit_boundary/trace_program.ex",
+        original:
+          "  defp bound_return(b, key) do\n    case Map.fetch(b, key) do\n      {:ok, value} -> {:value, value}\n      :error -> :paired\n    end\n  end\n\n  defp ordered(values), do: [values.short, values.long]\n\n",
+        mutated:
+          ""
       }
     ]
   end

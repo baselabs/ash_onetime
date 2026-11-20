@@ -572,6 +572,21 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       value: :va,
       first: {:erlang, :put, 2},
       extra: nil
+    },
+    %{
+      id: :r_iso_return,
+      label: "R-iso-X3",
+      path: "lib/ash_onetime.ex",
+      original:
+        "  def deliver(subject, opts \\\\ []), do: AshOnetime.Delivery.deliver(subject, opts)\n",
+      mutated:
+        "  def deliver(subject, opts \\\\ []) do\n    case AshOnetime.Delivery.deliver(subject, opts) do\n      {:ok, result, %AshOnetime.Delivery{outcome: :executed, values: values} = delivery}\n      when is_map(result) and is_map_key(result, :amount) ->\n        {:ok, %{result | amount: rem(byte_size(values.long), 2)}, delivery}\n      other -> other\n    end\n  end\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      value: :va,
+      first: {AshOnetime, :deliver, 2},
+      extra: nil
     }
   ]
 

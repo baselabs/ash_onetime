@@ -97,6 +97,19 @@ defmodule AshOnetime.DeliveryComparatorControls do
       opts: []
     },
     %{
+      id: :pc_host_arguments,
+      path: "lib/ash_onetime/delivery.ex",
+      original: "    case module.produce(subject, context) do\n",
+      mutated:
+        "    case module.produce(subject, Map.put(context, :extra, rem(byte_size(handle.ref), 2))) do\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      kind: :comparison,
+      rules: [:host_arguments],
+      opts: []
+    },
+    %{
       id: :pc_complete_payload_nil,
       path: "lib/ash_onetime/store/postgres.ex",
       original: "      Result.success(:complete, claim: completed, payload: encoded_response)\n",
