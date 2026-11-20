@@ -52,7 +52,7 @@ defmodule AshOnetime.ExternalState.ProofInventorySourcesTest do
     end
     '''
 
-    manifest = %{"interpolated-check" => %{}, "interpolated-refusal" => %{}}
+    manifest = %{"interpolated-check" => %{path: "interpolation"}, "interpolated-refusal" => %{path: "interpolation"}}
 
     assert :ok =
              AshOnetime.MutationInventory.assert_rendered!(manifest, %{}, [

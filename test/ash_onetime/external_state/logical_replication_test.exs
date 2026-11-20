@@ -99,11 +99,15 @@ for partitioning <- [nil, 2] do
               )
 
             :outcome_delete ->
-              SQL.query!(
-                c.pub.owner_repo,
-                "DELETE FROM #{rel(c.pub, "ash_onetime_effect_outcomes")} WHERE attempt=1",
-                []
-              )
+              SQL.query!(c.pub.owner_repo,
+                "ALTER TABLE #{rel(c.pub, "ash_onetime_effect_outcomes")} DISABLE TRIGGER ash_onetime_effect_outcome_guard", [])
+              try do
+                SQL.query!(c.pub.owner_repo,
+                  "DELETE FROM #{rel(c.pub, "ash_onetime_effect_outcomes")} WHERE attempt=1", [])
+              after
+                SQL.query!(c.pub.owner_repo,
+                  "ALTER TABLE #{rel(c.pub, "ash_onetime_effect_outcomes")} ENABLE ALWAYS TRIGGER ash_onetime_effect_outcome_guard", [])
+              end
 
             :outcome_insert ->
               columns =

@@ -10,7 +10,13 @@ for partitioning <- [nil, 2] do
     @tag :enforcement_maintenance_upgrade_validation_mutation
     test "#{partitioning || "plain"}: maintenance upgrade authenticates the current relation shape",
          c do
-      assert :ok = install(c)
+      options = if c[:hash_partitions], do: [hash_partitions: c.hash_partitions], else: []
+      alias AshOnetime.Test.{SchemaFixture, ShippedMigrations}
+      alias Mix.Tasks.AshOnetime.Gen.Migrations, as: Generator
+      assert :ok = SchemaFixture.migrate!(c, ShippedMigrations.render("v0.6.0", :render, Repo, options), 10)
+      assert :ok = SchemaFixture.migrate!(c, Generator.render_logical_partition_upgrade(Repo, []), 11)
+      assert :ok = SchemaFixture.migrate!(c, Generator.render_operation_hold_upgrade(Repo, []), 12)
+      assert :ok = SchemaFixture.migrate!(c, Generator.render_external_state_upgrade(Repo, []), 13)
 
       SQL.query!(
         c.owner_repo,

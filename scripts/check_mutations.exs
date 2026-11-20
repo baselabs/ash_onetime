@@ -915,17 +915,17 @@ defmodule AshOnetime.MutationCheck do
       tag: "external_state_logical_claim_insert_mutation",
       test_name: "plain: untrusted logical apply refuses claim_insert",
       assertion: "assert",
-      assertion_line: 177,
+      assertion_line: 181,
       required_failures: [
         %{
           test_name: "plain: untrusted logical apply refuses claim_insert",
           assertion: "assert",
-          assertion_line: 177
+          assertion_line: 181
         },
         %{
           test_name: "2: untrusted logical apply refuses claim_insert",
           assertion: "assert",
-          assertion_line: 177
+          assertion_line: 181
         }
       ]
     },
@@ -937,17 +937,17 @@ defmodule AshOnetime.MutationCheck do
       tag: "external_state_logical_outcome_delete_mutation",
       test_name: "plain: untrusted logical apply refuses outcome_delete",
       assertion: "assert",
-      assertion_line: 177,
+      assertion_line: 181,
       required_failures: [
         %{
           test_name: "plain: untrusted logical apply refuses outcome_delete",
           assertion: "assert",
-          assertion_line: 177
+          assertion_line: 181
         },
         %{
           test_name: "2: untrusted logical apply refuses outcome_delete",
           assertion: "assert",
-          assertion_line: 177
+          assertion_line: 181
         }
       ]
     },
@@ -959,17 +959,17 @@ defmodule AshOnetime.MutationCheck do
       tag: "external_state_logical_outcome_insert_mutation",
       test_name: "plain: untrusted logical apply refuses outcome_insert",
       assertion: "assert",
-      assertion_line: 177,
+      assertion_line: 181,
       required_failures: [
         %{
           test_name: "plain: untrusted logical apply refuses outcome_insert",
           assertion: "assert",
-          assertion_line: 177
+          assertion_line: 181
         },
         %{
           test_name: "2: untrusted logical apply refuses outcome_insert",
           assertion: "assert",
-          assertion_line: 177
+          assertion_line: 181
         }
       ]
     },
@@ -982,17 +982,17 @@ defmodule AshOnetime.MutationCheck do
       tag: "external_state_logical_claim_insert_mutation",
       test_name: "plain: untrusted logical apply refuses claim_insert",
       assertion: "assert",
-      assertion_line: 177,
+      assertion_line: 181,
       required_failures: [
         %{
           test_name: "plain: untrusted logical apply refuses claim_insert",
           assertion: "assert",
-          assertion_line: 177
+          assertion_line: 181
         },
         %{
           test_name: "2: untrusted logical apply refuses claim_insert",
           assertion: "assert",
-          assertion_line: 177
+          assertion_line: 181
         }
       ]
     },
@@ -1005,17 +1005,17 @@ defmodule AshOnetime.MutationCheck do
       tag: "external_state_logical_outcome_insert_mutation",
       test_name: "plain: untrusted logical apply refuses outcome_insert",
       assertion: "assert",
-      assertion_line: 177,
+      assertion_line: 181,
       required_failures: [
         %{
           test_name: "plain: untrusted logical apply refuses outcome_insert",
           assertion: "assert",
-          assertion_line: 177
+          assertion_line: 181
         },
         %{
           test_name: "2: untrusted logical apply refuses outcome_insert",
           assertion: "assert",
-          assertion_line: 177
+          assertion_line: 181
         }
       ]
     },
@@ -2499,17 +2499,17 @@ defmodule AshOnetime.MutationCheck do
       test_name: "plain: maintenance upgrade authenticates the current relation shape",
       assertion: "assert error.postgres.message ==",
       mutated: "NULL; -- bypass historical validation",
-      assertion_line: 34,
+      assertion_line: 40,
       required_failures: [
         %{
           test_name: "plain: maintenance upgrade authenticates the current relation shape",
           assertion: "assert error.postgres.message ==",
-          assertion_line: 34
+          assertion_line: 40
         },
         %{
           test_name: "2: maintenance upgrade authenticates the current relation shape",
           assertion: "assert error.postgres.message ==",
-          assertion_line: 34
+          assertion_line: 40
         }
       ]
     },
@@ -3853,10 +3853,10 @@ defmodule AshOnetime.MutationCheck do
         "@logical_key_predicate \"logical_partition = $1 AND operation_hash = $2 AND scope_hash = $3 AND key_hash = $4\"",
       test: "test/ash_onetime/store/uncertainty_test.exs",
       test_name: "nonce replay and deadline reads preserve operation identity",
-      assertion: "assert deadline == claim_a.retain_until",
+      assertion: "assert {:ok, deadline}",
       mutated:
         "@logical_key_predicate \"logical_partition = $1 AND $2::bytea IS NOT NULL AND operation_hash = operation_hash AND scope_hash = $3 AND key_hash = $4\"",
-      assertion_line: 163
+      assertion_line: 155
     },
     "operation-hash-completion" => %{
       path: "lib/ash_onetime/store/postgres.ex",

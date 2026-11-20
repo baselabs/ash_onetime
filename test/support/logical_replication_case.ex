@@ -299,41 +299,58 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
   end
 
   def assert_apply_stopped!(c, checkpoint, sqlstate, message) do
-    eventually!(fn ->
-      scalar(
-        c.sub.admin,
-        "SELECT coalesce(sum(apply_error_count),0)::bigint FROM pg_stat_subscription_stats"
-      ) > 0
-    end)
-
-    eventually!(fn ->
-      scalar(
-        c.sub.admin,
-        "SELECT NOT subenabled FROM pg_subscription WHERE subname=#{literal(c.subscription)}"
-      )
-    end)
-
-    # Match only bytes written after this case's operation and the exact apply
-    # backend observed before it. An error in another session cannot satisfy it.
-    eventually!(fn ->
-      size = scalar(c.sub.admin, "SELECT (pg_stat_file($1)).size", [checkpoint.path])
-
-      log =
-        scalar(c.sub.admin, "SELECT pg_read_file($1,$2,$3)", [
-          checkpoint.path,
-          checkpoint.offset,
-          max(size - checkpoint.offset, 0)
-        ])
-
-      Enum.any?(csv_records(log), fn row ->
-        length(row) >= 24 and
-          Enum.at(row, 2) == String.trim_leading(URI.parse(c.sub.url).path, "/") and
-          Enum.at(row, 3) == Integer.to_string(checkpoint.pid) and
-          Enum.at(row, 11) == "ERROR" and Enum.at(row, 12) == sqlstate and
-          String.contains?(Enum.at(row, 13), message) and
-          String.contains?(Enum.at(row, 23), "logical replication")
+    try do
+      eventually!(fn ->
+        scalar(
+          c.sub.admin,
+          "SELECT coalesce(sum(apply_error_count),0)::bigint FROM pg_stat_subscription_stats"
+        ) > 0
       end)
-    end)
+
+      eventually!(fn ->
+        scalar(
+          c.sub.admin,
+          "SELECT NOT subenabled FROM pg_subscription WHERE subname=#{literal(c.subscription)}"
+        )
+      end)
+
+      # Match only bytes written after this case's operation and the exact apply
+      # backend observed before it. An error in another session cannot satisfy it.
+      eventually!(fn ->
+        size = scalar(c.sub.admin, "SELECT (pg_stat_file($1)).size", [checkpoint.path])
+
+        log =
+          scalar(c.sub.admin, "SELECT pg_read_file($1,$2,$3)", [
+            checkpoint.path,
+            checkpoint.offset,
+            max(size - checkpoint.offset, 0)
+          ])
+
+        Enum.any?(csv_records(log), fn row ->
+          length(row) >= 24 and
+            Enum.at(row, 2) == String.trim_leading(URI.parse(c.sub.url).path, "/") and
+            Enum.at(row, 3) == Integer.to_string(checkpoint.pid) and
+            Enum.at(row, 11) == "ERROR" and Enum.at(row, 12) == sqlstate and
+            String.contains?(Enum.at(row, 13), message) and
+            String.contains?(Enum.at(row, 23), "logical replication")
+        end)
+      end)
+    rescue
+      error in ExUnit.AssertionError ->
+        state = SQL.query!(c.sub.admin,
+          "SELECT subenabled,(SELECT coalesce(sum(apply_error_count),0)::bigint FROM pg_stat_subscription_stats) FROM pg_subscription WHERE subname=$1",
+          [c.subscription]).rows
+        size = scalar(c.sub.admin, "SELECT (pg_stat_file($1)).size", [checkpoint.path])
+        errors = scalar(c.sub.admin, "SELECT pg_read_file($1,$2,$3)",
+          [checkpoint.path, checkpoint.offset, max(size-checkpoint.offset, 0)])
+          |> csv_records()
+          |> Enum.filter(fn row ->
+            length(row) >= 24 and Enum.at(row, 2) == String.trim_leading(URI.parse(c.sub.url).path, "/") and
+              Enum.at(row, 11) == "ERROR" and String.contains?(Enum.at(row, 23), "logical replication")
+          end)
+          |> Enum.map(fn row -> %{pid: Enum.at(row, 3), code: Enum.at(row, 12), message: Enum.at(row, 13)} end)
+        flunk("assert_apply_stopped!: #{Exception.message(error)}; subscription=#{inspect(state)}; expected_pid=#{checkpoint.pid}; native_errors=#{inspect(errors)}")
+    end
   end
 
   def csv_records(binary), do: csv_records(binary, false, [], [], [])
