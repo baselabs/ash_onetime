@@ -155,7 +155,13 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {AshOnetime.Response, :contract, 4},
         {AshOnetime.Response, :encode, 3},
         {AshOnetime.Response, :replay, 3},
-        {AshOnetime.Cache, :key, 1}
+        {AshOnetime.Cache, :key, 1},
+        {AshOnetime.Store.Claim.Request, :__struct__, 1},
+        {AshOnetime.Store.Claim, :__struct__, 1},
+        {AshOnetime.Store.Result, :__struct__, 1},
+        {AshOnetime.Admission.State, :__struct__, 1},
+        {AshOnetime.Cache.Entry, :__struct__, 1},
+        {AshOnetime.Response.Contract, :__struct__, 1}
       ],
       function_slots: @function_slots,
       compute: {AshOnetime.Test.ExitBoundary.Derivations, :build, 2}
@@ -179,6 +185,13 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
       expression: :declaration,
       readers: @declarations,
       fields: {AshOnetime.Test.ExitBoundary.DeclarationSlots, :all, 0}
+    },
+    %{
+      id: :o2b_response,
+      source: {AshOnetime.Resource.Info, :protection, 2},
+      locations: [:compiled_response_declaration],
+      expression: :response_field,
+      compute: {AshOnetime.Resource.Info, :protection, 2}
     },
     %{
       id: :o2b_argument,

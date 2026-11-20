@@ -6,6 +6,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
   alias AshOnetime.Test.ExitBoundary.{
     Analysis,
     Comparator,
+    ComparatorMutants,
     Diagnostics,
     Historical,
     MutationWitness,
@@ -46,7 +47,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
       @tag :u12
     end
 
-    test "#{String.upcase(Atom.to_string(mutation.id))}: named first divergence", context do
+    test "#{AshOnetime.DeliveryComparatorMutations.label(mutation)}: named first divergence", context do
       mutation = unquote(Macro.escape(mutation))
       prepare_runtime(mutation, context)
       row = row!(mutation.action, mutation.branch, mutation.fault)
@@ -74,6 +75,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
       if first do
         named? = MutationWitness.named?(mutation, first, pair, comparison)
         assert named?, "#{mutation.id}: an earlier or different divergence is not a kill"
+        comparator_mutants(mutation, pair, first)
 
         if mutation.extra == :u12 do
           IO.inspect(%{mutation: mutation.id, at: first.at, path: first.path, rule: first.rule},
@@ -123,6 +125,32 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
           assert clear?,
                  String.upcase(Atom.to_string(mutation.id)) <> "_C_SET_NAMED_FIRST_DIVERGENCE"
         end
+      end
+    end
+  end
+
+  defp comparator_mutants(mutation, pair, active_first) do
+    for rule <- ComparatorMutants.rules() do
+      disabled = ComparatorMutants.compare(pair, rule)
+      next = List.first(disabled.errors)
+
+      IO.inspect(
+        %{rule: rule, mutation: mutation.id, active: Diagnostics.safe(active_first),
+          next: Diagnostics.safe(next), remaining: length(disabled.errors)},
+        label: "COMPARATOR_MUTANT", limit: :infinity
+      )
+
+      case {rule, mutation.id} do
+        {:k, :r_iso_k} ->
+          assert disabled.errors == [], "R-iso-K must pass with only K's expression disabled"
+
+        {:k, :r2} ->
+          assert next != nil, "R2's independent multiplicity/order protection must remain"
+          refute match?(%{at: %{mfa: {AshOnetime.Delivery, :key, 1}}, rule: :permitted_return}, next)
+
+        _ ->
+          assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
+                 "#{mutation.id}: disabling #{rule} changed another rule's named divergence"
       end
     end
   end

@@ -97,6 +97,42 @@ defmodule AshOnetime.DeliveryComparatorControls do
       opts: []
     },
     %{
+      id: :pc_complete_payload_nil,
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "      Result.success(:complete, claim: completed, payload: encoded_response)\n",
+      mutated: "      Result.success(:complete, claim: completed, payload: if(target.context_multitenant?, do: nil, else: encoded_response))\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      kind: :comparison,
+      rules: [:response_copy],
+      opts: []
+    },
+    %{
+      id: :pc_complete_codec_nil,
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "      Result.success(:complete, claim: completed, payload: encoded_response)\n",
+      mutated: "      completed = if target.context_multitenant?, do: %{completed | response_codec: nil}, else: completed\n      Result.success(:complete, claim: completed, payload: encoded_response)\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      kind: :comparison,
+      rules: [:response_copy],
+      opts: []
+    },
+    %{
+      id: :pc_complete_digest_nil,
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "      Result.success(:complete, claim: completed, payload: encoded_response)\n",
+      mutated: "      completed = if target.context_multitenant?, do: %{completed | response_digest: nil}, else: completed\n      Result.success(:complete, claim: completed, payload: encoded_response)\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      kind: :comparison,
+      rules: [:response_copy],
+      opts: []
+    },
+    %{
       id: :pc_attribute_copy_run,
       path: "lib/ash_onetime/admission.ex",
       original: "        %Ash.Changeset{} -> [subject.attributes | surfaces]\n",
@@ -120,6 +156,30 @@ defmodule AshOnetime.DeliveryComparatorControls do
       fault: nil,
       kind: :comparison,
       rules: [:attribute_copy],
+      opts: []
+    },
+    %{
+      id: :pc_o2b_response_run,
+      path: "lib/ash_onetime/admission.ex",
+      original: "    Response.contract(subject.resource, subject.action.name, response, trusted)\n",
+      mutated: "    Response.contract(subject.resource, subject.action.name, if(subject.resource == AshOnetime.Test.ExitBoundary.Withheld, do: %{response | codec_opts: [runtime_alteration: true]}, else: response), trusted)\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      kind: :comparison,
+      rules: [:o2b_response],
+      opts: []
+    },
+    %{
+      id: :pc_o2b_response_twin,
+      path: "lib/ash_onetime/admission.ex",
+      original: "    Response.contract(subject.resource, subject.action.name, response, trusted)\n",
+      mutated: "    Response.contract(subject.resource, subject.action.name, if(subject.resource == AshOnetime.Test.ExitBoundary.Returned, do: %{response | codec_opts: [runtime_alteration: true]}, else: response), trusted)\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      kind: :comparison,
+      rules: [:o2b_response],
       opts: []
     },
     %{

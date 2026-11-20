@@ -471,7 +471,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       path: "lib/ash_onetime/delivery.ex",
       original: "        with :complete <- Store.committed_completion(target, claim),\n",
       mutated:
-        "        with :complete <- Store.committed_completion(target, %{claim | id: Ecto.UUID.generate()}),\n",
+        "        foreign_id = case claim.id do\n          <<head::binary-size(35), last>> -> <<head::binary, if(last == ?0, do: ?1, else: ?0)>>\n        end\n        with :complete <- Store.committed_completion(target, %{claim | id: foreign_id}),\n",
       action: :issue,
       branch: :execute,
       fault: nil,
@@ -544,10 +544,24 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       value: :va,
       first: {:erlang, :monitor, 3},
       extra: nil
+    },
+    %{
+      id: :r_iso_k,
+      label: "R-iso-K",
+      path: "lib/ash_onetime/delivery.ex",
+      original: "  def key(ref), do: {__MODULE__, :crypto.hash(:sha256, ref)}\n",
+      mutated: "  def key(ref) do\n    <<head::binary-size(31), last>> = :crypto.hash(:sha256, ref)\n    digest = if byte_size(ref) == 16, do: <<head::binary, Bitwise.bxor(last, 1)>>, else: <<head::binary, last>>\n    {__MODULE__, digest}\n  end\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      value: :va,
+      first: {AshOnetime.Delivery, :key, 1},
+      extra: nil
     }
   ]
 
   def rows, do: @rows
+  def label(row), do: Map.get(row, :label, String.upcase(Atom.to_string(row.id)))
   # These change an existing scalar or order only when length parity is one.
   # Adding an event, a byte, or a map key still changes the observation when its
   # payload is zero, so those R rows cannot be C-set's neutral Va control.
@@ -575,7 +589,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
        Map.merge(row, %{
          test: "test/ash_onetime/delivery/comparator_mutations_test.exs",
          tag: name,
-         test_name: String.upcase(name) <> ": named first divergence",
+         test_name: label(row) <> ": named first divergence",
          assertion: String.upcase(name) <> "_NAMED_FIRST_DIVERGENCE"
        })}
     end)

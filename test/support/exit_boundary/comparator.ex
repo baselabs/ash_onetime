@@ -968,6 +968,15 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       else: error(state, :o2b_protection, path, a, b)
   end
 
+  defp term(%AshOnetime.Resource.Response{} = a, %AshOnetime.Resource.Response{} = b, state, path) do
+    expected_run = Registry.compute(:o2b_response, [state.run.resource, state.row.action]).response
+    expected_twin = Registry.compute(:o2b_response, [state.twin.resource, state.row.action]).response
+
+    if a === expected_run and b === expected_twin,
+      do: state,
+      else: error(state, :o2b_response, path, a, b)
+  end
+
   defp term(%{__struct__: module} = a, %{__struct__: module} = b, state, path)
        when module in [
               Ash.Resource.Actions.Create,

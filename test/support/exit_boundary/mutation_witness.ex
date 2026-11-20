@@ -35,6 +35,14 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
     end
   end
 
+  defp location(
+         :r_iso_k,
+         %{event: {_, :return_from, {Delivery, :key, 1}, key}},
+         _,
+         b,
+         %{rule: :permitted_return}
+       ), do: key !== {Delivery, :crypto.hash(:sha256, b.ref)}
+
   defp location(:r1, %{event: {_, :call, {:erlang, :put, [:m, 0]}}}, events, b, _),
     do: after_seal?(events, b)
 
