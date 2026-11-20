@@ -157,6 +157,12 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         {:completion, :r4} ->
           assert disabled.errors == [], "R4 must pass with only completion's source binding disabled"
 
+        {:crypto, :r5} ->
+          assert disabled.errors == [], "R5 must pass with only the crypto transfer disabled"
+
+        {:crypto, id} when id in [:r6, :r7] ->
+          assert next != nil, "#{mutation.id}: a compound crypto mutation must still fail"
+
         {:k, :r2} ->
           assert next != nil, "R2's independent multiplicity/order protection must remain"
 
