@@ -9,6 +9,7 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
     @tag u9_path: name
     @tag u9_group: Integer.to_string(div(ordinal, 5))
     test "U9 and U11: twenty C-pos observations of #{name}", context do
+      started = System.monotonic_time(:millisecond)
       row = unquote(Macro.escape(row))
       context = with_references(context, [row])
       values = Values.set()[:va]
@@ -21,6 +22,9 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
           {side, Origins.build(pair[side]).origins |> Map.keys() |> Enum.sort()}
       end
       assert length(Enum.uniq(profiles)) == 1, "U11: producer origin keys changed across repetitions"
+      IO.inspect(%{group: unquote(Integer.to_string(div(ordinal, 5))),
+        path: unquote(name), seconds: (System.monotonic_time(:millisecond) - started) / 1000},
+        label: "U9_PATH_SECONDS")
     end
   end
 end
