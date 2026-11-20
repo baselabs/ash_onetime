@@ -2505,17 +2505,17 @@ defmodule AshOnetime.MutationCheck do
       test_name: "plain: maintenance upgrade authenticates the current relation shape",
       assertion: "assert error.postgres.message ==",
       mutated: "NULL; -- bypass historical validation",
-      assertion_line: 52,
+      assertion_line: 61,
       required_failures: [
         %{
           test_name: "plain: maintenance upgrade authenticates the current relation shape",
           assertion: "assert error.postgres.message ==",
-          assertion_line: 52
+          assertion_line: 61
         },
         %{
           test_name: "2: maintenance upgrade authenticates the current relation shape",
           assertion: "assert error.postgres.message ==",
-          assertion_line: 52
+          assertion_line: 61
         }
       ]
     },

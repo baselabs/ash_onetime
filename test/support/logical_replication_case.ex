@@ -242,15 +242,31 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
 
     if role == c.apply_role do
       {table, privilege} = Keyword.fetch!(options, :operation)
-      SQL.query!(c.sub.admin, "GRANT #{privilege} ON #{rel(c.sub, table)} TO #{q(role)}", [])
-      # The invoker bound reads the granted attempt. SELECT on the parent is
-      # an input to that guard, not unrelated DML authority on other relations.
-      if table == "ash_onetime_effect_outcomes" and privilege == "INSERT" do
-        SQL.query!(
-          c.sub.admin,
-          "GRANT SELECT ON #{rel(c.sub, "ash_onetime_idempotency_claims")} TO #{q(role)}",
-          []
-        )
+      # Native apply checks the actual leaf's ACL. UPDATE and DELETE also read
+      # the target to find its replica identity; the outcome bound reads claims.
+      privileges = if privilege in ["UPDATE", "DELETE"], do: "#{privilege},SELECT", else: privilege
+      grants = [{table, privileges}]
+
+      grants =
+        if table == "ash_onetime_effect_outcomes" and privilege == "INSERT",
+          do: [{"ash_onetime_idempotency_claims", "SELECT"} | grants],
+          else: grants
+
+      for {target, privileges} <- grants do
+        relations =
+          SQL.query!(
+            c.sub.admin,
+            "WITH RECURSIVE relations(oid) AS (SELECT $1::text::regclass::oid UNION SELECT i.inhrelid FROM pg_inherits i JOIN relations r ON i.inhparent=r.oid) SELECT n.nspname,c.relname FROM relations r JOIN pg_class c ON c.oid=r.oid JOIN pg_namespace n ON n.oid=c.relnamespace",
+            [rel(c.sub, target)]
+          ).rows
+
+        for [schema, name] <- relations do
+          SQL.query!(
+            c.sub.admin,
+            "GRANT #{privileges} ON #{q(schema)}.#{q(name)} TO #{q(role)}",
+            []
+          )
+        end
       end
     end
 

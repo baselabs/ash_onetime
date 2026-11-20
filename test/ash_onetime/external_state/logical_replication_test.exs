@@ -312,12 +312,12 @@ for partitioning <- [nil, 2] do
                    "SELECT coalesce(sum(apply_error_count),0)::bigint FROM pg_stat_subscription_stats"
                  ) == 0
         else
-          message =
+          {sqlstate, message} =
             if matrix.role == :trusted and matrix.subscriber_bypass,
-              do: "query would be affected by row-level security policy",
-              else: "cannot replicate into relation with row-level security enabled"
+              do: {"42501", "query would be affected by row-level security policy"},
+              else: {"0A000", "cannot replicate into relation with row-level security enabled"}
 
-          assert_apply_stopped!(c, checkpoint, "42501", message)
+          assert_apply_stopped!(c, checkpoint, sqlstate, message)
 
           assert scalar(
                    c.sub.admin,

@@ -30,9 +30,18 @@ for partitioning <- [nil, 2] do
       assert :ok =
                SchemaFixture.migrate!(c, Generator.render_external_state_upgrade(Repo, []), 13)
 
+      # Tamper one leaf only, so the owning refusal cannot depend on which
+      # inherited copy of a root constraint the catalog visits first.
+      payload =
+        scalar(
+          c.owner_repo,
+          "SELECT c.relname FROM pg_partition_tree($1::text::regclass) t JOIN pg_class c ON c.oid=t.relid WHERE t.isleaf ORDER BY c.relname LIMIT 1",
+          [rel(c, "ash_onetime_response_payloads")]
+        )
+
       SQL.query!(
         c.owner_repo,
-        "ALTER TABLE #{rel(c, "ash_onetime_response_payloads")} ADD CONSTRAINT consumer_check CHECK (octet_length(encoded_response)>0)",
+        "ALTER TABLE ONLY #{rel(c, payload)} ADD CONSTRAINT consumer_check CHECK (octet_length(encoded_response)>0)",
         []
       )
 
@@ -50,7 +59,7 @@ for partitioning <- [nil, 2] do
       assert error.postgres.pg_code == "P0001"
 
       assert error.postgres.message ==
-               "untrusted_dependency: upgrade relation shape ash_onetime_response_payloads"
+               "untrusted_dependency: upgrade relation shape #{payload}"
     end
 
     test "#{partitioning || "plain"}: missing external state refuses before a claim write", c do
