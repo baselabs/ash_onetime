@@ -2,7 +2,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Comparator
 
-  def rules, do: [:k, :inv, :completion, :crypto, :return]
+  def rules, do: [:k, :inv, :completion, :crypto, :context, :return]
 
   # Disable K's expression at its source, while still binding that return and
   # checking every later copy. The captured events are passed through unchanged.
@@ -54,8 +54,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/permitted_trace.ex",
-        original:
-          "          state = exact(state, e, :dictionary_binding, value, expected)\n",
+        original: "          state = exact(state, e, :dictionary_binding, value, expected)\n",
         mutated:
           "          {state, expected} =\n            case {value, expected} do\n              {{:done, inv, :executed, envelope, {target, claim}},\n               {:done, expected_inv, :executed, expected_envelope, _}}\n              when inv === expected_inv and envelope === expected_envelope ->\n                state =\n                  state\n                  |> bind(:target, target)\n                  |> bind(:c_admit, claim)\n                  |> bind(:completion, {target, claim})\n\n                {state, value}\n\n              _ ->\n                {state, expected}\n            end\n\n          state = exact(state, e, :dictionary_binding, value, expected)\n"
       },
@@ -89,7 +88,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/permitted_trace.ex",
         original:
-          "  defp returned(state, e, {:crypto, :generate_key, 3}, _, pair, _side),\n    do: exact(state, e, :keypair_copy, pair, state.bound[:nif_keypair])\n\n",
+          "  defp returned(state, e, {:crypto, :generate_key, 3}, _, {pk, sk} = pair, _side) do\n    state = exact(state, e, :keypair_copy, pair, state.bound[:nif_keypair])\n\n    if Enum.any?(e.stack, fn {m, _, _} -> m == Envelope end),\n      do: state |> bind(:epk, pk) |> bind(:esk, sk),\n      else: state\n  end\n\n",
         mutated:
           "  defp returned(state, e, {:crypto, :generate_key, 3}, _, {pk, sk}, _side) do\n    if Enum.any?(e.stack, fn {m, _, _} -> m == Envelope end),\n      do: state |> bind(:epk, pk) |> bind(:esk, sk),\n      else: state\n  end\n\n"
       },
@@ -144,29 +143,25 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         path: "test/support/exit_boundary/permitted_trace.ex",
         original:
           "  defp validate_delivery(state, e, result, side) do\n    state =\n      if Map.has_key?(state.bound, :delivered_return),\n        do: exact(state, e, :return, result, state.bound.delivered_return),\n        else: state\n\n    case result do\n      {:ok, _, %Delivery{outcome: :executed, values: values}} ->\n        exact(state, e, :delivery_values, values, side.values)\n\n      {:ok, _, %Delivery{outcome: outcome, values: values}}\n      when outcome in [:replayed, :recovered] ->\n        exact(state, e, :delivery_values, values, %{})\n\n      {:error, _} ->\n        state\n\n      _ ->\n        state\n    end\n  end\n\n",
-        mutated:
-          "  defp validate_delivery(state, _e, _result, _side), do: state\n\n"
+        mutated: "  defp validate_delivery(state, _e, _result, _side), do: state\n\n"
       },
       %{
         path: "test/support/exit_boundary/comparator.ex",
         original:
           "  defp exact_return(value, state) do\n    expected = state.run.bound.delivered_return\n\n    if value === expected,\n      do: state,\n      else: error(state, :return, [:return, :delivered], value, expected)\n  end\n\n",
-        mutated:
-          "  defp exact_return(_value, state), do: state\n\n"
+        mutated: "  defp exact_return(_value, state), do: state\n\n"
       },
       %{
         path: "test/support/exit_boundary/comparator.ex",
         original:
           "  defp raw_return(state, events) do\n    case Enum.find(\n           events,\n           &match?(%{event: {_, :call, {AshOnetime.Delivery, :normalize, [_, _, _]}}}, &1)\n         ) do\n      nil ->\n        state\n\n      %{event: {_, :call, {_, _, [raw, _, _]}}} = source ->\n        at = %{role: source.role, run_index: source.index, mfa: source.mfa, stack: source.stack}\n        term(raw, state.twin.run.result, %{state | at: at}, [:return, :raw])\n    end\n  end\n\n",
-        mutated:
-          "  defp raw_return(state, _events), do: state\n\n"
+        mutated: "  defp raw_return(state, _events), do: state\n\n"
       },
       %{
         path: "test/support/exit_boundary/comparator.ex",
         original:
           "    state =\n      case Returns.raw(run) do\n        {:found, raw} -> term(raw, twin.run.result, %{state | at: :return}, [:return, :raw])\n        nil -> term(run.run.result, twin.run.result, %{state | at: :return}, [:return])\n      end\n\n",
-        mutated:
-          ""
+        mutated: ""
       },
       %{
         path: "test/support/exit_boundary/trace_program.ex",
@@ -179,15 +174,24 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         path: "test/support/exit_boundary/trace_program.ex",
         original:
           "  defp expected_return({Delivery, :normalize, 3}, [raw, type, opts], _, _) do\n    result = Returns.delivered(raw, type, opts, :delivery)\n\n    {:value,\n     if(match?({:error, _}, result),\n       do: result,\n       else: Tuple.delete_at(result, tuple_size(result) - 1)\n     )}\n  end\n\n",
-        mutated:
-          "  defp expected_return({Delivery, :normalize, 3}, _, _, _), do: :paired\n\n"
+        mutated: "  defp expected_return({Delivery, :normalize, 3}, _, _, _), do: :paired\n\n"
       },
       %{
         path: "test/support/exit_boundary/trace_program.ex",
         original:
           "  defp bound_return(b, key) do\n    case Map.fetch(b, key) do\n      {:ok, value} -> {:value, value}\n      :error -> :paired\n    end\n  end\n\n",
-        mutated:
-          ""
+        mutated: ""
+      }
+    ]
+  end
+
+  def edits(:context) do
+    [
+      %{
+        path: "test/support/exit_boundary/comparator.ex",
+        original:
+          "    state =\n      Enum.reduce(expected, state, fn {key, value}, s ->\n        case Map.fetch(private, key) do\n          {:ok, ^value} -> s\n          :error -> s\n          {:ok, actual} -> error(s, :context, path ++ [:context, :private, key], actual, value)\n        end\n      end)\n\n",
+        mutated: ""
       }
     ]
   end

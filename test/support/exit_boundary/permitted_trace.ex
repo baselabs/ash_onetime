@@ -589,8 +589,13 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
   defp returned(state, _e, {:crypto, :strong_rand_bytes_nif, 1}, [16], bytes, _side),
     do: bind(state, :nif_entropy, bytes)
 
-  defp returned(state, e, {:crypto, :generate_key, 3}, _, pair, _side),
-    do: exact(state, e, :keypair_copy, pair, state.bound[:nif_keypair])
+  defp returned(state, e, {:crypto, :generate_key, 3}, _, {pk, sk} = pair, _side) do
+    state = exact(state, e, :keypair_copy, pair, state.bound[:nif_keypair])
+
+    if Enum.any?(e.stack, fn {m, _, _} -> m == Envelope end),
+      do: state |> bind(:epk, pk) |> bind(:esk, sk),
+      else: state
+  end
 
   defp returned(state, e, {Process, :get, _}, [_key | _], value, _side),
     do: exact(state, e, :dictionary_read, value, state.last_state)

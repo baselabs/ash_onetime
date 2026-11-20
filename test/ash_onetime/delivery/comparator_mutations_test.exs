@@ -50,44 +50,45 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
     test "#{AshOnetime.DeliveryComparatorMutations.label(mutation)}: named first divergence",
          context do
       mutation = unquote(Macro.escape(mutation))
-      prepare_runtime(mutation, context)
-      row = row!(mutation.action, mutation.branch, mutation.fault)
-      pair = observe(context, row, Keyword.fetch!(Values.set(), mutation.value))
-      hits = Search.hits(pair.run)
-      comparison = Comparator.compare(pair)
-      first = List.first(comparison.errors)
+      with_runtime(mutation, context, fn ->
+        row = row!(mutation.action, mutation.branch, mutation.fault)
+        pair = observe(context, row, Keyword.fetch!(Values.set(), mutation.value))
+        hits = Search.hits(pair.run)
+        comparison = Comparator.compare(pair)
+        first = List.first(comparison.errors)
 
-      if first || hits != [] do
-        IO.inspect(
-          %{
-            mutation: mutation.id,
-            source: if(first, do: Diagnostics.location(first)),
-            raw_canary_hits: hits,
-            difference: Diagnostics.safe(first)
-          },
-          label: "R_FIRST_DIVERGENCE",
-          limit: :infinity
-        )
-      end
-
-      quiet? = hits == []
-      assert quiet?, "a raw-canary exit invalidates #{mutation.id}: #{inspect(hits)}"
-
-      if first do
-        named? = MutationWitness.named?(mutation, first, pair, comparison)
-        assert named?, "#{mutation.id}: an earlier or different divergence is not a kill"
-        comparator_mutants(mutation, pair, first)
-
-        if mutation.extra == :u12 do
-          IO.inspect(%{mutation: mutation.id, at: first.at, path: first.path, rule: first.rule},
-            label: "U12_NATIVE_REACHABILITY"
+        if first || hits != [] do
+          IO.inspect(
+            %{
+              mutation: mutation.id,
+              source: if(first, do: Diagnostics.location(first)),
+              raw_canary_hits: hits,
+              difference: Diagnostics.safe(first)
+            },
+            label: "R_FIRST_DIVERGENCE",
+            limit: :infinity
           )
         end
-      end
 
-      clear? = comparison.errors == []
-      marker = String.upcase(Atom.to_string(mutation.id)) <> "_NAMED_FIRST_DIVERGENCE"
-      assert clear?, marker
+        quiet? = hits == []
+        assert quiet?, "a raw-canary exit invalidates #{mutation.id}: #{inspect(hits)}"
+
+        if first do
+          named? = MutationWitness.named?(mutation, first, pair, comparison)
+          assert named?, "#{mutation.id}: an earlier or different divergence is not a kill"
+          comparator_mutants(mutation, pair, first)
+
+          if mutation.extra == :u12 do
+            IO.inspect(%{mutation: mutation.id, at: first.at, path: first.path, rule: first.rule},
+              label: "U12_NATIVE_REACHABILITY"
+            )
+          end
+        end
+
+        clear? = comparison.errors == []
+        marker = String.upcase(Atom.to_string(mutation.id)) <> "_NAMED_FIRST_DIVERGENCE"
+        assert clear?, marker
+      end)
     end
   end
 
@@ -152,10 +153,12 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
           assert disabled.errors == [], "R-iso-K must pass with only K's expression disabled"
 
         {:inv, :r_iso_inv} ->
-          assert disabled.errors == [], "R-iso-inv must pass with only inv's source binding disabled"
+          assert disabled.errors == [],
+                 "R-iso-inv must pass with only inv's source binding disabled"
 
         {:completion, :r4} ->
-          assert disabled.errors == [], "R4 must pass with only completion's source binding disabled"
+          assert disabled.errors == [],
+                 "R4 must pass with only completion's source binding disabled"
 
         {:crypto, :r5} ->
           assert disabled.errors == [], "R5 must pass with only the crypto transfer disabled"
@@ -163,8 +166,16 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         {:crypto, id} when id in [:r6, :r7] ->
           assert next != nil, "#{mutation.id}: a compound crypto mutation must still fail"
 
+        {:context, :r_iso_context} ->
+          assert disabled.errors == [], "R-iso-context must pass with only CONTEXT disabled"
+
+        {:context, :r8} ->
+          assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
+                 "R8's earlier dictionary-read divergence must remain under the CONTEXT mutant"
+
         {:return, :r_iso_return} ->
-          assert disabled.errors == [], "R-iso-X3 must pass with only caller-return checks disabled"
+          assert disabled.errors == [],
+                 "R-iso-X3 must pass with only caller-return checks disabled"
 
         {:return, :r17} ->
           assert next != nil, "R17's earlier error-term propagation must still fail"
@@ -184,7 +195,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
     end
   end
 
-  defp prepare_runtime(%{id: :r28, path: path}, context) do
+  defp with_runtime(%{id: :r28, path: path}, context, callback) do
     source = File.read!(path)
 
     if String.contains?(source, "COMPARATOR_SOCKET") do
@@ -212,15 +223,11 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
       source =
         String.replace(source, "COMPARATOR_SOCKET", List.to_string(:erlang.port_to_list(port)))
 
-      previous_options = Code.compiler_options(ignore_module_conflict: true)
-
-      try do
-        Code.compile_string(source, path)
-      after
-        Code.compiler_options(previous_options)
-      end
+      AshOnetime.Test.ExitBoundary.Compiled.with_source(source, path, callback)
+    else
+      callback.()
     end
   end
 
-  defp prepare_runtime(_, _), do: :ok
+  defp with_runtime(_, _, callback), do: callback.()
 end

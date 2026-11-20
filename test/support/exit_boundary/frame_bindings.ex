@@ -281,14 +281,16 @@ defmodule AshOnetime.Test.ExitBoundary.FrameBindings do
       |> Enum.reverse()
       |> Enum.find(&(&1.pid == e.pid and predicate.(&1)))
 
-  defp ordinal(e, events),
-    do:
-      events
-      |> Enum.filter(&(&1.index < e.index))
-      |> Enum.count(
-        &(&1.pid == e.pid and &1.mfa == e.mfa and &1.stack == e.stack and
-            elem(&1.event, 1) == :call)
-      )
+  defp ordinal(e, events) do
+    start = parent(e, events).index
+
+    events
+    |> Enum.filter(&(&1.index > start and &1.index < e.index))
+    |> Enum.count(
+      &(&1.pid == e.pid and &1.mfa == e.mfa and &1.stack == e.stack and
+          elem(&1.event, 1) == :call)
+    )
+  end
 
   defp difference(e, rule, actual, expected),
     do: %{

@@ -89,7 +89,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
           :trace.port(session, :existing, true, @port_flags)
           Process.monitor(root)
           send(test, {:armed, self()})
-          send(root, {:go, self()})
+          unless Keyword.get(options, :passive?, false), do: send(root, {:go, self()})
 
           state = %{
             session: session,
@@ -105,7 +105,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
             pending_cancel: %{},
             returned?: false,
             published?: false,
-            stopped?: false,
+            stopped?: Keyword.get(options, :passive?, false),
             residue: nil,
             fence_timeout: false,
             untimed: 0,

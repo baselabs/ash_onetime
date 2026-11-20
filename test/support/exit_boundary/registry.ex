@@ -387,12 +387,15 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
   def phase({_, :return_from, {AshOnetime.Admission, :complete, 2}, _}, _), do: :done
   def phase({_, :call, {AshOnetime.Delivery, :open, _}}, _), do: :open
 
-  def phase({_, tag, {AshOnetime, :deliver, 2}, _}, _)
-      when tag in [:return_from, :exception_from], do: :post
+  # A caller-transaction refusal never arms a delivery. The surrounding real
+  # transaction still owns its checkout/checkin on both sides of that path.
+  def phase({_, tag, {AshOnetime, :deliver, 2}, _}, current)
+      when tag in [:return_from, :exception_from] and current != :pre_arm, do: :post
 
   def phase({_, tag, {Ash, function, 2}, _}, _)
       when tag in [:return_from, :exception_from] and
-             function in [:create, :update, :destroy, :run_action], do: :post
+             function in [:create, :update, :destroy, :run_action],
+      do: :post
 
   def phase({_, tag, {AshOnetime.Test.ExitBoundary.Root, :invoke, 2}, _}, _)
       when tag in [:return_from, :exception_from], do: :post

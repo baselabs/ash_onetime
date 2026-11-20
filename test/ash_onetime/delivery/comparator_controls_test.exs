@@ -214,15 +214,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   test "U10: removing pure operations preserves every rule 3 exit", context do
     row = row!(:external_issue, :execute)
     values = Values.set()[:va]
-    before = observe(Map.put(context, :include_pure?, true), row, values)
-    after_pair = observe(context, row, values)
+    pair = observe(Map.put(context, :compare_pure?, true), row, values)
 
     for name <- [:run, :twin] do
-      assert exit_counts(before[name]) == exit_counts(after_pair[name])
-      assert length(before[name].run.events) > length(after_pair[name].run.events)
+      captured = pair[name].run
+      assert exit_observation(captured.pattern_probe) == exit_observation(captured.events)
+      assert length(captured.pattern_probe) > length(captured.events)
     end
 
-    assert_green(after_pair)
+    assert_green(pair)
   end
 
   @tag :u13
@@ -239,7 +239,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       ) ++
         [row!(:issue, :transaction, :rollback), row!(:mint, :transaction, :rollback)]
 
-    context = with_references(context, rows)
+    context = with_references(context)
 
     pairs =
       for row <- rows do
@@ -272,7 +272,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         pair
       end
 
-    assert Completeness.check(pairs) == %{
+    production_raises =
+      AshOnetime.Test.ExitBoundary.PathFrameWitnesses.capture(context, Values.set()[:va])
+
+    assert Completeness.check(pairs ++ production_raises) == %{
              declarations: [],
              hooks: MapSet.new(),
              copies: MapSet.new(),
@@ -340,6 +343,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     for {key, origin} <- sources do
       assert Map.has_key?(twin.origins, key),
              "U8: a pool monitor role has no twin occurrence: #{inspect(%{key: key, index: origin.index})}"
+
       expected = Map.fetch!(twin.origins, key).value
       assert Map.fetch!(pairing.forward, origin.value) == expected
       assert Map.fetch!(pairing.reverse, expected) == origin.value
@@ -349,10 +353,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert length(Enum.uniq(values)) == length(values), "U8: monitor occurrences alias"
   end
 
-  defp exit_counts(side) do
-    side.run.events
+  defp exit_observation(events) do
+    events
     |> Enum.filter(&String.match?(Atom.to_string(&1.class), ~r/^e[0-9]+$/))
-    |> Enum.frequencies_by(&{&1.class, &1.mfa, elem(&1.event, 1)})
+    |> Enum.group_by(& &1.pid, &{&1.class, &1.event})
   end
 
   defp event_mfa({_, :call, {m, f, args}}), do: {m, f, length(args)}

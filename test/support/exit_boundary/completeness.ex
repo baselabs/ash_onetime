@@ -26,18 +26,18 @@ defmodule AshOnetime.Test.ExitBoundary.Completeness do
 
     declared_frames =
       for pair <- pairs,
-          frame <- PathFrames.build(pair.row, pair.run.hooks),
+          frame <- declared_frames(pair),
           into: MapSet.new(),
-          do: {pair.row.type, frame.mfa}
+          do: {PathFrames.path(pair.row), frame.mfa}
 
     frames =
       Enum.reduce(pairs, MapSet.new(), fn pair, seen ->
         stacks = stacks(pair.run.run.events)
 
-        Enum.reduce(PathFrames.build(pair.row, pair.run.hooks), seen, fn frame, acc ->
-          if Enum.any?(stacks, fn stack ->
-               Enum.any?(stack, &(PathFrames.mfa(&1) == frame.mfa))
-             end), do: MapSet.put(acc, {pair.row.type, frame.mfa}), else: acc
+        Enum.reduce(declared_frames(pair), seen, fn frame, acc ->
+          if Enum.any?(stacks, &PathFrames.witness?(&1, frame)),
+            do: MapSet.put(acc, {PathFrames.path(pair.row), frame.mfa}),
+            else: acc
         end)
       end)
 
@@ -47,6 +47,12 @@ defmodule AshOnetime.Test.ExitBoundary.Completeness do
       copies: MapSet.difference(MapSet.new(ContextCopies.slots()), copies),
       frames: MapSet.difference(declared_frames, frames)
     }
+  end
+
+  defp declared_frames(pair) do
+    Map.get_lazy(pair, :path_frame_declarations, fn ->
+      PathFrames.build(pair.row, pair.run.hooks)
+    end)
   end
 
   defp hook_witnesses(pair, seen) do

@@ -185,7 +185,8 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
         ExitBoundary.observe(setup, &invoke/1, %{
           host: host,
           callbacks: @callbacks,
-          include_pure?: Map.get(context, :include_pure?, false)
+          include_pure?: Map.get(context, :include_pure?, false),
+          compare_pure?: Map.get(context, :compare_pure?, false)
         })
 
       %{

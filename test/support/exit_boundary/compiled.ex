@@ -2,6 +2,39 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.References
 
+  # Keep the installed BEAM and its debug readers on the same source revision
+  # while a hosted test exercises a guarded production edit.
+  def with_source(source, path, callback) do
+    previous = Code.compiler_options(ignore_module_conflict: true)
+
+    modules =
+      for [_, name] <- Regex.scan(~r/^defmodule ([A-Za-z0-9_.]+) do$/m, source) do
+        module = Module.concat([name])
+        beam = :code.which(module)
+        {module, beam, File.read!(beam)}
+      end
+
+    try do
+      for {module, binary} <- Code.compile_string(source, path) do
+        {^module, beam, _original} = List.keyfind(modules, module, 0)
+        File.write!(beam, binary)
+        {:module, ^module} = :code.load_binary(module, beam, binary)
+      end
+
+      callback.()
+    after
+      try do
+        for {module, beam, binary} <- modules do
+          File.write!(beam, binary)
+          {:module, ^module} = :code.load_binary(module, beam, binary)
+          unless File.read!(beam) === binary, do: raise("BEAM restoration failed")
+        end
+      after
+        Code.compiler_options(previous)
+      end
+    end
+  end
+
   def identity(module, name, arity) do
     References.memo({:compiled_fun, module, module.module_info(:md5), name, arity}, fn ->
       {:ok, {^module, chunks}} = :beam_lib.chunks(:code.which(module), [:atoms, ~c"FunT"])

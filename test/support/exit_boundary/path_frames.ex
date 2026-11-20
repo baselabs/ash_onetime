@@ -21,42 +21,59 @@ defmodule AshOnetime.Test.ExitBoundary.PathFrames do
       }
     ]
 
-    inner =
-      if row.type == :action do
-        []
-      else
-        %{identity: {module, function, _, _, _}} = hooks[{:around_action, 0}]
+    # The code's call structure determines these declarations, not observed
+    # stacks. Generic before-action is suspended in claim/reserve/produce;
+    # after-action is suspended in complete. Consumer hooks run between them.
+    stage = Map.get(row, :frame_stage, suspension(row))
+    module = if row.type == :action, do: AshOnetime.GenericAction, else: AshOnetime.Change
 
-        [
-          %{
-            mfa: Hooks.trace_mfa(hooks[{:around_action, 0}]),
-            anchor: {AshOnetime.Change, :complete, 2},
-            source: {:install_delivery, 4, :complete, 2},
-            name: {module, function}
-          }
-        ]
+    {slot, callee} =
+      case {row.type, stage} do
+        {:action, :reserve} -> {{:before_action, 0}, {:reserve, 4}}
+        {:action, :producer} -> {{:before_action, 0}, {:produce, 4}}
+        {:action, :complete} -> {{:after_action, 1}, {:complete, 2}}
+        {:action, _} -> {nil, nil}
+        {_, :reserve} -> {{:around_action, 0}, {:reserve, 4}}
+        {_, :producer} -> {{:around_action, 0}, {:produce, 4}}
+        {_, _} -> {{:around_action, 0}, {:complete, 2}}
       end
 
-    replacements =
-      for {slot, hook} <- hooks do
-        module = if row.type == :action, do: AshOnetime.GenericAction, else: AshOnetime.Change
-        source = {module, :install, 3}
-        callee = if elem(slot, 0) == :after_action, do: {:complete, 2}, else: {:reserve, 4}
+    inner =
+      if slot do
+        hook = Map.fetch!(hooks, slot)
+        {function, arity} = callee
 
-        %{
-          replace_hook: slot,
-          installer: source,
+        declaration = %{
           mfa: Hooks.trace_mfa(hook),
-          source: {:install_delivery, 4, elem(callee, 0), elem(callee, 1)}
+          anchor: {module, function, arity},
+          source: {:install_delivery, 4, function, arity}
         }
+
+        # CRUD's ordinary hook retains a non-tail reserve call. Generic's
+        # ordinary before/after hooks and CRUD's completion are tail calls.
+        if row.type != :action and stage == :reserve do
+          [Map.merge(declaration, %{replace_hook: slot, installer: {module, :install, 3}})]
+        else
+          [declaration]
+        end
+      else
+        []
       end
 
     case row.branch do
       :transaction -> []
-      :direct -> replacements
-      _ -> replacements ++ inner ++ outer
+      :direct -> []
+      _ -> inner ++ outer
     end
   end
+
+  def path(row),
+    do: {row.action, row.external?, row.branch, row.fault, Map.get(row, :frame_stage)}
+
+  defp suspension(%{branch: :consumer_failure}), do: :consumer
+  defp suspension(%{branch: :producer_failure}), do: :producer
+  defp suspension(%{fault: :codec_decode}), do: :reserve
+  defp suspension(_), do: :complete
 
   def build(row, hooks) do
     twin = Hooks.reference(AshOnetime.Test.ExitBoundary.Returned, row.action, row.type)
@@ -89,6 +106,13 @@ defmodule AshOnetime.Test.ExitBoundary.PathFrames do
 
   def mfa({m, f, a, _}), do: {m, f, if(is_list(a), do: length(a), else: a)}
   def mfa(_), do: nil
+
+  def witness?(stack, frame) do
+    Enum.chunk_every(stack, 2, 1, :discard)
+    |> Enum.any?(fn [callee, suspended] ->
+      mfa(callee) == frame.anchor and suspended === frame.frame
+    end)
+  end
 
   # Erlang abstract code is obtained from the compiled module's debug backend.
   # The location is the call expression in the declaring function, including calls

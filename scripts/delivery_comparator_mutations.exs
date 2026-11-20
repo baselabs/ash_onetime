@@ -262,7 +262,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       branch: :execute,
       fault: nil,
       value: :vd,
-      first: {AshOnetime.Test.ExitBoundary.Consumer, :after_action, 2},
+      first: {:erlang, :get, 0},
       extra: nil
     },
     %{
@@ -571,6 +571,20 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       fault: nil,
       value: :va,
       first: {:erlang, :put, 2},
+      extra: nil
+    },
+    %{
+      id: :r_iso_context,
+      label: "R-iso-context",
+      path: "lib/ash_onetime/change.ex",
+      original: "  defp complete(changeset, callback) do\n",
+      mutated:
+        "  defp complete(changeset, callback) do\n    changeset = case changeset.context do\n      %{private: %{ash_onetime_delivery: %{ref: ref} = delivery} = private} = context when is_binary(ref) ->\n        private = %{private | ash_onetime_delivery: Map.put(delivery, :n, rem(:binary.first(ref), 2))}\n        %{changeset | context: %{context | private: private}}\n      _ -> changeset\n    end\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      value: :va,
+      first: {AshOnetime.Test.ExitBoundary.Consumer, :after_action, 2},
       extra: nil
     },
     %{

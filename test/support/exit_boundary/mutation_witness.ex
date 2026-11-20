@@ -59,7 +59,8 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
          _,
          b,
          %{rule: rule}
-       ) when rule in [:return, :permitted_return],
+       )
+       when rule in [:return, :permitted_return],
        do: result.amount === rem(byte_size(b.values.long), 2) and {:ok, result} !== b.raw_return
 
   defp location(:r1, %{event: {_, :call, {:erlang, :put, [:m, 0]}}}, events, b, _),
@@ -118,8 +119,28 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
        }),
        do: envelope !== <<1, b.epk::binary, b.tag::binary, b.ct::binary>>
 
-  defp location(:r8, %{event: {_, :call, {Consumer, _, [subject | _]}}}, _, b, _),
-    do: get_in(subject.context, [:private, :ash_onetime_delivery]) !== %{ref: b.ref}
+  defp location(
+         :r8,
+         %{event: {_, :return_from, {:erlang, :get, 0}, dictionary}, stack: stack},
+         _,
+         b,
+         _
+       ),
+    do: {AshOnetime.Change, :complete, 2} in stack and
+          Enum.any?(dictionary, fn
+            {key, {:sealed, inv, envelope}} -> {key, inv, envelope} === {b.key, b.inv, b.envelope}
+            _ -> false
+          end)
+
+  defp location(
+         :r_iso_context,
+         %{event: {_, :call, {Consumer, _, [subject | _]}}},
+         _,
+         b,
+         %{rule: :context}
+       ),
+    do: get_in(subject.context, [:private, :ash_onetime_delivery]) ===
+          %{ref: b.ref, n: rem(:binary.first(b.ref), 2)}
 
   defp location(:r9, %{index: index, event: {_, :call, {Producer, :produce, _}}}, events, b, _),
     do:

@@ -9,6 +9,7 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
     Declarations,
     Diagnostics,
     Returned,
+    Scenarios,
     Search,
     Values,
     Withheld
@@ -101,18 +102,28 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
 
     pairs =
       try do
-        for action <- [:issue, :rotate, :revoke, :mint] do
-          pair =
-            observe(context, row!(action, :consumer_failure, :after_raise), Values.set()[:va])
+        pairs =
+          for row <- Scenarios.rows(),
+              row.branch == :consumer_failure and row.fault == :after_raise do
+            pair = observe(context, row, Values.set()[:va])
 
-          comparison = Comparator.compare(pair)
-          baseline? = comparison.errors == []
+            comparison = Comparator.compare(pair)
+            baseline? = comparison.errors == []
 
-          assert baseline?,
-                 "U13 needs an accepted real capture before adding a dead registry slot"
+            assert baseline?,
+                   "U13 needs an accepted real capture before adding a dead registry slot"
 
-          pair
-        end
+            pair
+          end
+
+        assert Completeness.check(pairs) == %{
+                 declarations: [],
+                 hooks: MapSet.new(),
+                 copies: MapSet.new(),
+                 frames: MapSet.new()
+               }, "U13 baseline must have every live witness before the dead-slot mutation"
+
+        pairs
       after
         if mutated?, do: compile_reference(source, control.path)
       end

@@ -19,7 +19,7 @@ defmodule AshOnetime.Test.ExitBoundary do
     # `result` is what the boundary function returned to the root; `residue` the count of
     # delivery entries left in the root's dictionary; `events` the annotated snapshot;
     # `snapshot` the raw drained snapshot (its ledger and its process set).
-    defstruct [:result, :residue, :events, :snapshot, :fixture, :backtrace_depth]
+    defstruct [:result, :residue, :events, :snapshot, :fixture, :backtrace_depth, :pattern_probe]
   end
 
   @doc """
@@ -40,6 +40,16 @@ defmodule AshOnetime.Test.ExitBoundary do
 
       frames = Capture.frames(spec.host, spec.callbacks) ++ Map.get(spec, :frames, [])
 
+      # U10 attaches both native patterns before releasing the same root. The
+      # passive session drains its own fences after the controlling session has
+      # stopped the root; it never participates in the application's execution.
+      probe =
+        if Map.get(spec, :compare_pure?, false) do
+          probe = Collector.start(frames, @deadline, include_pure?: true, passive?: true)
+          :ok = Collector.arm(probe, root)
+          probe
+        end
+
       collector =
         Collector.start(frames, @deadline, include_pure?: Map.get(spec, :include_pure?, false))
 
@@ -48,12 +58,21 @@ defmodule AshOnetime.Test.ExitBoundary do
 
       case Collector.snapshot(collector, @deadline) do
         {:ok, snapshot} ->
+          pattern_probe =
+            if probe do
+              case Collector.snapshot(probe, @deadline) do
+                {:ok, captured} -> Capture.annotate(captured, spec)
+                {:error, reason} -> raise "U10 pattern probe did not drain: #{inspect(reason)}"
+              end
+            end
+
           %Run{
             result: result,
             residue: snapshot.residue,
             backtrace_depth: 64,
             events: Capture.annotate(snapshot, spec),
             snapshot: snapshot,
+            pattern_probe: pattern_probe,
             fixture: %{control: control, observer: test, collector: collector}
           }
 
