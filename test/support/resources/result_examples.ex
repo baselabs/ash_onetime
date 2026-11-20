@@ -35,6 +35,7 @@ defmodule AshOnetime.Test.ResultExamples.Account do
     action :array_result, {:array, :integer}
     action :map_result, :map
 
+    # rule:return-contract
     action :nullable_result, :string do
       allow_nil? true
     end

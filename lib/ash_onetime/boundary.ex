@@ -200,6 +200,7 @@ defmodule AshOnetime.Boundary do
            """
            SELECT coalesce(max(seq), 0)
            FROM #{relation(target, table)}
+           -- rule:boundary-check-predicate
            WHERE tenant = $1 AND seq > $2 AND #{predicate}
            """,
            [tenant, cutoff | predicate_params]
@@ -252,6 +253,7 @@ defmodule AshOnetime.Boundary do
     Enum.reduce_while(tags, :ok, fn tag, :ok ->
       case dispatched(
              target,
+             # rule:boundary-lock-noop
              "SELECT pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))",
              [
                tenant,

@@ -22,7 +22,8 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
     path = run_generator(temporary, [])
     source = File.read!(path)
 
-    assert source =~ "id uuid PRIMARY KEY"
+    assert source =~ "id uuid NOT NULL"
+    assert source =~ "PRIMARY KEY (id)"
     refute source =~ "count = 4"
 
     assert source =~
@@ -76,7 +77,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
       "20261113000000"
     ]
 
-    assert_raise Mix.Error, ~r/requires the 1.10.0 operation-hold migration/, fn ->
+    assert_raise Mix.Error, ~r/requires the 2.0 operation-hold migration/, fn ->
       GenerateMigrations.run(arguments)
     end
 
@@ -84,6 +85,11 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
 
     File.write!(
       Path.join(path, "20261112000000_add_ash_onetime_operation_hold.exs"),
+      "# applied predecessor\n"
+    )
+
+    File.write!(
+      Path.join(path, "20261112000001_add_ash_onetime_external_state.exs"),
       "# applied predecessor\n"
     )
 
@@ -257,6 +263,9 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
       |> Enum.sort()
 
     assert templates == [
+             "priv/templates/migrations/external_state.exs",
+             "priv/templates/migrations/external_state/claims.sql",
+             "priv/templates/migrations/external_state/outcomes.sql",
              "priv/templates/migrations/fact_tables.exs",
              "priv/templates/migrations/hash_partitioned.exs",
              "priv/templates/migrations/install.exs",
@@ -270,6 +279,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
              "priv/templates/migrations/maintenance/copy_policy.sql",
              "priv/templates/migrations/maintenance/edges.sql",
              "priv/templates/migrations/maintenance/eligible.sql",
+             "priv/templates/migrations/maintenance/expire.sql",
              "priv/templates/migrations/maintenance/guard_idempotency.sql",
              "priv/templates/migrations/maintenance/guard_nonce.sql",
              "priv/templates/migrations/maintenance/lock.sql",
@@ -278,6 +288,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
              "priv/templates/migrations/maintenance/prune.sql",
              "priv/templates/migrations/maintenance/reap.sql",
              "priv/templates/migrations/maintenance/reference.sql",
+             "priv/templates/migrations/maintenance/reference_legacy.sql",
              "priv/templates/migrations/maintenance/relations.sql",
              "priv/templates/migrations/maintenance/reset_acl.sql",
              "priv/templates/migrations/maintenance/roll.sql",
@@ -286,6 +297,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
              "priv/templates/migrations/maintenance/status.sql",
              "priv/templates/migrations/maintenance/trust.sql",
              "priv/templates/migrations/maintenance_helpers.exs",
+             "priv/templates/migrations/maintenance_routines.exs",
              "priv/templates/migrations/operation_hold.exs"
            ]
   end

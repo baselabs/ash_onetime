@@ -24,8 +24,8 @@ defmodule Mix.Tasks.AshOnetime.DoctorLiveTest do
     assert output =~ "[OK]  logical_partition column present on all three authority tables"
     assert output =~ "[OK]  ash_onetime_response_payloads table present"
     assert output =~ "[OK]  ash_onetime_response_payloads_default partition present"
-    assert output =~ "[OK]  cleanup/reap functions present with exact arities"
-    assert output =~ "[OK]  delete-guard triggers present"
+    assert output =~ "[OK]  cleanup/reap/expiry functions present with exact arities"
+    assert output =~ "[OK]  claim and outcome guard triggers present"
     assert output =~ "all checks passed"
   end
 

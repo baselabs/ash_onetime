@@ -40,6 +40,7 @@ defmodule AshOnetime.Telemetry do
       :oversized,
       :disabled
     ],
+    # rule:partitions-created-telemetry
     cleanup: [:claims_deleted, :partitions_dropped, :partitions_created, :partitions_kept],
     reap: [:claims_reaped],
     external_recovery: [
@@ -48,6 +49,7 @@ defmodule AshOnetime.Telemetry do
       :recover_succeeded,
       :absence_proven,
       :outcome_unknown,
+      :outcome_unrecorded,
       :external_effect_unavailable,
       :finalize_locked,
       :replayed
@@ -230,6 +232,20 @@ defmodule AshOnetime.Telemetry do
     with :ok <- validate_context(strategy, resource, action),
          true <- result_class in Map.fetch!(@classes, event),
          :ok <- validate_measurements(event, measurements) do
+      # rule:telemetry-exception
+      # rule:telemetry-fingerprint
+      # rule:telemetry-key
+      # rule:telemetry-key_hash
+      # rule:telemetry-payload
+      # rule:telemetry-resolver_id
+      # rule:telemetry-response
+      # rule:telemetry-scope
+      # rule:telemetry-scope_hash
+      # rule:telemetry-secret
+      # rule:telemetry-signature
+      # rule:telemetry-store_result
+      # rule:telemetry-token
+      # rule:telemetry-verifier_id
       metadata = %{
         strategy: strategy,
         resource: resource,
@@ -237,6 +253,17 @@ defmodule AshOnetime.Telemetry do
         result_class: result_class
       }
 
+# -- end-rule:telemetry-resolver_id
+# -- end-rule:telemetry-store_result
+# -- end-rule:telemetry-key_hash
+# -- end-rule:telemetry-scope_hash
+# -- end-rule:telemetry-fingerprint
+# -- end-rule:telemetry-exception
+# -- end-rule:telemetry-payload
+# -- end-rule:telemetry-signature
+# -- end-rule:telemetry-response
+# -- end-rule:telemetry-secret
+# -- end-rule:telemetry-key
       :telemetry.execute([:ash_onetime, event], measurements, metadata)
       :ok
     else

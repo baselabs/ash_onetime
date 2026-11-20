@@ -1,0 +1,56 @@
+name: Logical PostgreSQL
+description: Start or remove this job's dedicated PostgreSQL logical replication server
+inputs:
+  mode:
+    description: start or stop
+    required: false
+    default: start
+runs:
+  using: composite
+  steps:
+    - name: Manage the logical replication server
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        # Throwaway fixture values, never credentials for an external service.
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+        POSTGRES_DB: ash_onetime_test
+      run: |
+        set -euo pipefail
+        container="${ASH_ONETIME_TEST_SERVER:?}-logical"
+        case "$container" in
+          "ao-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}-"*) ;;
+          *) echo "::error::logical PostgreSQL requires this run's server hostname"; exit 1 ;;
+        esac
+        case "$MODE" in
+          stop)
+            docker rm -f -v "$container"
+            exit 0 ;;
+          start) ;;
+          *) echo "::error::mode must be start or stop"; exit 1 ;;
+        esac
+
+        postgres_image=
+        while IFS='=' read -r key value; do
+          case "$key" in postgres_image) postgres_image="$value" ;; esac
+        done < .github/service-pins
+        case "$postgres_image" in
+          *@sha256:*) ;;
+          *) echo "::error::the PostgreSQL service pin must name an immutable digest"; exit 1 ;;
+        esac
+
+        docker run --detach --name "$container" --hostname "$container" \
+          --env POSTGRES_USER --env POSTGRES_PASSWORD --env POSTGRES_DB \
+          --publish 127.0.0.1:18842:5432 "$postgres_image" \
+          -c wal_level=logical -c logging_collector=on -c log_destination=csvlog
+        for ((attempt=0; attempt<60; attempt++)); do
+          if docker exec "$container" pg_isready -h 127.0.0.1 -U postgres -d ash_onetime_test; then
+            echo 'ASH_ONETIME_LOGICAL_URL=ecto://postgres:postgres@127.0.0.1:18842/ash_onetime_test' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          sleep 1
+        done
+        docker logs "$container"
+        echo "::error::logical PostgreSQL did not become ready within 60 attempts"
+        exit 1

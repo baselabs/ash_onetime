@@ -5,6 +5,8 @@ defmodule AshOnetime.Store do
 
   @callback claim(term(), Claim.Request.t()) :: Result.t()
   @callback claim_committed(term(), Claim.Request.t(), keyword()) :: Result.t()
+  @callback record_outcome_committed(term(), Claim.t(), :held | :absent_proven, keyword()) ::
+              Result.t()
   @callback lock_for_effect(term(), Claim.t(), keyword()) :: Result.t()
   @callback complete(term(), Claim.t(), binary(), binary(), binary()) :: Result.t()
   @callback complete_external(term(), Claim.t(), binary(), binary(), binary()) :: Result.t()
@@ -36,6 +38,10 @@ defmodule AshOnetime.Store do
   @spec claim_committed(term(), Claim.Request.t(), keyword()) :: Result.t()
   def claim_committed(target, request, options),
     do: Postgres.claim_committed(target, request, options)
+
+  @doc false
+  def record_outcome_committed(target, claim, outcome, options),
+    do: Postgres.record_outcome_committed(target, claim, outcome, options)
 
   @doc false
   @spec lock_for_effect(term(), Claim.t(), keyword()) :: Result.t()
@@ -83,6 +89,7 @@ defmodule AshOnetime.Store do
   def load(target, claim, options), do: Postgres.load(target, claim, options)
 
   @type cleanup_counts :: %{
+          responses_expired: non_neg_integer(),
           idempotency: non_neg_integer(),
           nonce: non_neg_integer(),
           payload_partitions: non_neg_integer(),
@@ -193,6 +200,15 @@ defmodule AshOnetime.Store do
         :idempotency,
         repo,
         :cleanup,
+        counts.responses_expired,
+        :responses_expired
+      )
+
+    _ =
+      AshOnetime.Telemetry.cleanup(
+        :idempotency,
+        repo,
+        :cleanup,
         counts.idempotency,
         :claims_deleted
       )
@@ -213,6 +229,7 @@ defmodule AshOnetime.Store do
     # partition is kept every run and would bury the signal.
     refused = counts.payload_partitions_refused |> Map.values() |> Enum.sum()
 
+    # rule:rls-prune-refusal-telemetry
     if refused > 0 do
       AshOnetime.Telemetry.cleanup(
         :idempotency,

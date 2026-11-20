@@ -67,20 +67,14 @@ default 1 second) beyond its retention horizon (`retain_for`, defaulting to `max
 `clock_skew`). Retention cannot be shorter than acceptance. Cleanup is therefore strictly later than the
 acceptance window as long as the PostgreSQL clock is not ahead of the application clock by more
 than that margin — keep both clocks synchronized (e.g. via NTP), and raise the margin for looser
-synchronization. Processing external claims are retained for recovery until they are either
-completed or reaped. An abandoned processing claim that never settles would otherwise be immortal
-(cleanup skips it and the delete guard forbids deleting it), so a caller driving external-effect
-actions with distinct keys and abandoning each after commit could accumulate unbounded undeletable
-rows — a storage denial of service. The opt-in reaper (`mix ash_onetime.reap`) deletes such claims past a
-separate, much longer abandonment horizon, through a sanctioned delete path: a processing claim is
-removable only when it is older than both the operator's horizon and a hard 1-day floor and past
-its own retention horizon, all re-enforced by the delete guard. Recoverability is thereby bounded
-by `max(retention, abandonment horizon)` rather than unbounded. A retry after reaping runs
-under a new peer operation key, so no key-based defense remains at either layer — enable
-the reaper on external-effect actions only with a business-level reconciliation path (the
-external-effects guide states the boundary). The reaper bounds steady-state growth, not a burst
-(residual ≈ admission rate × that window); operators tune it with edge rate limiting and reap
-cadence.
+synchronization. Unresolved external claims are retained until recovery completes, regardless of retention or
+abandonment horizons. Their operation UUID and per-attempt outcome records survive every
+maintenance path. Only processing claims fixed as local at insertion are reapable. Retained
+external storage is unbounded by design; monitor counts and age, apply admission rate limits
+and use authoritative peer recovery. A shorter `response_retention` removes completed response
+bytes without reopening the claim's key. A hold prevents response expiry and claim cleanup.
+Ordered rollbacks lock before checking unresolved rows and refuse before removing protection.
+Running a historical `down` out of order is owner DDL outside that guarantee.
 Telemetry is deliberately value-free to avoid exporting keys, tokens, signatures, payloads,
 or verifier identities.
 

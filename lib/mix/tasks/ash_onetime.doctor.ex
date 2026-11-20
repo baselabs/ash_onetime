@@ -22,13 +22,13 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
     tables) and fails when the installed schema is not current for this package version — the
     failure mode of upgrading the package without running its migrations. Checks: the
     `logical_partition` column on both claim tables (the 1.1 logical-partition upgrade), the
-    `ash_onetime_response_payloads` partitioned table and its `_default` partition, the three
-    cleanup/reap functions (by name and arity), the two delete-guard triggers, and the
+    `ash_onetime_response_payloads` partitioned table and its `_default` partition, the cleanup, reap and response-expiry functions (by name and arity), the claim and
+    outcome guards, durable external state, and the
     operation-hold column, validated CHECK, partial indexes, and function definitions.
     Also checks ALWAYS firing on package triggers, including fact tables and partitions,
     event-trigger function ownership and holders, and refuses owner-equivalent runtime
     roles. Run the live doctor once for each runtime role using its own connection.
-    Prints the held backlog and oldest admission age; when row security applies to this
+    Prints held and unresolved external backlogs and oldest admission ages; when row security applies to this
     role, labels the figures as visible rows rather than an installation total.
 
       mix ash_onetime.doctor --repo MyApp.Repo --live
@@ -52,6 +52,7 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   @switches [repo: :string, prefix: :string, live: :boolean]
 
   # Matches mix.exs ash_requirement/0 (ADR 0004); change both together.
+  # rule:doctor-ash-floor
   @ash_floor Version.parse!("3.37.2")
 
   # The three required Oban queues (authoritative source: the three `use Oban.Worker, queue:`
@@ -250,11 +251,28 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   @expected_functions [
     {"ash_onetime_cleanup_idempotency", 1},
     {"ash_onetime_cleanup_nonce", 1},
-    {"ash_onetime_reap_idempotency", 2}
+    {"ash_onetime_reap_idempotency", 2},
+    {"ash_onetime_expire_responses", 1}
   ]
-  @expected_triggers ["ash_onetime_idempotency_delete_guard", "ash_onetime_nonce_delete_guard"]
+  @expected_triggers ~w(ash_onetime_idempotency_delete_guard ash_onetime_nonce_delete_guard ash_onetime_idempotency_update_guard ash_onetime_effect_outcome_guard ash_onetime_effect_outcome_bound)
 
-  @claim_tables ["ash_onetime_idempotency_claims", "ash_onetime_nonce_claims"]
+  @claim_tables ~w(ash_onetime_idempotency_claims ash_onetime_nonce_claims ash_onetime_effect_outcomes)
+
+  @external_state_sql """
+  SELECT (SELECT count(*)=5 FROM pg_attribute a
+    WHERE a.attrelid=to_regclass(format('%I.ash_onetime_idempotency_claims',$1::text))
+      AND NOT a.attisdropped AND (a.attname,a.atttypid) IN (
+        ('effect_local','boolean'::regtype),('effect_attempt','bigint'::regtype),
+        ('response_retain_until','timestamptz'::regtype),('response_expired_at','timestamptz'::regtype),
+        ('hold_reference','text'::regtype)))
+    AND to_regclass(format('%I.ash_onetime_effect_outcomes',$1::text)) IS NOT NULL
+    AND (SELECT count(*)=4 FROM pg_constraint k
+      WHERE k.conrelid=to_regclass(format('%I.ash_onetime_idempotency_claims',$1::text))
+        AND k.convalidated AND k.conname IN ('ash_onetime_idempotency_claims_effect_check',
+          'ash_onetime_idempotency_claims_processing_check',
+          'ash_onetime_idempotency_claims_deadline_order_check',
+          'ash_onetime_idempotency_claims_complete_check'))
+  """
 
   @logical_partition_sql """
   SELECT c.relname
@@ -305,6 +323,7 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
   @trigger_modes_sql """
   WITH RECURSIVE relations(oid) AS (
     SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+    -- rule:M-doctor-fact-schema
     WHERE (n.nspname=$1 AND c.relname=ANY($2)) OR EXISTS (
       SELECT 1 FROM pg_catalog.pg_trigger t
       WHERE t.tgrelid=c.oid AND t.tgfoid=pg_catalog.to_regprocedure(pg_catalog.format('%I.ash_onetime_fact_append_only()',$1)))
@@ -398,10 +417,48 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
         "Held idempotency claims: #{backlog.held_count}; oldest age: #{age} (#{scope})."
       )
 
-      :ok
+      check_external_backlog(repo, schema, scope)
     else
       _failure -> live_query_failure(repo, "held backlog could not be read")
     end
+  end
+
+  defp check_external_backlog(repo, schema, scope) do
+    quoted = ~s("#{String.replace(schema, "\"", "\"\"")}")
+
+    sql = """
+    SELECT state,count(*),extract(epoch FROM (statement_timestamp()-min(admitted_at)))::bigint
+    FROM (
+      SELECT c.admitted_at,CASE WHEN c.effect_attempt=0 THEN 'unknown'
+        ELSE coalesce(o.outcome,'unresolved') END AS state
+      FROM #{quoted}.ash_onetime_idempotency_claims c
+      LEFT JOIN #{quoted}.ash_onetime_effect_outcomes o ON o.claim_id=c.id AND o.attempt=c.effect_attempt
+        AND (to_jsonb(o)->>'operation_hash' IS NULL OR (to_jsonb(o)->>'operation_hash')::bytea=c.operation_hash)
+        AND (to_jsonb(o)->>'logical_partition' IS NULL OR to_jsonb(o)->>'logical_partition'=c.logical_partition)
+      WHERE c.state='processing' AND NOT c.effect_local
+    ) external GROUP BY state
+    """
+
+    case query(repo, sql, []) do
+      {:ok, result} ->
+        rows = Map.new(result.rows, fn [state, count, age] -> {state, {count, age}} end)
+
+        for state <- ~w(unresolved held absent_proven unknown) do
+          {count, age} = Map.get(rows, state, {0, nil})
+
+          render_external_backlog(state, count, age, scope)
+        end
+
+        :ok
+
+      {:error, reason} ->
+        live_query_failure(repo, reason)
+    end
+  end
+
+  defp render_external_backlog(state, count, age, scope) do
+    age = if age, do: "#{age}s", else: "none"
+    Mix.shell().info("External #{state}: #{count}; oldest age: #{age} (#{scope}).")
   end
 
   defp check_schema(repo, prefix) do
@@ -429,12 +486,14 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
          "(found on: #{inspect(Enum.sort(facts.logical_partition_tables))})"},
       {Map.get(facts, :operation_hold, false),
        "operation-hold column, validated check, indexes, and functions current"},
+      {Map.get(facts, :external_state, false),
+       "external-state columns, checks and outcome relation current"},
       {facts.payload_table, "ash_onetime_response_payloads table present"},
       {facts.default_partition, "ash_onetime_response_payloads_default partition present"},
       {MapSet.new(facts.functions) == MapSet.new(@expected_functions),
-       "cleanup/reap functions present with exact arities"},
+       "cleanup/reap/expiry functions present with exact arities"},
       {Enum.sort(Enum.uniq(facts.triggers)) == Enum.sort(@expected_triggers),
-       "delete-guard triggers present (found: #{inspect(Enum.sort(Enum.uniq(facts.triggers)))})"}
+       "claim and outcome guard triggers present (found: #{inspect(Enum.sort(Enum.uniq(facts.triggers)))})"}
     ]
     |> Enum.map(fn {passed?, message} ->
       if passed?, do: {:ok, message}, else: {:fail, message}
@@ -449,12 +508,14 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
       end)
 
     events =
+      # rule:M-evt-doctor
       Enum.map(facts.event_owners, fn [trigger, function, owner, holder] ->
         {:fail,
          "event trigger #{trigger}, function #{function}, owner #{owner}, holder #{holder || "none"} is untrusted"}
       end)
 
     runtime =
+      # rule:M-doctor-runtime
       Enum.flat_map(facts.runtime_owner, fn
         [role, true] -> [{:fail, "runtime role #{role} is owner-equivalent to the package owner"}]
         [_role, false] -> []
@@ -480,10 +541,14 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
              [
                "ash_onetime_guard_idempotency_delete",
                "ash_onetime_guard_nonce_delete",
+               "ash_onetime_guard_idempotency_update",
+               "ash_onetime_guard_effect_outcome",
+               "ash_onetime_bound_effect_outcome",
                "ash_onetime_fact_append_only"
              ],
              Postgres.routine_schema(schema)
            ]),
+         {:ok, external_state} <- query(repo, @external_state_sql, [schema]),
          {:ok, runtime_owner} <- query(repo, @runtime_owner_sql, [schema]),
          {:ok, event_owners} <- query(repo, @event_owner_sql, [schema]),
          {:ok, hold} <-
@@ -499,6 +564,7 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
          functions: Enum.map(functions.rows, &List.to_tuple/1),
          triggers: Enum.map(triggers.rows, &hd/1),
          operation_hold: hold.rows == [[true]],
+         external_state: external_state.rows == [[true]],
          trigger_modes: trigger_modes.rows,
          runtime_owner: runtime_owner.rows,
          event_owners: event_owners.rows

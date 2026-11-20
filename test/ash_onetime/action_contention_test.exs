@@ -180,6 +180,7 @@ defmodule AshOnetime.ActionContentionTest do
         CREATE FUNCTION #{relation(prefix, "guard_action_effect_ledger")}()
         RETURNS trigger LANGUAGE plpgsql AS $guard$
         BEGIN
+          -- rule:ledger-tamper
           RAISE EXCEPTION 'action effect ledger is append-only' USING ERRCODE = '23514';
         END
         $guard$

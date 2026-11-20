@@ -22,6 +22,7 @@ defmodule AshOnetime.GenericAction do
     protection = Keyword.fetch!(opts, :protection)
 
     input
+    # rule:generic-preparation
     |> Ash.ActionInput.before_action(
       fn pending -> reserve(pending, protection, context) end,
       prepend?: true
@@ -32,6 +33,8 @@ defmodule AshOnetime.GenericAction do
   @impl Ash.Resource.Actions.Implementation
   def run(input, opts, context) do
     case AshOnetime.Admission.state(input) do
+      # rule:action-replay
+      # rule:replay-execution
       {:ok, %{class: class}} when class in [:execute, :external_execute, :nonce, :untracked] ->
         run_original(input, Keyword.get(opts, :original), context)
 
@@ -52,6 +55,7 @@ defmodule AshOnetime.GenericAction do
       {:execute, state} -> AshOnetime.Admission.put_state(input, state)
       {:execute, prepared, state} -> AshOnetime.Admission.put_state(prepared, state)
       {:execute_untracked, state} -> AshOnetime.Admission.put_state(input, state)
+      # rule:marker-propagation
       {:replay, _decoded, state} -> AshOnetime.Admission.put_replay(input, state)
       {:error, error} -> {:error, error}
     end
@@ -61,6 +65,7 @@ defmodule AshOnetime.GenericAction do
     case AshOnetime.Admission.state(input) do
       {:ok, %{class: :replay} = state} ->
         # ActionInput has no relationship field, but caller code can add map keys.
+        # rule:generic-replay-relationship-backstop
         if Map.get(input, :relationships, %{}) == %{} do
           after_result(input, AshOnetime.Admission.stamp_replay(state, result))
         else
@@ -76,6 +81,7 @@ defmodule AshOnetime.GenericAction do
       {:ok, state} ->
         persisted_result = if is_nil(input.action.returns), do: :ok, else: result
 
+        # rule:completion
         case AshOnetime.Admission.complete(state, persisted_result) do
           {:ok, normalized} ->
             after_result(input, AshOnetime.Admission.stamp_replay(state, normalized))

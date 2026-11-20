@@ -10,12 +10,16 @@ DECLARE
   little_days bigint;
   big_days bigint;
 BEGIN
-  FOREACH root IN ARRAY ARRAY['ash_onetime_idempotency_claims','ash_onetime_nonce_claims',
+  result := result || jsonb_build_object('package_roots',to_jsonb(ARRAY['ash_onetime_idempotency_claims','ash_onetime_effect_outcomes','ash_onetime_nonce_claims','ash_onetime_response_payloads','ash_onetime_maintenance_runs']));
+  FOREACH root IN ARRAY ARRAY['ash_onetime_idempotency_claims','ash_onetime_effect_outcomes','ash_onetime_nonce_claims',
     'ash_onetime_response_payloads','ash_onetime_maintenance_runs'] LOOP
     relation_oid := format('%I.%I',@schema_name@,root)::regclass;
     result := result || jsonb_build_object(root,@routines@.ash_onetime_maintenance_shape(relation_oid::oid));
     SELECT inhrelid INTO child_oid FROM pg_inherits WHERE inhparent=relation_oid ORDER BY inhrelid LIMIT 1;
     IF FOUND THEN
+      IF root <> 'ash_onetime_response_payloads' THEN
+        result := result || jsonb_build_object(root || '_children', (SELECT jsonb_object_agg(regexp_replace(c.relpartbound::text,':location [-0-9]+',':location -1','g'),@routines@.ash_onetime_maintenance_shape(c.oid::oid)) FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid WHERE i.inhparent=relation_oid));
+      END IF;
       result := result || jsonb_build_object(root || '_child',@routines@.ash_onetime_maintenance_shape(child_oid::oid));
     END IF;
   END LOOP;
@@ -34,6 +38,7 @@ BEGIN
     + mod(sample_bytes[2]+256,256)*65536::bigint + mod(sample_bytes[1]+256,256)*16777216::bigint;
   IF big_days>2147483647 THEN big_days := big_days-4294967296; END IF;
   IF little_days<>sample_days AND big_days<>sample_days THEN
+    -- rule:capture-date-encoding-refusal
     RAISE EXCEPTION 'untrusted_dependency: unsupported date encoding';
   END IF;
   result := result || jsonb_build_object('payload_byte_order',CASE WHEN little_days=sample_days THEN 'little' ELSE 'big' END);

@@ -21,6 +21,8 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/logical-postgres
+
     - name: Refuse an unknown cache input
       shell: bash
       env:
@@ -65,3 +67,8 @@ runs:
         ASH_ONETIME_RLS_PRUNE_TESTS: "1"
     - shell: bash
       run: mix credo --strict
+
+    - uses: ./.github/actions/logical-postgres
+      if: always()
+      with:
+        mode: stop

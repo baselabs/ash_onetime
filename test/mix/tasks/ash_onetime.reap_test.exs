@@ -47,13 +47,13 @@ defmodule Mix.Tasks.AshOnetime.ReapTest do
   defp insert_abandoned(prefix, label) do
     claim_id = Ecto.UUID.generate()
 
-    SQL.query!(
+    restore_fixture!(
       Repo,
       """
       INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}
-        (id, operation_hash, scope_hash, key_hash, fingerprint, state,
+        (id, operation_hash, scope_hash, key_hash, fingerprint, state,effect_local,
          admitted_at, retain_until, inserted_at)
-      VALUES ($1::uuid, $2, $3, $4, $5, 'processing',
+      VALUES ($1::uuid, $2, $3, $4, $5, 'processing',true,
               transaction_timestamp() - interval '40 days',
               transaction_timestamp() - interval '39 days',
               transaction_timestamp() - interval '40 days')

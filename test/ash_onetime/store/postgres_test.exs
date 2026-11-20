@@ -1,6 +1,8 @@
 defmodule AshOnetime.Store.PostgresTest do
   use AshOnetime.Test.StoreCase, async: false
 
+  alias AshOnetime.Test.StoreCase
+
   alias AshOnetime.Test.ExternalPeer
 
   @moduletag :store
@@ -358,7 +360,7 @@ defmodule AshOnetime.Store.PostgresTest do
   end
 
   @tag claim_load_payload_restore_mutation: true
-  test "completed claim load restores the caller timeout before reading its payload", %{
+  test "completed claim load bounds its joined payload read and restores the caller timeout", %{
     target: target,
     prefix: prefix
   } do
@@ -413,9 +415,9 @@ defmodule AshOnetime.Store.PostgresTest do
                    []
                  ).rows
 
-               assert observed == [["7s"]]
+               assert observed == [["100ms"]]
                assert SQL.query!(Repo, "SHOW lock_timeout", []).rows == [["7s"]]
-               IO.puts("PAYLOAD_READ_TIMEOUT observed=7s claim_bound=100ms contention=false")
+               IO.puts("PAYLOAD_READ_TIMEOUT observed=100ms claim_bound=100ms contention=false")
                :checked
              end)
   end
@@ -946,7 +948,7 @@ defmodule AshOnetime.Store.PostgresTest do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     retain_until = DateTime.add(now, 3_600, :second)
 
-    SQL.query!(
+    StoreCase.restore_fixture!(
       Repo,
       """
       INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}

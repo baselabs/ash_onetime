@@ -62,12 +62,14 @@ defmodule AshOnetime.Admission do
       when is_map(subject) and is_map(protection) and is_map(trusted_context) do
     started = System.monotonic_time()
 
+    # rule:reserved-input
     with :ok <- reject_reserved(subject),
          :ok <- reject_external_effect(protection),
          {:ok, state} <- prepare_resolved(subject, protection),
          %Result{} = result <- store().claim(state.target, state.request) do
       resolve(
         result,
+        # rule:state-request-sanitization
         %{state | request: sanitize_request(state.request)},
         protection,
         started,
@@ -185,6 +187,7 @@ defmodule AshOnetime.Admission do
       protection.external_effect ->
         AshOnetime.ExternalRecovery.reserve(subject, protection, trusted)
 
+      # rule:replay-fence-dispatch
       protection.strategy == :one_time_nonce and protection.commit == :independent ->
         reserve_committed(subject, protection, trusted)
 
@@ -348,12 +351,14 @@ defmodule AshOnetime.Admission do
   cleanup"), so it returns no `:ash_onetime` metadata and `replayed?/1` reports `nil`.
   """
   @spec stamp_replay(State.t(), term()) :: term()
+  # rule:untracked-transparency
   def stamp_replay(%State{class: :untracked}, result), do: result
 
   def stamp_replay(%State{class: class}, result)
       when class in [:execute, :external_execute, :replay, :nonce] do
     case result do
       %{__metadata__: _} = record ->
+        # rule:replay-metadata
         Ash.Resource.put_metadata(record, :ash_onetime, %{replayed: class == :replay})
 
       _other ->
@@ -690,7 +695,12 @@ defmodule AshOnetime.Admission do
     case protection.strategy do
       :idempotency ->
         Claim.idempotency(
-          attributes ++ [fingerprint: fingerprint, retention_seconds: protection.retention]
+          attributes ++
+            [
+              fingerprint: fingerprint,
+              retention_seconds: protection.retention,
+              response_retention_seconds: protection.response_retention || protection.retention
+            ]
         )
 
       :one_time_nonce ->
@@ -700,6 +710,7 @@ defmodule AshOnetime.Admission do
               verified: verified,
               max_age: Keyword.fetch!(protection.window, :max_age),
               clock_skew: Keyword.fetch!(protection.window, :clock_skew)
+            # rule:nonce-retention-forward
             ] ++ Keyword.take(protection.window, [:retain_for])
         )
     end
@@ -721,14 +732,43 @@ defmodule AshOnetime.Admission do
     end
   end
 
+  # rule:admission-classify-admitted
   defp decide(%Result{status: :admitted} = result, state, _protection, started, mode) do
     transaction = expected_transaction(mode)
 
     with :ok <- validate_admitted(result, state.request, state.target, transaction) do
       class = execution_class(state.strategy, mode)
+      # rule:state-claim-sanitization
       state = %{state | class: class, claim: sanitize_claim(result.claim)}
       emit_admission(state, started, :admitted)
       {:execute, state}
+      # -- end-rule:admission-classify-admitted
+    end
+  end
+
+  defp decide(
+         %Result{status: :complete_expired} = result,
+         %{strategy: :idempotency} = state,
+         _protection,
+         _started,
+         mode
+       ) do
+    # rule:expired-after-fingerprint
+    with {:ok, disposition} <-
+           validate_collision(result, state.request, state.target, expected_transaction(mode)),
+         :match <- disposition do
+      {:error, Error.new(:response_expired, "stored response has expired")}
+    else
+      # rule:admission-classify-expired-mismatch
+      :fingerprint_mismatch -> # expired fingerprint classification
+        emit_fingerprint_mismatch(state)
+
+        {:error,
+         Error.new(:key_reused_with_different_request, "key was reused with a different request")}
+
+      # rule:admission-classify-expired-invalid
+      {:error, %Error{} = collision_error} ->
+        {:error, collision_error}
     end
   end
 
@@ -746,14 +786,17 @@ defmodule AshOnetime.Admission do
       emit_conflict(state, :complete)
       emit_admission(state, started, :admitted)
       replay_state = %{state | class: :replay, claim: result.claim, replayed: replayed}
+      # rule:admission-classify-complete
       {:replay, replayed, replay_state}
     else
-      :fingerprint_mismatch ->
+      # rule:admission-classify-complete-mismatch
+      :fingerprint_mismatch -> # complete fingerprint classification
         emit_fingerprint_mismatch(state)
 
         {:error,
          Error.new(:key_reused_with_different_request, "key was reused with a different request")}
 
+      # rule:corrupt-replay-execution
       {:error, %Error{} = error} ->
         emit_conflict(state, :malformed)
         {:error, error}
@@ -771,14 +814,17 @@ defmodule AshOnetime.Admission do
            validate_collision(result, state.request, state.target, expected_transaction(mode)),
          :match <- disposition do
       case mode do
+        # rule:admission-classify-processing-local
         :local_claim ->
           emit_conflict(state, :processing)
           {:error, Error.new(:request_in_progress, "request is already processing")}
 
+        # rule:admission-classify-processing-committed
         :committed_external_claim ->
           emit_conflict(state, :processing)
           {:recover, %{state | claim: sanitize_claim(result.claim)}}
 
+        # rule:admission-classify-processing-finalize
         :locked_external_finalize ->
           emit_conflict(state, :processing)
           {:execute, %{state | class: :external_execute, claim: sanitize_claim(result.claim)}}
@@ -786,17 +832,20 @@ defmodule AshOnetime.Admission do
         # The pre-peer claim lock's own resolution (ADR-0010): reading a :processing claim
         # under the lock is not a new conflict — every other mode's emission still fires —
         # so this arm emits nothing and keeps the per-execute conflict counts unchanged.
+        # rule:admission-classify-processing-locked
         :locked_external_claim ->
           {:execute, %{state | class: :external_execute, claim: sanitize_claim(result.claim)}}
       end
     else
-      :fingerprint_mismatch ->
+      # rule:admission-classify-processing-mismatch
+      :fingerprint_mismatch -> # processing fingerprint classification
         emit_fingerprint_mismatch(state)
 
         {:error,
          Error.new(:key_reused_with_different_request, "key was reused with a different request")}
 
-      _other ->
+      # rule:admission-classify-processing-invalid
+      _other -> # processing malformed classification
         {:error, Error.new(:store_invariant, "store result violated an invariant")}
     end
   end
@@ -809,16 +858,19 @@ defmodule AshOnetime.Admission do
          mode
        ) do
     case validate_collision(result, state.request, state.target, expected_transaction(mode)) do
+      # rule:admission-classify-nonce
       {:ok, :match} ->
         emit_conflict(state, :nonce_used)
         {:error, Error.new(:nonce_already_used, "nonce was already used")}
 
-      _other ->
+      # rule:admission-classify-nonce-invalid
+      _other -> # nonce malformed classification
         emit_conflict(state, :malformed)
         {:error, Error.new(:store_invariant, "store result violated an invariant")}
     end
   end
 
+  # rule:untracked-siblings
   defp decide(
          %Result{
            status: :failure,
@@ -828,6 +880,7 @@ defmodule AshOnetime.Admission do
            claim: nil,
            payload: nil
          },
+         # rule:nonce-failure-direction
          %{strategy: :idempotency} = state,
          %{on_definite_store_failure: :execute_untracked},
          started,
@@ -839,6 +892,7 @@ defmodule AshOnetime.Admission do
     {:execute_untracked, state}
   end
 
+  # rule:cache-admission
   defp decide(%Result{} = result, state, _protection, _started, _mode) do
     emit_uncertainty(result, state)
     {:error, store_error(result)}
@@ -860,6 +914,7 @@ defmodule AshOnetime.Admission do
   defp execution_class(:one_time_nonce, :committed_external_claim), do: :nonce
 
   defp execution_class(:idempotency, :committed_external_claim), do: :external_execute
+  # rule:locked-external-claim-class
   defp execution_class(:idempotency, :locked_external_claim), do: :external_execute
   defp execution_class(:idempotency, :locked_external_finalize), do: :external_execute
   defp execution_class(:idempotency, :local_claim), do: :execute
@@ -898,6 +953,7 @@ defmodule AshOnetime.Admission do
        ) do
     with true <- transaction == expected_transaction,
          :ok <- validate_locator(claim, request, target),
+         # rule:admitted-identity
          true <- claim.id == request.id,
          :match <- fingerprint_disposition(claim, request),
          :ok <- validate_claim_state(claim, :admitted) do
@@ -938,9 +994,13 @@ defmodule AshOnetime.Admission do
     do: {:error, Error.new(:store_invariant, "store result violated an invariant")}
 
   defp validate_collision_payload(:complete, payload) when is_binary(payload), do: :ok
-  defp validate_collision_payload(status, nil) when status in [:processing, :collision], do: :ok
+
+  defp validate_collision_payload(status, nil)
+       when status in [:processing, :collision, :complete_expired], do: :ok
+
   defp validate_collision_payload(_status, _payload), do: :error
 
+  # rule:completion-outer
   defp validate_complete(
          %Result{
            status: :complete,
@@ -958,9 +1018,14 @@ defmodule AshOnetime.Admission do
     with :ok <- validate_locator(claim, state.request, state.target),
          true <- claim.id == state.claim.id,
          :match <- fingerprint_disposition(claim, state.request),
+         # rule:completion-partition-clock
+         # rule:completion-state
          :ok <- validate_claim_state(claim, :complete),
+         # rule:completion-codec
          true <- claim.response_codec == encoded.codec,
          true <- claim.hold_reference == reference,
+         # rule:completion-payload
+         # rule:completion-digest
          true <- payload == encoded.payload,
          true <- fixed_digest_equal?(claim.response_digest, encoded.digest),
          true <- fixed_digest_equal?(:crypto.hash(:sha256, payload), encoded.digest) do
@@ -1005,8 +1070,11 @@ defmodule AshOnetime.Admission do
   end
 
   defp equal_locator_hashes?(claim, request) do
+    # rule:operation-identity
     :crypto.hash_equals(claim.operation_hash, request.operation_hash) and
+      # rule:scope-identity
       :crypto.hash_equals(claim.scope_hash, request.scope_hash) and
+      # rule:key-identity
       :crypto.hash_equals(claim.key_hash, request.key_hash)
   end
 
@@ -1018,6 +1086,7 @@ defmodule AshOnetime.Admission do
   defp fingerprint_disposition(%Claim{fingerprint: left}, %{fingerprint: right})
        when is_binary(left) and byte_size(left) == 32 and is_binary(right) and
               byte_size(right) == 32 do
+    # rule:fingerprint-identity
     if :crypto.hash_equals(left, right), do: :match, else: :fingerprint_mismatch
   end
 
@@ -1030,6 +1099,7 @@ defmodule AshOnetime.Admission do
            response_partition: nil,
            response_codec: nil,
            response_digest: nil,
+           response_expired_at: nil,
            issued_at: nil,
            expires_at: nil,
            verifier_id: nil
@@ -1043,9 +1113,11 @@ defmodule AshOnetime.Admission do
          %Claim{
            strategy: :idempotency,
            state: :complete,
+           # rule:completion-partition
            response_partition: %Date{},
            response_codec: codec,
            response_digest: digest,
+           response_expired_at: nil,
            issued_at: nil,
            expires_at: nil,
            verifier_id: nil
@@ -1053,6 +1125,19 @@ defmodule AshOnetime.Admission do
          :complete
        )
        when is_binary(codec) and is_binary(digest) and byte_size(digest) == 32,
+       do: :ok
+
+  defp validate_claim_state(
+         %Claim{
+           strategy: :idempotency,
+           state: :complete,
+           response_partition: nil,
+           response_codec: nil,
+           response_digest: nil,
+           response_expired_at: %DateTime{}
+         },
+         :complete_expired
+       ),
        do: :ok
 
   defp validate_claim_state(

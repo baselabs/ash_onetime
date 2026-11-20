@@ -18,6 +18,10 @@ on:
   push:
     branches-ignore: [main, 'kci/**']
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
 
@@ -99,6 +103,49 @@ jobs:
             mix deps.audit --path "$lock_dir"
           done
 
+  quality:
+    name: Compile, docs, format, types and precommit
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    # No green run yet for this separate work-branch quality job.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/beam
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      - uses: ./.github/actions/mix-cache
+        with:
+          mode: restore
+          cell: release
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      - run: mix deps.get --check-locked
+      - name: Format check
+        id: format
+        run: mix format --check-formatted
+      - name: Export formatter changes on failure
+        if: failure() && steps.format.outcome == 'failure'
+        run: |
+          mix format
+          git diff --binary > "$RUNNER_TEMP/format.patch"
+      - name: Upload formatter changes
+        if: failure() && steps.format.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: format-changes
+          path: ${{ runner.temp }}/format.patch
+          if-no-files-found: error
+      - run: mix compile --warnings-as-errors
+      - run: MIX_ENV='test' mix compile --warnings-as-errors
+      - run: mix docs --warnings-as-errors
+      - run: mix precommit
+      - run: mix dialyzer
+      - run: MIX_ENV='test' mix dialyzer
+
   tests:
     name: Test suite
     needs: toolchain
@@ -130,6 +177,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/logical-postgres
       - uses: ./.github/actions/postgres-client
         with:
           version: ${{ needs.toolchain.outputs.postgres_client }}
@@ -150,18 +198,23 @@ jobs:
       - run: MIX_ENV='test' mix compile --warnings-as-errors
       - run: mix test
 
+      - uses: ./.github/actions/logical-postgres
+        if: always()
+        with:
+          mode: stop
+
   mutations:
     name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Slowest green shard: 25 min 59 s, run 44212940459, which restored a cache; slowest cold:
-    # 24 min 58 s, Work run 44216676477 (the same composite). About twice the slower.
-    timeout-minutes: 52
+    # No green run yet for the expanded whole-manifest battery with twelve shards.
+    # Measure this split on its first cold green run.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         # The same shards as ci.yml.
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
     services:
       postgres:

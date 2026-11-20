@@ -92,6 +92,7 @@ defmodule AshOnetime.Window do
   defp valid_durations?(max_age, skew) do
     is_integer(max_age) and max_age >= 0 and max_age <= @max_duration_seconds and
       is_integer(skew) and skew >= 0 and skew <= @max_duration_seconds and
+      # rule:nonce-retention-upper-bound
       max_age + skew <= @max_duration_seconds
   end
 
@@ -100,7 +101,9 @@ defmodule AshOnetime.Window do
     newest = DateTime.add(evaluated_at, skew, :second)
 
     valid_issuance? =
+      # rule:window
       DateTime.compare(issued_at, oldest) in [:eq, :gt] and
+        # rule:window-newest
         DateTime.compare(issued_at, newest) in [:eq, :lt]
 
     if valid_issuance? and valid_expiry?(issued_at, expires_at, evaluated_at, skew) do
@@ -115,7 +118,9 @@ defmodule AshOnetime.Window do
   defp valid_expiry?(issued_at, %DateTime{} = expires_at, evaluated_at, skew) do
     expiry_horizon = DateTime.add(expires_at, skew, :second)
 
+    # rule:window-expiry-order
     DateTime.compare(expires_at, issued_at) in [:eq, :gt] and
+      # rule:window-expiry-horizon
       DateTime.compare(evaluated_at, expiry_horizon) in [:eq, :lt]
   end
 

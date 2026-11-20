@@ -1,0 +1,73 @@
+{
+  "tag": "v1.9.2",
+  "sources": [
+    {
+      "path": "lib/ash_onetime/canonical.ex",
+      "ref": "5ecc7682689b8dbb68b169b876d5776f329f3a69",
+      "sha256": "4541fa5b2e1b114310222e93f8672a5672be8c1f20778bca508f44ef091d81a7",
+      "blob": "3404292c7031cec73881d5c558c3e1069651fc3c"
+    },
+    {
+      "path": "lib/ash_onetime/clock.ex",
+      "ref": "5ecc7682689b8dbb68b169b876d5776f329f3a69",
+      "sha256": "8bca4887c1ffd8a3ac7e71b6482154a6b15e192d98c6fb91525e07ed77b4e650",
+      "blob": "f0c45ee204f39c70378905b2d899e75b9894d2f4"
+    },
+    {
+      "path": "lib/ash_onetime/error.ex",
+      "ref": "5ecc7682689b8dbb68b169b876d5776f329f3a69",
+      "sha256": "e06550116af9a79ea592972c9a6c4a950ef7c8a8827bc37cfd7635ef0f50c0e3",
+      "blob": "988a9ff199b9a476be46cc74a4f70658adb38c1c"
+    },
+    {
+      "path": "lib/ash_onetime/fingerprint.ex",
+      "ref": "5ecc7682689b8dbb68b169b876d5776f329f3a69",
+      "sha256": "2f6fe4927655506625b03a86ce16d321c4c28a0e5d472ce0ddb0b1bcaf4f61be",
+      "blob": "b102033512beeed002c5f706fc196d6a9a1fb68c"
+    },
+    {
+      "path": "lib/ash_onetime/store.ex",
+      "ref": "5ecc7682689b8dbb68b169b876d5776f329f3a69",
+      "sha256": "89c41d554e1612ac5a20fba8f7d0a32a1bc4eb97a459ad39dfcd6b553fb2fd43",
+      "blob": "541d0046d195d936eafabc78b2f4c2d0d5ab397a"
+    },
+    {
+      "path": "lib/ash_onetime/store/claim.ex",
+      "ref": "5ecc7682689b8dbb68b169b876d5776f329f3a69",
+      "sha256": "db822bfca84c0dc6a229883b0b072007a77175c417c511f92c4da6a34842189f",
+      "blob": "f2813b6b1c3ce73e8f70520728cc9e080d0e28e0"
+    },
+    {
+      "path": "lib/ash_onetime/store/postgres.ex",
+      "ref": "5ecc7682689b8dbb68b169b876d5776f329f3a69",
+      "sha256": "a862b259f2a4fd7ddc9645398c03ba1edbcf8fcb0396493d39e3899e3009d939",
+      "blob": "9f982723766db64bcf5f579fea09f6796e0c9131"
+    },
+    {
+      "path": "lib/ash_onetime/store/result.ex",
+      "ref": "5ecc7682689b8dbb68b169b876d5776f329f3a69",
+      "sha256": "95ad98e3ba76495391c18534f9e57687d245b3b65e6468a39dc639537e0aa54f",
+      "blob": "2ef838ae9cd796cd6630096897a242c9f07a1a1f"
+    },
+    {
+      "path": "lib/ash_onetime/telemetry.ex",
+      "ref": "5ecc7682689b8dbb68b169b876d5776f329f3a69",
+      "sha256": "cf2ded9fe095b5618a0157bb195d7388a5f179b0d6b9aaa26332646f39dbe1b3",
+      "blob": "3be7c8fa9162ca48f321e8c548b9003329c25e72"
+    },
+    {
+      "path": "lib/ash_onetime/verified.ex",
+      "ref": "5ecc7682689b8dbb68b169b876d5776f329f3a69",
+      "sha256": "40a4509efb30d63bccc48573f5e07d3d98da4262b0b42d78aa4c62b99acbc761",
+      "blob": "bfa81ea50f65c2b58e296bf1058a19fc0e0f0d6b"
+    },
+    {
+      "path": "lib/ash_onetime/window.ex",
+      "ref": "5ecc7682689b8dbb68b169b876d5776f329f3a69",
+      "sha256": "ae2f51dbfdc4bbb1ce3147dd688fe57f02aba587235f325708ef86824f1711d2",
+      "blob": "86f19b85c526b8eb952598ab8a18f018fac7bb42"
+    }
+  ],
+  "ref": "5ecc7682689b8dbb68b169b876d5776f329f3a69",
+  "xref_command": "mix xref graph --source lib/ash_onetime/store/postgres.ex --format dot"
+}

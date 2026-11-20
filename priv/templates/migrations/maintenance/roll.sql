@@ -14,6 +14,7 @@ DECLARE
   previous_setting text := current_setting('ash_onetime.maintenance',true);
   previous_rls text := current_setting('row_security');
 BEGIN
+  -- rule:maintenance-null-bound
   IF months_ahead IS NULL OR months_ahead<1 OR months_ahead>24 THEN
     RAISE EXCEPTION 'invalid roll months (1..24)' USING ERRCODE='22023';
   END IF;
@@ -27,6 +28,7 @@ BEGIN
     EXECUTE format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',default_oid::regclass);
     SELECT relrowsecurity,relforcerowsecurity INTO STRICT default_enabled,default_forced FROM pg_class WHERE oid=default_oid;
     EXECUTE format('ALTER TABLE %s NO FORCE ROW LEVEL SECURITY',default_oid::regclass);
+    -- rule:roll-default-force-1
     IF (SELECT relforcerowsecurity FROM pg_class WHERE oid=default_oid) THEN
       RAISE EXCEPTION 'prune_blocked: FORCE reapplied to DEFAULT';
     END IF;
@@ -61,6 +63,7 @@ BEGIN
         EXECUTE format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',default_oid::regclass);
         SELECT relrowsecurity,relforcerowsecurity INTO STRICT default_enabled,default_forced FROM pg_class WHERE oid=default_oid;
         EXECUTE format('ALTER TABLE %s NO FORCE ROW LEVEL SECURITY',default_oid::regclass);
+        -- rule:roll-default-force-2
         IF (SELECT relforcerowsecurity FROM pg_class WHERE oid=default_oid) THEN
           RAISE EXCEPTION 'prune_blocked: FORCE reapplied to DEFAULT';
         END IF;
@@ -74,10 +77,13 @@ BEGIN
       ELSE
         create_child := format('CREATE TABLE %I.%I PARTITION OF %I.ash_onetime_response_payloads FOR VALUES FROM (%L) TO (%L)',@schema_name@,child_name,@schema_name@,month_date,until_date);
       END IF;
+      -- rule:maintenance-heap
       EXECUTE create_child || ' USING heap';
       child_oid := to_regclass(format('%I.%I',@schema_name@,child_name));
+      -- rule:maintenance-acl-reset
       PERFORM @routines@.ash_onetime_maintenance_reset_acl(child_oid::oid,true::boolean);
       IF has_default_rows THEN
+        -- rule:roll-relocation
         EXECUTE format('WITH moved AS (DELETE FROM %s WHERE partition_date >= $1 AND partition_date < $2 RETURNING *) INSERT INTO %I.%I SELECT * FROM moved',
           default_oid::regclass,@schema_name@,child_name) USING month_date,until_date;
         EXECUTE format('ALTER TABLE %I.ash_onetime_response_payloads ATTACH PARTITION %I.%I FOR VALUES FROM (%L) TO (%L)',@schema_name@,@schema_name@,child_name,month_date,until_date);
@@ -89,10 +95,12 @@ BEGIN
       PERFORM set_config('row_security',previous_rls,true);
       created := created+1;
     EXCEPTION WHEN duplicate_table THEN
+      -- rule:maintenance-name-collision
       RAISE EXCEPTION 'untrusted_dependency: name collision';
     WHEN OTHERS THEN
       -- The subtransaction restores moved rows, attachment, flags, policies,
       -- ACLs, and settings as one unit; the exception also aborts this call.
+      -- rule:roll-reraise
       RAISE;
     END;
   END LOOP;

@@ -145,7 +145,7 @@ transactional-outbox patterns.
 
 ## Status
 
-This guide targets [v1.10.0](CHANGELOG.md). [Context boundaries](documentation/context-boundary.md)
+This guide targets [v2.0.0](CHANGELOG.md). [Context boundaries](documentation/context-boundary.md)
 admit an append only when nothing matching changed since read. Partition pruning checks emptiness
 as the table owner; existing installs must generate and apply the maintenance upgrade migrations
 (see [Upgrading](documentation/upgrading.md)). Fact tables are opt-in with `--fact-tables`.

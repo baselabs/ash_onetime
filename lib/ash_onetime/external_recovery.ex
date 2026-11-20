@@ -25,7 +25,8 @@ defmodule AshOnetime.ExternalRecovery do
         # The same-key retry's worker blocked on the original's pre-peer claim lock past the
         # configured wait (ADR-0010): the external path now reports the local path's
         # concurrent-retry semantic instead of racing into a second peer execute.
-        %Result{status: :failure, reason: :lock_timeout} ->
+        %Result{status: :failure, reason: reason}
+        when reason in [:lock_timeout, :request_in_progress] ->
           emit_claim_lock_conflict(state)
 
           {:error,
@@ -59,6 +60,7 @@ defmodule AshOnetime.ExternalRecovery do
     operation_key = state.claim.id
 
     with :ok <- validate_operation_key(operation_key) do
+      # rule:pre-peer-lock-removed
       case lock_for_peer(state, protection, started) do
         {:ok, locked} ->
           execute_then_settle(locked, subject, protection, context, operation_key, started)
@@ -69,6 +71,7 @@ defmodule AshOnetime.ExternalRecovery do
     end
   end
 
+  # rule:external-operation-key
   defp continue({:recover, state}, subject, protection, context, started) do
     operation_key = state.claim.id
 
@@ -98,7 +101,8 @@ defmodule AshOnetime.ExternalRecovery do
   # The claim-id binding rejects a reaped-and-reinserted row (ADR 0010).
   defp lock_for_peer(state, protection, started) do
     case Store.lock_for_effect(state.target, state.claim, claim_lock_options(protection)) do
-      %Result{status: :failure, reason: :lock_timeout} ->
+      %Result{status: :failure, reason: reason}
+      when reason in [:lock_timeout, :request_in_progress] ->
         emit_claim_lock_conflict(state)
         {:error, Error.new(:request_in_progress, "a request for this key is already processing")}
 
@@ -147,8 +151,9 @@ defmodule AshOnetime.ExternalRecovery do
         emit(state, started, :absence_proven)
         execute_then_settle(state, subject, protection, context, operation_key, started)
 
+      # rule:ambiguous-retry
       :unknown ->
-        ambiguous_recovery(state, started)
+        ambiguous_recovery(state, protection, started)
     end
   end
 
@@ -193,18 +198,54 @@ defmodule AshOnetime.ExternalRecovery do
       :absent ->
         emit(state, started, :external_effect_unavailable)
 
-        {:error,
-         Error.new(:external_effect_unavailable, "external effect did not produce an outcome")}
+        publish_outcome(
+          state,
+          protection,
+          :absent_proven,
+          Error.new(:external_effect_unavailable, "external effect did not produce an outcome"),
+          started
+        )
 
+      # rule:ambiguous-retry-settle
       :unknown ->
-        ambiguous_recovery(state, started)
+        ambiguous_recovery(state, protection, started)
     end
   end
 
   # mutation sentinel: ambiguous-retry
-  defp ambiguous_recovery(state, started) do
+  defp ambiguous_recovery(state, protection, started) do
     emit(state, started, :outcome_unknown)
-    {:error, Error.new(:outcome_unknown, "external effect outcome is unknown")}
+
+    publish_outcome(
+      state,
+      protection,
+      :held,
+      Error.new(:outcome_unknown, "external effect outcome is unknown"),
+      started
+    )
+  end
+
+  defp publish_outcome(state, protection, outcome, error, started) do
+    case Store.record_outcome_committed(
+           state.target,
+           state.claim,
+           outcome,
+           Keyword.put(
+             claim_lock_options(protection),
+             :telemetry_context,
+             {state.resource, state.action}
+           )
+         ) do
+      %Result{status: :processing, transaction: :committed} ->
+        {:error, error}
+
+      %Result{status: :failure, reason: :store_invariant} ->
+        {:error, Error.new(:store_invariant, "duplicate outcome for a granted attempt")}
+
+      _ ->
+        emit(state, started, :outcome_unrecorded)
+        {:error, error}
+    end
   end
 
   defp finalize(state, subject, protection, peer_result, started) do
@@ -243,7 +284,8 @@ defmodule AshOnetime.ExternalRecovery do
 
   defp resolve_finalization_claim(state, protection, started) do
     case Store.load(state.target, state.claim, claim_lock_options(protection)) do
-      %Result{status: :failure, reason: :lock_timeout} ->
+      %Result{status: :failure, reason: reason}
+      when reason in [:lock_timeout, :request_in_progress] ->
         emit_claim_lock_conflict(state)
         {:error, Error.new(:request_in_progress, "a request for this key is already processing")}
 
@@ -265,6 +307,7 @@ defmodule AshOnetime.ExternalRecovery do
   end
 
   defp safe_recover(module, operation_key, subject, context) do
+    # rule:external-recover
     case module.recover(operation_key, subject, context) do
       {:ok, peer_result} -> {:ok, peer_result}
       :absent -> :absent

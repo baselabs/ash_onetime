@@ -63,6 +63,7 @@ defmodule AshOnetime.Codec do
   @spec structural_limits(map()) :: map()
   def structural_limits(contract) do
     known = hard_limits()
+    # rule:structural-limits-map-take
     Map.merge(known, Map.take(Map.get(contract, :limits, %{}), Map.keys(known)))
   end
 

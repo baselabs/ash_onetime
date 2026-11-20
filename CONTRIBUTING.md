@@ -51,6 +51,14 @@ python3 scripts/release_archives.py build _build/release # package and docs arch
 mix run scripts/check_optional_matrix.exs
 ```
 
+The mutation manifest associates each enforcement marker with one source edit and an owning
+assertion. Run `MIX_ENV=test mix run scripts/check_mutations.exs -- --self-test` to audit its
+source anchors. The enforcing-site and native catalog checks are in
+`test/ash_onetime/external_state/proof_inventory_test.exs`; they cover rendered SQL and library
+classifications, plus fresh plain and hash PostgreSQL installs. An unmarked enforcement site
+or catalog mismatch refuses the check. Mutation acceptance requires the owning assertion to
+fail under the edit and the tagged cases to pass after exact source restoration.
+
 To reset notebook installs, remove `_build/livebook-install` (or your `MIX_INSTALL_DIR`).
 Each notebook removes its UUID-named schema after verification.
 

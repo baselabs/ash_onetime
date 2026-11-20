@@ -435,6 +435,7 @@ defmodule AshOnetime.Response do
 
     typos = Enum.filter(rejected, fn {key, _value} -> key not in @protect_only_limit_keys end)
 
+    # rule:response-limits-unknown-key
     if typos == [],
       do: {:ok, selected},
       else: {:error, :unknown, Enum.map(typos, &elem(&1, 0))}

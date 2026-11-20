@@ -2,6 +2,7 @@ defmodule AshOnetime.Test.ExternalEffectSupport do
   @moduledoc false
 
   alias AshOnetime.Test.{ExternalPeer, Repo}
+  alias Ecto.Adapters.SQL
 
   @mode_key {__MODULE__, :mode}
 
@@ -65,20 +66,49 @@ defmodule AshOnetime.Test.ExternalEffectSupport do
     end
   end
 
-  def recover(operation_key, subject) do
-    # This mode lies about absence regardless of peer state.
-    # The library trusts :absent and re-executes under the operation key.
-    # The adapter must prove absence; the peer must enforce key idempotency.
-    # A correct peer absorbs redundant execution.
-    if mode() == :lying_absent do
-      :absent
-    else
-      if match?({:pause_recover_probe, _observer, _reference}, mode()) do
-        pause_recover_probe(operation_key, subject)
-      else
-        recover_with_disposition(operation_key, subject)
-      end
-    end
+  def recover(operation_key, subject), do: recover(mode(), operation_key, subject)
+
+  defp recover({:pause_recover_unknown, observer, reference}, operation_key, subject) do
+    result = ExternalPeer.recover(subject.to_tenant, operation_key, :unknown)
+    send(observer, {:external_pause, reference, :recover_unknown, operation_key, self()})
+    receive do: ({:external_continue, ^reference} -> :ok)
+    result
+  end
+
+  defp recover(mode, operation_key, subject)
+       when mode in [
+              :raise_recover,
+              :throw_recover,
+              :invalid_recover,
+              :recover_failed_query,
+              :recover_nested_rollback
+            ] do
+    # Read the authoritative peer before failing on the action's connection.
+    _ = ExternalPeer.recover(subject.to_tenant, operation_key)
+    recover_failure(mode)
+  end
+
+  # This deliberately false adapter answer exercises the peer's keyed admission.
+  defp recover(:lying_absent, _operation_key, _subject), do: :absent
+
+  defp recover({:pause_recover_probe, _observer, _reference}, operation_key, subject),
+    do: pause_recover_probe(operation_key, subject)
+
+  defp recover(_mode, operation_key, subject),
+    do: recover_with_disposition(operation_key, subject)
+
+  defp recover_failure(:raise_recover), do: raise("test recover failure")
+  defp recover_failure(:throw_recover), do: throw(:test_recover_failure)
+  defp recover_failure(:invalid_recover), do: :invalid
+
+  defp recover_failure(:recover_failed_query) do
+    {:error, _} = SQL.query(Repo, "SELECT 1/0", [])
+    raise "recover query failed"
+  end
+
+  defp recover_failure(:recover_nested_rollback) do
+    {:error, :recover_rollback} = Repo.transaction(fn -> Repo.rollback(:recover_rollback) end)
+    :unknown
   end
 
   # Reports whether recover/3 is executing inside the caller's open transaction — the

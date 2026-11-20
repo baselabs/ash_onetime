@@ -135,6 +135,9 @@ case Ash.create(changeset) do
       # The same key was retried with a different amount — terminal, never re-runs.
       :key_reused_with_different_request -> {:conflict, "idempotency key reused with a different payload"}
       # A concurrent request for the same key is mid-flight.
+<!--
+# rule:charge-recipe-error-fallback
+-->
       :request_in_progress -> {:conflict, "a request for this key is already processing"}
       _code -> {:error, error}
     end
@@ -247,6 +250,9 @@ case Ash.update(Ash.Changeset.for_update(link, :redeem, %{proof: proof})) do
   {:error, error} ->
     case AshOnetime.Error.code(error) do
       :nonce_already_used -> {:conflict, "this redemption link has already been used"}
+<!--
+# rule:redemption-recipe-error-fallback
+-->
       :request_in_progress -> {:conflict, "a redemption for this proof is already processing"}
       _code -> {:error, error}
     end

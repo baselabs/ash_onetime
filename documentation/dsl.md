@@ -65,6 +65,10 @@ would produce a new key on every attempt and never match, defeating idempotency;
 sources like `{:client, ...}`, `{:argument, ...}`, `{:attribute, ...}`, or a `{:verified, ...}`
 proof whose descriptor is stable.
 
+`response_retention {count, unit}` optionally gives replay bytes a shorter lifetime than the
+claim. It defaults to `retention`, must be positive and cannot exceed it. Maintenance expires
+the response independently; matching retries then return `:response_expired` without dispatch.
+
 Idempotency requires `fingerprint`, `response`, and positive `retention`. The response
 codec receives an explicit field allowlist and a classifier that chooses store, reject,
 or rollback. `on_definite_store_failure :execute_untracked` is available only to

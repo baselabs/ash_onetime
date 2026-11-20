@@ -13,10 +13,14 @@ defmodule AshOnetime.Test.MutationFormatter do
         test_name: test.name |> Atom.to_string() |> String.replace_prefix("test ", ""),
         file: Path.relative_to_cwd(file),
         line: line,
-        assertion: Exception.message(error)
+        assertion:
+          if(is_exception(error),
+            do: Exception.message(error),
+            else: Exception.format_banner(:exit, error)
+          )
       }
 
-      IO.puts("ASH_ONETIME_TEST_FAILURE=" <> Jason.encode!(record))
+      IO.puts("\nASH_ONETIME_TEST_FAILURE=" <> Jason.encode!(record))
     end
 
     {:noreply, state}
@@ -31,7 +35,7 @@ defmodule AshOnetime.Test.MutationFormatter do
 
       _ ->
         nil
-    end) || raise "failed test has no assertion location in #{Path.relative_to_cwd(file)}"
+    end) || 0
   end
 
   defp path_matches?(nil, _file), do: false

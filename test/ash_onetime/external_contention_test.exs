@@ -25,16 +25,24 @@ defmodule AshOnetime.ExternalContentionTest do
       Postgrex.query!(holder, "BEGIN", [])
 
       try do
-        Postgrex.query!(
-          holder,
-          ~s(LOCK TABLE "#{context.prefix}".ash_onetime_response_payloads IN ACCESS EXCLUSIVE MODE),
-          []
-        )
+        reference = make_ref()
 
         {caller, monitor} =
           start_monitored_worker(fn ->
+            ExternalEffectSupport.put_mode({:pause_after_execute, parent, reference})
             send(parent, {:completion_done, self(), run_quick_lock(context, "completion-bound")})
           end)
+
+        assert_receive {:external_pause, ^reference, :after_execute, operation_key, ^caller},
+                       5_000
+
+        Postgrex.query!(
+          holder,
+          ~s(LOCK TABLE "#{context.prefix}".ash_onetime_response_payloads IN SHARE MODE),
+          []
+        )
+
+        send(caller, {:external_continue, reference})
 
         assert_receive {:completion_done, ^caller,
                         {:error,
@@ -45,7 +53,7 @@ defmodule AshOnetime.ExternalContentionTest do
 
         assert_receive {:DOWN, ^monitor, :process, ^caller, :normal}, 1_000
 
-        [["execute", operation_key]] = ExternalPeer.calls(context.prefix)
+        [["execute", ^operation_key]] = ExternalPeer.calls(context.prefix)
 
         assert %{rows: [["processing"]]} =
                  Postgrex.query!(
@@ -89,7 +97,7 @@ defmodule AshOnetime.ExternalContentionTest do
           end)
 
         # Admission emits replay only after the grant worker committed. Pause that caller
-        # before its first FOR UPDATE, then acquire the conflicting lock on another session.
+        # before its first FOR NO KEY UPDATE, then acquire the conflicting lock on another session.
         assert_receive {:replay_lock_ready, ^reference, ^caller}, 30_000
 
         Postgrex.query!(
@@ -101,7 +109,7 @@ defmodule AshOnetime.ExternalContentionTest do
         started = System.monotonic_time(:millisecond)
         send(caller, {:replay_lock_continue, reference})
         assert {backend_pid, [_ | _], query} = wait_for_blocked_query(context.prefix)
-        assert String.contains?(String.downcase(query), "for update")
+        assert String.starts_with?(String.downcase(query), "select claims.id")
 
         assert %{rows: [[true]]} =
                  Postgrex.query!(
@@ -172,7 +180,11 @@ defmodule AshOnetime.ExternalContentionTest do
       []
     )
 
-    SQL.query!(Repo, ~s(GRANT SELECT ON "#{prefix}".ash_onetime_response_payloads TO #{role}), [])
+    SQL.query!(
+      Repo,
+      ~s(GRANT SELECT ON "#{prefix}".ash_onetime_response_payloads, "#{prefix}".ash_onetime_effect_outcomes TO #{role}),
+      []
+    )
 
     url =
       System.fetch_env!("DATABASE_URL")

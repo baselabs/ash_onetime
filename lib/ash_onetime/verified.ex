@@ -64,6 +64,7 @@ defmodule AshOnetime.Verified do
     end
   end
 
+  # rule:verified-shape-rejection
   def new(_fields), do: {:error, "verified facts must be a keyword list"}
 
   defp well_formed(fields) do
@@ -71,6 +72,7 @@ defmodule AshOnetime.Verified do
       not Keyword.keyword?(fields) ->
         {:error, "verified facts must be a keyword list"}
 
+      # rule:verified-duplicate-keys
       map_size(Map.new(fields)) != length(fields) ->
         {:error, "verified facts must contain unique keys"}
 
@@ -80,7 +82,9 @@ defmodule AshOnetime.Verified do
   end
 
   defp check_keys(keys) do
+    # rule:verified-missing-required
     missing = Enum.uniq(@required_keys -- keys)
+    # rule:verified-unknown-keys
     unknown = Enum.uniq(keys -- @known_keys)
 
     cond do
@@ -97,6 +101,7 @@ defmodule AshOnetime.Verified do
 
   defp mint_key(fields) do
     case Keyword.fetch!(fields, :key) do
+      # rule:verified-key-validation
       key when is_binary(key) and byte_size(key) > 0 -> {:ok, key}
       _other -> {:error, "key must be a non-empty binary"}
     end
@@ -105,6 +110,7 @@ defmodule AshOnetime.Verified do
   defp mint_issued_at(fields) do
     issued_at = Keyword.fetch!(fields, :issued_at)
 
+    # rule:verified-issued-at-validation
     if representable_datetime?(issued_at) do
       {:ok, issued_at}
     else
@@ -114,6 +120,7 @@ defmodule AshOnetime.Verified do
 
   defp mint_verifier_id(fields) do
     case Keyword.fetch!(fields, :verifier_id) do
+      # rule:verified-verifier-id-bound
       verifier_id
       when is_binary(verifier_id) and byte_size(verifier_id) > 0 and
              byte_size(verifier_id) <= @max_verifier_id_bytes ->
@@ -131,11 +138,13 @@ defmodule AshOnetime.Verified do
     cond do
       is_nil(expires_at) -> {:ok, nil}
       representable_datetime?(expires_at) -> mint_expiry_order(expires_at, issued_at)
+      # rule:verified-expires-at-validation
       true -> {:error, "expires_at must be a DateTime or nil"}
     end
   end
 
   defp mint_expiry_order(expires_at, issued_at) do
+    # rule:verified-expiry-order
     if DateTime.compare(expires_at, issued_at) in [:eq, :gt] do
       {:ok, expires_at}
     else

@@ -4,7 +4,6 @@ DECLARE
   parent_oid oid := @payload@::regclass;
   default_oid oid;
   child_name text;
-  facts record;
   bounds text[];
   occupied boolean;
   remaining integer;
@@ -18,11 +17,13 @@ DECLARE
 BEGIN
   IF partition_limit IS NULL OR partition_limit < 1 OR partition_limit > 128
     OR lock_budget_ms IS NULL OR lock_budget_ms < 1 OR lock_budget_ms > 5000 THEN
+    -- rule:prune-arguments
     RAISE EXCEPTION 'invalid prune bounds' USING ERRCODE='22023';
   END IF;
   -- Take the nonblocking pruner key before relation locks. A direct caller
   -- may already hold a DML lock; letting two such callers wait for SUE and
   -- then upgrade the parent would form a lock cycle.
+  -- rule:rls-prune-single-pruner
   IF NOT pg_try_advisory_xact_lock(1095716946,parent_oid::integer) THEN
     RETURN jsonb_build_object('dropped',0,'kept',0,'refusals','{}'::jsonb,'blocked',false);
   END IF;
@@ -42,42 +43,43 @@ BEGIN
     ORDER BY pg_get_expr(c.relpartbound,c.oid),c.oid
   LOOP
     bounds := regexp_match(candidate.boundary, '^FOR VALUES FROM [(]''([0-9]{4}-[0-9]{2}-[0-9]{2})''[)] TO [(]''([0-9]{4}-[0-9]{2}-[0-9]{2})''[)]$');
-    IF bounds IS NULL THEN RAISE EXCEPTION 'untrusted_dependency: partition bound %',candidate.relname; END IF;
+    -- rule:payload-partition
     CONTINUE WHEN transaction_timestamp()::date <= bounds[2]::date;
     EXIT WHEN dropped+kept >= partition_limit;
+    -- rule:rls-prune-pass-budget
     remaining := floor(extract(epoch FROM (deadline-clock_timestamp()))*1000)::integer;
     EXIT WHEN remaining<=0;
     child_name := format('%I.%I',candidate.nspname,candidate.relname);
     reason := NULL;
     BEGIN
-      SELECT c.relkind,c.relowner,EXISTS(SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=parent_oid) AS child
-      INTO facts FROM pg_class c WHERE c.oid=candidate.oid;
-      IF NOT FOUND THEN RAISE EXCEPTION 'missing' USING ERRCODE='AOP01'; END IF;
-      IF facts.relkind<>'r' OR NOT facts.child THEN RAISE EXCEPTION 'not_plain_child' USING ERRCODE='AOP01'; END IF;
-      IF facts.relowner<>@owner@ THEN RAISE EXCEPTION 'not_owner' USING ERRCODE='AOP01'; END IF;
+      -- rule:rls-prune-lock-timeout
       PERFORM set_config('lock_timeout',remaining::text,true);
+      -- rule:rls-prune-row-security
       PERFORM set_config('row_security','off',true);
+      -- rule:rls-prune-parent-lock
       LOCK TABLE ONLY @schema@.ash_onetime_response_payloads IN ACCESS EXCLUSIVE MODE;
+      -- rule:prune-child-nowait
       EXECUTE format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',child_name);
       IF default_oid<>0 THEN
+        -- rule:prune-default-nowait
         EXECUTE format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE NOWAIT',default_oid::regclass);
       END IF;
-      SELECT c.relkind,c.relowner,EXISTS(SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=parent_oid) AS child
-      INTO facts FROM pg_class c WHERE c.oid=candidate.oid;
-      IF NOT FOUND THEN RAISE EXCEPTION 'missing' USING ERRCODE='AOP01'; END IF;
-      IF facts.relkind<>'r' OR NOT facts.child THEN RAISE EXCEPTION 'not_plain_child' USING ERRCODE='AOP01'; END IF;
-      IF facts.relowner<>@owner@ THEN RAISE EXCEPTION 'not_owner' USING ERRCODE='AOP01'; END IF;
+      -- rule:rls-prune-unforce
       EXECUTE format('ALTER TABLE %s NO FORCE ROW LEVEL SECURITY',child_name);
+      -- rule:rls-prune-force-gate
       IF (SELECT relforcerowsecurity FROM pg_class WHERE oid=candidate.oid) THEN
         RAISE EXCEPTION 'force_reapplied' USING ERRCODE='AOP01';
       END IF;
+      -- rule:payload-partition-count
       EXECUTE format('SELECT EXISTS(SELECT 1 FROM %s)',child_name) INTO occupied;
+      -- rule:rls-partition-kept
       IF occupied THEN RAISE EXCEPTION 'occupied' USING ERRCODE='AOP01'; END IF;
       EXECUTE format('DROP TABLE %s',child_name);
       dropped := dropped+1;
     EXCEPTION
       WHEN SQLSTATE 'AOP01' THEN GET STACKED DIAGNOSTICS reason=MESSAGE_TEXT;
       WHEN lock_not_available THEN reason := 'lock_unavailable';
+      -- rule:rls-error-to-kept
       WHEN OTHERS THEN reason := 'ddl_blocked';
     END;
     IF reason IS NOT NULL THEN

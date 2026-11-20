@@ -1,6 +1,8 @@
 defmodule AshOnetime.Store.RollForwardTest do
   use AshOnetime.Test.StoreCase, async: false
 
+  alias AshOnetime.Test.StoreCase
+
   alias AshOnetime.Store
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
@@ -95,7 +97,7 @@ defmodule AshOnetime.Store.RollForwardTest do
     admitted = ~U[2000-01-01 00:00:00Z]
     retain = if past?, do: ~U[2000-01-02 00:00:00Z], else: ~U[9999-12-31 23:59:59Z]
 
-    SQL.query!(
+    StoreCase.restore_fixture!(
       Repo,
       """
       INSERT INTO "#{prefix}"."ash_onetime_idempotency_claims"

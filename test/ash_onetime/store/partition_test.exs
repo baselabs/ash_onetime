@@ -1,6 +1,8 @@
 defmodule AshOnetime.Store.PartitionTest do
   use AshOnetime.Test.StoreCase, async: false
 
+  alias AshOnetime.Test.StoreCase
+
   import ExUnit.CaptureIO
 
   alias Mix.Tasks.AshOnetime.RollPartitions
@@ -267,7 +269,7 @@ defmodule AshOnetime.Store.PartitionTest do
     partition_date = ~D[2100-01-01]
     digest = :crypto.hash(:sha256, <<>>)
 
-    SQL.query!(
+    StoreCase.restore_fixture!(
       Repo,
       """
       INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}
@@ -439,7 +441,7 @@ defmodule AshOnetime.Store.PartitionTest do
          fingerprint,
          boundary
        ) do
-    SQL.query!(
+    StoreCase.restore_fixture!(
       Repo,
       """
       INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}
@@ -466,7 +468,7 @@ defmodule AshOnetime.Store.PartitionTest do
        ) do
     digest = :crypto.hash(:sha256, payload)
 
-    SQL.query!(
+    StoreCase.restore_fixture!(
       Repo,
       """
       INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}

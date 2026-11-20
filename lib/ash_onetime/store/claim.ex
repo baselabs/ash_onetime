@@ -20,10 +20,12 @@ defmodule AshOnetime.Store.Claim do
       :key_hash,
       :fingerprint,
       :retention_seconds,
+      :response_retention_seconds,
       :verified,
       :max_age,
       :retain_for,
       :clock_skew,
+      effect_local: true,
       clock: AshOnetime.Clock
     ]
 
@@ -35,6 +37,8 @@ defmodule AshOnetime.Store.Claim do
             key_hash: binary(),
             fingerprint: binary() | nil,
             retention_seconds: pos_integer() | nil,
+            response_retention_seconds: pos_integer() | nil,
+            effect_local: boolean(),
             verified: [Verified.t()] | nil,
             max_age: non_neg_integer() | nil,
             retain_for: non_neg_integer() | nil,
@@ -67,6 +71,14 @@ defmodule AshOnetime.Store.Claim do
     :response_codec,
     :response_digest,
     :hold_reference,
+    :effect_local,
+    :effect_attempt,
+    :effect_state,
+    :response_retain_until,
+    :response_expired_at,
+    :response_payload,
+    :retention_seconds,
+    :response_retention_seconds,
     :issued_at,
     :expires_at,
     :verifier_id,
@@ -88,6 +100,22 @@ defmodule AshOnetime.Store.Claim do
           response_codec: binary() | nil,
           response_digest: binary() | nil,
           hold_reference: binary() | nil,
+          effect_local: boolean() | nil,
+          effect_attempt: non_neg_integer() | nil,
+          effect_state:
+            :local
+            | :unknown
+            | :unresolved
+            | :held
+            | :absent_proven
+            | :finalized
+            | :resolved
+            | nil,
+          response_retain_until: DateTime.t() | nil,
+          response_expired_at: DateTime.t() | nil,
+          response_payload: binary() | nil,
+          retention_seconds: pos_integer() | nil,
+          response_retention_seconds: pos_integer() | nil,
           issued_at: DateTime.t() | nil,
           expires_at: DateTime.t() | nil,
           verifier_id: binary() | nil,
@@ -104,7 +132,12 @@ defmodule AshOnetime.Store.Claim do
          retention_seconds
          when is_integer(retention_seconds) and retention_seconds > 0 and
                 retention_seconds <= @max_retention_seconds <-
-           Keyword.get(attributes, :retention_seconds) do
+           Keyword.get(attributes, :retention_seconds),
+         response_retention_seconds =
+           Keyword.get(attributes, :response_retention_seconds, retention_seconds),
+         true <-
+           is_integer(response_retention_seconds) and response_retention_seconds > 0 and
+             response_retention_seconds <= retention_seconds do
       {:ok,
        struct!(
          Request,
@@ -112,7 +145,8 @@ defmodule AshOnetime.Store.Claim do
            [
              strategy: :idempotency,
              fingerprint: fingerprint,
-             retention_seconds: retention_seconds
+             retention_seconds: retention_seconds,
+             response_retention_seconds: response_retention_seconds
            ]
        )}
     else

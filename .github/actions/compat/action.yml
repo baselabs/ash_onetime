@@ -24,6 +24,8 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/logical-postgres
+
     - uses: ./.github/actions/postgres-client
       with:
         version: ${{ inputs.postgres-client }}
@@ -97,3 +99,8 @@ runs:
       run: mix docs --warnings-as-errors
     - shell: bash
       run: mix hex.build
+
+    - uses: ./.github/actions/logical-postgres
+      if: always()
+      with:
+        mode: stop

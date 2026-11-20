@@ -54,7 +54,9 @@ defmodule AshOnetime.MixProject do
       # Security floors (ADR 0004): AshPostgres 2.15.2 fixes tenant-isolation issues;
       # AshSql 0.8.6 fixes query-cache security. AshPostgres owns AshSql startup,
       # so ash_sql stays runtime: false.
+      # rule:deps-ash-postgres-floor
       {:ash_postgres, "~> 2.15 and >= 2.15.2"},
+      # rule:deps-ash-sql-floor
       {:ash_sql, "~> 0.8 and >= 0.8.6", runtime: false},
       {:spark, "~> 2.7"},
       {:ecto_sql, "~> 3.14"},
@@ -68,10 +70,13 @@ defmodule AshOnetime.MixProject do
       # It is used for property tests and excluded from runtime applications.
       {:plug, "~> 1.20", optional: true, runtime: false},
       {:oban, "~> 2.23", optional: true, runtime: false},
+      # rule:deps-igniter-floor
+      # rule:deps-optional-runtime
       {:igniter, "~> 0.8 and >= 0.8.4", optional: true, runtime: false},
       # Optional Mint constrains the Igniter HTTP closure without adding HTTP to core.
       # Mint 1.10.2 fixes HTTP/2 memory exhaustion and HTTP/1 response smuggling.
       # Consumers retain the patched 1.10 line; the development lock uses current 1.x.
+      # rule:deps-mint-floor
       {:mint, "~> 1.10 and >= 1.10.2", optional: true, runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
@@ -85,6 +90,7 @@ defmodule AshOnetime.MixProject do
   # Consumer Ash support is >= 3.37.2 and < 4.0.0 (security floors: ADR 0004).
   # ASH_ONETIME_ASH_VERSION may pin only a plain release inside that range;
   # latest or unset preserves the floating consumer requirement.
+  # rule:mixpin-ash-floor
   @ash_floor "3.37.2"
 
   defp ash_requirement do
@@ -170,6 +176,7 @@ defmodule AshOnetime.MixProject do
         "documentation/transaction-owned-admission.md",
         "documentation/errors.md",
         "documentation/operations.md",
+        "documentation/maintenance.md",
         "documentation/security.md",
         "documentation/recipes.md",
         "documentation/phoenix.md",

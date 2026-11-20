@@ -6,6 +6,10 @@ on:
   push:
     branches: ['kci/**']
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
 
@@ -142,13 +146,13 @@ jobs:
     name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Slowest green shard: 25 min 59 s, run 44212940459, which restored a cache; slowest cold:
-    # 24 min 58 s, Work run 44216676477 (the same composite). About twice the slower.
-    timeout-minutes: 52
+    # No green run yet for the expanded whole-manifest battery with twelve shards.
+    # Measure this split on its first cold green run.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
     services:
       postgres:

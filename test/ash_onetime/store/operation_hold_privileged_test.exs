@@ -3,7 +3,7 @@ defmodule AshOnetime.Store.OperationHoldPrivilegedTest do
 
   alias AshOnetime.{Store, Transaction}
   alias AshOnetime.Store.Postgres
-  alias AshOnetime.Test.Repo
+  alias AshOnetime.Test.{Repo, StoreCase}
   alias Ecto.Adapters.SQL
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: Generator
 
@@ -77,7 +77,7 @@ defmodule AshOnetime.Store.OperationHoldPrivilegedTest do
   end
 
   test "the delete guard stops a direct DELETE by a superuser", ctx do
-    seed!(ctx.schema, "scope")
+    seed!(ctx, "scope")
     Repo.put_dynamic_repo(ctx.super)
 
     assert {:ok, :ok} =
@@ -98,7 +98,7 @@ defmodule AshOnetime.Store.OperationHoldPrivilegedTest do
 
   test "the guard does not stop owner TRUNCATE, superuser replica-mode DELETE, or owner DROP",
        ctx do
-    seed!(ctx.schema, "scope")
+    seed!(ctx, "scope")
 
     for operation <- [:truncate, :replica, :drop] do
       repo = if operation == :replica, do: ctx.super, else: ctx.owner_repo
@@ -108,7 +108,7 @@ defmodule AshOnetime.Store.OperationHoldPrivilegedTest do
                Repo.transaction(fn ->
                  case operation do
                    :truncate ->
-                     query!(repo, "TRUNCATE #{claims(ctx.schema)}")
+                     query!(repo, "TRUNCATE #{claims(ctx.schema)} CASCADE")
 
                      assert count(repo, ctx.schema) == 0,
                             "TRUNCATE does not invoke the DELETE guard"
@@ -135,7 +135,7 @@ defmodule AshOnetime.Store.OperationHoldPrivilegedTest do
   end
 
   test "a non-owner runtime role releases only its tenant under FORCE row security", ctx do
-    for scope <- ["tenant-a", "tenant-b"], do: seed!(ctx.schema, scope)
+    for scope <- ["tenant-a", "tenant-b"], do: seed!(ctx, scope)
 
     %{rows: [[scope_hash]]} =
       query!(
@@ -205,14 +205,14 @@ defmodule AshOnetime.Store.OperationHoldPrivilegedTest do
     end
   end
 
-  defp seed!(schema, scope) do
-    assert {:ok, :ok} =
+  defp seed!(ctx, scope) do
+    assert {:ok, claim_id} =
              Repo.transaction(fn ->
                assert {:execute, admission} =
                         Transaction.idempotency(Repo,
                           operation: {__MODULE__, :open},
                           partition: "global",
-                          prefix: schema,
+                          prefix: ctx.schema,
                           scope: scope,
                           key: "request",
                           fingerprint: :crypto.hash(:sha256, "body"),
@@ -221,11 +221,13 @@ defmodule AshOnetime.Store.OperationHoldPrivilegedTest do
                         )
 
                Transaction.complete(admission, "response", hold: "shared-reference")
+               Ecto.UUID.dump!(admission.claim_id)
              end)
 
-    query!(
-      Repo.get_dynamic_repo(),
-      "UPDATE #{claims(schema)} SET admitted_at = statement_timestamp() - interval '2 days', inserted_at = statement_timestamp() - interval '2 days', retain_until = statement_timestamp() - interval '1 day'"
+    StoreCase.restore_fixture!(
+      ctx.super,
+      "UPDATE #{claims(ctx.schema)} SET admitted_at = statement_timestamp() - interval '2 days', inserted_at = statement_timestamp() - interval '2 days', retain_until = statement_timestamp() - interval '1 day' WHERE id = $1",
+      [claim_id]
     )
   end
 

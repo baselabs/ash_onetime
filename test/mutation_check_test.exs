@@ -1,6 +1,8 @@
 defmodule AshOnetime.MutationCheckTest do
   use ExUnit.Case, async: false
 
+  alias AshOnetime.Test.MutationFormatter
+
   Code.require_file("../scripts/mutation_failures.exs", __DIR__)
 
   @tag :mutation_checker_attribution_mutation
@@ -32,6 +34,29 @@ defmodule AshOnetime.MutationCheckTest do
              "owned case",
              "assert protected"
            )
+  end
+
+  test "structured failure records start after formatter progress output" do
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        IO.write(".")
+
+        test = %ExUnit.Test{
+          name: :"test owned case",
+          tags: %{file: __ENV__.file},
+          state:
+            {:failed,
+             [
+               {:error, %ExUnit.AssertionError{message: "assert protected"},
+                [{__MODULE__, :example, 1, [file: __ENV__.file, line: 42]}]}
+             ]}
+        }
+
+        MutationFormatter.handle_cast({:test_finished, test}, nil)
+      end)
+
+    assert [%{"test_name" => "owned case", "line" => 42}] =
+             AshOnetime.MutationFailures.records(output)
   end
 
   test "structured failure formatter records the assertion location of a real failure" do

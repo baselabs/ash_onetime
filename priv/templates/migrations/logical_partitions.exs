@@ -33,6 +33,7 @@ defmodule <%= inspect(module) %> do
         SELECT 1 FROM #{q("ash_onetime_response_payloads")}
         WHERE logical_partition <> 'global'
       ) THEN
+        -- rule:logical-downgrade-refusal
         RAISE EXCEPTION 'cannot remove logical partitions while non-global claims exist'
           USING ERRCODE = '23514';
       END IF;
@@ -61,6 +62,7 @@ defmodule <%= inspect(module) %> do
     execute("""
     ALTER TABLE #{q(table)}
     ADD COLUMN logical_partition text NOT NULL DEFAULT 'global'
+      -- rule:logical-column-check
       CHECK (octet_length(logical_partition) BETWEEN 1 AND 255)
     """)
   end
@@ -84,6 +86,7 @@ defmodule <%= inspect(module) %> do
       WHERE columns = ARRAY['operation_hash','scope_hash','key_hash']::name[];
 
       IF old_name IS NULL THEN
+        -- rule:logical-collision-required
         RAISE EXCEPTION 'legacy ash_onetime collision constraint is missing'
           USING ERRCODE = '23514';
       END IF;

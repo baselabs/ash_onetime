@@ -23,6 +23,7 @@ defmodule AshOnetime.MutationFailures do
 
   def matches?(records, mutation, test_name, assertion) do
     Enum.any?(records, fn record ->
+      # rule:mutation-checker-failure-attribution
       record["test_name"] == test_name and
         Path.expand(record["file"]) in Enum.map(List.wrap(mutation.test), &Path.expand/1) and
         assertion_matches?(record, mutation, assertion)

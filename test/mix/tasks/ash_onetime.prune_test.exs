@@ -195,7 +195,7 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
     id = Ecto.UUID.generate()
     payload = "live"
 
-    SQL.query!(
+    restore_fixture!(
       Repo,
       """
       INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}
@@ -231,17 +231,24 @@ defmodule Mix.Tasks.AshOnetime.PruneTest do
       Process.unlink(connection)
 
       try do
+        Postgrex.query!(connection, "BEGIN", [])
+        Postgrex.query!(connection, "SET LOCAL session_replication_role=replica", [])
+
         Postgrex.query!(
           connection,
           "UPDATE #{relation(prefix, "ash_onetime_idempotency_claims")} SET admitted_at=now()-interval '2 hours', inserted_at=now()-interval '2 hours', retain_until=now()-interval '1 hour' WHERE id=$1::uuid",
           [Ecto.UUID.dump!(id)]
         )
 
+        Postgrex.query!(connection, "SET LOCAL session_replication_role=origin", [])
+
         Postgrex.query!(
           connection,
           "DELETE FROM #{relation(prefix, "ash_onetime_idempotency_claims")} WHERE id=$1::uuid",
           [Ecto.UUID.dump!(id)]
         )
+
+        Postgrex.query!(connection, "COMMIT", [])
       after
         GenServer.stop(connection, :normal, 5_000)
       end

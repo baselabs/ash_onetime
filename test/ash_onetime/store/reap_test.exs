@@ -123,13 +123,13 @@ defmodule AshOnetime.Store.ReapTest do
   defp insert_processing(prefix, label, timings) do
     claim_id = Ecto.UUID.generate()
 
-    SQL.query!(
+    restore_fixture!(
       Repo,
       """
       INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}
-        (id, operation_hash, scope_hash, key_hash, fingerprint, state,
+        (id, operation_hash, scope_hash, key_hash, fingerprint, state, effect_local,
          admitted_at, retain_until, inserted_at)
-      VALUES ($1::uuid, $2, $3, $4, $5, 'processing',
+      VALUES ($1::uuid, $2, $3, $4, $5, 'processing', true,
               #{inserted_expr(timings)}, #{retain_expr(timings)}, #{inserted_expr(timings)})
       """,
       [
@@ -160,7 +160,7 @@ defmodule AshOnetime.Store.ReapTest do
     payload = "reap-complete"
     digest = :crypto.hash(:sha256, payload)
 
-    SQL.query!(
+    restore_fixture!(
       Repo,
       """
       INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}

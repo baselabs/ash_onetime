@@ -3,6 +3,7 @@ defmodule AshOnetime.Test.StoreCase do
 
   alias AshOnetime.Store.{Claim, Postgres}
   alias AshOnetime.Test.{Clock, Migration, Repo}
+  alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
   alias ExUnit.Callbacks
 
@@ -110,6 +111,30 @@ defmodule AshOnetime.Test.StoreCase do
       clock: Clock
     )
     |> elem(1)
+  end
+
+  # Restore historical test rows through the same trusted replica path as a
+  # data-only restore, then put the session back before testing runtime guards.
+  def restore_fixture!(repo, sql, parameters \\ []) do
+    previous_repo = Repo.put_dynamic_repo(repo)
+
+    try do
+      {:ok, result} =
+        Repo.transaction(fn ->
+          previous = SQL.query!(repo, "SHOW session_replication_role", []).rows |> hd() |> hd()
+          SQL.query!(repo, "SELECT set_config('session_replication_role','replica',true)", [])
+
+          try do
+            SQL.query!(repo, sql, parameters)
+          after
+            SQL.query!(repo, "SELECT set_config('session_replication_role',$1,true)", [previous])
+          end
+        end)
+
+      result
+    after
+      Repo.put_dynamic_repo(previous_repo)
+    end
   end
 
   def hash(value), do: :crypto.hash(:sha256, value)

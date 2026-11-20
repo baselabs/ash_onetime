@@ -7,64 +7,65 @@ Security-driven dependency floors follow the documented minor-release policy in
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md);
 their required dependency edits appear here too.
 
-This guide targets v1.10.0. Pin the
-minor whose public capabilities you use and review this page on each minor bump:
+This guide targets v2.0.0:
 
 ```elixir
-{:ash_onetime, "~> 1.10.0"}
+{:ash_onetime, "~> 2.0.0"}
 ```
 
-The mandatory operation-hold migration now replaces the nonce guard as well and switches
-claims and nonce DELETE guards and all fact append-only triggers to ENABLE ALWAYS. It
-finds fact triggers by their function identity, including renamed triggers. Apply this
-unreleased migration before the maintenance upgrade; previously generated migrations must
-be regenerated from the current template. Parent changes recurse to existing partitions;
-new partitions inherit the parent's firing mode. Run the live doctor once for each runtime
-role after migrating, using its own connection. It names non-ALWAYS triggers, untrusted
-event-trigger functions and owner-equivalent runtime roles. See
-[restore trigger modes](operations.md#trigger-modes-during-restore).
+## 2.0.0 — Durable external recovery and response expiry
 
-## v1.10.0 — Operation holds (November 13, 2026)
-
-Existing installations must generate and apply the operation-hold migration before deploying
-1.10.0. The 1.10.0 store code reads and writes the new `hold_reference` column, so on an
-installation without the migration admission refuses with `:store_invariant`; it never proceeds
-unprotected. Run the migration first, check it with the live doctor, then deploy:
+Existing installations apply the operation-hold migration, then the external-state migration,
+then the optional maintenance migration. A single operation-hold generator request writes
+both mandatory migrations in timestamp order. Adding `--maintenance --maintenance-role ROLE`
+writes all three. New installs already contain the state and guards.
 
 ```sh
 mix ash_onetime.gen.migrations --repo MyApp.Repo --operation-hold
+mix ash_onetime.gen.migrations --repo MyApp.Repo --maintenance --maintenance-role store_maintenance
 mix ecto.migrate
 mix ash_onetime.doctor --repo MyApp.Repo --live
 ```
 
-For schema-based installations, use `--tenants` and run the generated migration for every
-installation prefix using the repo's tenant migration process. The upgrade detects plain or
-hash-partitioned claims automatically. It adds nullable `hold_reference`, adds the CHECK as
-NOT VALID and then validates it, builds the partial cleanup and release indexes CONCURRENTLY,
-and drops the superseded full retention index. For hash claims it creates each parent index
-ON ONLY, builds each child concurrently, and attaches them. A failed concurrent build's INVALID
-index is dropped and rebuilt on retry; an incomplete parent resumes child attachment. The
-migration disables both the DDL transaction and migration lock because concurrent index
-creation cannot run inside a transaction. Run one instance of this migration per installation
-at a time; rerun it after a failed index build. It also replaces the delete guard and cleanup
-function. Existing data keeps its retention and has no hold.
+Run migrations as the installation owner. Schema-based installations also use `--tenants`
+and apply them for every installation prefix through the repo's tenant migration process.
+The generator detects plain and hash-partitioned claims. Maintenance generation refuses
+missing prerequisites and timestamps that would put it before them.
 
-New installs already contain these objects. Run migrations as the installation owner.
+Rolling request traffic is supported from v1.9.2. Earlier releases must first upgrade to
+v1.9.2, or stop every application node for the 2.0 upgrade. Version 1.10.0 was never published;
+its unreleased work is part of 2.0. Stop every v1.9.2 maintenance job, worker and maintenance
+Mix task before applying these migrations. Apply the migrations, roll the request nodes, and
+start maintenance with 2.0. A late 1.x maintenance call cannot find the moved routines (42883)
+and deletes nothing. Request traffic does not call those moved routines.
 
-The upgrade is reversible. Before `down`, return to a 1.9 release, stop hold-producing callers
-and release every outstanding hold. `down` refuses while any hold remains or while row security
-prevents it from proving that none does; otherwise it restores the previous functions and the
-full retention index and removes hold support. The downgrade probes with row security
-disabled, so a FORCE policy that applies to the migrating role refuses the downgrade even when
-the policy would show every row; use the installation's authorized maintenance procedure.
+The external-state upgrade authenticates the historical package shape before changing it,
+re-keys historical hash sequences, and adds the claim state, outcome relation, guards and
+policies in one transaction. Existing processing rows become `unknown` at attempt 0 and
+cannot be reaped. Their response deadline starts at the existing claim deadline. A 2.0 retry
+grants an external attempt before recovery. Complete rows retain their existing response.
+Retention safety holds throughout a supported rolling deploy; attempt ownership applies
+between 2.0 nodes, with the existing claim lock serializing 1.x callers against them.
 
-The payload prune's schema-resolution fix needs no separate migration. It resolves the
-namespace of the addressed `ash_onetime_response_payloads` parent, including an explicit
-prefix, instead of the first schema on `search_path`. The generated DEFAULT drain and monthly
-partition creation resolve that same namespace, including when no prefix is supplied.
+The operation-hold upgrade builds its indexes concurrently, outside a DDL transaction. Run
+one instance per installation. Retry a failed build; invalid indexes are rebuilt and child
+attachment resumes. The external-state and maintenance upgrades lock the claim and outcome
+parents recursively with a five-second lock timeout. A busy installation can return 55P03;
+retry the migration after the long transaction ends. New code against a schema missing the
+mandatory state fails closed with `:install_mismatch` before writing a claim.
 
-See [Idempotency](idempotency.md#keep-an-open-operations-record) for placing holds, releasing
-in the settling transaction, reference uniqueness, row security, and the guard's boundary.
+Ordered rollback retains the same protection. Stop 2.0 callers and maintenance before
+rolling back maintenance, external state, then operation hold. Each native `down` locks the
+parents before counting unresolved external claims and refuses while any remain. The
+external-state rollback also refuses expired responses that the old schema cannot represent.
+Row security that prevents an exact refusal count raises instead of proving the set empty.
+The operation-hold rollback refuses remaining holds and restores its guards inside the same
+locked block. Historical migrations run out of order are owner DDL outside this guarantee.
+
+After migration or restore, run the live doctor for every runtime role on its own connection.
+Every package trigger must fire ALWAYS. A full archive restore preserves this; a data-only
+restore with `--disable-triggers` changes firing modes and must be repaired before maintenance.
+See [maintenance](maintenance.md) and [restore trigger modes](operations.md#trigger-modes-during-restore).
 
 ## v1.9.1 — Bounded payload prune (November 10, 2026)
 
@@ -174,11 +175,9 @@ but a peer or adapter that conformed under the previous wording may no longer co
   prevents the overlap. If your peer claims keys with a read-then-write sequence, moving
   the claim into one `INSERT ... ON CONFLICT`-style statement keeps you correct under
   every retry interleaving. See ADR 0010 and ADR 0001.
-- **The reaper on external-effect actions requires a reconciliation path.** A reaped claim
-  deletes its operation key with it, so a post-reap retry executes under a new key and no
-  key-based defense remains at either layer. Enable `ash_onetime.reap` on an
-  external-effect action only with a business-level way to settle an outcome-unknown claim
-  before its abandonment horizon (ADR 0002).
+The historical 1.x reaper could remove external recovery points. In 2.0 the package excludes
+all external and legacy unknown processing claims itself; the current procedure above replaces
+that historical operational requirement.
 
 Also new: the adapter execution environment is normative (callbacks run inside the
 caller's open transaction, unbounded — adapters MUST bound their own peer call; an
@@ -435,7 +434,7 @@ partitions while it re-adds the CHECKs, which scans every row, and rebuilds the 
 index. Its duration grows with the claim and payload rows, and requests that touch those
 tables wait for it. Run this migration in a window sized to those tables.
 
-The generator requires the 1.10.0 operation-hold migration to be present. Stop old maintenance
+The generator requires both mandatory 2.0 migrations, operation hold and external state, to precede maintenance. Stop old maintenance
 jobs first: their prefix-hash advisory lock does not coordinate with the new OID lock. Scope
 all consumer policies on package tables to runtime roles before applying the migration;
 it raises and names every extra policy that applies to the owner.

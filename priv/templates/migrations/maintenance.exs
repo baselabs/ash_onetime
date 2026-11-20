@@ -11,6 +11,9 @@ defmodule <%= inspect(module) %> do
     DECLARE
       original jsonb;
       original_acls jsonb;
+      original_triggers jsonb;
+      original_policies jsonb;
+      dependency jsonb;
       item jsonb;
       privilege jsonb;
       target text;
@@ -23,35 +26,84 @@ defmodule <%= inspect(module) %> do
       routine jsonb;
       column_name text;
     BEGIN
+      PERFORM set_config('lock_timeout','5s',true);
       SELECT pg_get_userbyid(c.relowner),n.nspname INTO STRICT owner_name,install_schema FROM pg_class c
       JOIN pg_namespace n ON n.oid=c.relnamespace
       WHERE c.oid=#{maintenance_literal(q("ash_onetime_response_payloads"))}::regclass;
       routine_schema := 'ash_onetime_' || substr(encode(sha256(convert_to(install_schema,'UTF8')),'hex'),1,48);
       PERFORM set_config('role',owner_name,true);
+      -- rule:rollback-lock-maintenance
+      LOCK TABLE #{q("ash_onetime_idempotency_claims")}, #{q("ash_onetime_effect_outcomes")} IN ACCESS EXCLUSIVE MODE;
+      PERFORM set_config('row_security','off',true);
+      -- rule:rollback-refusal-maintenance
+      IF EXISTS (SELECT 1 FROM #{q("ash_onetime_idempotency_claims")} WHERE state='processing' AND NOT effect_local) THEN
+        RAISE EXCEPTION 'unresolved external claims prevent rollback' USING ERRCODE='23514';
+      END IF;
       SELECT last_counts->'previous_functions',last_counts->'previous_acls' INTO original,original_acls
       FROM #{q("ash_onetime_maintenance_runs")} WHERE step='install';
       FOR relation_oid IN SELECT #{rq("ash_onetime_maintenance_relations")}() LOOP
-        EXECUTE format('DROP POLICY IF EXISTS ash_onetime_maintenance ON %s',relation_oid::regclass);
         PERFORM #{rq("ash_onetime_maintenance_reset_acl")}(relation_oid,true);
       END LOOP;
       PERFORM set_config('role',migrating_role,true);
-      -- Recreate each invoker as its original owner. This works with SET
-      -- membership and NO INHERIT, without requiring reverse membership.
+      -- Move every original function before taking native trigger and policy
+      -- definitions, so their references name the restored schema.
       PERFORM set_config('role',owner_name,true);
-      EXECUTE format('DROP TRIGGER ash_onetime_idempotency_delete_guard ON %s',#{maintenance_literal(q("ash_onetime_idempotency_claims"))}::regclass);
-      EXECUTE format('DROP TRIGGER ash_onetime_nonce_delete_guard ON %s',#{maintenance_literal(q("ash_onetime_nonce_claims"))}::regclass);
       FOR item IN SELECT * FROM jsonb_array_elements(original) LOOP
-        EXECUTE format('DROP FUNCTION %s',(item->>'oid')::oid::regprocedure);
+        EXECUTE format('ALTER FUNCTION %s SET SCHEMA %I',(item->>'oid')::oid::regprocedure,install_schema);
       END LOOP;
+      IF EXISTS (SELECT 1 FROM jsonb_array_elements(original) old WHERE old->>'owner'<>owner_name) THEN
+        -- SET membership does not let the owner transfer a function back to
+        -- the migrator. Recreate it as its recorded owner instead. The parent
+        -- locks keep the restored guards and policies atomic with the refusal.
+        SELECT coalesce(jsonb_agg(jsonb_build_object('relation',t.tgrelid,'name',t.tgname,
+          'definition',pg_get_triggerdef(t.oid),'enabled',t.tgenabled)),'[]')
+        INTO original_triggers FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgparentid=0
+          AND t.tgfoid IN (SELECT (old->>'oid')::oid FROM jsonb_array_elements(original) old);
+        SELECT coalesce(jsonb_agg(jsonb_build_object('relation',p.polrelid,'name',p.polname,
+          -- rule:rollback-policy-permissive
+          'definition',format('CREATE POLICY %I ON %s AS %s FOR %s TO %s%s%s',
+            p.polname,p.polrelid::regclass,CASE WHEN p.polpermissive THEN 'PERMISSIVE' ELSE 'RESTRICTIVE' END,
+            CASE p.polcmd WHEN '*' THEN 'ALL' WHEN 'r' THEN 'SELECT' WHEN 'a' THEN 'INSERT'
+              WHEN 'w' THEN 'UPDATE' WHEN 'd' THEN 'DELETE' END,
+            (SELECT string_agg(CASE WHEN role_oid=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(role_oid)) END,',') FROM unnest(p.polroles) role_oid),
+            CASE WHEN p.polqual IS NULL THEN '' ELSE format(' USING (%s)',pg_get_expr(p.polqual,p.polrelid)) END,
+            -- rule:rollback-policy-check
+            CASE WHEN p.polwithcheck IS NULL THEN '' ELSE format(' WITH CHECK (%s)',pg_get_expr(p.polwithcheck,p.polrelid)) END))),'[]')
+        INTO original_policies FROM pg_policy p WHERE EXISTS (
+          SELECT 1 FROM pg_depend d WHERE d.classid='pg_policy'::regclass AND d.objid=p.oid
+            AND d.refclassid='pg_proc'::regclass
+            AND d.refobjid IN (SELECT (old->>'oid')::oid FROM jsonb_array_elements(original) old));
+        FOR dependency IN SELECT * FROM jsonb_array_elements(original_policies) LOOP
+          EXECUTE format('DROP POLICY %I ON %s',dependency->>'name',(dependency->>'relation')::oid::regclass);
+        END LOOP;
+        FOR dependency IN SELECT * FROM jsonb_array_elements(original_triggers) LOOP
+          EXECUTE format('DROP TRIGGER %I ON %s',dependency->>'name',(dependency->>'relation')::oid::regclass);
+        END LOOP;
+        FOR item IN SELECT * FROM jsonb_array_elements(original) LOOP
+          EXECUTE format('DROP FUNCTION %s',(item->>'oid')::oid::regprocedure);
+        END LOOP;
+      ELSE
+        original_triggers := '[]';
+        original_policies := '[]';
+      END IF;
       FOR item IN SELECT * FROM jsonb_array_elements(original) LOOP
         PERFORM set_config('role',item->>'owner',true);
         EXECUTE item->>'definition';
       END LOOP;
       PERFORM set_config('role',owner_name,true);
-      EXECUTE format('CREATE TRIGGER ash_onetime_idempotency_delete_guard BEFORE DELETE ON %s FOR EACH ROW EXECUTE FUNCTION %I.ash_onetime_guard_idempotency_delete()',#{maintenance_literal(q("ash_onetime_idempotency_claims"))}::regclass,#{maintenance_literal(@install_prefix || prefix() || "public")});
-      EXECUTE format('ALTER TABLE %s ENABLE ALWAYS TRIGGER ash_onetime_idempotency_delete_guard',#{maintenance_literal(q("ash_onetime_idempotency_claims"))}::regclass);
-      EXECUTE format('CREATE TRIGGER ash_onetime_nonce_delete_guard BEFORE DELETE ON %s FOR EACH ROW EXECUTE FUNCTION %I.ash_onetime_guard_nonce_delete()',#{maintenance_literal(q("ash_onetime_nonce_claims"))}::regclass,#{maintenance_literal(@install_prefix || prefix() || "public")});
-      EXECUTE format('ALTER TABLE %s ENABLE ALWAYS TRIGGER ash_onetime_nonce_delete_guard',#{maintenance_literal(q("ash_onetime_nonce_claims"))}::regclass);
+      FOR dependency IN SELECT * FROM jsonb_array_elements(original_triggers) LOOP
+        EXECUTE dependency->>'definition';
+        EXECUTE format('ALTER TABLE %s %s TRIGGER %I',(dependency->>'relation')::oid::regclass,
+          CASE dependency->>'enabled' WHEN 'A' THEN 'ENABLE ALWAYS' WHEN 'R' THEN 'ENABLE REPLICA'
+            WHEN 'D' THEN 'DISABLE' ELSE 'ENABLE' END,dependency->>'name');
+      END LOOP;
+      -- rule:M-firing-down-claims
+      -- rule:M-firing-down-nonce
+      -- Restored trigger firing modes are part of the rollback contract.
+      FOR dependency IN SELECT * FROM jsonb_array_elements(original_policies) LOOP
+        EXECUTE dependency->>'definition';
+      END LOOP;
+      PERFORM set_config('role',owner_name,true);
       FOR item IN SELECT * FROM jsonb_array_elements(original_acls) LOOP
         PERFORM set_config('role',pg_get_userbyid((item->>'owner')::oid),true);
         IF item->>'kind'='function' THEN
@@ -92,9 +144,9 @@ defmodule <%= inspect(module) %> do
       END LOOP;
       PERFORM set_config('role',owner_name,true);
       EXECUTE format('DROP TABLE %I.ash_onetime_maintenance_runs',install_schema);
-      FOR routine IN SELECT * FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@maintenance_functions))}::jsonb)
-        WHERE value->>'name' NOT IN ('ash_onetime_cleanup_eligible','ash_onetime_guard_idempotency_delete',
-          'ash_onetime_guard_nonce_delete','ash_onetime_cleanup_idempotency','ash_onetime_cleanup_nonce','ash_onetime_reap_idempotency')
+      FOR routine IN SELECT f.value FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@maintenance_functions))}::jsonb) AS f(value)
+        WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(original) old WHERE
+          to_regprocedure(old->>'identity')=to_regprocedure(format('%I.%I(%s)',install_schema,f.value->>'name',f.value->>'types')))
       LOOP
         EXECUTE format('DROP FUNCTION %I.%I(%s)',routine_schema,routine->>'name',routine->>'args');
       END LOOP;

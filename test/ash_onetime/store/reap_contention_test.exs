@@ -1,10 +1,11 @@
 defmodule AshOnetime.Store.ReapContentionTest do
   use ExUnit.Case, async: false
 
+  alias AshOnetime.Test.StoreCase
+
   alias AshOnetime.Store
   alias AshOnetime.Store.{Claim, Postgres, Result}
   alias AshOnetime.Test.{ExternalPeer, Migration, RealConnection, Repo}
-  alias Ecto.Adapters.SQL
 
   @moduletag :store
 
@@ -121,13 +122,13 @@ defmodule AshOnetime.Store.ReapContentionTest do
 
     RealConnection.with_connection(fn ->
       Repo.transaction(fn ->
-        SQL.query!(
+        StoreCase.restore_fixture!(
           Repo,
           """
           INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}
-            (id, operation_hash, scope_hash, key_hash, fingerprint, state,
+            (id, operation_hash, scope_hash, key_hash, fingerprint, state, effect_local,
              admitted_at, retain_until, inserted_at)
-          VALUES ($1::uuid, $2, $3, $4, $5, 'processing',
+          VALUES ($1::uuid, $2, $3, $4, $5, 'processing', true,
                   transaction_timestamp() - interval '40 days',
                   transaction_timestamp() - interval '39 days',
                   transaction_timestamp() - interval '40 days')

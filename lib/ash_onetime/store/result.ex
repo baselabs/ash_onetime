@@ -4,16 +4,28 @@ defmodule AshOnetime.Store.Result do
   alias AshOnetime.Store.Claim
 
   @enforce_keys [:status, :admission_dispatch, :transaction]
-  defstruct [:status, :claim, :payload, :reason, :admission_dispatch, :transaction, :error]
+  defstruct [
+    :status,
+    :claim,
+    :payload,
+    :reason,
+    :admission_dispatch,
+    :transaction,
+    :error,
+    :previous_effect_state
+  ]
 
-  @type status :: :admitted | :collision | :processing | :complete | :failure
+  @type status :: :admitted | :collision | :processing | :complete | :complete_expired | :failure
   @type reason ::
           :invalid_request
           | :invalid_nonce_window
           | :not_in_transaction
           | :unsupported_isolation
+          | :install_mismatch
           | :checkout_unavailable
           | :missing_prefix
+          | :outcome_unrecorded
+          | :request_in_progress
           | :lock_timeout
           | :disconnected
           | :dispatched_unknown
@@ -42,7 +54,7 @@ defmodule AshOnetime.Store.Result do
 
   @spec success(status(), keyword()) :: t()
   def success(status, fields \\ [])
-      when status in [:admitted, :collision, :processing, :complete] do
+      when status in [:admitted, :collision, :processing, :complete, :complete_expired] do
     struct!(
       __MODULE__,
       [status: status, admission_dispatch: :sent, transaction: :open] ++ fields
@@ -51,7 +63,7 @@ defmodule AshOnetime.Store.Result do
 
   @spec committed(t()) :: t()
   def committed(%__MODULE__{status: status, transaction: :open} = result)
-      when status in [:admitted, :processing, :complete, :collision],
+      when status in [:admitted, :processing, :complete, :complete_expired, :collision],
       do: %{result | transaction: :committed}
 
   @spec failure(
