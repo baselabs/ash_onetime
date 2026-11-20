@@ -47,6 +47,7 @@ jobs:
       postgres_image: ${{ steps.versions.outputs.postgres_image }}
       postgres_client: ${{ steps.versions.outputs.postgres_client }}
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
+      mutation_shards: ${{ steps.versions.outputs.mutation_shards }}
     steps:
       # The default branch is read from the repository, as in every workflow here.
       - name: Refuse the default branch, candidates and anything not a branch
@@ -108,7 +109,7 @@ jobs:
     needs: toolchain
     runs-on: ubuntu-24.04
     # No green run yet for this separate work-branch quality job.
-    timeout-minutes: 90
+    timeout-minutes: 90 # no green run yet
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -209,12 +210,12 @@ jobs:
     runs-on: ubuntu-24.04
     # No green run yet for the expanded whole-manifest battery with twelve shards.
     # Measure this split on its first cold green run.
-    timeout-minutes: 90
+    timeout-minutes: 90 # no green run yet
     strategy:
       fail-fast: false
       matrix:
         # The same shards as ci.yml.
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        shard: ${{ fromJSON(needs.toolchain.outputs.mutation_shards) }}
 
     services:
       postgres:

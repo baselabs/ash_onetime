@@ -22,9 +22,27 @@ outputs:
   pgdg_key:
     description: PGDG apt signing key fingerprint from .github/service-pins
     value: ${{ steps.service-pins.outputs.pgdg_key }}
+  mutation_shards:
+    description: Shared mutation shard list as JSON
+    value: ${{ steps.mutation-shards.outputs.mutation_shards }}
 runs:
   using: composite
   steps:
+    - name: Read the shared mutation shards
+      id: mutation-shards
+      shell: bash
+      run: |
+        python3 - <<'PYTHON'
+        import json
+        import os
+        from pathlib import Path
+
+        shards = json.loads(Path('.github/mutation-shards.json').read_text())
+        if not shards or shards != list(range(1, len(shards) + 1)):
+            raise SystemExit('Mutation shards must be consecutive integers starting at 1')
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write(f'mutation_shards={json.dumps(shards)}\n')
+        PYTHON
     - name: Validate the shared toolchain reader
       shell: bash
       run: sh scripts/toolchain.sh --self-test
