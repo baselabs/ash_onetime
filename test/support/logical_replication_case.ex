@@ -482,9 +482,7 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
     )
 
     source =
-      ShippedMigrations.render("v1.1.0", :render, Repo,
-        hash_partitions: c.pub.hash_partitions
-      )
+      ShippedMigrations.render("v1.1.0", :render, Repo, hash_partitions: c.pub.hash_partitions)
 
     migrate!(c.pub, 1, source)
   end
