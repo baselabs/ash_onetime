@@ -7510,19 +7510,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "plain: install-upgrade-policy-policy preserves its native policy attribute",
                  assertion: "assert actual",
-                 assertion_line: 85,
+                 assertion_line: 93,
                  required_failures: [
                    %{
                      test_name:
                        "plain: install-upgrade-policy-policy preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    },
                    %{
                      test_name:
                        "2: install-upgrade-policy-policy preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    }
                  ]
                },
@@ -7537,19 +7537,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "plain: install-upgrade-policy-check preserves its native policy attribute",
                  assertion: "assert actual",
-                 assertion_line: 85,
+                 assertion_line: 93,
                  required_failures: [
                    %{
                      test_name:
                        "plain: install-upgrade-policy-check preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    },
                    %{
                      test_name:
                        "2: install-upgrade-policy-check preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    }
                  ]
                },
@@ -7564,19 +7564,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "plain: install-maintenance-policy preserves its native policy attribute",
                  assertion: "assert actual",
-                 assertion_line: 85,
+                 assertion_line: 93,
                  required_failures: [
                    %{
                      test_name:
                        "plain: install-maintenance-policy preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    },
                    %{
                      test_name:
                        "2: install-maintenance-policy preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    }
                  ]
                },
@@ -7591,19 +7591,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "plain: install-maintenance-check preserves its native policy attribute",
                  assertion: "assert actual",
-                 assertion_line: 85,
+                 assertion_line: 93,
                  required_failures: [
                    %{
                      test_name:
                        "plain: install-maintenance-check preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    },
                    %{
                      test_name:
                        "2: install-maintenance-check preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    }
                  ]
                },
@@ -7618,19 +7618,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "plain: install-claim-visibility-policy preserves its native policy attribute",
                  assertion: "assert actual",
-                 assertion_line: 85,
+                 assertion_line: 93,
                  required_failures: [
                    %{
                      test_name:
                        "plain: install-claim-visibility-policy preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    },
                    %{
                      test_name:
                        "2: install-claim-visibility-policy preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    }
                  ]
                },
@@ -7643,19 +7643,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "plain: install-claim-visibility-check preserves its native policy attribute",
                  assertion: "assert actual",
-                 assertion_line: 85,
+                 assertion_line: 93,
                  required_failures: [
                    %{
                      test_name:
                        "plain: install-claim-visibility-check preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    },
                    %{
                      test_name:
                        "2: install-claim-visibility-check preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    }
                  ]
                },
@@ -7670,19 +7670,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "plain: external-maintenance-policy preserves its native policy attribute",
                  assertion: "assert actual",
-                 assertion_line: 85,
+                 assertion_line: 93,
                  required_failures: [
                    %{
                      test_name:
                        "plain: external-maintenance-policy preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    },
                    %{
                      test_name:
                        "2: external-maintenance-policy preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    }
                  ]
                },
@@ -7695,19 +7695,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "plain: external-maintenance-check preserves its native policy attribute",
                  assertion: "assert actual",
-                 assertion_line: 85,
+                 assertion_line: 93,
                  required_failures: [
                    %{
                      test_name:
                        "plain: external-maintenance-check preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    },
                    %{
                      test_name:
                        "2: external-maintenance-check preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    }
                  ]
                },
@@ -7722,19 +7722,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "plain: external-claim-visibility-policy preserves its native policy attribute",
                  assertion: "assert actual",
-                 assertion_line: 85,
+                 assertion_line: 93,
                  required_failures: [
                    %{
                      test_name:
                        "plain: external-claim-visibility-policy preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    },
                    %{
                      test_name:
                        "2: external-claim-visibility-policy preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    }
                  ]
                },
@@ -7747,19 +7747,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "plain: external-claim-visibility-check preserves its native policy attribute",
                  assertion: "assert actual",
-                 assertion_line: 85,
+                 assertion_line: 93,
                  required_failures: [
                    %{
                      test_name:
                        "plain: external-claim-visibility-check preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    },
                    %{
                      test_name:
                        "2: external-claim-visibility-check preserves its native policy attribute",
                      assertion: "assert actual",
-                     assertion_line: 85
+                     assertion_line: 93
                    }
                  ]
                },
@@ -7773,17 +7773,17 @@ defmodule AshOnetime.MutationCheck do
                  tag: "enforcement_copy_policy_check_mutation",
                  test_name: "plain: copying a policy preserves its explicit write check",
                  assertion: "assert",
-                 assertion_line: 119,
+                 assertion_line: 128,
                  required_failures: [
                    %{
                      test_name: "plain: copying a policy preserves its explicit write check",
                      assertion: "assert",
-                     assertion_line: 119
+                     assertion_line: 128
                    },
                    %{
                      test_name: "2: copying a policy preserves its explicit write check",
                      assertion: "assert",
-                     assertion_line: 119
+                     assertion_line: 128
                    }
                  ]
                },

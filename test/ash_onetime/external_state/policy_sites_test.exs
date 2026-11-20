@@ -5,6 +5,7 @@ for partitioning <- [nil, 2] do
             ) do
     use AshOnetime.Test.ExternalStateCase, async: false
     @moduletag hash_partitions: partitioning
+    @moduletag install_in_test: true
 
     for {rule, source, site, name, attribute} <- [
           {"install-upgrade-policy-policy", "priv/templates/migrations/maintenance_helpers.exs",
@@ -37,50 +38,57 @@ for partitioning <- [nil, 2] do
         {String.to_atom("enforcement_" <> String.replace(rule, "-", "_") <> "_mutation"), true}
       ]
       test "#{partitioning || "plain"}: #{@rule} preserves its native policy attribute", c do
-        source = File.read!(@source)
-
-        [command] =
-          Regex.run(~r/EXECUTE format\('\s*-- rule:#{@site}(?:-policy)?\n[\s\S]*?;/, source)
-
-        SQL.query!(
-          c.owner_repo,
-          "CREATE TABLE #{rel(c, "policy_target")} (claim_id uuid, operation_hash bytea, logical_partition text)",
-          []
-        )
-
-        on_exit(fn -> SQL.query!(c.owner_repo, "DROP TABLE #{rel(c, "policy_target")}", []) end)
-
-        body = """
-        DECLARE target record; owner_name name := #{literal(c.owner)}; install_schema name := #{literal(c.schema)};
-          routine_schema name := #{literal(Postgres.routine_schema(c.schema))};
-        BEGIN
-          SELECT #{literal(rel(c, "policy_target"))}::regclass::oid AS oid,
-            #{literal(rel(c, "policy_target"))} AS relation_name INTO target;
-          #{command}
-        END
-        """
-
-        SQL.query!(c.owner_repo, "DO #{literal(body)}", [])
-
-        [[permissive, check]] =
-          SQL.query!(
-            c.owner_repo,
-            "SELECT polpermissive,pg_get_expr(polwithcheck,polrelid) FROM pg_policy WHERE polrelid=$1::text::regclass AND polname=$2",
-            [rel(c, "policy_target"), @name]
-          ).rows
-
         actual =
-          if @attribute == "permissive",
-            do: permissive,
-            else:
-              is_binary(check) and
-                String.contains?(
-                  check,
-                  if(@name == "ash_onetime_claim_visibility",
-                    do: "ash_onetime_claim_visible(",
-                    else: "ash_onetime_maintenance_active()"
-                  )
-                )
+          case install(c) do
+            :ok ->
+              source = File.read!(@source)
+
+              [command] =
+                Regex.run(~r/EXECUTE format\('\s*-- rule:#{@site}(?:-policy)?\n[\s\S]*?;/, source)
+
+              SQL.query!(
+                c.owner_repo,
+                "CREATE TABLE #{rel(c, "policy_target")} (claim_id uuid, operation_hash bytea, logical_partition text)",
+                []
+              )
+
+              on_exit(fn -> SQL.query!(c.owner_repo, "DROP TABLE #{rel(c, "policy_target")}", []) end)
+
+              body = """
+              DECLARE target record; owner_name name := #{literal(c.owner)}; install_schema name := #{literal(c.schema)};
+                routine_schema name := #{literal(Postgres.routine_schema(c.schema))};
+              BEGIN
+                SELECT #{literal(rel(c, "policy_target"))}::regclass::oid AS oid,
+                  #{literal(rel(c, "policy_target"))} AS relation_name INTO target;
+                #{command}
+              END
+              """
+
+              SQL.query!(c.owner_repo, "DO #{literal(body)}", [])
+
+              [[permissive, check]] =
+                SQL.query!(
+                  c.owner_repo,
+                  "SELECT polpermissive,pg_get_expr(polwithcheck,polrelid) FROM pg_policy WHERE polrelid=$1::text::regclass AND polname=$2",
+                  [rel(c, "policy_target"), @name]
+                ).rows
+
+              if @attribute == "permissive",
+                  do: permissive,
+                  else:
+                    is_binary(check) and
+                      String.contains?(
+                        check,
+                        if(@name == "ash_onetime_claim_visibility",
+                          do: "ash_onetime_claim_visible(",
+                          else: "ash_onetime_maintenance_active()"
+                        )
+                      )
+            {:error, %Postgrex.Error{postgres: %{pg_code: "P0001", message: message}}} ->
+              assert String.starts_with?(message, "maintenance_blinded: ")
+              assert String.contains?(message, "." <> @name)
+              false
+          end
 
         assert actual == true
       end
@@ -88,6 +96,7 @@ for partitioning <- [nil, 2] do
 
     @tag :enforcement_copy_policy_check_mutation
     test "#{partitioning || "plain"}: copying a policy preserves its explicit write check", c do
+      assert :ok = install(c)
       SQL.query!(
         c.owner_repo,
         "CREATE POLICY consumer_write ON #{rel(c, "ash_onetime_response_payloads")} FOR INSERT TO #{q(c.runtime)} WITH CHECK (octet_length(encoded_response)>0)",
