@@ -124,7 +124,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert Enum.any?(events, fn
              %{event: {_, :call, {Postgrex, :query, [_connection, sql, _, _]}}} ->
-               String.contains?(sql, "GREATEST(")
+               String.contains?(IO.iodata_to_binary(sql), "GREATEST(")
 
              _ ->
                false
