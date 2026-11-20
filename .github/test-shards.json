@@ -1,15 +1,155 @@
 {
   "matrix_routes": [
-    "issue",
-    "external_issue",
-    "rotate",
-    "external_rotate",
-    "revoke",
-    "external_revoke",
-    "retire",
-    "external_retire",
-    "mint",
-    "external_mint"
+    {
+      "name": "issue",
+      "action": "issue",
+      "values": [
+        "va",
+        "vb",
+        "vc",
+        "vd",
+        "ve",
+        "vf"
+      ]
+    },
+    {
+      "name": "external_issue_abc",
+      "action": "external_issue",
+      "values": [
+        "va",
+        "vb",
+        "vc"
+      ]
+    },
+    {
+      "name": "external_issue_def",
+      "action": "external_issue",
+      "values": [
+        "vd",
+        "ve",
+        "vf"
+      ]
+    },
+    {
+      "name": "rotate",
+      "action": "rotate",
+      "values": [
+        "va",
+        "vb",
+        "vc",
+        "vd",
+        "ve",
+        "vf"
+      ]
+    },
+    {
+      "name": "external_rotate_abc",
+      "action": "external_rotate",
+      "values": [
+        "va",
+        "vb",
+        "vc"
+      ]
+    },
+    {
+      "name": "external_rotate_def",
+      "action": "external_rotate",
+      "values": [
+        "vd",
+        "ve",
+        "vf"
+      ]
+    },
+    {
+      "name": "revoke",
+      "action": "revoke",
+      "values": [
+        "va",
+        "vb",
+        "vc",
+        "vd",
+        "ve",
+        "vf"
+      ]
+    },
+    {
+      "name": "external_revoke_abc",
+      "action": "external_revoke",
+      "values": [
+        "va",
+        "vb",
+        "vc"
+      ]
+    },
+    {
+      "name": "external_revoke_def",
+      "action": "external_revoke",
+      "values": [
+        "vd",
+        "ve",
+        "vf"
+      ]
+    },
+    {
+      "name": "retire",
+      "action": "retire",
+      "values": [
+        "va",
+        "vb",
+        "vc",
+        "vd",
+        "ve",
+        "vf"
+      ]
+    },
+    {
+      "name": "external_retire_abc",
+      "action": "external_retire",
+      "values": [
+        "va",
+        "vb",
+        "vc"
+      ]
+    },
+    {
+      "name": "external_retire_def",
+      "action": "external_retire",
+      "values": [
+        "vd",
+        "ve",
+        "vf"
+      ]
+    },
+    {
+      "name": "mint",
+      "action": "mint",
+      "values": [
+        "va",
+        "vb",
+        "vc",
+        "vd",
+        "ve",
+        "vf"
+      ]
+    },
+    {
+      "name": "external_mint_abc",
+      "action": "external_mint",
+      "values": [
+        "va",
+        "vb",
+        "vc"
+      ]
+    },
+    {
+      "name": "external_mint_def",
+      "action": "external_mint",
+      "values": [
+        "vd",
+        "ve",
+        "vf"
+      ]
+    }
   ],
   "scheduling_shards": [
     {

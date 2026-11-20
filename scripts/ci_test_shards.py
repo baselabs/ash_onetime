@@ -10,8 +10,17 @@ import sys
 def configuration():
     data = json.loads(Path(".github/test-shards.json").read_text())
     routes = data["matrix_routes"]
-    if len(routes) != 10 or len(set(routes)) != len(routes):
-        raise ValueError("each comparator route must occur once")
+    names = [shard["name"] for shard in routes]
+    if len(names) != len(set(names)) or any(not shard["values"] for shard in routes):
+        raise ValueError("matrix shards must have unique names and nonempty value sets")
+    expected = {route for action in ["issue", "rotate", "revoke", "retire", "mint"]
+                for route in [action, "external_" + action]}
+    if {shard["action"] for shard in routes} != expected:
+        raise ValueError("matrix shards must cover every local and external route")
+    for action in expected:
+        values = [value for shard in routes if shard["action"] == action for value in shard["values"]]
+        if sorted(values) != ["va", "vb", "vc", "vd", "ve", "vf"]:
+            raise ValueError(f"matrix shards must cover each value tuple once for {action}")
     groups = [group for shard in data["scheduling_shards"] for group in shard["groups"]]
     if sorted(groups, key=int) != [str(n) for n in range(35)]:
         raise ValueError("each of the 35 scheduling groups must occur once")
@@ -31,13 +40,15 @@ def main(arguments):
     if arguments == ["--outputs"]:
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             for key, value in data.items():
+                if key == "matrix_routes":
+                    value = [shard["name"] for shard in value]
                 output.write(f"{key}={json.dumps(value, separators=(',', ':'))}\n")
         return 0
 
     lane, selector = arguments
     directory = "test/ash_onetime/delivery/"
     command = ["mix", "test"]
-    if lane == "matrix" and selector in data["matrix_routes"]:
+    if lane == "matrix" and selector in [shard["name"] for shard in data["matrix_routes"]]:
         command += [directory + "comparator_matrix_test.exs", "--only", f"matrix_route:{selector}"]
     elif lane == "scheduling":
         shard = next(shard for shard in data["scheduling_shards"] if shard["name"] == selector)

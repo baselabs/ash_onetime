@@ -72,30 +72,26 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
       )
   end
 
-  for action <- [
-        :issue,
-        :external_issue,
-        :rotate,
-        :external_rotate,
-        :revoke,
-        :external_revoke,
-        :retire,
-        :external_retire,
-        :mint,
-        :external_mint
-      ] do
+  @partition_file Path.expand("../../../.github/test-shards.json", __DIR__)
+  @external_resource @partition_file
+  @partitions @partition_file |> File.read!() |> Jason.decode!() |> Map.fetch!("matrix_routes")
+
+  for partition <- @partitions do
+    action = String.to_atom(partition["action"])
+    labels = Enum.map(partition["values"], &String.to_atom/1)
     @tag :full_matrix
-    @tag matrix_route: action
-    test "C-pos: #{action}, every path and every structured tuple", context do
+    @tag matrix_route: partition["name"]
+    test "C-pos: #{partition["name"]}, every path and declared structured tuple", context do
       Repo.put_dynamic_repo(context.repo)
-      values = Values.set()
+      labels = unquote(Macro.escape(labels))
+      values = Keyword.take(Values.set(), labels)
       rows = Enum.filter(Scenarios.rows(), &(&1.action == unquote(action)))
 
       expected_rows =
         if String.starts_with?(Atom.to_string(unquote(action)), "external_"), do: 18, else: 17
 
       assert length(rows) == expected_rows
-      assert Keyword.keys(values) == [:va, :vb, :vc, :vd, :ve, :vf]
+      assert Keyword.keys(values) == labels
       assert length(Enum.uniq_by(rows, &{&1.branch, &1.fault})) == expected_rows
       IO.inspect(Values.flipped_bits(), label: "C_POS_FLIPPED_BITS")
       context = with_references(context, rows)
@@ -178,7 +174,7 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
         end)
 
       IO.inspect(counts, label: "C_POS_COUNTS")
-      assert counts.pairs == expected_rows * 6
+      assert counts.pairs == expected_rows * length(labels)
 
       for {key, sample} <- Enum.sort(residuals),
           do:
