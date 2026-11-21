@@ -31,7 +31,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     connections =
       Map.new(state.connections, fn {port, connection} -> {port, finish(connection)} end)
 
-    errors = Enum.flat_map(connections, fn {_port, c} -> c.errors end)
+    errors =
+      Enum.flat_map(connections, fn {port, c} ->
+        Enum.map(c.errors, &Map.put(&1, :port, port))
+      end)
 
     %{
       connections: connections,

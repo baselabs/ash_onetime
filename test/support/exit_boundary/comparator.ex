@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.Comparator do
   alias AshOnetime.Test.ExitBoundary.AttributeCopies
   alias AshOnetime.Test.ExitBoundary.ClockExpressions
+  alias AshOnetime.Test.ExitBoundary.ConnectionReads
   alias AshOnetime.Test.ExitBoundary.ContextCopies
   alias AshOnetime.Test.ExitBoundary.DatabaseOrigins
   alias AshOnetime.Test.ExitBoundary.Declarations
@@ -8,6 +9,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   alias AshOnetime.Test.ExitBoundary.FailureTwins
   alias AshOnetime.Test.ExitBoundary.Hooks
   alias AshOnetime.Test.ExitBoundary.HostCall
+  alias AshOnetime.Test.ExitBoundary.NativeTransport
   alias AshOnetime.Test.ExitBoundary.Origins
   alias AshOnetime.Test.ExitBoundary.PathFrames
   alias AshOnetime.Test.ExitBoundary.PermittedTrace
@@ -45,6 +47,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
     ri = Origins.build(run)
     ti = Origins.build(twin)
+    native = {ri, ti}
     rs = Scheduling.build(ri)
     ts = Scheduling.build(ti)
     ri = %{ri | events: rs.events}
@@ -111,7 +114,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       tf: tf,
       readback: readback,
       checkpoint: checkpoint,
-      refusal: refusal
+      refusal: refusal,
+      native: native
     }
   end
 
@@ -129,7 +133,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       tf: tf,
       readback: readback,
       checkpoint: checkpoint,
-      refusal: refusal
+      refusal: refusal,
+      native: {raw_ri, raw_ti}
     } = matches
 
     claimed =
@@ -265,6 +270,26 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         )
       end)
 
+    rconnections = connection_streams(raw_ri, run.historical, readback.claimed)
+    tconnections = connection_streams(raw_ti, twin.historical, MapSet.new())
+
+    state =
+      Enum.reduce(
+        [run_index: rconnections, twin_index: tconnections],
+        state,
+        fn {side, proof}, s ->
+          Enum.reduce(proof.errors, s, fn e, s ->
+            error(
+              %{s | at: Map.put(e.at, side, e.index)},
+              :connection_stream,
+              [e.rule],
+              e.actual,
+              e.expected
+            )
+          end)
+        end
+      )
+
     rt = TransportReferences.build(ri, readback.claimed)
     tt = TransportReferences.build(ti)
 
@@ -363,8 +388,52 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       readback_sources: Readback.whole_sources(readback, state.pairing, ti),
       databases: state.databases,
       derivations: state.derivations,
-      clocks: state.clocks
+      clocks: state.clocks,
+      connections: {rconnections, tconnections}
     }
+  end
+
+  defp connection_streams(indexed, historical, readback) do
+    native = NativeTransport.build(indexed, historical.connections)
+    reads = ConnectionReads.build(native, readback, historical.prepared_catalogs)
+
+    errors =
+      Enum.map(native.errors ++ reads.errors, fn
+        %{index: index} = error when is_integer(index) ->
+          error
+
+        error ->
+          connection = Map.fetch!(reads.connections, error.port)
+          offset = Map.get(error, :offset)
+
+          frame =
+            Enum.find(connection.framing.messages, &(&1.start == offset)) ||
+              List.last(connection.framing.messages)
+
+          index =
+            if frame do
+              frame.provenance |> Enum.map(& &1.index) |> Enum.max()
+            else
+              (native.writes ++ native.reads ++ native.active)
+              |> Enum.filter(&(&1.port == error.port))
+              |> Enum.sort_by(& &1.source.index)
+              |> List.last()
+              |> Map.fetch!(:source)
+              |> Map.fetch!(:index)
+            end
+
+          source = Enum.find(indexed.events, &(&1.index == index))
+
+          %{
+            index: index,
+            at: Map.take(source, [:mfa, :role, :stack]),
+            rule: error.rule,
+            actual: Map.get(error, :actual, Map.take(error, [:direction, :offset, :received])),
+            expected: Map.get(error, :expected, :complete_protocol_frame)
+          }
+      end)
+
+    %{native: native, reads: reads, errors: errors}
   end
 
   defp readback_backend_copies(state, ri, readback, checkpoint, reference?) do

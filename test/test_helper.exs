@@ -36,6 +36,7 @@ case AshOnetime.Test.Application.start(:normal, []) do
   {:ok, _supervisor} -> :ok
   _error -> raise "the dedicated test fixture application did not start"
 end
+
 AshOnetime.Test.Migration.assert_isolated_database!()
 
 Ecto.Adapters.SQL.Sandbox.mode(AshOnetime.Test.Repo, :auto)

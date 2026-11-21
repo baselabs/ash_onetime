@@ -2464,6 +2464,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert assertion.left === state
     IO.puts("NATIVE_DIAGNOSTIC_CLASS: unprojected RED; every typed output GREEN")
   end
+
   @tag :connection_streams
   test "Connection streams: a historical active mode owns the first native delivery" do
     run = ConnectionNative.observe(:historical_active)
@@ -2495,10 +2496,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     rejected = NativeTransport.build(%{events: corrupt_events}, corrupt.native_history)
     assert Enum.any?(rejected.errors, &(&1.actual == :native_option_source))
+
     IO.puts(
       "CONNECTION_HISTORY_ACTIVE: missing origin RED; native origin GREEN; foreign control RED"
     )
   end
+
   @tag :connection_streams
   test "Connection streams: coalesced messages have distinct addresses and real native indices" do
     run = ConnectionNative.observe(:pipeline)
@@ -2525,6 +2528,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert source.pid == message.pid
       assert DatabaseOrigins.address(message) == message.message_address
       assert Map.fetch!(contexts, message.message_address) == message.wire_sql
+
       assert message.wire_frame.stop - message.wire_frame.start ==
                5 + byte_size(message.wire_frame.payload)
     end
