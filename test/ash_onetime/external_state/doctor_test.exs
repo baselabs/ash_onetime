@@ -16,11 +16,11 @@ for partitioning <- [nil, 2] do
       previous = Repo.put_dynamic_repo(c.runtime_repo)
 
       try do
-        capture_io(fn ->
-          assert_raise Mix.Error, ~r/check\(s\) failed/, fn ->
+        assert_raise Mix.Error, ~r/check\(s\) failed/, fn ->
+          capture_io(fn ->
             Doctor.run(["--repo", inspect(Repo), "--live", "--prefix", c.schema])
-          end
-        end)
+          end)
+        end
       after
         Repo.put_dynamic_repo(previous)
 

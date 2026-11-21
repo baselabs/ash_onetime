@@ -9996,17 +9996,17 @@ defmodule AshOnetime.MutationCheck do
                  tag: "external_state_review_journal_doctor",
                  test_name: "plain: doctor refuses a missing rollback journal",
                  assertion: "assert_raise Mix.Error",
-                 assertion_line: 20,
+                 assertion_line: 19,
                  required_failures: [
                    %{
                      test_name: "plain: doctor refuses a missing rollback journal",
                      assertion: "assert_raise Mix.Error",
-                     assertion_line: 20
+                     assertion_line: 19
                    },
                    %{
                      test_name: "2: doctor refuses a missing rollback journal",
                      assertion: "assert_raise Mix.Error",
-                     assertion_line: 20
+                     assertion_line: 19
                    }
                  ]
                }
