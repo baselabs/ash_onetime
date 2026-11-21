@@ -3,6 +3,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   alias AshOnetime.Test.ExitBoundary.ClockExpressions
   alias AshOnetime.Test.ExitBoundary.ConnectionDecoders
   alias AshOnetime.Test.ExitBoundary.ConnectionReads
+  alias AshOnetime.Test.ExitBoundary.ConnectionStates
   alias AshOnetime.Test.ExitBoundary.ContextCopies
   alias AshOnetime.Test.ExitBoundary.DatabaseOrigins
   alias AshOnetime.Test.ExitBoundary.Declarations
@@ -407,8 +408,10 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         historical.query_origins
       )
 
+    states = ConnectionStates.build(indexed, native, decoders, historical.connections)
+
     errors =
-      Enum.map(native.errors ++ reads.errors ++ decoders.errors, fn
+      Enum.map(native.errors ++ reads.errors ++ decoders.errors ++ states.errors, fn
         %{index: index} = error when is_integer(index) ->
           error
 
@@ -443,7 +446,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
           }
       end)
 
-    %{native: native, reads: reads, decoders: decoders, errors: errors}
+    %{native: native, reads: reads, decoders: decoders, states: states, errors: errors}
   end
 
   defp readback_backend_copies(state, ri, readback, checkpoint, reference?) do

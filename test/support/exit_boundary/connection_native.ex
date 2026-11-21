@@ -212,6 +212,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp execute_cached({%{sock: {module, socket}} = protocol, query, params}, corruption) do
     query = if corruption == :query_copy, do: %{query | cache: :reference}, else: query
+
     protocol =
       if corruption == :state_copy, do: %{protocol | null: :foreign_native_null}, else: protocol
 

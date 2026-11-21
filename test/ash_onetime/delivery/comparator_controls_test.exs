@@ -510,6 +510,31 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert source.mfa == {Postgrex.Protocol, :handle_execute, 4}
     assert elem(source.event, 1) == :call
 
+    for mutant <- [:stream_length, :stream_timeout, :stream_required, :stream_state_copy] do
+      checked =
+        ComparatorMutants.with_mutant(mutant, fn ->
+          AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+            %{events: captured.events},
+            captured.native,
+            captured.decoders,
+            captured.historical
+          )
+        end)
+
+      expected = if mutant == :stream_state_copy, do: [], else: [:state_input_copy]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    assert Enum.map(
+             AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+               %{events: captured.events},
+               captured.native,
+               captured.decoders,
+               captured.historical
+             ).errors,
+             & &1.rule
+           ) == [:state_input_copy]
+
     restored = cached_decoders(nil)
 
     accepted =
@@ -521,6 +546,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       )
 
     assert accepted.errors == []
+    IO.puts("CONNECTION_STATE_INPUT_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
   @tag :connection_streams
@@ -2728,14 +2754,25 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert Enum.all?(logical, &is_integer(&1.index))
         assert Enum.all?(logical, &(elem(&1.message_address, 1) == run.tls_binding.port))
 
-        program =
-          for event <- events,
-              event.mfa != nil,
-              do: %{index: event.index, mfa: event.mfa, tag: elem(event.event, 1)}
+        for event <- events do
+          owner =
+            cond do
+              event.pid == run.snapshot.root -> :caller
+              event.pid == run.tls_binding.owner -> :tls_transport_owner
+              event.pid == run.tls_binding.port -> :transport
+              true -> :other_native_process
+            end
 
-        IO.puts(
-          "CONNECTION_TLS_NATIVE_PROGRAM: " <> Diagnostics.render(program, limit: :infinity)
-        )
+          IO.puts(
+            "CONNECTION_TLS_NATIVE_EVENT: " <>
+              Diagnostics.render(%{
+                index: event.index,
+                mfa: event.mfa,
+                tag: elem(event.event, 1),
+                owner: owner
+              })
+          )
+        end
 
         {corruption, messages}
       end)
