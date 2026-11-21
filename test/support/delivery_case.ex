@@ -65,17 +65,19 @@ defmodule AshOnetime.Test.DeliveryCase do
     do: Ash.ActionInput.for_action(Resource, :mint, %{value: 1, request_key: key}, tenant: prefix)
 
   @doc """
-  The executing-only values present in `results`, searched through the shapes a test
-  collects (deliver returns, rollback reasons). Only the count is ever reported.
+  Executed deliveries with values, searched through the shapes a test collects
+  (deliver returns, rollback reasons). Each value tuple counts as one delivery;
+  neither the declared names nor their count change that. Only the count is reported.
   """
   def delivered(results) when is_list(results), do: Enum.flat_map(results, &delivered/1)
-  def delivered(%Delivery{outcome: :executed, values: %{secret: secret}}), do: [secret]
+  def delivered(%Delivery{outcome: :executed, values: values}) when map_size(values) > 0,
+    do: [values]
   def delivered(%Delivery{}), do: []
   def delivered(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> delivered()
   def delivered(_other), do: []
 
   @doc """
-  The guarantee: at most one value per key. Fails on the second value with its count,
+  The guarantee: at most one delivery of values per key. Fails on the second with its count,
   never the value.
   """
   defmacro assert_at_most_one_value(results) do
@@ -83,7 +85,7 @@ defmodule AshOnetime.Test.DeliveryCase do
       count = length(unquote(__MODULE__).delivered(unquote(results)))
 
       assert count <= 1,
-             "#{count} executing-only values were delivered for one key"
+             "#{count} executing-only deliveries carried values for one key"
     end
   end
 

@@ -111,6 +111,7 @@ for partitioning <- [nil, 2] do
           |> AshOnetime.deliver()
         assert %Delivery{outcome: :executed, values: values} = elem(first, tuple_size(first) - 1)
         assert map_size(values) == 2
+        assert length(delivered(first)) == 1
         assert error_code(AshOnetime.deliver(build.())) == :response_expired
       end
 
