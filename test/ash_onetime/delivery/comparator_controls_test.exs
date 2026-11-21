@@ -164,6 +164,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert length(read.copies) == 5
       assert Enum.all?(read.copies, &(&1.index in read.indexes))
       assert Enum.all?(read.copies, &(&1.length == byte_size(read.bytes)))
+      assert_native_copies(read.copies, indexed, read.bytes)
     end
 
     for write <- native.writes do
@@ -174,11 +175,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert length(write.copies) == 6
       assert Enum.all?(write.copies, &(&1.index in write.indexes))
       assert Enum.all?(write.copies, &(&1.length == byte_size(write.bytes)))
+      assert_native_copies(write.copies, indexed, write.bytes)
     end
 
     demand = ConnectionReads.build(native)
     assert demand.errors == []
     assert length(demand.demands) == length(native.reads)
+    assert map_size(demand.connections) == 1
+    assert Enum.all?(Map.values(demand.connections), &(&1.framing.messages != []))
 
     for {_port, connection} <- demand.connections,
         frame <- connection.framing.messages,
@@ -217,6 +221,28 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp native_result(%{result: {:caught, kind, _reason}}), do: {:caught, kind, :term}
   defp native_result(_run), do: :unexpected_result
+
+  defp assert_native_copies(copies, events, expected) do
+    for copy <- copies do
+      source = Enum.fetch!(events, copy.index)
+      bytes = native_copy_bytes(source.event, copy.path)
+      assert is_binary(bytes), "native copy must address its captured data slot"
+      assert copy.offset + copy.length <= byte_size(bytes)
+      equal? = binary_part(bytes, copy.offset, copy.length) === expected
+      assert equal?, "native copy bytes must equal their own transport origin"
+    end
+  end
+
+  defp native_copy_bytes(event, path) do
+    path
+    |> Enum.reduce(event, fn
+      index, tuple when is_tuple(tuple) -> elem(tuple, index)
+      index, list when is_list(list) -> Enum.fetch!(list, index)
+    end)
+    |> IO.iodata_to_binary()
+  rescue
+    _error in [ArgumentError, Enum.OutOfBoundsError, FunctionClauseError] -> nil
+  end
 
   @tag :connection_streams
   test "Connection streams: native pipelining preserves each query and response" do

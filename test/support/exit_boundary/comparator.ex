@@ -311,13 +311,16 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       |> Enum.reject(&MapSet.member?(claimed, &1.index))
       |> Enum.group_by(& &1.role)
 
-    twin_claimed =
+    twin_indexes =
       if reference?,
-        do: MapSet.new(),
+        do: [],
         else:
           HostCall.indexes(ti.events)
           |> MapSet.union(tf.claimed)
           |> MapSet.union(checkpoint.claimed)
+          |> MapSet.to_list()
+
+    twin_claimed = MapSet.new(twin_indexes)
 
     right =
       tw
