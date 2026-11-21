@@ -259,6 +259,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       actual: false,
       expected: true
     }
+
     %{state | errors: [error | state.errors]}
   end
 end

@@ -550,6 +550,64 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: holder writes bind to the callback return that owns their state" do
+    {captured, rejected} = holder_states(:state_copy)
+    assert Enum.map(rejected.errors, & &1.rule) == [:state_holder_update]
+    [failure] = rejected.errors
+    assert Enum.fetch!(captured.events, failure.index).mfa == {:ets, :update_element, 3}
+
+    for mutant <- [:stream_state_copy, :stream_state_holder_update] do
+      checked =
+        ComparatorMutants.with_mutant(mutant, fn ->
+          AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+            %{events: captured.events},
+            captured.native,
+            captured.decoders,
+            captured.historical
+          )
+        end)
+
+      expected = if mutant == :stream_state_holder_update, do: [], else: [:state_holder_update]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    {_captured, restored} = holder_states(:state_copy)
+    assert Enum.map(restored.errors, & &1.rule) == [:state_holder_update]
+    {_captured, positive} = holder_states(nil)
+    assert positive.errors == []
+    assert Enum.any?(positive.copies, &(&1.path == [2, 2, 2, 0, 1]))
+
+    IO.puts("CONNECTION_STATE_HOLDER_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  defp holder_states(corruption) do
+    run = ConnectionNative.observe_holder(corruption)
+    assert run.result == :ok
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    native = NativeTransport.build(%{events: events}, run.native_history)
+    assert native.errors == []
+    streams = ConnectionReads.build(native)
+    assert streams.errors == []
+    decoders = ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
+    assert decoders.errors == []
+
+    states =
+      AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+        %{events: events},
+        native,
+        decoders,
+        run.native_history
+      )
+
+    {%{events: events, native: native, decoders: decoders, historical: run.native_history}, states}
+  end
+
+  @tag :connection_streams
   test "Connection streams: cached query copies are independently bound" do
     captured = cached_decoders(:query_copy)
     assert Enum.map(captured.decoders.errors, & &1.rule) == [:decoder_query_copy]
@@ -2729,6 +2787,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         run = ConnectionNative.observe_tls(corruption)
         expected = if corruption == :binding, do: [:tls_local_endpoint], else: []
         assert run.result == expected
+
+        for process <- run.tls_binding.processes do
+          IO.puts(
+            "CONNECTION_TLS_PROCESS_ORIGIN: " <>
+              Diagnostics.render(%{
+                mfa: process.mfa,
+                role: if(process.pid == run.tls_binding.owner, do: :transport_owner, else: :linked)
+              })
+          )
+        end
 
         events =
           run.events

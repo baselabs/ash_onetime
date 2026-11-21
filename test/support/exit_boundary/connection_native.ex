@@ -37,6 +37,70 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp initial_mode(protocol, _mode), do: protocol
 
+  # Exercise the actual Holder API on a real, single-connection Postgrex pool.
+  # The deliberately altered write is restored before the next callback runs.
+  def observe_holder(corruption \\ nil) do
+    observer = self()
+    tag = make_ref()
+
+    run =
+      ExitBoundary.observe(
+        fn ->
+          options =
+            Repo.config()
+            |> Keyword.delete(:name)
+            |> Keyword.put(:pool_size, 1)
+            |> Keyword.put(:types, Postgrex.DefaultTypes)
+
+          {:ok, pool} = Postgrex.start_link(options)
+
+          try do
+            holder =
+              DBConnection.run(pool, fn %{pool_ref: pool_ref} ->
+                {:pool_ref, _, _, _, holder, _} = pool_ref
+                {:idle, _protocol} = DBConnection.Holder.handle(pool_ref, :handle_status, [], [])
+                holder
+              end)
+
+            DBConnection.get_connection_metrics(pool)
+            [row] = :ets.lookup(holder, :conn)
+            protocol = elem(row, 3)
+            send(observer, {tag, %{holder => %{protocol: protocol}}})
+            pool
+          catch
+            kind, reason ->
+              GenServer.stop(pool)
+              :erlang.raise(kind, reason, __STACKTRACE__)
+          end
+        end,
+        fn pool ->
+          try do
+            DBConnection.run(pool, fn %{pool_ref: pool_ref} ->
+              {:idle, protocol} = DBConnection.Holder.handle(pool_ref, :handle_status, [], [])
+
+              stored =
+                if corruption == :state_copy,
+                  do: %{protocol | null: :foreign_native_null},
+                  else: protocol
+
+              :ok = DBConnection.Holder.put_state(pool_ref, stored)
+              :ok = DBConnection.Holder.put_state(pool_ref, protocol)
+              :ok
+            end)
+          after
+            GenServer.stop(pool)
+          end
+        end,
+        %{host: [], callbacks: []}
+      )
+
+    receive do
+      {^tag, historical} -> Map.put(run, :native_history, historical)
+    after
+      0 -> raise "native holder state was not captured"
+    end
+  end
+
   def observe_tls(corruption \\ nil) do
     observer = self()
     tag = make_ref()

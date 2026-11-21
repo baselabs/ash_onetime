@@ -332,7 +332,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
           | event:
               e.event
               |> ClockExpressions.project(e.index, rc)
-              |> DatabaseOrigins.project(e.index, rdb)
+              |> DatabaseOrigins.project(DatabaseOrigins.address(e), rdb)
         }
       end)
       |> Enum.reject(&MapSet.member?(claimed, &1.index))
@@ -357,7 +357,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
           | event:
               e.event
               |> ClockExpressions.project(e.index, tc)
-              |> DatabaseOrigins.project(e.index, tdb)
+              |> DatabaseOrigins.project(DatabaseOrigins.address(e), tdb)
         }
       end)
       |> Enum.reject(&MapSet.member?(twin_claimed, &1.index))
@@ -2121,8 +2121,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp readback_backends(_, _, state, _), do: state
 
   defp query_context(a, b, state) do
-    run_sql = event_sql(a.event) || Map.fetch!(state.query_contexts.run, a.index)
-    twin_sql = event_sql(b.event) || Map.fetch!(state.query_contexts.twin, b.index)
+    run_sql = event_sql(a.event) || Map.fetch!(state.query_contexts.run, DatabaseOrigins.address(a))
+    twin_sql = event_sql(b.event) || Map.fetch!(state.query_contexts.twin, DatabaseOrigins.address(b))
 
     %{state | current: %{run: a, twin: b, run_sql: run_sql, twin_sql: twin_sql}}
   end

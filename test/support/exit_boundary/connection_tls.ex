@@ -16,7 +16,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           do: port
 
     {:connected, owner} = Port.info(port, :connected)
-    %{socket: socket, port: port, owner: owner, local: local, peer: peer}
+    {:links, links} = Process.info(owner, :links)
+
+    processes =
+      for pid <- Enum.uniq([owner | links]), is_pid(pid) do
+        mfa =
+          case :proc_lib.translate_initial_call(pid) do
+            {module, function, arity} when is_atom(module) and is_atom(function) and is_integer(arity) ->
+              {module, function, arity}
+
+            _ ->
+              :unknown_initial_call
+          end
+
+        %{pid: pid, mfa: mfa}
+      end
+
+    %{socket: socket, port: port, owner: owner, local: local, peer: peer, processes: processes}
   end
 
   def validate(binding) do
