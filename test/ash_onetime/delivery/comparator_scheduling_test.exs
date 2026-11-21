@@ -27,7 +27,7 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
         IO.puts(
           "U9_NATIVE_WARM_FIRST_DIVERGENCE" <>
             ": " <>
-            inspect(%{path: unquote(name), first: Diagnostics.safe(first)},
+            Diagnostics.render(%{path: unquote(name), first: Diagnostics.safe(first)},
               pretty: true,
               limit: :infinity
             )
@@ -42,7 +42,7 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
           pair = Scenarios.observe(row, values, context)
           result = Comparator.compare(pair)
           locations = Enum.map(result.errors, &{&1.at, &1.rule, &1.path})
-          assert locations == [], "U9 repetition #{repetition}: #{inspect(locations)}"
+          assert locations == [], "U9 repetition #{repetition}: #{Diagnostics.render(locations)}"
 
           for side <- [:run, :twin],
               into: %{},
@@ -63,7 +63,7 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
           IO.puts(
             "U11_ORIGIN_KEY_DIFF" <>
               ": " <>
-              inspect(
+              Diagnostics.render(
                 %{
                   path: unquote(name),
                   repetition: index + 1,
@@ -84,7 +84,7 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
       IO.puts(
         "U9_PATH_SECONDS" <>
           ": " <>
-          inspect(
+          Diagnostics.render(
             %{
               group: unquote(Integer.to_string(div(ordinal, 5))),
               path: unquote(name),

@@ -3055,7 +3055,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
       )
 
     IO.puts(
-      "CALLER_TIMEOUT elapsed_ms=#{elapsed} bound_ms=200 marker_present=#{marker_present} result=#{inspect(result)}"
+      "CALLER_TIMEOUT elapsed_ms=#{elapsed} bound_ms=200 marker_present=#{marker_present} result=#{AshOnetime.Test.ExitBoundary.Diagnostics.render(result)}"
     )
 
     assert %Result{
@@ -3464,7 +3464,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
       for task <- tasks do
         result = Task.await(task, 30_000)
-        IO.puts("COMPOUND_CLEANUP #{inspect(result)}")
+        IO.puts("COMPOUND_CLEANUP #{AshOnetime.Test.ExitBoundary.Diagnostics.render(result)}")
         assert match?({:ok, %{}}, result) or match?(%Result{reason: :lock_unavailable}, result)
       end
     end)

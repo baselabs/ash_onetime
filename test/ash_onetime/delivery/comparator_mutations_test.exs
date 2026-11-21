@@ -38,7 +38,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
     pair = observe(context, row!(:issue, :execute), Values.set()[:va])
     assert Analysis.unclaimed(pair.run.run.events) == []
     hits = Search.hits(pair.run)
-    assert hits == [], "run: a canary crossed the boundary: #{inspect(hits)}"
+    assert hits == [], "run: a canary crossed the boundary: #{Diagnostics.render(hits)}"
     assert Comparator.compare(pair).errors == []
   end
 
@@ -64,7 +64,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
 
           IO.puts(
             "R_NEUTRAL_TUPLE_GREEN" <>
-              ": " <> inspect(%{mutation: mutation.id, tuple: neutral}, pretty: true)
+              ": " <> Diagnostics.render(%{mutation: mutation.id, tuple: neutral}, pretty: true)
           )
         end
 
@@ -86,7 +86,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
           IO.puts(
             "R_FIRST_DIVERGENCE" <>
               ": " <>
-              inspect(
+              Diagnostics.render(
                 %{
                   mutation: mutation.id,
                   source: if(first, do: Diagnostics.location(first)),
@@ -100,7 +100,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         end
 
         quiet? = hits == []
-        assert quiet?, "a raw-canary exit invalidates #{mutation.id}: #{inspect(hits)}"
+        assert quiet?, "a raw-canary exit invalidates #{mutation.id}: #{Diagnostics.render(hits)}"
 
         if first do
           named? = MutationWitness.named?(mutation, first, pair, comparison)
@@ -111,7 +111,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
             IO.puts(
               "U12_NATIVE_REACHABILITY" <>
                 ": " <>
-                inspect(
+                Diagnostics.render(
                   %{mutation: mutation.id, at: first.at, path: first.path, rule: first.rule},
                   pretty: true
                 )
@@ -155,7 +155,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
           IO.puts(
             "C_SET_NATIVE_COMPARISON" <>
               ": " <>
-              inspect(%{mutation: mutation.id, tuple: label, first: Diagnostics.safe(first)},
+              Diagnostics.render(%{mutation: mutation.id, tuple: label, first: Diagnostics.safe(first)},
                 pretty: true,
                 limit: :infinity
               )
@@ -189,7 +189,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
       IO.puts(
         "COMPARATOR_MUTANT" <>
           ": " <>
-          inspect(
+          Diagnostics.render(
             %{
               rule: rule,
               mutation: mutation.id,

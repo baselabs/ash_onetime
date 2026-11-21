@@ -376,7 +376,7 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
         end)
 
       flunk(
-        "assert_apply_stopped!: #{Exception.message(error)}; subscription=#{inspect(state)}; expected_pid=#{checkpoint.pid}; native_errors=#{inspect(errors)}"
+        "assert_apply_stopped!: #{AshOnetime.Test.ExitBoundary.Diagnostics.render(error)}; subscription=#{AshOnetime.Test.ExitBoundary.Diagnostics.render(state)}; expected_pid=#{checkpoint.pid}; native_errors=#{AshOnetime.Test.ExitBoundary.Diagnostics.render(errors)}"
       )
   end
 

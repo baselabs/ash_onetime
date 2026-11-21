@@ -96,7 +96,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
           {:ok, index}
 
         other ->
-          raise "callee argument is not a captured origin: #{inspect({target, argument, other})}"
+          raise "callee argument is not a captured origin: #{Diagnostics.render({target, argument, other})}"
       end
     else
       :not_called
@@ -119,7 +119,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
 
       IO.puts(
         "COMPILED_CAPTURE_FAILURE: " <>
-          inspect(
+          Diagnostics.render(
             %{
               function: {module, function, count},
               callee: target,
@@ -288,7 +288,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
     do: regs
 
   defp capture_step(instruction, _),
-    do: raise("undeclared captured-origin instruction: #{inspect(instruction)}")
+    do: raise("undeclared captured-origin instruction: #{Diagnostics.render(instruction)}")
 
   defp register({:tr, register, _type}), do: register(register)
   defp register(register), do: register
@@ -327,7 +327,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
                 {:cont, regs}
 
               instruction, _ ->
-                raise "undeclared closure instruction: #{inspect(instruction)}"
+                raise "undeclared closure instruction: #{Diagnostics.render(instruction)}"
             end)
 
           for n <- 0..(count - 1), do: Map.fetch!(registers, {:x, n})

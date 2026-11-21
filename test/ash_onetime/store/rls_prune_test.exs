@@ -91,7 +91,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
         result
 
       {:error, error} ->
-        raise "query failed: #{Exception.message(error)} SQL=#{String.slice(sql || "", 0, 120)}"
+        raise "query failed: #{AshOnetime.Test.ExitBoundary.Diagnostics.render(%{error: error, sql: sql})}"
     end
   end
 
@@ -1250,7 +1250,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
   defp wait_for_parent_waiter!(_prefix, task, 0) do
     result = if task, do: Task.yield(task, 0)
-    flunk("prune did not wait for parent lock; completed result: #{inspect(result)}")
+    flunk("prune did not wait for parent lock; completed result: #{AshOnetime.Test.ExitBoundary.Diagnostics.render(result)}")
   end
 
   defp wait_for_parent_waiter!(prefix, task, attempts) do

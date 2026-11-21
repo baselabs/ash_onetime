@@ -3,6 +3,12 @@
 # PGPORT may vary by machine, but the default port 5432 is refused.
 # Never point tests at a server carrying unrelated databases.
 # The URL guard validates the target shape, not other server contents.
+:ok =
+  :logger.add_primary_filter(:ash_onetime_native_diagnostics, {
+    &AshOnetime.Test.ExitBoundary.Diagnostics.logger_filter/2,
+    nil
+  })
+
 database_url = System.fetch_env!("DATABASE_URL")
 
 %URI{scheme: scheme, userinfo: userinfo, host: host, port: port, path: path} =
@@ -17,8 +23,7 @@ dedicated_target? =
 unless dedicated_target? do
   raise """
   DATABASE_URL must target the dedicated ash_onetime_test PostgreSQL on \
-  127.0.0.1 under the postgres user, on a non-default port; got: \
-  user #{inspect(user)}, host #{inspect(host)} — see .env.example (PGPORT)
+  127.0.0.1 under the postgres user, on a non-default port — see .env.example (PGPORT)
   """
 end
 
@@ -38,3 +43,11 @@ Ecto.Migrator.run(
 Ecto.Adapters.SQL.Sandbox.mode(AshOnetime.Test.Repo, :manual)
 
 ExUnit.start()
+
+ExUnit.configure(
+  formatters:
+    Enum.map(ExUnit.configuration()[:formatters], fn
+      ExUnit.CLIFormatter -> AshOnetime.Test.TestFormatter
+      formatter -> formatter
+    end)
+)

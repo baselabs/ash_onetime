@@ -1,6 +1,6 @@
 defmodule AshOnetime.Test.ExitBoundary.PathFrameWitnesses do
   @moduledoc false
-  alias AshOnetime.Test.ExitBoundary.{Compiled, Completeness, PathFrames, Scenarios}
+  alias AshOnetime.Test.ExitBoundary.{Compiled, Completeness, Diagnostics, PathFrames, Scenarios}
 
   # These are real guarded production raises. No captured stack, event, hook or
   # environment is synthesized. Both BEAM bytes and compiler options are restored
@@ -55,7 +55,7 @@ defmodule AshOnetime.Test.ExitBoundary.PathFrameWitnesses do
 
     for frame <- frames do
       unless Enum.any?(stacks, &PathFrames.witness?(&1, frame)),
-        do: raise("U14 missing #{inspect({PathFrames.path(row), frame.mfa})}")
+        do: raise("U14 missing #{Diagnostics.render({PathFrames.path(row), frame.mfa})}")
     end
 
     raised? =
@@ -68,7 +68,7 @@ defmodule AshOnetime.Test.ExitBoundary.PathFrameWitnesses do
 
     IO.puts(
       "U14_PRODUCTION_RAISE: " <>
-        inspect(%{path: PathFrames.path(row), stacks: Enum.uniq(stacks)},
+        Diagnostics.render(%{path: PathFrames.path(row), stacks: Enum.uniq(stacks)},
           pretty: true,
           limit: :infinity
         )

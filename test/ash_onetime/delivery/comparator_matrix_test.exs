@@ -41,11 +41,11 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
 
     IO.puts(
       "U3_FINALIZE_REPLAY" <>
-        ": " <> inspect(%{pairs: length(rows) * 6, failures: failures}, pretty: true)
+        ": " <> Diagnostics.render(%{pairs: length(rows) * 6, failures: failures}, pretty: true)
     )
 
     assert failures == []
-    assert locations == [], "U3 comparison diverged at #{inspect(locations)}"
+    assert locations == [], "U3 comparison diverged at #{Diagnostics.render(locations)}"
   end
 
   defp finalize_replay?(run) do
@@ -103,13 +103,13 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
       assert Enum.uniq(path_indices) == path_indices
       assert Enum.all?(path_indices, &(&1 in 0..(expected_rows - 1)))
       rows = Enum.map(path_indices, &Enum.fetch!(rows, &1))
-      IO.puts("C_POS_FLIPPED_BITS" <> ": " <> inspect(Values.flipped_bits(), pretty: true))
+      IO.puts("C_POS_FLIPPED_BITS" <> ": " <> Diagnostics.render(Values.flipped_bits(), pretty: true))
       context = with_references(context, rows)
 
       {residuals, counts} =
         Enum.reduce(rows, {%{}, %{pairs: 0, events: 0}}, fn row, acc ->
           IO.puts(
-            "C_POS_ROW" <> ": " <> inspect({row.action, row.branch, row.fault}, pretty: true)
+            "C_POS_ROW" <> ": " <> Diagnostics.render({row.action, row.branch, row.fault}, pretty: true)
           )
 
           Enum.reduce(values, acc, fn {label, tuple}, {all, counts} ->
@@ -131,7 +131,7 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
                         at: :comparator,
                         rule: :unhandled_capture,
                         path: [],
-                        run: {error.__struct__, Exception.message(error), __STACKTRACE__},
+                        run: {error.__struct__, error, __STACKTRACE__},
                         twin: :completed_comparison
                       }
                     ]
@@ -187,7 +187,7 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
           end)
         end)
 
-      IO.puts("C_POS_COUNTS" <> ": " <> inspect(counts, pretty: true))
+      IO.puts("C_POS_COUNTS" <> ": " <> Diagnostics.render(counts, pretty: true))
       assert counts.pairs == length(path_indices) * length(labels)
 
       for {key, sample} <- Enum.sort(residuals),
@@ -195,7 +195,7 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
             IO.puts(
               "C_POS_RESIDUAL" <>
                 ": " <>
-                inspect({key, sample}, pretty: true, limit: :infinity, printable_limit: :infinity)
+                Diagnostics.render({key, sample}, pretty: true, limit: :infinity, printable_limit: :infinity)
             )
 
       assert residuals == %{},
@@ -206,7 +206,7 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
   defp log_difference(row, tuple, difference) do
     IO.puts(
       "C_POS_RESIDUAL_OCCURRENCE: " <>
-        inspect(
+        Diagnostics.render(
           %{
             row: row,
             tuple: tuple,

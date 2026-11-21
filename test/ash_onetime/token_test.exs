@@ -508,7 +508,7 @@ defmodule AshOnetime.TokenTest do
         custody_context: %{material: ReviewMaterial, key: secret}
       )
 
-    IO.inspect(result, limit: :infinity)
+    IO.puts(AshOnetime.Test.ExitBoundary.Diagnostics.render(result, limit: :infinity))
     '''
 
     # The dev subprocess inherits a clean env: config/config.exs imports test.exs ONLY for

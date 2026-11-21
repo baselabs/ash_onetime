@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   @moduledoc false
   use GenServer
+
   import Postgrex.Messages,
     only: [msg_parameter_desc: 1, msg_row_desc: 1, msg_no_data: 0, row_field: 1]
 
@@ -103,8 +104,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
        do: {pid, :columns, {arity, columns(fields)}}
 
   defp select(
-         {pid, :return_from, {Postgrex.Protocol, :msg_recv, arity},
-          {:ok, msg_no_data(), _buffer}}
+         {pid, :return_from, {Postgrex.Protocol, :msg_recv, arity}, {:ok, msg_no_data(), _buffer}}
        ),
        do: {pid, :columns, {arity, []}}
 
@@ -169,6 +169,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   end
 
   defp record({_stamp, {pid, :refused, _}}, state), do: elem(pop(state, pid), 1)
+
   defp record({_stamp, {pid, :exit, _}}, state),
     do: %{state | frames: Map.delete(state.frames, pid)}
 

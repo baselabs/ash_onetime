@@ -358,7 +358,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     sql =
       ~s[SELECT id, amount FROM "#{context.prefix}".ash_onetime_boundary_records WHERE amount >= $1]
 
-    SQL.query!(context.repo, sql, [1])
+    SQL.query!(context.repo, sql, [1], cache_statement: "historical_native_catalog")
     historical = Historical.capture(context.prefix)
     catalogs? = Map.has_key?(historical, :prepared_catalogs)
     assert catalogs?, "the historical native prepared catalog is missing"
@@ -544,7 +544,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
 
     assert Enum.map(programs, & &1.mode) == [:once, false]
-    IO.puts("CONNECTION_STREAM_ACTIVE_PROGRAMS: " <> inspect(programs, limit: :infinity))
+    IO.puts("CONNECTION_STREAM_ACTIVE_PROGRAMS: " <> Diagnostics.render(programs, limit: :infinity))
 
     demand = ConnectionReads.build(native)
     assert demand.errors == []
@@ -617,7 +617,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           do: index
 
     assert deferred != [], "the real contended socket must execute deferred controls"
-    IO.puts("CONNECTION_STREAM_DEFERRED_CONTROLS: " <> inspect(length(deferred)))
+    IO.puts("CONNECTION_STREAM_DEFERRED_CONTROLS: " <> Diagnostics.render(length(deferred)))
   end
 
   @tag :connection_streams
@@ -642,7 +642,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
 
     replays = List.flatten(replays)
-    IO.puts("CONNECTION_STREAM_BUFFER_PROGRAMS: " <> inspect(replays, limit: :infinity))
+    IO.puts("CONNECTION_STREAM_BUFFER_PROGRAMS: " <> Diagnostics.render(replays, limit: :infinity))
     assert replays != [], "the native runs must actually execute Postgrex buffered replay"
   end
 
@@ -724,7 +724,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     if native_result(run) != :ok do
       IO.puts(
         "CONNECTION_STREAM_BUFFER_FAILURE: " <>
-          inspect(%{result: native_result(run), program: buffer_failure_program(run)})
+          Diagnostics.render(%{result: native_result(run), program: buffer_failure_program(run)})
       )
     end
 
@@ -885,7 +885,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         IO.puts(
           "C_TICK_READS" <>
             ": " <>
-            inspect(%{attempt: attempt, run: run, twin: twin, seconds: delta}, pretty: true)
+            Diagnostics.render(%{attempt: attempt, run: run, twin: twin, seconds: delta}, pretty: true)
         )
 
         assert_green(pair)
@@ -959,7 +959,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     IO.puts(
       "U1_RERAISE" <>
-        ": " <> inspect(Enum.map(tail, fn e -> {elem(e, 1), event_mfa(e)} end), pretty: true)
+        ": " <> Diagnostics.render(Enum.map(tail, fn e -> {elem(e, 1), event_mfa(e)} end), pretty: true)
     )
 
     assert raises == []
@@ -986,7 +986,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts(
       "U2_ALLOCATION_NATIVE_CHECKPOINT" <>
         ": " <>
-        inspect(
+        Diagnostics.render(
           Enum.map(checkpoint_events, fn event ->
             Map.take(event, [:index, :role, :mfa, :stack])
             |> Map.put(:event, Diagnostics.safe(event.event))
@@ -1068,7 +1068,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert Enum.any?(origins, &match?(%{origin: {:wire_statement, :committed_read, _}}, &1))
     assert Enum.any?(origins, &match?(%{origin: {:wire_statement, :shared, _}}, &1))
-    IO.puts("U2_NATIVE_WIRE_ORIGINS" <> ": " <> inspect(origins, pretty: true, limit: :infinity))
+    IO.puts("U2_NATIVE_WIRE_ORIGINS" <> ": " <> Diagnostics.render(origins, pretty: true, limit: :infinity))
 
     for side <- [pair.run, pair.twin] do
       wire = side |> Origins.build() |> TransportReferences.build() |> Wire.build()
@@ -1085,7 +1085,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       IO.puts(
         "U2_NATIVE_TRANSPORT_OWNERSHIP" <>
           ": " <>
-          inspect(%{side: side.resource, instances: counts}, pretty: true, limit: :infinity)
+          Diagnostics.render(%{side: side.resource, instances: counts}, pretty: true, limit: :infinity)
       )
 
       u2_command_ownership(
@@ -1095,7 +1095,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
 
     assert outside == [],
-           "OPEN claimed transport outside its native interval: #{inspect(outside)}"
+           "OPEN claimed transport outside its native interval: #{Diagnostics.render(outside)}"
 
     assert_green(pair)
   end
@@ -1188,7 +1188,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
         IO.puts(
           "ALLOCATION_NATIVE_NEGATIVE" <>
-            ": " <> inspect(%{fault: name, rejected_by: rule}, pretty: true)
+            ": " <> Diagnostics.render(%{fault: name, rejected_by: rule}, pretty: true)
         )
       end)
 
@@ -1242,7 +1242,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           first
         )
 
-      assert owned?, inspect(Diagnostics.safe(first))
+      assert owned?, Diagnostics.render(Diagnostics.safe(first))
       assert Registry.allocation_checkpoint?(active.row)
 
       assert Enum.count(
@@ -1312,7 +1312,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         owned? =
           match?(%{at: %{mfa: {:persistent_term, :get, 1}}, rule: :permitted_call_order}, first)
 
-        assert owned?, inspect(Diagnostics.safe(first))
+        assert owned?, Diagnostics.render(Diagnostics.safe(first))
         IO.puts("ALLOCATION_NATIVE_BACKEND_ROUTING_REJECTED")
       end)
     after
@@ -1330,7 +1330,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     %{positive: positive, negative: negative} = cross_lease_captures(context)
     assert Allocation.captured_pairs(positive).errors == []
     rejected = Allocation.captured_pairs(negative)
-    IO.puts("U_CROSS_LEASE_NATIVE_CONFLICT" <> ": " <> inspect(rejected.errors, pretty: true))
+    IO.puts("U_CROSS_LEASE_NATIVE_CONFLICT" <> ": " <> Diagnostics.render(rejected.errors, pretty: true))
     assert rejected.errors != [], "U_CROSS_LEASE_IDENTITY_WITNESS"
 
     assert Enum.all?(
@@ -1361,7 +1361,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       IO.puts(
         "U_CROSS_LEASE_SAME_CAPTURE_SELECTIVITY" <>
-          ": " <> inspect(%{mutant: rule, remaining: length(rejected.errors)}, pretty: true)
+          ": " <> Diagnostics.render(%{mutant: rule, remaining: length(rejected.errors)}, pretty: true)
       )
     end
 
@@ -1399,7 +1399,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts(
       "U_ALLOCATION_NATIVE_OPPOSITE_CHECKIN_ORDER" <>
         ": " <>
-        inspect(Enum.map(rejected.errors, &Map.take(&1, [:rule, :run, :twin])), pretty: true)
+        Diagnostics.render(Enum.map(rejected.errors, &Map.take(&1, [:rule, :run, :twin])), pretty: true)
     )
 
     witnessed? =
@@ -1508,7 +1508,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       IO.puts(
         "U4_NATIVE_CLOCK_COPY_COVERAGE" <>
           ": " <>
-          inspect(
+          Diagnostics.render(
             %{
               side: side.resource,
               copies: Enum.frequencies(tokens),
@@ -1542,7 +1542,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       IO.puts(
         "U4_NATIVE_REPLAY_CLOCK_COPY_COVERAGE" <>
-          ": " <> inspect(%{side: side.resource, copies: Enum.frequencies(tokens)}, pretty: true)
+          ": " <> Diagnostics.render(%{side: side.resource, copies: Enum.frequencies(tokens)}, pretty: true)
       )
     end
 
@@ -1683,7 +1683,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       IO.puts(
         "U10_SAME_INVOCATION_EXIT_EQUALITY" <>
           ": " <>
-          inspect(
+          Diagnostics.render(
             %{side: name, full: length(captured.pattern_probe), reduced: length(captured.events)},
             pretty: true
           )
@@ -1717,7 +1717,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         IO.puts(
           "U14_ANCHORS" <>
             ": " <>
-            inspect(
+            Diagnostics.render(
               %{
                 action: row.action,
                 branch: row.branch,
@@ -1781,7 +1781,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     comparison = compare_observation(run_side, twin_side, row)
 
     first = List.first(comparison.errors)
-    IO.puts("U_CONSUMER_NATIVE_FIRST_DIVERGENCE" <> ": " <> inspect(first, pretty: true))
+    IO.puts("U_CONSUMER_NATIVE_FIRST_DIVERGENCE" <> ": " <> Diagnostics.render(first, pretty: true))
 
     assert match?(
              %{
@@ -1832,7 +1832,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert compare_observation(equal_side, twin_side, row).errors == []
       comparison = compare_observation(run_side, twin_side, row)
       difference = List.first(comparison.errors)
-      IO.puts("U_STORE_NATIVE_FIRST_DIVERGENCE" <> ": " <> inspect(difference, pretty: true))
+      IO.puts("U_STORE_NATIVE_FIRST_DIVERGENCE" <> ": " <> Diagnostics.render(difference, pretty: true))
 
       assert match?(
                %{
@@ -1915,7 +1915,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert compare_observation(equal, twin, row).errors == []
     first = compare_observation(changed, twin, row).errors |> List.first()
-    IO.puts("U_ERROR_NATIVE_FIRST_DIVERGENCE" <> ": " <> inspect(first, pretty: true))
+    IO.puts("U_ERROR_NATIVE_FIRST_DIVERGENCE" <> ": " <> Diagnostics.render(first, pretty: true))
 
     assert match?(
              %{
@@ -2127,7 +2127,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       IO.puts(
         "C_NATIVE_FIRST_DIVERGENCE" <>
           ": " <>
-          inspect(
+          Diagnostics.render(
             %{
               path: {pair.row.action, pair.row.branch, pair.row.fault},
               first: Diagnostics.safe(first)
@@ -2139,7 +2139,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
 
     locations = Enum.map(result.errors, &{&1.at, &1.rule, &1.path})
-    assert locations == [], "comparator differences: #{inspect(locations)}"
+    assert locations == [], "comparator differences: #{Diagnostics.render(locations)}"
   end
 
   defp next_second(side) do
@@ -2149,7 +2149,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     now = System.system_time(:millisecond)
 
     IO.puts(
-      "C_TICK_BOUNDARY" <> ": " <> inspect(%{target: target, after_side: now}, pretty: true)
+      "C_TICK_BOUNDARY" <> ": " <> Diagnostics.render(%{target: target, after_side: now}, pretty: true)
     )
 
     Process.sleep(max(target - now, 0))
@@ -2199,7 +2199,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           {proof.twin.value, proof.pairing}
         else
           assert Map.has_key?(twin.origins, key),
-                 "U8: a pool monitor role has no twin occurrence: #{inspect(%{key: key, index: origin.index})}"
+                 "U8: a pool monitor role has no twin occurrence: #{Diagnostics.render(%{key: key, index: origin.index})}"
 
           {Map.fetch!(twin.origins, key).value, comparison.pairing}
         end
@@ -2247,7 +2247,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts(
       "U2_CANONICAL_COMMAND_OWNERSHIP" <>
         ": " <>
-        inspect(
+        Diagnostics.render(
           %{
             side: side.resource,
             scheduling_errors: scheduled.errors,
@@ -2348,4 +2348,83 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     do: value |> Map.to_list() |> Enum.flat_map(&wire_terms(&1, tag))
 
   defp wire_terms(_, _), do: []
+  @tag :connection_streams
+  test "Connection diagnostics: every output boundary keeps captured native state private", context do
+    Repo.put_dynamic_repo(context.repo)
+    captured = Historical.capture(context.prefix)
+    {_holder, connection} = Enum.find(captured.connections, fn {_, value} -> value.protocol end)
+    marker = "known-native-diagnostic-sentinel"
+    private = %{connection.protocol | scram: marker, connection_key: 9_876_543_219_876}
+    state = %{captured: captured, protocol: private, copied_key: private.connection_key}
+
+    # This is an output-only copy of a real capture. Neither the observation nor
+    # the comparison sees the marker. The unprojected printer proves the witness.
+    unguarded = ExUnit.CaptureIO.capture_io(fn -> IO.inspect(state, limit: :infinity) end)
+    assert String.contains?(unguarded, marker)
+
+    assertion =
+      try do
+        assert state == nil
+      rescue
+        error in ExUnit.AssertionError -> error
+      end
+
+    pattern =
+      try do
+        (fn value -> :ok = value end).(state)
+      rescue
+        error in MatchError -> error
+      end
+
+    test = %ExUnit.Test{
+      name: :"test native diagnostic witness",
+      module: __MODULE__,
+      tags: %{file: __ENV__.file, line: __ENV__.line}
+    }
+
+    status = %{state: state, message: state, reason: state, log: [state]}
+    stack = [{__MODULE__, :diagnostic_witness, [state], [file: __ENV__.file, line: 0]}]
+
+    printers = [
+      residual: fn -> IO.puts(Diagnostics.render(state, limit: :infinity)) end,
+      residual_projection: fn -> IO.inspect(Diagnostics.safe(state), limit: :infinity) end,
+      assertion_failure: fn ->
+        AshOnetime.Test.TestFormatter.print_failure(test, [{:error, assertion, stack}])
+      end,
+      pattern_failure: fn ->
+        AshOnetime.Test.TestFormatter.print_failure(test, [{:error, pattern, stack}])
+      end,
+      exit_failure: fn ->
+        AshOnetime.Test.TestFormatter.print_failure(test, [{:exit, state, stack}])
+      end,
+      mutation_failure: fn ->
+        AshOnetime.Test.MutationFormatter.handle_cast(
+          {:test_finished, %{test | state: {:failed, [{:error, assertion, stack}]}}},
+          nil
+        )
+      end,
+      history_status: fn -> IO.inspect(ConnectionHistory.format_status(status), limit: :infinity) end,
+      test_formatter_status: fn ->
+        IO.inspect(AshOnetime.Test.TestFormatter.format_status(status), limit: :infinity)
+      end,
+      mutation_formatter_status: fn ->
+        IO.inspect(AshOnetime.Test.MutationFormatter.format_status(status), limit: :infinity)
+      end
+    ]
+
+    for {site, printer} <- printers do
+      output = ExUnit.CaptureIO.capture_io(printer)
+      private? = String.contains?(output, marker) or String.contains?(output, "9876543219876")
+      refute private?, "a native diagnostic output boundary exposed its witness"
+      assert is_atom(site)
+    end
+
+    require Logger
+    logged = ExUnit.CaptureLog.capture_log(fn -> Logger.error(fn -> %{capture: state} end) end)
+    refute String.contains?(logged, marker)
+    refute String.contains?(logged, "9876543219876")
+    assert state.protocol.scram == marker
+    assert assertion.left === state
+    IO.puts("NATIVE_DIAGNOSTIC_CLASS: unprojected RED; every typed output GREEN")
+  end
 end

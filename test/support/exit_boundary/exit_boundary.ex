@@ -10,7 +10,7 @@ defmodule AshOnetime.Test.ExitBoundary do
   # module loaded during the run is one the run itself caused (E18), not one a dependency
   # happened to load lazily (a query builder's first use, a protocol's implementation).
 
-  alias AshOnetime.Test.ExitBoundary.{Capture, Collector, Root}
+  alias AshOnetime.Test.ExitBoundary.{Capture, Collector, Diagnostics, Root}
 
   @deadline 10_000
 
@@ -62,7 +62,7 @@ defmodule AshOnetime.Test.ExitBoundary do
             if probe do
               case Collector.snapshot(probe, @deadline) do
                 {:ok, captured} -> Capture.annotate(captured, spec)
-                {:error, reason} -> raise "U10 pattern probe did not drain: #{inspect(reason)}"
+                {:error, reason} -> raise "U10 pattern probe did not drain: #{Diagnostics.render(reason)}"
               end
             end
 
@@ -78,7 +78,7 @@ defmodule AshOnetime.Test.ExitBoundary do
 
         {:error, reason} ->
           raise ExUnit.AssertionError,
-            message: "the run did not reach the terminal boundary: #{inspect(reason)}"
+            message: "the run did not reach the terminal boundary: #{Diagnostics.render(reason)}"
       end
     after
       Process.demonitor(monitor, [:flush])

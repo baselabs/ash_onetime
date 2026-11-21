@@ -37,7 +37,7 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
               pair = observe(context, row, Values.set()[:va])
               hits = Search.hits(pair.run)
               quiet? = hits == []
-              assert quiet?, "a positive control crossed a raw-canary exit: #{inspect(hits)}"
+              assert quiet?, "a positive control crossed a raw-canary exit: #{Diagnostics.render(hits)}"
               Comparator.compare(pair).errors
           end
         end)
@@ -54,7 +54,7 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
         IO.puts(
           "QUALIFIED_ORIGIN_CONTROL" <>
             ": " <>
-            inspect(%{control: control.id, errors: Diagnostics.safe(errors)},
+            Diagnostics.render(%{control: control.id, errors: Diagnostics.safe(errors)},
               pretty: true,
               limit: :infinity
             )
