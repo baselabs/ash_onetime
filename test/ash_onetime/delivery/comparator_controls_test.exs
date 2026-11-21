@@ -176,6 +176,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         label: "U2_NATIVE_TRANSPORT_OWNERSHIP",
         limit: :infinity
       )
+
+      u2_command_ownership(
+        side,
+        if(side.resource == Withheld, do: readback.claimed, else: MapSet.new())
+      )
     end
 
     assert outside == [],
@@ -740,6 +745,106 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp event_mfa({_, :call, {m, f, args}}), do: {m, f, length(args)}
   defp event_mfa({_, tag, mfa, _}) when tag in [:return_from, :exception_from], do: mfa
   defp event_mfa(_), do: nil
+
+  # Read-only diagnosis over the same captured U2 pair. The comparator and its
+  # whole-run physical identity rule remain unchanged while the design is ruled.
+  defp u2_command_ownership(side, open_claimed) do
+    indexed = Origins.build(side)
+    scheduled = AshOnetime.Test.ExitBoundary.Scheduling.build(indexed)
+    indexed = %{indexed | events: scheduled.events}
+    wire = indexed |> TransportReferences.build() |> Wire.build()
+
+    leases =
+      for %{
+            event:
+              {caller, :return_from, {DBConnection.Holder, :checkout, 3},
+               {:ok, {:pool_ref, pool, _, _, holder, _} = pool_ref, Postgrex.Protocol, _,
+                %Postgrex.Protocol{sock: socket}}}
+          } = source <- indexed.events do
+        port =
+          case socket do
+            {:gen_tcp, port} -> port
+            {:gen_tcp, port, _} -> port
+            port when is_port(port) -> port
+            _ -> nil
+          end
+
+        stop =
+          Enum.find(indexed.events, fn event ->
+            event.index > source.index and
+              match?(
+                %{event: {^caller, :call, {DBConnection.Holder, :checkin, [^pool_ref]}}},
+                event
+              )
+          end)
+
+        %{
+          start: source.index,
+          stop: if(stop, do: stop.index),
+          caller: caller,
+          port: port,
+          pool: pool,
+          holder: holder,
+          open?: MapSet.member?(open_claimed, source.index),
+          stack:
+            Enum.filter(source.stack, fn {module, _, _} ->
+              String.starts_with?(Atom.to_string(module), "Elixir.AshOnetime.")
+            end)
+        }
+      end
+
+    commands =
+      for %{event: {port, :receive, {caller, {:command, payload}}}} = event <- wire,
+          is_port(port) do
+        lease =
+          leases
+          |> Enum.filter(fn lease ->
+            lease.caller == caller and lease.start < event.index and
+              (lease.stop == nil or event.index < lease.stop)
+          end)
+          |> Enum.max_by(& &1.start, fn -> nil end)
+
+        messages =
+          case payload do
+            {:pg_transport, :driver_command, _, messages} -> Enum.map(messages, &elem(&1, 0))
+            _ -> :undecoded
+          end
+
+        %{
+          index: event.index,
+          port: indexed.roles[port],
+          caller: indexed.roles[caller],
+          lease: if(lease, do: lease.start),
+          owner_port: if(lease, do: indexed.roles[lease.port]),
+          owner_matches?: lease != nil and port === lease.port,
+          open?: MapSet.member?(open_claimed, event.index),
+          sql: if(event.wire_sql, do: Base.encode16(:crypto.hash(:sha256, event.wire_sql))),
+          messages: messages
+        }
+      end
+
+    checkouts =
+      Enum.map(leases, fn lease ->
+        %{
+          lease
+          | caller: indexed.roles[lease.caller],
+            port: indexed.roles[lease.port],
+            pool: indexed.roles[lease.pool],
+            holder: indexed.roles[lease.holder]
+        }
+      end)
+
+    IO.inspect(
+      %{
+        side: side.resource,
+        scheduling_errors: scheduled.errors,
+        checkouts: checkouts,
+        commands: commands
+      },
+      label: "U2_CANONICAL_COMMAND_OWNERSHIP",
+      limit: :infinity
+    )
+  end
 
   defp wire_terms(value, tag) when is_tuple(value) do
     own = if tuple_size(value) > 0 and elem(value, 0) == tag, do: [value], else: []
