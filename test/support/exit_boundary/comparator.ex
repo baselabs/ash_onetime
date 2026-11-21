@@ -1219,9 +1219,13 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     state = row_state(state, a.state, b.state)
 
     state =
-      Enum.reduce([response_codec: :codec, response_digest: :digest, response_payload: :payload], state, fn {field, key}, s ->
-        response_value(Map.fetch!(a, field), Map.fetch!(b, field), key, s, path ++ [field])
-      end)
+      Enum.reduce(
+        [response_codec: :codec, response_digest: :digest, response_payload: :payload],
+        state,
+        fn {field, key}, s ->
+          response_value(Map.fetch!(a, field), Map.fetch!(b, field), key, s, path ++ [field])
+        end
+      )
 
     state = %{state | current: previous}
     {a, state} = claim_clock_copies(a, :run, state, path)
@@ -1457,10 +1461,15 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         cache_arguments?(state, path) ->
           cache_arguments(a, b, state, path)
 
-        match?(%{mfa: {AshOnetime.Store.Postgres, f, _}} when f in [:decode_claim, :decode_selected_claim], state.at) and
-            path == [:event, 2, 2, 1] and
+        match?(
+          %{mfa: {AshOnetime.Store.Postgres, f, _}}
+          when f in [:decode_claim, :decode_selected_claim],
+          state.at
+        ) and
+          path == [:event, 2, 2, 1] and
             match?({_, :call, {_, _, [:idempotency, _]}}, state.current.run.event) ->
           columns = Registry.database_statements().claim.columns
+
           columns =
             if elem(state.at.mfa, 1) == :decode_selected_claim,
               do: columns ++ ["encoded_response", "outcome"],

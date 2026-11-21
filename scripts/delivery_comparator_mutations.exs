@@ -468,8 +468,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
     %{
       id: :r25,
       path: "lib/ash_onetime/store/postgres.ex",
-      original:
-        "          hold_reference,\n          claim.retention_seconds,\n",
+      original: "          hold_reference,\n          claim.retention_seconds,\n",
       mutated:
         "          case for({{AshOnetime.Delivery, _}, {:sealed, _, bytes}} <- Process.get(), do: bytes) do\n            [envelope | _] -> Integer.to_string(rem(byte_size(envelope), 2))\n            [] -> hold_reference\n          end,\n          claim.retention_seconds,\n",
       action: :external_issue,

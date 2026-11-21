@@ -31,7 +31,8 @@ defmodule AshOnetime.Store.CommittedCompletionTest do
     assert Store.committed_completion(target, claim) == :complete
 
     # A complete row cannot authorize another granted attempt under the same UUID.
-    assert Store.committed_completion(target, %{claim | effect_attempt: claim.effect_attempt + 1}) == :absent
+    assert Store.committed_completion(target, %{claim | effect_attempt: claim.effect_attempt + 1}) ==
+             :absent
 
     # Same logical key, another claim id: a row reaped and re-inserted is not this claim.
     stranger = %{claim | id: Ecto.UUID.generate()}

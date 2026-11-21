@@ -17,12 +17,36 @@ defmodule AshOnetime.Test.ExitBoundary.Persisted do
       )
 
     for [table] <- tables, into: %{} do
+      relation = quote_identifier(prefix) <> "." <> quote_identifier(table)
+
+      %{rows: fields} =
+        SQL.query!(
+          repo,
+          "SELECT attname, atttypid = 'pg_catalog.aclitem'::regtype, atttypid = 'pg_catalog.aclitem[]'::regtype FROM pg_catalog.pg_attribute WHERE attrelid = pg_catalog.to_regclass($1) AND attnum > 0 AND NOT attisdropped ORDER BY attnum",
+          [relation]
+        )
+
+      # Postgrex has no aclitem decoder. PostgreSQL's own text output preserves
+      # every ACL element, array position and NULL; comparison stays exact.
+      projection =
+        Enum.map_join(fields, ", ", fn [name, acl?, acl_array?] ->
+          column = quote_identifier(name)
+
+          cond do
+            acl? -> column <> "::text AS " <> column
+            acl_array? -> column <> "::text[] AS " <> column
+            true -> column
+          end
+        end)
+
       %{columns: columns, rows: rows} =
-        SQL.query!(repo, ~s[SELECT * FROM "#{prefix}"."#{table}"], [])
+        SQL.query!(repo, "SELECT " <> projection <> " FROM " <> relation, [])
 
       {table, Enum.map(rows, &(columns |> Enum.zip(&1) |> Map.new()))}
     end
   end
+
+  defp quote_identifier(name), do: "\"" <> String.replace(name, "\"", "\"\"") <> "\""
 
   @doc "Rows added and removed between two snapshots, per table, only tables that changed."
   def delta(before, after_run) do

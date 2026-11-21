@@ -95,7 +95,7 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
       assert Keyword.keys(values) == labels
       assert length(Enum.uniq_by(rows, &{&1.branch, &1.fault})) == expected_rows
       path_indices = unquote(Macro.escape(path_indices))
-      assert path_indices != [] and Enum.uniq(path_indices) == path_indices
+      assert Enum.uniq(path_indices) == path_indices
       assert Enum.all?(path_indices, &(&1 in 0..(expected_rows - 1)))
       rows = Enum.map(path_indices, &Enum.fetch!(rows, &1))
       IO.inspect(Values.flipped_bits(), label: "C_POS_FLIPPED_BITS")

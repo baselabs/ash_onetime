@@ -718,8 +718,17 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
         if info.module == AshOnetime.Store.Postgres do
           case outcome_capture(info.name) do
             {:ok, n} ->
-              check(s, e, path ++ [:function, :env, n], Enum.at(info.env, n), outcome_start(s, e.pid), :outcome_start_closure)
-            :not_called -> s
+              check(
+                s,
+                e,
+                path ++ [:function, :env, n],
+                Enum.at(info.env, n),
+                outcome_start(s, e.pid),
+                :outcome_start_closure
+              )
+
+            :not_called ->
+              s
           end
         else
           s
@@ -820,7 +829,13 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
 
   defp outcome_capture(function) do
     if String.starts_with?(Atom.to_string(function), "-record_outcome_committed/4-fun-") do
-      AshOnetime.Test.ExitBoundary.Compiled.captured_argument(AshOnetime.Store.Postgres, function, :report_abandoned_outcome, 4, 2)
+      AshOnetime.Test.ExitBoundary.Compiled.captured_argument(
+        AshOnetime.Store.Postgres,
+        function,
+        :report_abandoned_outcome,
+        4,
+        2
+      )
     else
       :not_called
     end
@@ -828,11 +843,14 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
 
   defp outcome_start(s, pid) do
     case Map.fetch(s.outcome_workers, pid) do
-      {:ok, _} = source -> source
+      {:ok, _} = source ->
+        source
+
       :error ->
         Enum.find_value(Map.get(s.active, pid, []), :error, fn frame ->
-          if frame.mfa == {AshOnetime.Store.Postgres, :record_outcome_committed, 4} and frame.started != nil,
-            do: {:ok, frame.started}
+          if frame.mfa == {AshOnetime.Store.Postgres, :record_outcome_committed, 4} and
+               frame.started != nil,
+             do: {:ok, frame.started}
         end)
     end
   end

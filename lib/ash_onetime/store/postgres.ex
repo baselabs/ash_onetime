@@ -585,7 +585,14 @@ defmodule AshOnetime.Store.Postgres do
     case dispatched_query(
            target,
            sql,
-           [logical_partition, operation_hash, scope_hash, key_hash, dump_uuid(claim.id), claim.effect_attempt]
+           [
+             logical_partition,
+             operation_hash,
+             scope_hash,
+             key_hash,
+             dump_uuid(claim.id),
+             claim.effect_attempt
+           ]
          ) do
       {:ok, %{num_rows: 1, rows: [["complete"]]}} -> :complete
       {:ok, %{num_rows: count}} when count in [0, 1] -> :absent

@@ -5,8 +5,10 @@ defmodule AshOnetime.DeliveryComparatorControls do
     %{
       id: :pc_o4_completion_deadline_expression,
       path: "lib/ash_onetime/store/postgres.ex",
-      original: "response_retain_until = statement_timestamp() + COALESCE($11::bigint, $10::bigint, extract(epoch FROM (response_retain_until - admitted_at))) * interval '1 second'",
-      mutated: "response_retain_until = statement_timestamp() + COALESCE($11::bigint, $10::bigint, extract(epoch FROM (response_retain_until - admitted_at))) * interval '1 second' - interval '1 second'",
+      original:
+        "response_retain_until = statement_timestamp() + COALESCE($11::bigint, $10::bigint, extract(epoch FROM (response_retain_until - admitted_at))) * interval '1 second'",
+      mutated:
+        "response_retain_until = statement_timestamp() + COALESCE($11::bigint, $10::bigint, extract(epoch FROM (response_retain_until - admitted_at))) * interval '1 second' - interval '1 second'",
       action: :external_issue,
       branch: :execute,
       fault: nil,
@@ -18,7 +20,8 @@ defmodule AshOnetime.DeliveryComparatorControls do
       id: :pc_o4_outcome_clock_source,
       path: "test/support/exit_boundary/scenarios.ex",
       original: "SELECT claim_id, attempt, outcome, recorded_at, (to_jsonb(o)",
-      mutated: "SELECT claim_id, attempt, outcome, recorded_at + interval '1 microsecond' AS recorded_at, (to_jsonb(o)",
+      mutated:
+        "SELECT claim_id, attempt, outcome, recorded_at + interval '1 microsecond' AS recorded_at, (to_jsonb(o)",
       action: :external_issue,
       branch: :recovered,
       fault: nil,
@@ -30,7 +33,8 @@ defmodule AshOnetime.DeliveryComparatorControls do
       id: :pc_o4_response_deadline_copy,
       path: "lib/ash_onetime/store/postgres.ex",
       original: "      response_retain_until: response_retain_until,",
-      mutated: "      response_retain_until: %{response_retain_until | second: rem(response_retain_until.second + 1, 60)},",
+      mutated:
+        "      response_retain_until: %{response_retain_until | second: rem(response_retain_until.second + 1, 60)},",
       action: :external_issue,
       branch: :execute,
       fault: nil,

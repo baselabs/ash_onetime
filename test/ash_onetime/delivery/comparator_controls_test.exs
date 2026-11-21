@@ -678,7 +678,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :u4
-  test "U4: outcome clocks originate in the granted attempt and survive the joined recovery snapshot", context do
+  test "U4: outcome clocks originate in the granted attempt and survive the joined recovery snapshot",
+       context do
     pair = observe(context, row!(:external_issue, :recovered), Values.set()[:va])
 
     for side <- [pair.run, pair.twin] do
@@ -698,15 +699,26 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert :outcome_start_closure in clock_tokens
 
       for row <- side.prior.delta["ash_onetime_effect_outcomes"].added do
-        assert AshOnetime.Test.ExitBoundary.DatabaseOrigins.outcome_snapshot(row, prior) == row["recorded_at"]
+        assert AshOnetime.Test.ExitBoundary.DatabaseOrigins.outcome_snapshot(row, prior) ==
+                 row["recorded_at"]
+
         assert row["attempt"] == 1
       end
 
       wire = side |> Origins.build() |> TransportReferences.build() |> Wire.build()
-      database = AshOnetime.Test.ExitBoundary.DatabaseOrigins.build(wire, Map.put(side, :prior_database, prior))
+
+      database =
+        AshOnetime.Test.ExitBoundary.DatabaseOrigins.build(
+          wire,
+          Map.put(side, :prior_database, prior)
+        )
+
       assert database.errors == []
       assert database.outcomes == prior.outcomes
-      assert Enum.any?(database.latest, fn {_, claim} -> claim["effect_attempt"] == 2 and claim["state"] == "complete" end)
+
+      assert Enum.any?(database.latest, fn {_, claim} ->
+               claim["effect_attempt"] == 2 and claim["state"] == "complete"
+             end)
     end
 
     assert_green(pair)
@@ -955,6 +967,63 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              "U_STORE_SNAPSHOT_WITNESS"
     after
       Scenarios.reset!(context.prefix)
+    end
+  end
+
+  @tag :u_store_acl_observation
+  test "U observation: native ACL arrays retain every element and change exactly", context do
+    alias AshOnetime.Test.ExitBoundary.Persisted
+    alias Ecto.Adapters.SQL
+
+    table = "snapshot_acl_observation"
+    relation = ~s["#{context.prefix}"."#{table}"]
+    row = row!(:issue, :execute)
+    SQL.query!(context.repo, "CREATE TABLE #{relation} (id integer, permissions aclitem[])", [])
+
+    try do
+      before = Persisted.snapshot(context.prefix, context.repo)
+
+      SQL.query!(
+        context.repo,
+        "INSERT INTO #{relation} SELECT 1, ARRAY[NULL::aclitem] || pg_catalog.acldefault('r', current_user::regrole)",
+        []
+      )
+
+      first = Persisted.snapshot(context.prefix, context.repo)
+      equal = Persisted.snapshot(context.prefix, context.repo)
+      [[expected]] =
+        SQL.query!(context.repo, "SELECT permissions::text[] FROM #{relation}", []).rows
+
+      assert [%{"id" => 1, "permissions" => ^expected}] = first[table]
+      assert [nil, _permission] = expected
+
+      SQL.query!(
+        context.repo,
+        "UPDATE #{relation} SET permissions = ARRAY[NULL::aclitem, pg_catalog.makeaclitem(current_user::regrole, current_user::regrole, 'SELECT', true)]",
+        []
+      )
+
+      changed = Persisted.snapshot(context.prefix, context.repo)
+      run = consumer_capture(0)
+      twin = consumer_capture(0)
+      delta = &Persisted.delta(before, &1)
+      twin_side = observation_side(context, twin, delta.(first), row)
+      equal_side = observation_side(context, run, delta.(equal), row)
+      run_side = observation_side(context, run, delta.(changed), row)
+      assert compare_observation(equal_side, twin_side, row).errors == []
+      difference = compare_observation(run_side, twin_side, row).errors |> List.first()
+
+      assert match?(
+               %{
+                 at: :store,
+                 rule: :o5,
+                 path: [:store, ^table, :added, 0, "permissions", 1]
+               },
+               difference
+             ),
+             "U_STORE_ACL_SNAPSHOT_WITNESS"
+    after
+      SQL.query!(context.repo, "DROP TABLE #{relation}", [])
     end
   end
 

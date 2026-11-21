@@ -12,11 +12,18 @@ defmodule AshOnetime.MutationCheck do
       mutated: "AND $6::bigint IS NOT DISTINCT FROM $6::bigint",
       test: "test/ash_onetime/delivery/external_state_integration_test.exs",
       tag: "delivery_completion_attempt",
-      test_name: "plain: external_mint: a later attempt cannot authorize an earlier rolled-back envelope",
+      test_name:
+        "plain: external_mint: a later attempt cannot authorize an earlier rolled-back envelope",
       assertion: "assert error_code(first) == :executing_only_lost",
       required_failures:
         for partition <- ["plain", "2"],
-            action <- [:external_issue, :external_rotate, :external_revoke, :external_retire, :external_mint] do
+            action <- [
+              :external_issue,
+              :external_rotate,
+              :external_revoke,
+              :external_retire,
+              :external_mint
+            ] do
           {"#{partition}: #{action}: a later attempt cannot authorize an earlier rolled-back envelope",
            "assert error_code(first) == :executing_only_lost"}
         end

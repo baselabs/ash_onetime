@@ -70,8 +70,10 @@ defmodule AshOnetime.Test.DeliveryCase do
   neither the declared names nor their count change that. Only the count is reported.
   """
   def delivered(results) when is_list(results), do: Enum.flat_map(results, &delivered/1)
+
   def delivered(%Delivery{outcome: :executed, values: values}) when map_size(values) > 0,
     do: [values]
+
   def delivered(%Delivery{}), do: []
   def delivered(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> delivered()
   def delivered(_other), do: []

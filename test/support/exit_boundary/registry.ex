@@ -349,14 +349,25 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
   def function_slots(AshOnetime.Store.Postgres = module, function) do
     name = Atom.to_string(function)
 
-    if Enum.any?(["-complete_mode/7-fun-", "-complete_external/7-fun-", "-complete_transaction/7-fun-"], &String.starts_with?(name, &1)) do
+    if Enum.any?(
+         ["-complete_mode/7-fun-", "-complete_external/7-fun-", "-complete_transaction/7-fun-"],
+         &String.starts_with?(name, &1)
+       ) do
       for {callee, arity, arguments} <- [
             {:complete_transaction, 7, [{2, :codec}, {3, :digest}, {4, :payload}]},
             {:insert_payload, 4, [{3, :payload}]},
             {:update_complete, 7, [{3, :codec}, {4, :digest}]}
           ],
           {argument, kind} <- arguments,
-          {:ok, index} <- [AshOnetime.Test.ExitBoundary.Compiled.captured_argument(module, function, callee, arity, argument)],
+          {:ok, index} <- [
+            AshOnetime.Test.ExitBoundary.Compiled.captured_argument(
+              module,
+              function,
+              callee,
+              arity,
+              argument
+            )
+          ],
           into: %{},
           do: {index, {:response, kind}}
     else
