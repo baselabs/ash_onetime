@@ -5,6 +5,24 @@ for partitioning <- [nil, 2] do
     alias Mix.Tasks.AshOnetime.Doctor
     import ExUnit.CaptureIO
 
+    @tag :external_state_review_journal_doctor
+    test "#{partitioning || "plain"}: doctor refuses a missing rollback journal", c do
+      journal = rel(c, "ash_onetime_external_state_restore")
+      present = scalar(c.owner_repo, "SELECT to_regclass($1) IS NOT NULL", [journal])
+      if present, do: SQL.query!(c.owner_repo, "ALTER TABLE #{journal} RENAME TO displaced_restore", [])
+      previous = Repo.put_dynamic_repo(c.runtime_repo)
+      try do
+        capture_io(fn ->
+          assert_raise Mix.Error, ~r/check\(s\) failed/, fn ->
+            Doctor.run(["--repo", inspect(Repo), "--live", "--prefix", c.schema])
+          end
+        end)
+      after
+        Repo.put_dynamic_repo(previous)
+        if present, do: SQL.query!(c.owner_repo, "ALTER TABLE #{rel(c, "displaced_restore")} RENAME TO ash_onetime_external_state_restore", [])
+      end
+    end
+
     test "#{partitioning || "plain"}: doctor accepts current triggers and shows retained external states",
          c do
       for state <- [:unresolved, :held, :absent_proven, :unknown] do
