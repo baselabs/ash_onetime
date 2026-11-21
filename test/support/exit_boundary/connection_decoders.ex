@@ -186,7 +186,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     consumed = byte_size(cursor.buffer) - byte_size(IO.iodata_to_binary(rest))
     state = retain(state, pair, port, cursor, consumed, rows, expected)
     [instance | rest] = state.instances
-    %{state | instances: [Map.put(instance, :descriptor, Map.take(origin, [:index, :path])) | rest]}
+
+    %{
+      state
+      | instances: [Map.put(instance, :descriptor, Map.take(origin, [:index, :path])) | rest]
+    }
   end
 
   defp message_result(<<tag, size::signed-32, bytes::binary>> = buffer)
