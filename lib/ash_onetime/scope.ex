@@ -25,9 +25,11 @@ defmodule AshOnetime.Scope do
       components == [] ->
         {:error, "scope must contain at least one component"}
 
+      # rule:scope-component-limit
       length(components) > @max_components ->
         {:error, "scope exceeds the #{@max_components}-component limit"}
 
+      # rule:scope-uniqueness
       Enum.uniq(components) != components ->
         {:error, "scope components must be unique"}
 

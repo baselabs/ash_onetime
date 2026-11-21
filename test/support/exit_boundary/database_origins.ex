@@ -27,6 +27,10 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
       latest: Map.new(prior, &{uuid(&1["id"]), &1}),
       peer_rows: if(history, do: history.peer_rows, else: %{}),
       peer_current: %{},
+      outcome_probe_sql: AshOnetime.Test.ExitBoundary.Scenarios.outcome_probe_sql(side.prefix),
+      outcome_pending: %{},
+      outcome_writes: if(history, do: history.outcome_writes, else: %{}),
+      outcomes: if(history, do: history.outcomes, else: %{}),
       slots: %{},
       errors: [],
       dates: %{},
@@ -40,7 +44,6 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
       payload_dates: if(history, do: history.payload_dates, else: %{}),
       date_checkpoints: %{},
       date_binds: %{},
-      payload_results: %{},
       payload_children: side.historical.payload_children
     }
 
@@ -83,6 +86,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
       end
 
     s = release(e, s)
+    s = outcome_result(e, s)
     s = date_flow(e, s)
     s = put_in(s.date_checkpoints[e.index], Map.get(s.dates, e.role))
     s = if wire_event?(e.event), do: data_rows(e.event, [], e, s), else: s
@@ -219,9 +223,6 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
       String.starts_with?(sql, "UPDATE ") and String.contains?(sql, "SET state = 'complete'") ->
         {0, 7}
 
-      String.starts_with?(sql, "SELECT partition_date, encoded_response") ->
-        {2, 1}
-
       true ->
         nil
     end
@@ -281,6 +282,9 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   def sql({_, :call, {AshOnetime.Store.Postgres, f, [_target, sql | _]}})
       when f in [:query_claim, :dispatched_query] and is_binary(sql), do: sql
+
+  def sql({_, :call, {AshOnetime.Store.Postgres, :select_claim_result, [_, _, sql, _]}}),
+    do: sql
 
   def sql({_, :call, {m, f, [_repo, sql, _params, _opts]}})
       when m in [Ecto.Adapters.SQL, Postgrex] and f in [:query, :query!],
@@ -346,7 +350,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
   defp query_frame?({DBConnection, f, 4}) when f in [:prepare_execute, :execute], do: true
 
   defp query_frame?({AshOnetime.Store.Postgres, f, _})
-       when f in [:query_claim, :dispatched_query], do: true
+       when f in [:query_claim, :dispatched_query, :select_claim_result], do: true
 
   defp query_frame?(_), do: false
 
@@ -368,6 +372,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
   def parameter_paths(mfa) do
     case mfa do
       {AshOnetime.Store.Postgres, f, _} when f in [:query_claim, :dispatched_query] -> [[2, 2, 2]]
+      {AshOnetime.Store.Postgres, :select_claim_result, 4} -> [[2, 2, 3]]
       {m, f, 4} when m in [Ecto.Adapters.SQL, Postgrex] and f in [:query, :query!] -> [[2, 2, 2]]
       {Postgrex, :prepare_execute, 5} -> [[2, 2, 3]]
       {Postgrex, :execute, 4} -> [[2, 2, 2]]
@@ -537,9 +542,10 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
   defp data_rows({:bind, _portal, _statement, _formats, binds, _result_formats}, _path, e, s) do
     sql = Map.get(s.wire_sql, e.role)
     s = wire_date_bind(sql, binds, e, s)
+    s = outcome_bind(sql, binds, e, s)
 
     if is_binary(sql) and String.starts_with?(sql, "INSERT INTO ") and
-         String.contains?(sql, "ash_onetime_idempotency_claims") and length(binds) == 7 do
+         String.contains?(sql, "ash_onetime_idempotency_claims") and length(binds) == 10 do
       {:bind_column, 1, 2950, _, id} = hd(binds)
       {:bind_column, 7, 20, _, retention} = Enum.at(binds, 6)
       key = {sql, uuid(value(id))}
@@ -563,8 +569,9 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
       end)
 
     cond do
-      relation(columns, s) == s.statements.claim.table and
-          Enum.sort(Map.keys(row)) == Enum.sort(s.statements.claim.columns) ->
+      relation(Enum.take(columns, length(s.statements.claim.columns)), s) == s.statements.claim.table and
+          Enum.all?(s.statements.claim.columns, &Map.has_key?(row, &1)) ->
+        row = Map.take(row, s.statements.claim.columns)
         {expected, s} = row_origin(row, sql, binds, e, s)
 
         s =
@@ -584,16 +591,42 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
             end
           end)
 
+        s =
+          if String.contains?(sql, "LEFT JOIN ") and row["state"] == "complete" do
+            n = Enum.find_index(columns, &(elem(&1, 4) == "response_partition"))
+            checked(s, e, path ++ [1, n, 9], row["response_partition"], payload_date(s, row["id"]), :joined_payload_date_column)
+          else
+            s
+          end
+
         s
         |> put_in([:last_rows, e.role], expected)
         |> put_in([:source_rows, {e.role, sql}], expected)
 
-      String.starts_with?(sql, "SELECT partition_date, encoded_response") ->
-        id = binds |> Enum.at(1) |> parameter_uuid()
-        expected = payload_date(s, id)
-        s = put_in(s.payload_results[e.role], expected)
-        n = Enum.find_index(columns, &(elem(&1, 4) == "partition_date"))
-        checked(s, e, path ++ [1, n, 9], row["partition_date"], expected, :payload_date_column)
+      sql == s.outcome_probe_sql ->
+        origin_relation = relation(Enum.take(columns, 4), s)
+        s =
+          if origin_relation == s.statements.outcome.table,
+            do: s,
+            else: failure(s, e, :outcome_clock_source, origin_relation, s.statements.outcome.table)
+
+        key = outcome_key(row)
+
+        case Map.fetch(s.outcome_writes, key) do
+          {:ok, write} ->
+            s =
+              if row["outcome"] == write.outcome,
+                do: s,
+                else: failure(s, e, :outcome_value_copy, row["outcome"], write.outcome)
+
+            source = Map.get(s.outcomes, key, row)
+            s = put_in(s.outcomes[key], source)
+            n = Enum.find_index(columns, &(elem(&1, 4) == "recorded_at"))
+            checked(s, e, path ++ [1, n, 9], row["recorded_at"], source["recorded_at"], :outcome_clock)
+
+          :error ->
+            failure(s, e, :outcome_without_insert, key, :successful_native_outcome_insert)
+        end
 
       relation(columns, s) in s.statements.peer.tables and
         Map.has_key?(row, "operation_key") and Map.has_key?(row, "inserted_at") ->
@@ -657,6 +690,57 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   defp data_list(t, path, e, s, n), do: data_rows(t, path ++ [n], e, s)
 
+  def outcome_key(row),
+    do: {row["logical_partition"], row["operation_hash"], uuid(row["claim_id"]), row["attempt"]}
+
+  def outcome_snapshot(row, s) do
+    case Map.fetch(s.outcomes, outcome_key(row)) do
+      {:ok, source} -> source["recorded_at"]
+      :error -> :missing_outcome_clock_origin
+    end
+  end
+
+  defp outcome_bind(sql, binds, e, s) when is_binary(sql) do
+    if String.starts_with?(sql, "INSERT INTO ") and
+         String.contains?(sql, "ash_onetime_effect_outcomes") do
+      # These are the two declared physical INSERT layouts, not a lookup by a
+      # clock value. The claim and attempt independently identify the write.
+      {hash, partition, id, attempt, outcome} =
+        case Enum.map(binds, &elem(&1, 4)) do
+          [id, attempt, outcome] -> {nil, nil, id, attempt, outcome}
+          [hash, partition, id, attempt, outcome] -> {hash, partition, id, attempt, outcome}
+        end
+
+      write = %{key: {value(partition), value(hash), uuid(value(id)), value(attempt)}, outcome: value(outcome), sql: sql}
+      put_in(s.outcome_pending[write.key], write)
+    else
+      s
+    end
+  end
+
+  defp outcome_bind(_, _, _, s), do: s
+
+  defp outcome_result(
+         %{event: {_, :call, {AshOnetime.Store.Postgres, :outcome_insert_result,
+           [_, claim, {:ok, %Postgrex.Result{num_rows: 1}}]}}} = e,
+         s
+       ) do
+    writes =
+      for {{_, _, id, attempt}, write} <- s.outcome_pending,
+          id == claim.id and attempt == claim.effect_attempt,
+          do: write
+
+    case writes do
+      [write] ->
+        put_in(s.outcome_writes[write.key], write)
+
+      _ ->
+        failure(s, e, :outcome_insert_binding, {claim.id, claim.effect_attempt}, :native_wire_bind)
+    end
+  end
+
+  defp outcome_result(_, s), do: s
+
   defp row_origin(row, sql, binds, e, s) do
     id = uuid(row["id"])
     previous = Map.get(s.latest, id)
@@ -672,6 +756,8 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
           row
           |> Map.put("inserted_at", admitted)
           |> Map.put("retain_until", DateTime.add(admitted, retention, :second))
+          |> Map.put("response_retain_until", DateTime.add(admitted, bind_value(binds, 10), :second))
+          |> Map.put("response_expired_at", nil)
 
         {expected, remember(s, expected)}
 
@@ -682,12 +768,24 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
           |> Map.put("admitted_at", previous["admitted_at"])
           |> Map.put("inserted_at", previous["inserted_at"])
 
-        # External retain_until is the first wire value of the statement-clock
-        # result. Exact paired SQL and binds close its content route (O4).
-        expected =
-          if String.contains?(sql, "retain_until = statement_timestamp()"),
-            do: expected,
-            else: Map.put(expected, "retain_until", previous["retain_until"])
+        {expected, s} =
+          if String.contains?(sql, "retain_until = statement_timestamp()") do
+            external_deadlines(expected, previous, binds, e, s)
+          else
+            duration = bind_value(binds, 11)
+            response =
+              if is_nil(duration),
+                do: previous["response_retain_until"],
+                else: DateTime.add(previous["admitted_at"], duration, :second)
+
+            expected =
+              expected
+              |> Map.put("retain_until", previous["retain_until"])
+              |> Map.put("response_retain_until", greatest(previous["response_retain_until"], response))
+              |> Map.put("response_expired_at", previous["response_expired_at"])
+
+            {expected, s}
+          end
 
         date = bind_value(binds, 1)
         expected = Map.put(expected, "response_partition", date)
@@ -700,6 +798,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
           prior
           |> Map.put("hold_reference", nil)
           |> Map.put("retain_until", row["retain_until"])
+          |> Map.put("response_retain_until", DateTime.add(prior["response_retain_until"], DateTime.diff(row["retain_until"], prior["retain_until"], :microsecond), :microsecond))
 
         s =
           if DateTime.compare(row["retain_until"], prior["retain_until"]) in [:eq, :gt],
@@ -717,6 +816,57 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
         {row, failure(s, e, :missing_prior_row, id, :captured_statement)}
     end
   end
+
+  # The two RETURNING deadlines share one statement clock. Eliminate that
+  # clock algebraically: an advanced deadline determines the other by the
+  # difference of their COALESCE intervals; a clamped deadline supplies no new
+  # origin. This checks the pair without inferring a timestamp and checking it
+  # against itself. The trigger's derive-before-clamp branch is included.
+  defp external_deadlines(row, prior, binds, e, s) do
+    retention = bind_value(binds, 10)
+    response_retention = bind_value(binds, 11)
+    claim_interval = interval(retention, prior["retain_until"], prior["admitted_at"])
+    response_interval =
+      interval(response_retention || retention, prior["response_retain_until"], prior["admitted_at"])
+
+    delta = response_interval - claim_interval
+    old_claim = prior["retain_until"]
+    old_response = prior["response_retain_until"]
+    new_claim = row["retain_until"]
+    new_response = row["response_retain_until"]
+
+    {expected_claim, expected_response} =
+      cond do
+        DateTime.compare(new_claim, old_claim) == :gt ->
+          raw_response = DateTime.add(new_claim, delta, :microsecond)
+          response =
+            if raw_response == old_response,
+              do: DateTime.add(old_response, DateTime.diff(new_claim, old_claim, :microsecond), :microsecond),
+              else: greatest(old_response, raw_response)
+          {new_claim, response}
+
+        DateTime.compare(new_response, old_response) == :gt ->
+          {greatest(old_claim, DateTime.add(new_response, -delta, :microsecond)), new_response}
+
+        true ->
+          {old_claim, old_response}
+      end
+
+    s = checked(s, e, [:completion_deadlines, :retain_until], new_claim, expected_claim, :completion_claim_clamp)
+    s = checked(s, e, [:completion_deadlines, :response_retain_until], new_response, expected_response, :completion_response_expression)
+
+    expected =
+      row
+      |> Map.put("retain_until", expected_claim)
+      |> Map.put("response_retain_until", expected_response)
+      |> Map.put("response_expired_at", prior["response_expired_at"])
+
+    {expected, s}
+  end
+
+  defp interval(nil, deadline, admitted), do: DateTime.diff(deadline, admitted, :microsecond)
+  defp interval(seconds, _deadline, _admitted), do: seconds * 1_000_000
+  defp greatest(a, b), do: if(DateTime.compare(a, b) == :lt, do: b, else: a)
 
   defp remember(s, row),
     do: %{
@@ -759,24 +909,19 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
   end
 
   defp typed_copies(
-         %Postgrex.Result{columns: ["partition_date", "encoded_response"], rows: [[date, _]]},
-         path,
-         e,
-         s
-       ) do
-    checked(
-      s,
-      e,
-      path ++ [:rows, 0, 0],
-      date,
-      Map.get(s.payload_results, e.role),
-      :payload_date_result
-    )
+         %Postgrex.Result{columns: ["claim_id", "attempt", "outcome", "recorded_at", "operation_hash", "logical_partition"] = columns, rows: rows},
+         path, e, s
+       ) when is_list(rows) do
+    Enum.with_index(rows)
+    |> Enum.reduce(s, fn {values, n}, acc ->
+      row = Map.new(Enum.zip(columns, values))
+      checked(acc, e, path ++ [:rows, n, 3], row["recorded_at"], outcome_snapshot(row, s), :outcome_clock_copy)
+    end)
   end
 
   defp typed_copies(%Postgrex.Result{columns: columns, rows: rows}, path, e, s)
        when is_list(columns) and is_list(rows) do
-    if columns == s.statements.claim.columns do
+    if Enum.take(columns, length(s.statements.claim.columns)) == s.statements.claim.columns do
       Enum.with_index(rows)
       |> Enum.reduce(s, fn {row, n}, acc ->
         id = row |> hd() |> uuid()
@@ -784,7 +929,12 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
         case Map.fetch(s.rows, {id, status}) do
           {:ok, source} ->
-            Enum.with_index(columns)
+            acc =
+              if length(columns) > length(s.statements.claim.columns) and status == "complete",
+                do: checked(acc, e, path ++ [:rows, n, 7], Enum.at(row, 7), payload_date(acc, id), :joined_payload_date_result),
+                else: acc
+
+            Enum.with_index(s.statements.claim.columns)
             |> Enum.reduce(acc, fn {name, k}, acc ->
               if name in acc.statements.claim.clocks or name == "response_partition",
                 do:

@@ -327,6 +327,7 @@ defmodule AshOnetime.ArchitectureTest do
       lock_for_effect: 3,
       processing_backlog: 1,
       reap: 3,
+      record_outcome_committed: 4,
       roll_partitions: 2
     ],
     AshOnetime.Store.Postgres => [
@@ -348,6 +349,7 @@ defmodule AshOnetime.ArchitectureTest do
       nonce_retention_deadline: 4,
       processing_backlog: 1,
       reap: 3,
+      record_outcome_committed: 4,
       release: 2,
       roll_partitions: 2,
       routine_schema: 1,
@@ -365,6 +367,7 @@ defmodule AshOnetime.ArchitectureTest do
     Mix.Tasks.AshOnetime.Gen.LogicalPartitions => [run: 1],
     Mix.Tasks.AshOnetime.Gen.Migrations => [
       render: 2,
+      render_external_state_upgrade: 2,
       render_fact_tables: 2,
       render_logical_partition_upgrade: 2,
       render_maintenance_upgrade: 2,

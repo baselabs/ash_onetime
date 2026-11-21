@@ -261,8 +261,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
           )
         end)
 
-      columns =
-        "id, logical_partition, operation_hash, scope_hash, key_hash, fingerprint, state, response_partition, response_codec, response_digest, hold_reference, admitted_at, retain_until, inserted_at"
+      columns = Enum.join(Registry.database_statements().claim.columns, ", ")
 
       SQL.query!(
         Repo.get_dynamic_repo(),
@@ -271,7 +270,18 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
       )
     end
 
+    if input.row.external? do
+      SQL.query!(Repo.get_dynamic_repo(), outcome_probe_sql(input.prefix), [])
+    end
+
     result
+  end
+
+  # Observe the committed statement-clock result without changing production SQL.
+  # This read runs identically on both sides after the declared checkpoint and
+  # fixture release. Every field remains in the whole observation.
+  def outcome_probe_sql(prefix) do
+    ~s[SELECT claim_id, attempt, outcome, recorded_at, (to_jsonb(o)->>'operation_hash')::bytea AS operation_hash, to_jsonb(o)->>'logical_partition' AS logical_partition FROM "#{prefix}"."ash_onetime_effect_outcomes" o ORDER BY claim_id, attempt]
   end
 
   # The counterfactual's sole allocation effect. The callback is a literal,
@@ -319,11 +329,15 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
           %{resource: resource, prefix: context.prefix, path: path, record: record}
         end,
         fn input ->
-          Pair.run_call(
-            input.resource,
-            input.path,
-            Pair.subject(input.path, input.resource, input.prefix, input.record)
-          )
+          result =
+            Pair.run_call(
+              input.resource,
+              input.path,
+              Pair.subject(input.path, input.resource, input.prefix, input.record)
+            )
+
+          SQL.query!(Repo.get_dynamic_repo(), outcome_probe_sql(input.prefix), [])
+          result
         end,
         %{host: [External, ReturnedExternal], callbacks: @callbacks}
       )

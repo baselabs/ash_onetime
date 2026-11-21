@@ -49,6 +49,7 @@ defmodule MyAppWeb.OnetimeErrors do
 
   @client_statuses %{
     nonce_already_used: :conflict,
+    response_expired: :gone,
     key_reused_with_different_request: :conflict,
     request_in_progress: :conflict,
     verification_failed: :unauthorized,
@@ -121,6 +122,7 @@ defmodule MyAppWeb.OnetimeErrors do
   ]
 
   @server_codes [
+    :install_mismatch,
     :store_invariant,
     :replay_relationship_change,
     :invalid_evaluated_at,

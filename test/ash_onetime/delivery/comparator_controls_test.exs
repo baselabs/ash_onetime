@@ -593,7 +593,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       clocks =
         for {:data_column, _, _, _, field, _, _, type, _, _} <- rows,
-            field in ["admitted_at", "retain_until", "inserted_at"],
+            field in ["admitted_at", "retain_until", "inserted_at", "response_retain_until"],
             do: type
 
       assert clocks != [] and Enum.all?(clocks, &(&1 == 1184))
@@ -666,7 +666,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert database.errors == []
       tokens = for {_, {:database_expression, token}} <- database.slots, do: token
 
-      for token <- [:payload_date_column, :payload_date_result],
+      for token <- [:joined_payload_date_column, :joined_payload_date_result],
           do: assert(token in tokens, "missing native replay clock-copy witness: #{token}")
 
       IO.inspect(%{side: side.resource, copies: Enum.frequencies(tokens)},
@@ -675,6 +675,35 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
 
     assert_green(replay)
+  end
+
+  @tag :u4
+  test "U4: outcome clocks originate in the granted attempt and survive the joined recovery snapshot", context do
+    pair = observe(context, row!(:external_issue, :recovered), Values.set()[:va])
+
+    for side <- [pair.run, pair.twin] do
+      prior_wire = side.prior |> Origins.build() |> TransportReferences.build() |> Wire.build()
+      prior = AshOnetime.Test.ExitBoundary.DatabaseOrigins.build(prior_wire, side.prior)
+      assert prior.errors == []
+      assert map_size(prior.outcome_writes) == 1
+      assert map_size(prior.outcomes) == 1
+      tokens = for {_, {:database_expression, token}} <- prior.slots, do: token
+      assert :outcome_clock in tokens
+      assert :outcome_clock_copy in tokens
+
+      for row <- side.prior.delta["ash_onetime_effect_outcomes"].added do
+        assert AshOnetime.Test.ExitBoundary.DatabaseOrigins.outcome_snapshot(row, prior) == row["recorded_at"]
+        assert row["attempt"] == 1
+      end
+
+      wire = side |> Origins.build() |> TransportReferences.build() |> Wire.build()
+      database = AshOnetime.Test.ExitBoundary.DatabaseOrigins.build(wire, Map.put(side, :prior_database, prior))
+      assert database.errors == []
+      assert database.outcomes == prior.outcomes
+      assert Enum.any?(database.latest, fn {_, claim} -> claim["effect_attempt"] == 2 and claim["state"] == "complete" end)
+    end
+
+    assert_green(pair)
   end
 
   @tag :u6

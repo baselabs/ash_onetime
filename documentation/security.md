@@ -67,20 +67,14 @@ default 1 second) beyond its retention horizon (`retain_for`, defaulting to `max
 `clock_skew`). Retention cannot be shorter than acceptance. Cleanup is therefore strictly later than the
 acceptance window as long as the PostgreSQL clock is not ahead of the application clock by more
 than that margin — keep both clocks synchronized (e.g. via NTP), and raise the margin for looser
-synchronization. Processing external claims are retained for recovery until they are either
-completed or reaped. An abandoned processing claim that never settles would otherwise be immortal
-(cleanup skips it and the delete guard forbids deleting it), so a caller driving external-effect
-actions with distinct keys and abandoning each after commit could accumulate unbounded undeletable
-rows — a storage denial of service. The opt-in reaper (`mix ash_onetime.reap`) deletes such claims past a
-separate, much longer abandonment horizon, through a sanctioned delete path: a processing claim is
-removable only when it is older than both the operator's horizon and a hard 1-day floor and past
-its own retention horizon, all re-enforced by the delete guard. Recoverability is thereby bounded
-by `max(retention, abandonment horizon)` rather than unbounded. A retry after reaping runs
-under a new peer operation key, so no key-based defense remains at either layer — enable
-the reaper on external-effect actions only with a business-level reconciliation path (the
-external-effects guide states the boundary). The reaper bounds steady-state growth, not a burst
-(residual ≈ admission rate × that window); operators tune it with edge rate limiting and reap
-cadence.
+synchronization. Unresolved external claims are retained until recovery completes, regardless of retention or
+abandonment horizons. Their operation UUID and per-attempt outcome records survive every
+maintenance path. Only processing claims fixed as local at insertion are reapable. Retained
+external storage is unbounded by design; monitor counts and age, apply admission rate limits
+and use authoritative peer recovery. A shorter `response_retention` removes completed response
+bytes without reopening the claim's key. A hold prevents response expiry and claim cleanup.
+Ordered rollbacks lock before checking unresolved rows and refuse before removing protection.
+Running a historical `down` out of order is owner DDL outside that guarantee.
 Telemetry is deliberately value-free to avoid exporting keys, tokens, signatures, payloads,
 or verifier identities.
 
@@ -144,8 +138,8 @@ during maintenance writes and therefore belong to its attack surface.
 
 Column defaults (`pg_attrdef`) are not containment roots because shape authentication pins
 every package column's normalized default expression before owner code runs. This covers
-claims, nonces, payload parents and partitions, and `ash_onetime_maintenance_runs`; a
-consumer-added or changed default is refused. See [shape.sql](../priv/templates/migrations/maintenance/shape.sql)
+every package root and partition, including outcomes, the maintenance ledger and the
+owner-only external-state rollback journal; a consumer-added or changed default is refused. See [shape.sql](../priv/templates/migrations/maintenance/shape.sql)
 and the `maintenance-shape-default` mutation's “Table 1 row 6: default refuses before owner
 code runs” regression. Maintenance does INSERT: its runtime ledger upserts supply every
 defaulted column (`installed_at` has no default), and roll's relocation uses `SELECT *` into
@@ -218,7 +212,10 @@ The install loop adds the maintenance policy to existing children, but does not 
 root policies or RLS flags, and relation shapes do not pin either to the root. A read-only
 grant therefore cannot safely be left to the explicit ACL status check alone. Scope backup
 grants to the package parents and other required application relations; revoke broad read
-membership or grants on package children and the ledger before maintenance can proceed.
+membership or grants on ordinary package children and owner-only ledgers before maintenance
+can proceed. `ash_onetime_external_state_restore` is owner-only for both table and column
+privileges, including reads; the configured maintainer has no direct journal access. Outcome
+children alone retain the append-only worker exception.
 
 Maintenance first ships in 2.0.0. Fresh installs and maintenance upgrades from previously
 shipped releases embed these routine bodies and pin their digests in the install manifest.
@@ -230,12 +227,16 @@ routine after its digest was checked. Relation locks cannot serialize that repla
 the migrator must coordinate function changes with maintenance.
 
 
-Package routines live in a dedicated schema owned by the table owner, with no public CREATE.
+Package routines live in a dedicated schema owned by the table owner. Only the owner and
+configured maintenance role have schema USAGE; PUBLIC has neither USAGE nor CREATE.
 Every step audits effective CREATE with `has_schema_privilege`. Runtime retains CREATE only
 in the table schema, so it cannot add a defaulted overload beside a package routine.
 The EXECUTE ACL audit checks that dedicated routine schema. Only the owner and the
 configured maintenance role may execute package routines, and the maintenance role must
-not hold grant options. Same-named functions in the table schema do not enter this audit.
+not hold grant options. The sole exception is `ash_onetime_claim_visible`, a SECURITY INVOKER
+visibility helper with PUBLIC EXECUTE. Bound RLS policies invoke it without public schema
+USAGE. Before optional maintenance is installed, the external-state upgrade grants EXECUTE
+on maintenance steps and cleanup eligibility only to their owner. Same-named functions in the table schema do not enter this audit.
 All package calls are schema-qualified and explicitly typed. The routine manifest checks the
 whole executable `pg_proc` row, normalized argument-default and SQL-body trees, a zero
 `prosupport`, and the source digest.
@@ -251,8 +252,9 @@ A value is delivered only after its effect has committed. `deliver/2` refuses to
 an open transaction (`:executing_only_in_transaction`), because a transaction it does not own
 can roll back after the value was returned, and a retry under the same key would then
 deliver a second one. After Ash returns success, `deliver/2` reads the store's committed
-completion for its own claim, outside any transaction, and opens the value only when that
-completion exists. When it does not (for example, an `after_transaction` hook turned a
+completion for its own claim and granted attempt, outside any transaction, and opens the
+value only when that completion exists. A later attempt's completion cannot authorize a
+rolled-back attempt's envelope. When it does not (for example, an `after_transaction` hook turned a
 rolled-back action into success), the call returns `:executing_only_lost` with no value.
 For a local transactional effect, rollback also undoes the effect and its claim; a retry
 under the same key can execute and deliver a fresh value. An external peer may already

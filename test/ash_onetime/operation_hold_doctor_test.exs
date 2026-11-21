@@ -81,6 +81,12 @@ defmodule AshOnetime.OperationHoldDoctorTest do
 
         SQL.query!(
           Repo,
+          ~s|GRANT SELECT ON "#{prefix}".ash_onetime_effect_outcomes TO "#{role}"|,
+          []
+        )
+
+        SQL.query!(
+          Repo,
           ~s|ALTER TABLE "#{prefix}".ash_onetime_idempotency_claims OWNER TO "#{role}"|,
           []
         )

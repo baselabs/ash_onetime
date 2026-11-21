@@ -14,6 +14,7 @@ BEGIN
   EXECUTE format('ALTER TABLE %s %s FORCE ROW LEVEL SECURITY', target_name,
     CASE WHEN flags.relforcerowsecurity THEN '' ELSE 'NO' END);
   FOR policy IN SELECT p.* FROM pg_policy p
+    -- rule:rls-child-policy-copy
     WHERE p.polrelid=format('%I.%I', @schema_name@, 'ash_onetime_response_payloads')::regclass
   LOOP
     SELECT string_agg(CASE WHEN role_oid=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(role_oid)) END, ', ')
@@ -23,6 +24,7 @@ BEGIN
       CASE policy.polcmd WHEN '*' THEN 'ALL' WHEN 'r' THEN 'SELECT' WHEN 'a' THEN 'INSERT' WHEN 'w' THEN 'UPDATE' WHEN 'd' THEN 'DELETE' END,
       role_list,
       CASE WHEN policy.polqual IS NULL THEN '' ELSE ' USING (' || pg_get_expr(policy.polqual,policy.polrelid) || ')' END,
+      -- rule:copy-policy-check
       CASE WHEN policy.polwithcheck IS NULL THEN '' ELSE ' WITH CHECK (' || pg_get_expr(policy.polwithcheck,policy.polrelid) || ')' END);
   END LOOP;
 END

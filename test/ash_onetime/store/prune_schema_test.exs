@@ -1,6 +1,8 @@
 defmodule AshOnetime.Store.PruneSchemaTest do
   use AshOnetime.Test.StoreCase, async: false
 
+  alias AshOnetime.Test.StoreCase
+
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: Generator
 
   setup_all do
@@ -61,7 +63,7 @@ defmodule AshOnetime.Store.PruneSchemaTest do
       id = Ecto.UUID.bingenerate()
       hash = :crypto.hash(:sha256, label)
 
-      SQL.query!(
+      StoreCase.restore_fixture!(
         Repo,
         """
         INSERT INTO public.ash_onetime_idempotency_claims

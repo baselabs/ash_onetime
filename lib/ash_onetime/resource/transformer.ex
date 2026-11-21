@@ -155,6 +155,7 @@ defmodule AshOnetime.Resource.Transformer do
   end
 
   # mutation sentinel: duplicate-protection-guard
+  # rule:dsl-duplicate
   defp reject_duplicates(protections, dsl_state),
     do: reject_duplicate_details(protections, dsl_state)
 
@@ -347,6 +348,7 @@ defmodule AshOnetime.Resource.Transformer do
   end
 
   # mutation sentinel: declared-reference-guard
+  # rule:dsl-references
   defp verify_references(references, protection, context, option),
     do: verify_reference_details(references, protection, context, option)
 
@@ -392,6 +394,7 @@ defmodule AshOnetime.Resource.Transformer do
   end
 
   # mutation sentinel: attribute-tenant-scope-guard
+  # rule:dsl-attribute-tenant-scope
   defp verify_tenant_scope(scope, protection, context),
     do: verify_tenant_scope_details(scope, protection, context)
 
@@ -417,6 +420,7 @@ defmodule AshOnetime.Resource.Transformer do
   defp tenant_scoped?(scope, tenant_attribute) do
     Enum.any?(scope, fn
       {:tenant, _module} -> true
+      # rule:dsl-attribute-tenant-scope-equality
       {:attribute, attribute} -> not is_nil(tenant_attribute) and attribute == tenant_attribute
       _component -> false
     end)
@@ -472,6 +476,7 @@ defmodule AshOnetime.Resource.Transformer do
     do: verify_nonce(protection, context)
 
   # mutation sentinel: idempotency-strategy-guard
+  # rule:dsl-idempotency
   defp verify_idempotency(protection, context),
     do: verify_idempotency_details(protection, context)
 
@@ -480,12 +485,27 @@ defmodule AshOnetime.Resource.Transformer do
          :ok <- verify_response(protection, context),
          {:ok, retention} <-
            positive_duration(protection.retention, protection, context, :retention),
+         {:ok, response_retention} <-
+           positive_duration(
+             protection.response_retention || protection.retention,
+             protection,
+             context,
+             :response_retention
+           ),
+         :ok <- verify_response_retention(response_retention, retention, protection, context),
          :ok <-
            reject_present(protection.window, protection, context, :window, "window is nonce-only"),
          :ok <- reject_explicit_commit(protection, context),
          :ok <- verify_external_effect(protection, context),
          :ok <- verify_hold(protection, context) do
-      {:ok, %{protection | fingerprint: fingerprint, retention: retention, window: nil}}
+      {:ok,
+       %{
+         protection
+         | fingerprint: fingerprint,
+           retention: retention,
+           response_retention: response_retention,
+           window: nil
+       }}
     end
   end
 
@@ -504,12 +524,21 @@ defmodule AshOnetime.Resource.Transformer do
   end
 
   # mutation sentinel: nonce-strategy-guard
+  # rule:dsl-nonce
   defp verify_nonce(protection, context), do: verify_nonce_details(protection, context)
 
   defp verify_nonce_details(protection, context) do
     with :ok <- verify_nonce_key(protection, context),
          :ok <-
            reject_present(protection.hold, protection, context, :hold, "hold is idempotency-only"),
+         :ok <-
+           reject_present(
+             protection.response_retention,
+             protection,
+             context,
+             :response_retention,
+             "response_retention is idempotency-only"
+           ),
          :ok <-
            reject_present(
              protection.response,
@@ -557,6 +586,7 @@ defmodule AshOnetime.Resource.Transformer do
   end
 
   # mutation sentinel: trusted-nonce-key-guard
+  # rule:dsl-nonce-key
   defp verify_nonce_key(protection, context), do: verify_nonce_key_details(protection, context)
 
   defp verify_nonce_key_details(protection, context) do
@@ -571,6 +601,7 @@ defmodule AshOnetime.Resource.Transformer do
           "nonce keys must contain only verified or minted trusted sources"
         )
 
+      # rule:nonce-minted-composite
       length(protection.key) > 1 and Enum.any?(protection.key, &match?({:minted, _}, &1)) ->
         error(
           context.dsl_state,
@@ -1062,6 +1093,20 @@ defmodule AshOnetime.Resource.Transformer do
     end
   end
 
+  defp verify_response_retention(response_retention, retention, protection, context) do
+    # rule:verifier-response-retention
+    if response_retention <= retention do
+      :ok
+    else
+      error(
+        context.dsl_state,
+        protection,
+        :response_retention,
+        "response_retention must not exceed retention"
+      )
+    end
+  end
+
   defp positive_duration(value, protection, context, option) do
     case duration(value) do
       {:ok, seconds} when seconds > 0 ->
@@ -1121,6 +1166,7 @@ defmodule AshOnetime.Resource.Transformer do
     do: verify_no_notifiers(protection, context)
 
   # mutation sentinel: idempotency-lifecycle-guard
+  # rule:dsl-lifecycle
   defp verify_lifecycle(protection, context), do: verify_lifecycle_details(protection, context)
 
   defp verify_lifecycle_details(protection, context) do
@@ -1203,6 +1249,7 @@ defmodule AshOnetime.Resource.Transformer do
   defp validate_nonce_around_capabilities(
          %{
            notifications: _notifications,
+           # rule:nonce-around-capability
            effects: _effects,
            around_action: false,
            marker: _marker
@@ -1230,6 +1277,7 @@ defmodule AshOnetime.Resource.Transformer do
        when type in [:create, :update, :destroy] do
     notifiers = ResourceInfo.notifiers(context.dsl_state) ++ context.action.notifiers
 
+    # rule:notifier-guard
     if notifiers == [] do
       :ok
     else
@@ -1266,6 +1314,7 @@ defmodule AshOnetime.Resource.Transformer do
   defp verify_replay_callback(_callback), do: {:error, "unsupported lifecycle callback shape"}
 
   # mutation sentinel: replay-callback-guard
+  # rule:dsl-builtin-options
   defp verify_replay_ref(ref, allowlist), do: verify_replay_ref_details(ref, allowlist)
 
   defp verify_replay_ref_details({Ash.Resource.Change.SetAttribute, opts}, _allowlist)
@@ -1327,6 +1376,7 @@ defmodule AshOnetime.Resource.Transformer do
 
   defp validate_replay_capabilities(
          :pure,
+         # rule:pure-producer-capability
          %{notifications: false, effects: false, around_action: false, marker: :unused} =
            capabilities
        )
@@ -1337,6 +1387,8 @@ defmodule AshOnetime.Resource.Transformer do
          :replay_aware,
          %{
            notifications: notifications,
+           # rule:around-capability
+           # rule:marker-consumption-capability
            effects: effects,
            around_action: false,
            marker: :consumed
@@ -1368,6 +1420,7 @@ defmodule AshOnetime.Resource.Transformer do
   end
 
   # mutation sentinel: replay-validation-guard
+  # rule:dsl-validations
   defp verify_replay_validation(validation), do: verify_replay_validation_details(validation)
 
   defp verify_replay_validation_details(%Ash.Resource.Validation{
@@ -1485,6 +1538,7 @@ defmodule AshOnetime.Resource.Transformer do
       error(dsl_state, protection, :action, "AshOnetime change wrapper is already present")
     else
       wrapper = %Ash.Resource.Change{
+        # rule:wrapper-protection
         change: {AshOnetime.Change, [protection: protection]},
         on: [action.type],
         only_when_valid?: false,

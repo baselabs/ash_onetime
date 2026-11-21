@@ -197,6 +197,34 @@ defmodule AshOnetime.Store.OperationHoldUpgradeTest do
           []
         )
 
+        # The refused nontransactional down built its full retention index before
+        # counting holds. Remove that test-created index before authenticating an
+        # unrelated upgrade's historical shape.
+        SQL.query!(
+          Repo,
+          ~s|DROP INDEX "#{schema}".ash_onetime_idempotency_claims_retain_until_index|,
+          []
+        )
+
+        external_module = Module.concat(__MODULE__, "External#{unique}")
+
+        external_source =
+          Generator.render_external_state_upgrade(Repo, [])
+          |> String.replace(
+            inspect(Repo) <> ".Migrations.AddAshOnetimeExternalState",
+            inspect(external_module)
+          )
+
+        Code.compile_string(external_source)
+
+        on_exit(fn ->
+          :code.purge(external_module)
+          :code.delete(external_module)
+        end)
+
+        assert :ok =
+                 Ecto.Migrator.up(Repo, unique + 1, external_module, prefix: schema, log: false)
+
         assert {:ok, {:ok, 1}} =
                  Repo.transaction(fn ->
                    AshOnetime.Transaction.release(Repo,
@@ -205,6 +233,9 @@ defmodule AshOnetime.Store.OperationHoldUpgradeTest do
                      reference: "operation"
                    )
                  end)
+
+        assert :ok =
+                 Ecto.Migrator.down(Repo, unique + 1, external_module, prefix: schema, log: false)
 
         assert :ok = Ecto.Migrator.down(Repo, unique, module, prefix: schema, log: false)
         assert :ok = Ecto.Migrator.up(Repo, unique, module, prefix: schema, log: false)
@@ -239,7 +270,7 @@ defmodule AshOnetime.Store.OperationHoldUpgradeTest do
     refute match?({:ok, {:execute, _admission}}, result),
            "an unmigrated installation must never admit: #{inspect(result)}"
 
-    assert match?({:ok, {:error, %AshOnetime.Error{code: :store_invariant}}}, result) or
+    assert match?({:ok, {:error, %AshOnetime.Error{code: :install_mismatch}}}, result) or
              match?({:error, _reason}, result),
            "expected a refusal, got: #{inspect(result)}"
 

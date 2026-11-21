@@ -26,6 +26,8 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/logical-postgres
+
     - name: Refuse an unknown cache input
       shell: bash
       env:
@@ -66,3 +68,8 @@ runs:
         SHARD: ${{ inputs.shard }}
         ASH_ONETIME_RLS_PRUNE_TESTS: "1"
       run: MIX_ENV='test' mix run scripts/check_mutations.exs -- --shard "$SHARD" all
+
+    - uses: ./.github/actions/logical-postgres
+      if: always()
+      with:
+        mode: stop

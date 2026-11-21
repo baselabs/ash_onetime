@@ -10,6 +10,7 @@ defmodule AshOnetime.Signer.HMAC do
 
   alias AshOnetime.Error
 
+  # rule:hmac-key-bound
   @max_key_bytes 4_096
 
   @impl AshOnetime.Signer
@@ -51,6 +52,7 @@ defmodule AshOnetime.Signer.HMAC do
       {:error, Error.new(:invalid_signature, "HMAC signature is invalid")}
     end
   rescue
+    # rule:secure-equal-length
     _exception -> {:error, Error.new(:invalid_signature, "HMAC signature is invalid")}
   end
 

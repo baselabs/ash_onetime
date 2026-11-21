@@ -60,13 +60,19 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
     claim: %{
       table: "ash_onetime_idempotency_claims",
       columns:
-        ~w(id logical_partition operation_hash scope_hash key_hash fingerprint state response_partition response_codec response_digest hold_reference admitted_at retain_until inserted_at),
-      clocks: ~w(admitted_at retain_until inserted_at),
+        ~w(id logical_partition operation_hash scope_hash key_hash fingerprint state response_partition response_codec response_digest hold_reference admitted_at retain_until inserted_at effect_local effect_attempt response_retain_until response_expired_at),
+      clocks: ~w(admitted_at retain_until inserted_at response_retain_until response_expired_at),
       sources: [
         {AshOnetime.Store.Postgres, :insert_claim, 3},
         {AshOnetime.Store.Postgres, :update_complete, 7},
         {AshOnetime.Store.Postgres, :release_query, 2}
       ]
+    },
+    outcome: %{
+      table: "ash_onetime_effect_outcomes",
+      clocks: ["recorded_at"],
+      source: {AshOnetime.Store.Postgres, :insert_outcome, 4},
+      observation: {AshOnetime.Test.ExitBoundary.Scenarios, :outcome_probe_sql, 1}
     },
     peer: %{
       tables:
@@ -91,23 +97,6 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
 
   @function_slots %{
     {Ecto.Adapters.SQL, :"-with_log/4-fun-0-"} => %{2 => :parameters},
-    {AshOnetime.Store.Postgres, :"-complete_mode/7-fun-1-"} => %{
-      2 => {:response, :codec},
-      3 => {:response, :digest},
-      4 => {:response, :payload}
-    },
-    {AshOnetime.Store.Postgres, :"-complete_external/7-fun-1-"} => %{
-      2 => {:response, :codec},
-      3 => {:response, :digest},
-      4 => {:response, :payload}
-    },
-    {AshOnetime.Store.Postgres, :"-complete_transaction/7-fun-1-"} => %{
-      2 => {:response, :payload}
-    },
-    {AshOnetime.Store.Postgres, :"-complete_transaction/7-fun-2-"} => %{
-      2 => {:response, :codec},
-      3 => {:response, :digest}
-    },
     {AshOnetime.Test.ExternalPeer, :"-execute/4-fun-0-"} => %{1 => :uuid},
     {AshOnetime.Test.ExternalPeer, :"-execute/4-fun-1-"} => %{1 => :uuid},
     {AshOnetime.Test.ExternalPeer, :"-recover/4-fun-0-"} => %{1 => :uuid},
@@ -356,6 +345,24 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
       "ash_onetime_response_payloads_#{year}_#{String.pad_leading(Integer.to_string(month), 2, "0")}"
 
   def derivations, do: rule!(:o2a_computations).sources
+
+  def function_slots(AshOnetime.Store.Postgres = module, function) do
+    name = Atom.to_string(function)
+
+    if Enum.any?(["-complete_mode/7-fun-", "-complete_external/7-fun-", "-complete_transaction/7-fun-"], &String.starts_with?(name, &1)) do
+      for {callee, arity, arguments} <- [
+            {:complete_transaction, 7, [{2, :codec}, {3, :digest}, {4, :payload}]},
+            {:insert_payload, 4, [{3, :payload}]},
+            {:update_complete, 7, [{3, :codec}, {4, :digest}]}
+          ],
+          {argument, kind} <- arguments,
+          {:ok, index} <- [AshOnetime.Test.ExitBoundary.Compiled.captured_argument(module, function, callee, arity, argument)],
+          into: %{},
+          do: {index, {:response, kind}}
+    else
+      Map.get(rule!(:o2a_computations).function_slots, {module, function}, %{})
+    end
+  end
 
   def function_slots(module, function),
     do: Map.get(rule!(:o2a_computations).function_slots, {module, function}, %{})

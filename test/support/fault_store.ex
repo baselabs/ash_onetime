@@ -1,6 +1,8 @@
 defmodule AshOnetime.Test.FaultStore do
   @moduledoc false
 
+  alias AshOnetime.Store.Postgres
+
   @behaviour AshOnetime.Store
 
   @result_key {__MODULE__, :result}
@@ -51,6 +53,10 @@ defmodule AshOnetime.Test.FaultStore do
   @impl AshOnetime.Store
   def complete_external(target, claim, codec, digest, payload, reference, _options),
     do: complete_external(target, claim, codec, digest, payload, reference)
+
+  @impl AshOnetime.Store
+  def record_outcome_committed(target, claim, outcome, options),
+    do: Postgres.record_outcome_committed(target, claim, outcome, options)
 
   @impl AshOnetime.Store
   def load(target, claim, options), do: result!(:load, [target, claim, options])

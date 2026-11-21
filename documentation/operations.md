@@ -84,21 +84,17 @@ claim sharing the reference, so use a UUID per operation. See
 [Idempotency](idempotency.md#keep-an-open-operations-record) for the transaction and Ash change
 APIs and the settle-before-commit race.
 
-Abandoned external `processing` claims — committed recovery points whose peer effect never
-settles and that no retry ever recovers — are immortal under cleanup (it skips them) and the
-delete guard (it forbids deleting them). Left unbounded this is a storage denial of service.
-`AshOnetime.Store.reap(target, batch_size, abandonment_seconds)` is an opt-in, bounded reaper that
-deletes such claims past a separate, much longer abandonment horizon. A claim is reaped only when
-it is older than both `abandonment_seconds` and a hard 1-day floor and past its own retention
-horizon (all re-enforced by the delete guard), so an in-flight or in-retention recovery point is
-never removed. `abandonment_seconds` must be at least the 1-day floor. Schedule it far less
-frequently than cleanup (recoverability becomes bounded by `max(retention, abandonment)`), and
-size the horizon well beyond any legitimate in-flight window. For **external-effect** actions,
-reaping is a stronger decision than for local ones: a reaped claim takes its operation key
-(the claim UUID) with it, so a later retry executes at the peer under a new key and no
-key-based defense remains at either layer — enable the reaper there only together with a
-business-level reconciliation path that can settle an outcome-unknown claim before its
-abandonment horizon passes (see the external-effects guide).
+External processing claims retain the peer operation UUID until recovery completes. Their
+locality is fixed at insertion: `external` and legacy `unknown` rows are never reapable,
+including rows whose latest attempt is unresolved, held or absence-proven. Every maintenance
+path preserves these recovery points and their outcome rows. Their storage is intentionally
+unbounded; monitor `kept_external` in the reaper's step record and investigate unresolved
+operations through authoritative peer recovery.
+
+`AshOnetime.Store.reap(target, batch_size, abandonment_seconds)` deletes only abandoned
+`local` processing claims. Each must be older than the abandonment horizon and the hard
+one-day floor, past its retention deadline and unheld. The DELETE guard enforces the same
+conditions. Size the horizon above legitimate local transaction lifetimes.
 
 Run the reaper manually or with the optional Oban worker, mirroring cleanup:
 
@@ -112,14 +108,9 @@ installed, on its own far slower cadence than `AshOnetime.Oban.CleanupWorker`. B
 observe the backlog with `AshOnetime.Store.processing_backlog(target)`, which returns
 `{:ok, %{processing_count: n, oldest_age_seconds: seconds}}` (`oldest_age_seconds` is `nil` when
 no recovery points are in flight) — watch it grow to detect abandonment accumulation and to size
-the abandonment horizon above the oldest legitimate in-flight claim. Existing deployments installed before
-the reaper existed must, in a manual migration, `CREATE OR REPLACE` the
-`ash_onetime_guard_idempotency_delete` function with the new body (the attached trigger keeps
-pointing at the same name), `CREATE` the `ash_onetime_reap_idempotency` function, and `CREATE` the
-`ash_onetime_idempotency_claims_processing_index`. Copy those three definitions from a freshly
-generated install migration (`mix ash_onetime.gen.migrations`), changing the guard's `CREATE
-FUNCTION` to `CREATE OR REPLACE FUNCTION`. Until they are applied a reap attempt fails closed
-against the old guard.
+the abandonment horizon above the oldest legitimate in-flight local claim. Existing
+installations apply both mandatory 2.0 upgrades before maintenance; see [upgrading](upgrading.md).
+The external-state upgrade installs the shared guards and state transactionally.
 
 ### Forward response partitions
 
@@ -246,37 +237,40 @@ a live authoritative store unless noted.
 
 ### backlog-stuck — abandoned `processing` recovery points accumulating
 
-**Symptom.** `[:ash_onetime, :external_recovery]` with `result_class: :outcome_unknown`
-sustained over time, or `processing_backlog/1` showing a growing `processing_count` whose
-`oldest_age_seconds` exceeds any legitimate in-flight window. Abandoned external-effect
-recovery points are immortal under cleanup (it skips `processing` claims) and the delete
-guard forbids deleting them; left unbounded this is a storage-exhaustion denial of service
-(ADR-0002).
+**Symptom.** Sustained `:outcome_unknown` or `outcome_unrecorded` recovery telemetry,
+a growing `processing_count`, or old unresolved external operations in maintenance status.
 
-**Diagnose.** Observe the backlog before reaping — the `processing_backlog/1` figures
-from above as SQL (replace `:prefix` with the tenant schema, e.g. `public`):
+**Diagnose.** Separate local abandonment from unresolved external work for each installation:
 
 ```sql
-SELECT count(*) AS processing_count,
+SELECT effect_local, count(*) AS processing_count,
        extract(epoch from now() - min(inserted_at))::int AS oldest_age_seconds
 FROM ":prefix".ash_onetime_idempotency_claims
-WHERE state = 'processing';
+WHERE state = 'processing'
+GROUP BY effect_local;
 ```
 
-**Remediate.** If `oldest_age_seconds` is well beyond any legitimate in-flight window (e.g.
-days), run the bounded reaper with an `abandonment_seconds` sized above your longest
-legitimate in-flight claim but below the point where storage pressure bites:
+**Remediate.** Recover external operations through the peer using the original claim UUID.
+Do not delete an unresolved claim to free its key. An ambiguous result remains retained until
+a retry obtains a final peer result and completes the claim. A proven absence permits
+another execution under the same key; it does not itself complete or discard the claim.
+A definitive business rejection can be a final result after the peer durably accounts for
+it: return `{:ok, terminal_result}` from the adapter and store it through the protected
+action's codec and classifier. Reconcile every unresolved operation this way before an
+ordered rollback, then stop callers and maintenance. If a decision remains ambiguous,
+retain its recovery point and postpone removal of its protection. Address sustained
+`outcome_unrecorded` by checking worker connections, lock waits and consumer policies.
+
+For abandoned local claims, run the bounded reaper above the longest legitimate local
+transaction lifetime:
 
 ```sh
 mix ash_onetime.reap --repo MyApp.Repo --abandonment-seconds 1209600 --batch-size 500
 ```
 
-`--abandonment-seconds` (default 604800 = 7 days, minimum 86400 = 1 day) must be at least the
-1-day floor; the reaper re-enforces both this floor and each claim's own retention horizon via
-the delete guard, so an in-flight or in-retention recovery point is never removed. Reaping an
-abandoned claim means a later retry re-inserts under a new claim id and executes as a new
-peer operation (ADR-0002). Schedule `AshOnetime.Oban.ReapWorker` on a slow cadence to keep
-this bounded steady-state rather than a manual fire drill.
+The default is seven days and the minimum is one day. Schedule
+`AshOnetime.Oban.ReapWorker` independently from cleanup. The reaper excludes external claims
+regardless of the chosen horizon. See [maintenance](maintenance.md) for eligibility by path.
 
 ### partition-discard-detected — a PartitionWorker exhausted its retries
 

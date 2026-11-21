@@ -7,6 +7,7 @@ DECLARE
   installed timestamptz;
   cleanup_age bigint;
   reap_age bigint;
+  external_backlog jsonb;
   held_count bigint;
   held_age bigint;
   default_rows boolean;
@@ -63,10 +64,26 @@ BEGIN
       SELECT retain_until FROM @schema@.ash_onetime_nonce_claims WHERE retain_until<transaction_timestamp()
     ) backlog;
     SELECT extract(epoch FROM (transaction_timestamp()-min(inserted_at)))::bigint INTO reap_age
-    FROM @schema@.ash_onetime_idempotency_claims WHERE state='processing'
+    FROM @schema@.ash_onetime_idempotency_claims WHERE state='processing' AND effect_local
       AND inserted_at<transaction_timestamp()-interval '86400 seconds' AND retain_until<transaction_timestamp();
     SELECT count(*),extract(epoch FROM (transaction_timestamp()-min(admitted_at)))::bigint INTO held_count,held_age
     FROM @schema@.ash_onetime_idempotency_claims WHERE hold_reference IS NOT NULL;
+    SELECT jsonb_build_object('unresolved',count(*) FILTER (WHERE state='unresolved'),
+      'held',count(*) FILTER (WHERE state='held'),'absent_proven',count(*) FILTER (WHERE state='absent_proven'),
+      'unknown',count(*) FILTER (WHERE state='unknown'),
+      'oldest_age_seconds',jsonb_build_object(
+        'unresolved',extract(epoch FROM (transaction_timestamp()-min(admitted_at) FILTER (WHERE state='unresolved')))::bigint,
+        'held',extract(epoch FROM (transaction_timestamp()-min(admitted_at) FILTER (WHERE state='held')))::bigint,
+        'absent_proven',extract(epoch FROM (transaction_timestamp()-min(admitted_at) FILTER (WHERE state='absent_proven')))::bigint,
+        'unknown',extract(epoch FROM (transaction_timestamp()-min(admitted_at) FILTER (WHERE state='unknown')))::bigint))
+    INTO external_backlog FROM (
+      SELECT c.admitted_at,CASE WHEN c.effect_attempt=0 THEN 'unknown' ELSE coalesce(o.outcome,'unresolved') END AS state
+      FROM @schema@.ash_onetime_idempotency_claims c
+      LEFT JOIN @schema@.ash_onetime_effect_outcomes o ON o.claim_id=c.id AND o.attempt=c.effect_attempt
+        AND (to_jsonb(o)->>'operation_hash' IS NULL OR (to_jsonb(o)->>'operation_hash')::bytea=c.operation_hash)
+        AND (to_jsonb(o)->>'logical_partition' IS NULL OR to_jsonb(o)->>'logical_partition'=c.logical_partition)
+      WHERE c.state='processing' AND NOT c.effect_local
+    ) external;
     SELECT partdefid INTO default_oid FROM pg_partitioned_table WHERE partrelid=@payload@::regclass;
     IF default_oid<>0 THEN EXECUTE format('SELECT EXISTS (SELECT 1 FROM %s)',default_oid::regclass) INTO default_rows;
     ELSE default_rows := false;
@@ -87,5 +104,6 @@ BEGIN
     'policy_error',policy_error,'trust_error',trust_error,'oldest_cleanup_age_seconds',cleanup_age,
     'oldest_reapable_age_seconds',reap_age,'coverage_until',coverage_until,'default_has_rows',default_rows,
     'permanent_prune_refusals',coalesce(prune_refusals,'{}')-'lock_unavailable',
+    'external_backlog',external_backlog,
     'held_backlog',jsonb_build_object('held_count',held_count,'oldest_age_seconds',held_age));
 END

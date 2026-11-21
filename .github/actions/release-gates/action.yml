@@ -1,6 +1,6 @@
 name: Release gates
 description: >-
-  Run the release gates for qualification and upstream drift; the mutation battery is its own
+  Run the release gates for qualification, work and upstream drift; the mutation battery is its own
   jobs (the mutations composite)
 inputs:
   elixir:
@@ -23,6 +23,8 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/logical-postgres
+
     - name: Refuse an unknown cache input
       shell: bash
       env:
@@ -84,3 +86,8 @@ runs:
     - name: Optional integration matrix
       shell: bash
       run: MIX_ENV='test' mix run scripts/check_optional_matrix.exs
+
+    - uses: ./.github/actions/logical-postgres
+      if: always()
+      with:
+        mode: stop

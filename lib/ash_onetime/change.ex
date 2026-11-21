@@ -13,6 +13,7 @@ defmodule AshOnetime.Change do
 
   @impl true
   def change(changeset, opts, context) do
+    # rule:authorization-order
     protection = Keyword.fetch!(opts, :protection)
 
     case protection.executing_only do
@@ -89,11 +90,13 @@ defmodule AshOnetime.Change do
 
   @impl true
   def batch_change(changesets, opts, context) do
+    # rule:bulk-fallback
     Enum.map(changesets, &change(&1, opts, context))
   end
 
   @impl true
   def atomic(_changeset, _opts, _context),
+    # rule:atomic-error-form
     do: {:not_atomic, "keyed effects require transactional stream execution"}
 
   defp reserve(changeset, protection, context, delivery) do
@@ -117,11 +120,13 @@ defmodule AshOnetime.Change do
           Enum.reduce(
             Map.keys(changeset.relationships),
             changeset,
+            # rule:replay-relationship-clearing
             &Ash.Changeset.clear_change(&2, &1)
           )
 
         changeset
         |> AshOnetime.Admission.put_replay(state)
+        # rule:crud-result-tuple
         |> Ash.Changeset.set_result({:ok, decoded})
 
       {:error, error} ->
@@ -136,6 +141,7 @@ defmodule AshOnetime.Change do
 
       {:error, callback_error} = error ->
         if AshOnetime.Admission.replay?(changeset) do
+          # rule:replay-callback-error-rollback
           Ash.DataLayer.rollback(changeset.resource, callback_error)
         else
           error
@@ -156,6 +162,7 @@ defmodule AshOnetime.Change do
               "relationship changes cannot run on a replay"
             )
 
+          # rule:replay-relationship-rollback
           Ash.DataLayer.rollback(final_changeset.resource, error)
         end
 
@@ -168,6 +175,7 @@ defmodule AshOnetime.Change do
   end
 
   defp normalize_completion(state, result, final_changeset, instructions) do
+    # rule:crud-completion
     case AshOnetime.Admission.complete(state, result) do
       {:ok, normalized} ->
         {:ok, AshOnetime.Admission.stamp_replay(state, normalized), final_changeset, instructions}

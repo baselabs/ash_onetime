@@ -128,15 +128,14 @@ defmodule AshOnetime.Store.UncertaintyTest do
   end
 
   @tag operation_hash_select_mutation: true
-  test "operation hash remains part of the shared command-two and load sink", %{target: target} do
-    base = idempotency_request("operation-a")
+  test "nonce replay and deadline reads preserve operation identity", %{target: target} do
+    base = nonce_request("operation-a")
     request_a = %{base | operation_hash: hash("operation-a")}
 
     request_b = %{
       base
       | id: Ecto.UUID.generate(),
-        operation_hash: hash("operation-b"),
-        fingerprint: hash("fingerprint-b")
+        operation_hash: hash("operation-b")
     }
 
     assert {:ok, %Result{status: :admitted, claim: claim_a}} =
@@ -147,16 +146,21 @@ defmodule AshOnetime.Store.UncertaintyTest do
 
     assert claim_a.operation_hash != claim_b.operation_hash
 
-    assert {:ok, %Result{status: :processing, claim: collision}} =
+    assert {:ok, %Result{status: :collision, claim: collision}} =
              Repo.transaction(fn -> Store.claim(target, request_a) end)
 
     assert collision.id == claim_a.id
     assert collision.operation_hash == request_a.operation_hash
 
-    assert {:ok, %Result{status: :processing, claim: loaded_a}} =
-             Repo.transaction(fn -> Store.load(target, claim_a, []) end)
+    assert {:ok, deadline} =
+             Postgres.nonce_retention_deadline(
+               target,
+               request_a.operation_hash,
+               request_a.scope_hash,
+               request_a.key_hash
+             )
 
-    assert loaded_a.operation_hash == request_a.operation_hash
+    assert deadline == claim_a.retain_until
   end
 
   test "fault store exposes distinct conservative failure classes" do

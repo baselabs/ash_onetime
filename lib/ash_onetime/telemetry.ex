@@ -40,7 +40,15 @@ defmodule AshOnetime.Telemetry do
       :oversized,
       :disabled
     ],
-    cleanup: [:claims_deleted, :partitions_dropped, :partitions_created, :partitions_kept],
+    # rule:partitions-created-telemetry
+    # rule:responses-expired-telemetry
+    cleanup: [
+      :responses_expired,
+      :claims_deleted,
+      :partitions_dropped,
+      :partitions_created,
+      :partitions_kept
+    ],
     reap: [:claims_reaped],
     external_recovery: [
       :processing_committed,
@@ -48,6 +56,8 @@ defmodule AshOnetime.Telemetry do
       :recover_succeeded,
       :absence_proven,
       :outcome_unknown,
+      # rule:outcome-unrecorded-telemetry
+      :outcome_unrecorded,
       :external_effect_unavailable,
       :finalize_locked,
       :replayed
@@ -135,8 +145,10 @@ defmodule AshOnetime.Telemetry do
 
   @doc """
   Emits `[:ash_onetime, :cleanup]` with `:count` and `result_class` in
-  `[:claims_deleted, :partitions_dropped, :partitions_created, :partitions_kept]`. A
-  bounded cleanup run; `:partitions_kept` fires only when at least one past partition
+  `[:responses_expired, :claims_deleted, :partitions_dropped, :partitions_created,
+  :partitions_kept]`. `:responses_expired` counts response payloads expired at their
+  response deadline; claim cleanup follows the claim's separate retention deadline.
+  A bounded cleanup run emits these counts. `:partitions_kept` fires only when at least one past partition
   was kept by refusal (non-owner driver, DDL block, lock contention, not a plain child) — the visible
   signal that pruning is not happening. Its count is the sum of
   `payload_partitions_refused` values; ordinary occupied partitions emit no event.
@@ -159,8 +171,10 @@ defmodule AshOnetime.Telemetry do
   @doc """
   Emits `[:ash_onetime, :external_recovery]` with `:duration` and `result_class` in
   `[:processing_committed, :execute_succeeded, :recover_succeeded, :absence_proven,
-  :outcome_unknown, :external_effect_unavailable, :finalize_locked, :replayed]`. The stage
-  outcomes of the committed external-effect recovery protocol.
+  :outcome_unknown, :outcome_unrecorded, :external_effect_unavailable, :finalize_locked,
+  :replayed]`. The stage outcomes of the committed external-effect recovery protocol.
+  `:outcome_unrecorded` means the independent outcome write could not be confirmed.
+  The external recovery point remains protected for a later recovery attempt.
   """
   @spec external_recovery(non_neg_integer(), atom(), module(), atom(), atom()) ::
           :ok | {:error, Error.t()}
@@ -230,6 +244,20 @@ defmodule AshOnetime.Telemetry do
     with :ok <- validate_context(strategy, resource, action),
          true <- result_class in Map.fetch!(@classes, event),
          :ok <- validate_measurements(event, measurements) do
+      # rule:telemetry-exception
+      # rule:telemetry-fingerprint
+      # rule:telemetry-key
+      # rule:telemetry-key_hash
+      # rule:telemetry-payload
+      # rule:telemetry-resolver_id
+      # rule:telemetry-response
+      # rule:telemetry-scope
+      # rule:telemetry-scope_hash
+      # rule:telemetry-secret
+      # rule:telemetry-signature
+      # rule:telemetry-store_result
+      # rule:telemetry-token
+      # rule:telemetry-verifier_id
       metadata = %{
         strategy: strategy,
         resource: resource,
@@ -237,6 +265,17 @@ defmodule AshOnetime.Telemetry do
         result_class: result_class
       }
 
+      # -- end-rule:telemetry-resolver_id
+      # -- end-rule:telemetry-store_result
+      # -- end-rule:telemetry-key_hash
+      # -- end-rule:telemetry-scope_hash
+      # -- end-rule:telemetry-fingerprint
+      # -- end-rule:telemetry-exception
+      # -- end-rule:telemetry-payload
+      # -- end-rule:telemetry-signature
+      # -- end-rule:telemetry-response
+      # -- end-rule:telemetry-secret
+      # -- end-rule:telemetry-key
       :telemetry.execute([:ash_onetime, event], measurements, metadata)
       :ok
     else

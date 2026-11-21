@@ -21,14 +21,14 @@ The lock and `.tool-versions` pin development releases; published ranges preserv
 
 - **Where it runs.** Compile, tests, type checks and docs run in this repository's own GitHub Actions jobs on hosted runners, each with its own PostgreSQL 18 service container. Agents never run them on a workstation or on shared build machines.
 - Build: `mix compile --warnings-as-errors`.
-- **Covering tests.** Every push to a work branch runs the `Work` workflow on that head: the whole suite against PostgreSQL 18 (`DATABASE_URL` and `ASH_ONETIME_TEST_SERVER`; see `CONTRIBUTING.md`), the whole mutation battery and the lock check of both Ash cells' locks (`mix.lock` and `locks/ash-floor/mix.lock`), which fails when a committed lock is not current and resolves nothing. Resolve a lock with `mix deps.get` (with `ASH_ONETIME_ASH_VERSION` set to the floor for the floor cell) where `mix.exs` changes, and commit it with that change; resolving compiles nothing. Only the drift report resolves fresh from upstream. Never write lock entries by hand.
+- **Covering tests.** Every work-branch push runs `Work` on that head: the same Ash floor/latest, additional BEAM, security, release-gates and mutation job definitions as qualification, plus explicit quality, whole-suite PostgreSQL 18 and both-cell lock checks (`DATABASE_URL` and `ASH_ONETIME_TEST_SERVER`; see `CONTRIBUTING.md`). Release gates execute all local Livebooks and optional consumers. Both committed locks (`mix.lock` and `locks/ash-floor/mix.lock`) must be current; the check resolves nothing. Resolve a lock with `mix deps.get` (with `ASH_ONETIME_ASH_VERSION` set to the floor for the floor cell) where `mix.exs` changes, and commit it with that change; resolving compiles nothing. Only the drift report resolves fresh from upstream. Never write lock entries by hand.
 - **Type check.** `mix dialyzer` and `MIX_ENV=test mix dialyzer`, in the same CI run.
 - **Release battery.** The additional release commands in `CONTRIBUTING.md` run in CI's release-gates job and
   its mutation-battery shard jobs. No job may measure over 45 minutes or carry a limit over 90; a
   longer job is split into jobs, never given a looser limit.
 - **Caches.** Every job restores Mix caches through `.github/actions/mix-cache`; only the `Cache warmer`
   workflow on the default branch saves them.
-- **Landing.** CI runs the full suite on a candidate branch before `main` moves.
+- **Landing.** CI runs the full suite on a candidate branch before `main` moves. A work branch lands whole: merge `origin/main` into it, push it so `Work` runs on that head, then run `kimosabe-land --sha <head>`, so that `main` moves to the branch's own commit. `--pick` copies commits and leaves the branch unmerged, so it is only for a commit that is not on a branch.
 
 ## CI/CD and releases
 
@@ -42,17 +42,33 @@ Re-read it whenever you touch a workflow, a Dockerfile, a release script or a se
   deploy, publish, tag a version, dispatch a workflow, push an image by hand, or handle a
   release, publish or CI key. When something should go out, send infra-1 one message: the
   repository, the full commit, what goes out and anything it needs.
+- **A landing ends with its cleanup.** A landing is not done until everything the change created
+  is gone. In the same step that confirms the default branch moved, remove:
+  - its work branch, on GitHub and locally (`git branch -d` succeeds, because the landed commits
+    are on the default branch);
+  - its worktree;
+  - any Actions cache scoped to that branch;
+  - every scratch ref, container, clone and temporary file it made.
+
+  A branch that a rebuild replaces is deleted when the replacement is pushed, not when the
+  replacement lands. The landing report lists what was removed. A child agent's final report
+  lists every branch, ref, worktree, file and artifact it created, so the landing can remove
+  them.
 - **Publication.** Infra dispatches `publish.yml` on the qualified default-branch commit. It
   publishes only a new version of an existing Hex package, with a dated changelog section and
-  no existing version tag. Build and inspect the package and reproducible docs archives before
+  no existing version tag. Build and inspect the package and docs archives before
   the keyed step; that step only uploads missing archives with `mix run --no-mix-exs` from an
   empty directory. A held release is finished by a second dispatch on the same commit after
-  approval. Matching served archives are reused; retired releases and differing bytes are
-  refused, never replaced. Read both archives back without a key. The publish job exports
-  the package, docs, checksums and notes as one `release-assets` artifact for infra to compare
-  and attach to the GitHub release. No workflow creates a release or runs on a tag. The
-  `published-livebooks` job needs the publish job, uses the same actor restriction, and holds
-  no environment or key. Qualification uses only local package consumers.
+  approval. Package bytes must match any staged or served release; retired releases are
+  refused. Docs bytes are never compared: readable served docs are kept, missing docs uploaded.
+  Every docs build writes root `release.json` with package, version and the run's commit.
+  Keyless read-back requires `index.html` and that provenance naming this package and version
+  and the dispatched commit or an ancestor on the default branch; it outputs that published
+  commit. Only ready runs export `release-assets`: the package, downloaded served docs,
+  recomputed checksums and checkout changelog notes, for infra to attach to the GitHub release
+  on the published commit. A held run exports none. No archive is replaced. No workflow creates
+  a release or runs on a tag. The `published-livebooks` job needs the publish job, uses the same
+  actor restriction, and holds no environment or key. Qualification uses only local package consumers.
 - **You write your own workflow changes; infra-1 reviews them.** Before landing a change to
   `.github/`, a Dockerfile, a release script or anything that touches a secret, send infra-1 the
   branch and head and wait for its review. Take any CI/CD, runner, box or key problem to

@@ -1,3 +1,7 @@
+<%
+external_claim_columns = EEx.eval_file(Path.join([__DIR__, "external_state", "claims.sql"]), fragment: :columns)
+external_claim_checks = EEx.eval_file(Path.join([__DIR__, "external_state", "claims.sql"]), fragment: :checks)
+%>
 defmodule <%= inspect(module) %> do
   use Ecto.Migration
 
@@ -9,38 +13,43 @@ defmodule <%= inspect(module) %> do
   def up do
     execute("""
     CREATE TABLE #{q("ash_onetime_idempotency_claims")} (
-      id uuid <%= if hash_partitions, do: "NOT NULL", else: "PRIMARY KEY" %>,
+      id uuid NOT NULL,
       logical_partition text NOT NULL DEFAULT 'global'
-        CHECK (octet_length(logical_partition) BETWEEN 1 AND 255),
-      operation_hash bytea NOT NULL CHECK (octet_length(operation_hash) = 32),
-      scope_hash bytea NOT NULL CHECK (octet_length(scope_hash) = 32),
-      key_hash bytea NOT NULL CHECK (octet_length(key_hash) = 32),
-      fingerprint bytea NOT NULL CHECK (octet_length(fingerprint) = 32),
-      state text NOT NULL DEFAULT 'processing' CHECK (state IN ('processing', 'complete')),
+        -- rule:idempotency-claims-check-logical-partition
+        CONSTRAINT ash_onetime_idempotency_claims_logical_partition_check CHECK (octet_length(logical_partition) BETWEEN 1 AND 255),
+      -- rule:idempotency-claims-check-operation-hash
+      operation_hash bytea NOT NULL CONSTRAINT ash_onetime_idempotency_claims_operation_hash_check CHECK (octet_length(operation_hash) = 32),
+      -- rule:idempotency-claims-check-scope-hash
+      scope_hash bytea NOT NULL CONSTRAINT ash_onetime_idempotency_claims_scope_hash_check CHECK (octet_length(scope_hash) = 32),
+      -- rule:idempotency-claims-check-key-hash
+      key_hash bytea NOT NULL CONSTRAINT ash_onetime_idempotency_claims_key_hash_check CHECK (octet_length(key_hash) = 32),
+      -- rule:idempotency-claims-check-fingerprint
+      fingerprint bytea NOT NULL CONSTRAINT ash_onetime_idempotency_claims_fingerprint_check CHECK (octet_length(fingerprint) = 32),
+      -- rule:idempotency-claims-check-state
+      state text NOT NULL DEFAULT 'processing' CONSTRAINT ash_onetime_idempotency_claims_state_check CHECK (state IN ('processing', 'complete')),
       response_partition date,
       response_codec text,
       response_digest bytea,
+      <%= external_claim_columns %>
+      -- rule:idempotency-claims-check-hold
       hold_reference text CONSTRAINT ash_onetime_idempotency_claims_hold_check
         CHECK (hold_reference IS NULL OR (octet_length(hold_reference) >= 1 AND octet_length(hold_reference) <= 255 AND state = 'complete')),
       admitted_at timestamptz NOT NULL,
       retain_until timestamptz NOT NULL,
       inserted_at timestamptz NOT NULL,
       <%= collision_constraint %>,
-      <%= if hash_partitions, do: "PRIMARY KEY (operation_hash, logical_partition, id)," %>
-      CHECK (retain_until > admitted_at),
-      CHECK (inserted_at >= admitted_at),
-      CHECK (
-        (state = 'processing' AND response_partition IS NULL AND response_codec IS NULL AND response_digest IS NULL)
-        OR
-        (state = 'complete' AND response_partition IS NOT NULL AND response_codec IS NOT NULL
-          AND response_digest IS NOT NULL
-          AND octet_length(response_codec) >= 1 AND octet_length(response_codec) <= 128
-          AND octet_length(response_digest) = 32)
-      )
+      -- rule:idempotency-claims-primary-key
+      CONSTRAINT ash_onetime_idempotency_claims_pkey PRIMARY KEY (<%= if hash_partitions, do: "operation_hash, logical_partition, " %>id),
+      -- rule:idempotency-claims-check-retention
+      CONSTRAINT ash_onetime_idempotency_claims_check CHECK (retain_until > admitted_at),
+      -- rule:idempotency-claims-check-inserted-at
+      CONSTRAINT ash_onetime_idempotency_claims_check1 CHECK (inserted_at >= admitted_at),
+      <%= external_claim_checks %>
     ) <%= if hash_partitions, do: "PARTITION BY HASH (operation_hash)", else: "USING heap" %>
     """)
 
     create_claim_partitions("ash_onetime_idempotency_claims")
+    create_effect_outcomes()
 
     execute("""
     CREATE INDEX ash_onetime_idempotency_claims_cleanup_index
@@ -67,24 +76,34 @@ defmodule <%= inspect(module) %> do
 
     execute("""
     CREATE TABLE #{q("ash_onetime_nonce_claims")} (
-      id uuid <%= if hash_partitions, do: "NOT NULL", else: "PRIMARY KEY" %>,
+      id uuid NOT NULL,
       logical_partition text NOT NULL DEFAULT 'global'
-        CHECK (octet_length(logical_partition) BETWEEN 1 AND 255),
-      operation_hash bytea NOT NULL CHECK (octet_length(operation_hash) = 32),
-      scope_hash bytea NOT NULL CHECK (octet_length(scope_hash) = 32),
-      key_hash bytea NOT NULL CHECK (octet_length(key_hash) = 32),
+        -- rule:nonce-claims-check-logical-partition
+        CONSTRAINT ash_onetime_nonce_claims_logical_partition_check CHECK (octet_length(logical_partition) BETWEEN 1 AND 255),
+      -- rule:nonce-claims-check-operation-hash
+      operation_hash bytea NOT NULL CONSTRAINT ash_onetime_nonce_claims_operation_hash_check CHECK (octet_length(operation_hash) = 32),
+      -- rule:nonce-claims-check-scope-hash
+      scope_hash bytea NOT NULL CONSTRAINT ash_onetime_nonce_claims_scope_hash_check CHECK (octet_length(scope_hash) = 32),
+      -- rule:nonce-claims-check-key-hash
+      key_hash bytea NOT NULL CONSTRAINT ash_onetime_nonce_claims_key_hash_check CHECK (octet_length(key_hash) = 32),
       issued_at timestamptz NOT NULL,
       expires_at timestamptz,
-      verifier_id text NOT NULL CHECK (octet_length(verifier_id) BETWEEN 1 AND 128),
+      -- rule:nonce-claims-check-verifier-id
+      verifier_id text NOT NULL CONSTRAINT ash_onetime_nonce_claims_verifier_id_check CHECK (octet_length(verifier_id) BETWEEN 1 AND 128),
       admitted_at timestamptz NOT NULL,
       retain_until timestamptz NOT NULL,
       inserted_at timestamptz NOT NULL,
       <%= collision_constraint %>,
-      <%= if hash_partitions, do: "PRIMARY KEY (operation_hash, logical_partition, id)," %>
-      CHECK (expires_at IS NULL OR expires_at >= issued_at),
-      CHECK (retain_until > issued_at),
-      CHECK (retain_until > admitted_at),
-      CHECK (inserted_at >= admitted_at)
+      -- rule:nonce-claims-primary-key
+      CONSTRAINT ash_onetime_nonce_claims_pkey PRIMARY KEY (<%= if hash_partitions, do: "operation_hash, logical_partition, " %>id),
+      -- rule:nonce-claims-check-expiry
+      CONSTRAINT ash_onetime_nonce_claims_check CHECK (expires_at IS NULL OR expires_at >= issued_at),
+      -- rule:nonce-claims-check-issued-retention
+      CONSTRAINT ash_onetime_nonce_claims_check1 CHECK (retain_until > issued_at),
+      -- rule:nonce-claims-check-admitted-retention
+      CONSTRAINT ash_onetime_nonce_claims_check2 CHECK (retain_until > admitted_at),
+      -- rule:nonce-claims-check-inserted-at
+      CONSTRAINT ash_onetime_nonce_claims_check3 CHECK (inserted_at >= admitted_at)
     ) <%= if hash_partitions, do: "PARTITION BY HASH (operation_hash)", else: "USING heap" %>
     """)
 
@@ -100,16 +119,30 @@ defmodule <%= inspect(module) %> do
   end
 
   def down do
+    execute("DO " <> maintenance_literal("""
+    BEGIN
+      PERFORM set_config('lock_timeout','5s',true);
+      -- rule:rollback-lock-install
+      LOCK TABLE #{q("ash_onetime_idempotency_claims")}, #{q("ash_onetime_effect_outcomes")} IN ACCESS EXCLUSIVE MODE;
+      PERFORM set_config('row_security','off',true);
+      -- rule:rollback-refusal-install
+      IF EXISTS (SELECT 1 FROM #{q("ash_onetime_idempotency_claims")} WHERE state='processing' AND NOT effect_local) THEN
+        RAISE EXCEPTION 'unresolved external claims prevent rollback' USING ERRCODE='23514';
+      END IF;
+    END
+    """))
     execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_reap_idempotency")}(integer, bigint)")
     execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_cleanup_nonce")}(integer)")
     execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_cleanup_idempotency")}(integer)")
     execute("DROP TABLE IF EXISTS #{q("ash_onetime_nonce_claims")} CASCADE")
+    execute("DROP TABLE IF EXISTS #{q("ash_onetime_effect_outcomes")} CASCADE")
     execute("DROP TABLE IF EXISTS #{q("ash_onetime_idempotency_claims")} CASCADE")
     execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_guard_nonce_delete")}()")
     execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_guard_idempotency_delete")}()")
     execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_cleanup_eligible")}(timestamptz)")
     execute("DROP TABLE IF EXISTS #{q("ash_onetime_response_payloads")} CASCADE")
     execute("DROP TABLE IF EXISTS #{q("ash_onetime_maintenance_runs")} CASCADE")
+    execute("DROP TABLE IF EXISTS #{q("ash_onetime_external_state_restore")} CASCADE")
     for routine <- @maintenance_functions do
       execute("DROP FUNCTION IF EXISTS #{rq(routine.name)}(#{routine.args})")
     end
@@ -120,10 +153,13 @@ defmodule <%= inspect(module) %> do
     execute("""
     CREATE TABLE #{q("ash_onetime_response_payloads")} (
       logical_partition text NOT NULL DEFAULT 'global'
-        CHECK (octet_length(logical_partition) BETWEEN 1 AND 255),
+        -- rule:response-payloads-check-logical-partition
+        CONSTRAINT ash_onetime_response_payloads_logical_partition_check CHECK (octet_length(logical_partition) BETWEEN 1 AND 255),
       partition_date date NOT NULL,
       claim_id uuid NOT NULL,
-      encoded_response bytea NOT NULL CHECK (octet_length(encoded_response) <= #{@payload_ceiling}),
+      -- rule:response-payloads-check-size
+      encoded_response bytea NOT NULL CONSTRAINT ash_onetime_response_payloads_encoded_response_check CHECK (octet_length(encoded_response) <= #{@payload_ceiling}),
+      -- rule:payload-primary-key
       PRIMARY KEY (logical_partition, partition_date, claim_id)
     ) PARTITION BY RANGE (partition_date)
     """)
@@ -177,6 +213,12 @@ defmodule <%= inspect(module) %> do
     _ = parent
     :ok
     <% end %>
+  end
+
+  defp create_effect_outcomes do
+    execute("DO " <> maintenance_literal("""
+    <%= EEx.eval_file(Path.join([__DIR__, "external_state", "outcomes.sql"]), fragment: :create) %>
+    """))
   end
 
   defp create_cleanup_functions do

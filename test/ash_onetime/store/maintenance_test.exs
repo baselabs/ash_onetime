@@ -208,6 +208,10 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
       if context[:legacy_install] && !context[:firing_upgrade_mutation] do
         migrate_source!(owner_repo, schema, Generator.render_operation_hold_upgrade(Repo, []))
+
+        unless context[:shipped_release] do
+          migrate_source!(owner_repo, schema, Generator.render_external_state_upgrade(Repo, []))
+        end
       end
 
       for table <- [
@@ -457,13 +461,25 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     Code.compile_string(source)
     previous = Repo.put_dynamic_repo(c.owner_repo)
-    version = 20_261_113_000_001 + System.unique_integer([:positive, :monotonic])
+    version = 20_261_113_100_000 + System.unique_integer([:positive, :monotonic])
 
     try do
       assert :ok = Ecto.Migrator.up(Repo, version, module, prefix: c.schema, log: false)
 
       if direction == :down do
+        # This roundtrip proves function restoration. FORCE RLS refusal is
+        # exercised separately by the rollback boundary tests.
+        sql!(
+          c.owner_repo,
+          "ALTER TABLE #{rel(c, "ash_onetime_idempotency_claims")} NO FORCE ROW LEVEL SECURITY"
+        )
+
         assert :ok = Ecto.Migrator.down(Repo, version, module, prefix: c.schema, log: false)
+
+        sql!(
+          c.owner_repo,
+          "ALTER TABLE #{rel(c, "ash_onetime_idempotency_claims")} FORCE ROW LEVEL SECURITY"
+        )
       end
     after
       Repo.put_dynamic_repo(previous)
@@ -490,6 +506,31 @@ defmodule AshOnetime.Store.MaintenanceTest do
           claim
         end)
 
+      claim =
+        dst_transaction(c, zone, fn target ->
+          identity =
+            struct!(
+              AshOnetime.Store.Claim,
+              Map.take(Map.from_struct(claim), [
+                :strategy,
+                :id,
+                :logical_partition,
+                :operation_hash,
+                :scope_hash,
+                :key_hash,
+                :admitted_at,
+                :retain_until,
+                :inserted_at
+              ])
+            )
+
+          assert %Result{status: :processing, claim: loaded} =
+                   Postgres.load(target, identity, lock_timeout_ms: 300)
+
+          assert is_nil(loaded.retention_seconds)
+          loaded
+        end)
+
       dst_transaction(c, zone, fn target ->
         assert %Result{status: :complete} =
                  Postgres.complete_external(
@@ -513,8 +554,8 @@ defmodule AshOnetime.Store.MaintenanceTest do
       install_dst_observer!(c)
       claim = dst_held_claim!(c, zone, seconds, "restart")
 
-      SQL.query!(
-        c.owner_repo,
+      StoreCase.restore_fixture!(
+        Repo,
         """
         UPDATE #{rel(c, "ash_onetime_idempotency_claims")}
         SET admitted_at = admitted_at - interval '7200 seconds',
@@ -532,8 +573,8 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
       later = dst_held_claim!(c, zone, seconds, "later")
 
-      SQL.query!(
-        c.owner_repo,
+      StoreCase.restore_fixture!(
+        Repo,
         """
         UPDATE #{rel(c, "ash_onetime_idempotency_claims")}
         SET admitted_at = admitted_at + interval '7200 seconds',
@@ -1213,7 +1254,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   defp seed_guard_rows!(c) do
-    sql!(Repo, """
+    StoreCase.restore_fixture!(Repo, """
     WITH claim AS (
       INSERT INTO #{rel(c, "ash_onetime_idempotency_claims")}
       (id,logical_partition,operation_hash,scope_hash,key_hash,fingerprint,state,response_partition,response_codec,response_digest,admitted_at,retain_until,inserted_at)
@@ -1746,7 +1787,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
           c,
           "ash_onetime_cleanup_nonce",
           "1",
-          "untrusted_dependency: effective replication privilege"
+          "untrusted_dependency: effective replication privilege for role #{c.outsider}"
         )
       after
         sql!(Repo, "REVOKE pg_create_subscription FROM #{q(c.outsider)} CASCADE")
@@ -1789,7 +1830,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
         c,
         "ash_onetime_cleanup_nonce",
         "1",
-        "untrusted_dependency: effective subscription privilege"
+        "untrusted_dependency: effective subscription privilege for role #{c.outsider}"
       )
     after
       sql!(Repo, "DROP SUBSCRIPTION IF EXISTS #{q(subscription)}")
@@ -1962,7 +2003,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
     assert {:error, %Postgrex.Error{postgres: %{pg_code: "P0001", message: message}}} =
              SQL.query(c.owner_repo, "SELECT #{rel(c, "ash_onetime_cleanup_nonce")}(1)", [])
 
-    assert message == "untrusted_dependency: effective MAINTAIN privilege"
+    assert message =~ maintain_diagnostic(c, "pg_maintain")
   end
 
   for holder <- [:pg_maintain, :nologin] do
@@ -2002,7 +2043,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
         c,
         "ash_onetime_cleanup_nonce",
         "1",
-        "untrusted_dependency: effective MAINTAIN privilege"
+        maintain_diagnostic(c, holder)
       )
     end
   end
@@ -2054,7 +2095,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
         [routine_schema(c.schema), entry_points()]
       ).rows
 
-    assert length(rows) == 6
+    assert length(rows) == length(entry_points())
 
     for [_name, definer, config, owner] <- rows do
       assert definer
@@ -2071,22 +2112,30 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   @tag routine_lock_catalog_mutation: true
-  test "every routine that pins search_path, DateStyle and row security also pins lock_timeout",
-       c do
-    [[pinned, with_lock_timeout]] =
+  test "top-level routines pin lock_timeout and statement helpers inherit it", c do
+    inside =
+      ~w(ash_onetime_cleanup_eligible ash_onetime_guard_idempotency_delete ash_onetime_guard_nonce_delete ash_onetime_guard_idempotency_update ash_onetime_bound_effect_outcome ash_onetime_claim_visible ash_onetime_maintenance_active ash_onetime_guard_effect_outcome)
+
+    rows =
       SQL.query!(
         c.owner_repo,
-        """
-        SELECT count(*), count(*) FILTER (WHERE 'lock_timeout=5s' = ANY(p.proconfig))
-        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = $1
-          AND p.proconfig @> ARRAY['search_path=pg_catalog, pg_temp', 'DateStyle=ISO, YMD',
-                                   'row_security=on']
-        """,
+        "SELECT p.proname,p.proconfig FROM pg_proc p WHERE p.pronamespace=$1::text::regnamespace ORDER BY p.proname",
         [routine_schema(c.schema)]
       ).rows
 
-    assert {pinned, with_lock_timeout} == {23, 23}
+    assert rows != []
+    assert Enum.sort(for [name, _] <- rows, name in inside, do: name) == Enum.sort(inside)
+
+    for [name, settings] <- rows do
+      assert "search_path=pg_catalog, pg_temp" in settings
+      assert "DateStyle=ISO, YMD" in settings
+
+      if name in inside do
+        refute Enum.any?(settings, &String.starts_with?(&1, "lock_timeout="))
+      else
+        assert "lock_timeout=5s" in settings
+      end
+    end
   end
 
   @tag quoted_schema: true
@@ -2104,7 +2153,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
   @tag legacy_install: true
   @tag revision7: true
-  test "maintenance upgrade replaces legacy grants and reverses to the invoker definitions", c do
+  test "maintenance upgrade restores the captured definitions and grants", c do
     sql!(
       c.owner_repo,
       "GRANT EXECUTE ON FUNCTION #{rel(c, "ash_onetime_cleanup_nonce")}(integer) TO #{q(c.owner)}, #{q(c.runtime)}, #{q(c.maintainer)}, #{q(c.outsider)}"
@@ -2132,6 +2181,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     original_acls = catalog_acls(c)
 
+    original_definition =
+      scalar(
+        c.owner_repo,
+        "SELECT pg_get_functiondef('#{rel(c, "ash_onetime_cleanup_nonce")}(integer)'::regprocedure)"
+      )
+
     source =
       Generator.render_maintenance_upgrade(Repo, prefix: c.schema, maintenance_role: c.maintainer)
 
@@ -2140,7 +2195,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     try do
       assert :ok =
-               Ecto.Migrator.up(Repo, 20_261_113_000_002, module, prefix: c.schema, log: false)
+               Ecto.Migrator.up(Repo, 20_261_114_000_000, module, prefix: c.schema, log: false)
 
       assert scalar(c.runtime_repo, "SELECT #{rel(c, "ash_onetime_cleanup_nonce")}(1)") == 0
 
@@ -2149,7 +2204,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
       refusal =
         assert_raise Postgrex.Error, fn ->
-          Ecto.Migrator.down(Repo, 20_261_113_000_002, module, prefix: c.schema, log: false)
+          Ecto.Migrator.down(Repo, 20_261_114_000_000, module, prefix: c.schema, log: false)
         end
 
       assert refusal.postgres.pg_code == "42501"
@@ -2164,13 +2219,23 @@ defmodule AshOnetime.Store.MaintenanceTest do
         sql!(Repo, "GRANT #{q(grantor)} TO #{q(c.migrator)} WITH INHERIT FALSE, SET TRUE")
       end
 
-      assert :ok =
-               Ecto.Migrator.down(Repo, 20_261_113_000_002, module, prefix: c.schema, log: false)
+      sql!(
+        c.owner_repo,
+        "ALTER TABLE #{rel(c, "ash_onetime_idempotency_claims")} NO FORCE ROW LEVEL SECURITY"
+      )
 
-      refute scalar(
+      assert :ok =
+               Ecto.Migrator.down(Repo, 20_261_114_000_000, module, prefix: c.schema, log: false)
+
+      sql!(
+        c.owner_repo,
+        "ALTER TABLE #{rel(c, "ash_onetime_idempotency_claims")} FORCE ROW LEVEL SECURITY"
+      )
+
+      assert scalar(
                Repo,
-               "SELECT prosecdef FROM pg_proc WHERE oid='#{rel(c, "ash_onetime_cleanup_nonce")}(integer)'::regprocedure"
-             )
+               "SELECT pg_get_functiondef('#{rel(c, "ash_onetime_cleanup_nonce")}(integer)'::regprocedure)"
+             ) == original_definition
 
       assert catalog_acls(c) == original_acls
     after
@@ -2197,7 +2262,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     try do
       assert_raise Postgrex.Error, ~r/maintenance_blinded:.*first_policy.*second_policy/, fn ->
-        Ecto.Migrator.up(Repo, 20_261_113_000_002, module, prefix: c.schema, log: false)
+        Ecto.Migrator.up(Repo, 20_261_114_000_000, module, prefix: c.schema, log: false)
       end
     after
       Repo.put_dynamic_repo(previous)
@@ -2233,12 +2298,22 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     try do
       assert :ok =
-               Ecto.Migrator.up(Repo, 20_261_113_000_002, module, prefix: c.schema, log: false)
+               Ecto.Migrator.up(Repo, 20_261_114_000_000, module, prefix: c.schema, log: false)
 
       assert scalar(c.runtime_repo, "SELECT #{rel(c, "ash_onetime_cleanup_nonce")}(1)") == 0
 
+      sql!(
+        c.owner_repo,
+        "ALTER TABLE #{rel(c, "ash_onetime_idempotency_claims")} NO FORCE ROW LEVEL SECURITY"
+      )
+
       assert :ok =
-               Ecto.Migrator.down(Repo, 20_261_113_000_002, module, prefix: c.schema, log: false)
+               Ecto.Migrator.down(Repo, 20_261_114_000_000, module, prefix: c.schema, log: false)
+
+      sql!(
+        c.owner_repo,
+        "ALTER TABLE #{rel(c, "ash_onetime_idempotency_claims")} FORCE ROW LEVEL SECURITY"
+      )
 
       assert scalar(
                migrator_repo,
@@ -2288,7 +2363,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
             {"held", "'operation'", "now()-interval '2 days'"},
             {"retained", "NULL", "now()+interval '365 days'"}
           ] do
-        sql!(Repo, """
+        StoreCase.restore_fixture!(Repo, """
         WITH claim AS (
           INSERT INTO #{rel(c, "ash_onetime_idempotency_claims")}
           (id,logical_partition,operation_hash,scope_hash,key_hash,fingerprint,state,response_partition,response_codec,response_digest,hold_reference,admitted_at,retain_until,inserted_at)
@@ -2739,7 +2814,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   @tag rls_child_policy_copy_mutation: true
-  @tag effective_column_authority_mutation: true
+  @tag effective_select_safety_mutation: true
   test "forward roll copies policies and flags and resets table and column ACLs", c do
     parent = rel(c, "ash_onetime_response_payloads")
     sql!(c.owner_repo, "ALTER TABLE #{parent} ENABLE ROW LEVEL SECURITY")
@@ -2813,6 +2888,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
            ) >= 1
   end
 
+  @tag :roll_relocation_mutation
   test "roll recovers past and forward DEFAULT months atomically and restores FORCE", c do
     table = rel(c, "ash_onetime_response_payloads_default")
     sql!(c.owner_repo, "ALTER TABLE #{table} ENABLE ROW LEVEL SECURITY")
@@ -2885,7 +2961,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
       )
     end
 
-    sql!(
+    StoreCase.restore_fixture!(
       Repo,
       """
       WITH claim AS (
@@ -2908,9 +2984,9 @@ defmodule AshOnetime.Store.MaintenanceTest do
              "SELECT relforcerowsecurity FROM pg_class WHERE oid='#{rel(c, "past2")}'::regclass"
            )
 
-    sql!(
+    StoreCase.restore_fixture!(
       Repo,
-      "UPDATE #{rel(c, "ash_onetime_idempotency_claims")} SET retain_until=now()-interval '1 second' WHERE logical_partition='tenant'"
+      "UPDATE #{rel(c, "ash_onetime_idempotency_claims")} SET retain_until=now()-interval '1 second',response_retain_until=now()-interval '1 second' WHERE logical_partition='tenant'"
     )
 
     assert scalar(c.runtime_repo, "SELECT #{rel(c, "ash_onetime_cleanup_idempotency")}(100)") == 1
@@ -3157,7 +3233,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
       c,
       "ash_onetime_cleanup_nonce",
       "1",
-      "untrusted_dependency: effective MAINTAIN privilege"
+      maintain_diagnostic(c, "pg_maintain")
     )
   end
 
@@ -3915,7 +3991,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
       assert :ok =
                Ecto.Migrator.up(
                  Repo,
-                 20_261_113_000_001 + System.unique_integer([:positive, :monotonic]),
+                 20_261_113_100_000 + System.unique_integer([:positive, :monotonic]),
                  module,
                  prefix: schema,
                  log: false
@@ -3961,7 +4037,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
         ] do
       SQL.query!(
         Repo,
-        "SELECT to_jsonb(t) FROM #{rel(c, table)} t ORDER BY to_jsonb(t)::text",
+        "SELECT to_jsonb(t) - ARRAY['effect_local','effect_attempt','response_retain_until','response_expired_at'] FROM #{rel(c, table)} t ORDER BY to_jsonb(t)::text",
         []
       ).rows
     end
@@ -4008,14 +4084,15 @@ defmodule AshOnetime.Store.MaintenanceTest do
     rows =
       SQL.query!(
         c.owner_repo,
-        "SELECT t.relname,p.relname,#{rel(c, "ash_onetime_maintenance_shape")}(t.oid) FROM pg_class t LEFT JOIN pg_inherits i ON i.inhrelid=t.oid LEFT JOIN pg_class p ON p.oid=i.inhparent WHERE t.relnamespace=$1::text::regnamespace AND t.relkind IN ('r','p') AND (t.relname=ANY($2) OR p.relname=ANY($2)) ORDER BY t.relname",
+        "SELECT t.relname,p.relname,regexp_replace(t.relpartbound::text,':location [-0-9]+',':location -1','g'),#{rel(c, "ash_onetime_maintenance_shape")}(t.oid) FROM pg_class t LEFT JOIN pg_inherits i ON i.inhrelid=t.oid LEFT JOIN pg_class p ON p.oid=i.inhparent WHERE t.relnamespace=$1::text::regnamespace AND t.relkind IN ('r','p') AND (t.relname=ANY($2) OR p.relname=ANY($2)) ORDER BY t.relname",
         [
           c.schema,
           [
             "ash_onetime_idempotency_claims",
             "ash_onetime_nonce_claims",
             "ash_onetime_response_payloads",
-            "ash_onetime_maintenance_runs"
+            "ash_onetime_maintenance_runs",
+            "ash_onetime_effect_outcomes"
           ]
         ]
       ).rows
@@ -4027,9 +4104,13 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     assert length(rows) > 4
 
-    for [name, parent, shape] <- rows do
-      key = if parent, do: parent <> "_child", else: name
-      assert shape == expected[key], "fresh-install reference differs for #{name}"
+    for [name, parent, bound, shape] <- rows do
+      reference =
+        if parent,
+          do: get_in(expected, [parent <> "_children", bound]) || expected[parent <> "_child"],
+          else: expected[name]
+
+      assert shape == reference, "fresh-install reference differs for #{name}"
     end
   end
 
@@ -4080,6 +4161,13 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   defp with_upgrade(c, callback) do
+    unless scalar(
+             c.owner_repo,
+             "SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid=#{literal(rel(c, "ash_onetime_idempotency_claims"))}::regclass AND attname='effect_local' AND NOT attisdropped)"
+           ) do
+      migrate_source!(c.owner_repo, c.schema, Generator.render_external_state_upgrade(Repo, []))
+    end
+
     [{module, _}] =
       Code.compile_string(
         Generator.render_maintenance_upgrade(Repo,
@@ -4591,7 +4679,14 @@ defmodule AshOnetime.Store.MaintenanceTest do
     assert {:error, %Postgrex.Error{postgres: %{pg_code: "P0001", message: message}}} =
              SQL.query(c.runtime_repo, "SELECT #{rel(c, name)}(#{args})", [])
 
-    assert message == reason
+    case reason do
+      %Regex{} -> assert message =~ reason
+      _ -> assert message == reason
+    end
+  end
+
+  defp maintain_diagnostic(c, holder) do
+    ~r/\Auntrusted_dependency: effective MAINTAIN privilege on #{Regex.escape(c.schema)}\.ash_onetime_[a-z_0-9]+ for role (?:#{Regex.escape(holder)}|#{Regex.escape(c.runtime)})\z/
   end
 
   for {row, kind} <- [
@@ -5406,9 +5501,14 @@ defmodule AshOnetime.Store.MaintenanceTest do
   @tag revision7: true
   @tag maintenance_isolation_mutation: true
   test "SQL rejects NULL and out of range bounds and repeatable read", c do
-    sql!(
+    StoreCase.restore_fixture!(
       Repo,
       "INSERT INTO #{rel(c, "ash_onetime_idempotency_claims")} (id,logical_partition,operation_hash,scope_hash,key_hash,fingerprint,state,admitted_at,retain_until,inserted_at) VALUES (gen_random_uuid(),'ceiling',sha256('ceiling'),sha256('scope'),sha256('key'),sha256('fingerprint'),'processing','0001-01-01'::timestamptz,'0001-01-02'::timestamptz,'0001-01-01'::timestamptz)"
+    )
+
+    StoreCase.restore_fixture!(
+      Repo,
+      "UPDATE #{rel(c, "ash_onetime_idempotency_claims")} SET effect_local=true WHERE logical_partition='ceiling'"
     )
 
     assert scalar(
@@ -5528,6 +5628,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
       {"ash_onetime_cleanup_idempotency", "100"},
       {"ash_onetime_cleanup_nonce", "100"},
       {"ash_onetime_reap_idempotency", "100,86400"},
+      {"ash_onetime_expire_responses", "100"},
       {"ash_onetime_prune_payload_partitions", "8,2000"},
       {"ash_onetime_roll_payload_partitions", "6"},
       {"ash_onetime_maintenance_status", ""}
@@ -5545,6 +5646,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
       String.starts_with?(name, [
         "ash_onetime_cleanup_",
         "ash_onetime_reap_",
+        "ash_onetime_expire_",
         "ash_onetime_roll_",
         "ash_onetime_prune_",
         "ash_onetime_guard_",

@@ -271,6 +271,7 @@ defmodule AshOnetime.Transaction do
          {:ok, scope_hash} <- identity_hash(:transaction_scope, scope),
          {:ok, key_hash} <- identity_hash(:transaction_key, key),
          prefix <- Keyword.get(options, :prefix),
+         # rule:transaction-prefix-validation
          :ok <- valid_prefix(prefix),
          target <- Postgres.for_repo(repo, prefix, logical_partition: partition) do
       {:ok,
@@ -308,6 +309,7 @@ defmodule AshOnetime.Transaction do
          {DBConnection, connection_reference, _reason} = rollback
        )
        when is_reference(connection_reference),
+       # rule:transaction-boundary-rollback-propagation
        do: throw(rollback)
 
   defp contain_or_propagate(_kind, _reason), do: unavailable()

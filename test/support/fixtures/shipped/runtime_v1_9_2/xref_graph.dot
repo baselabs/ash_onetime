@@ -1,0 +1,20 @@
+digraph "xref graph" {
+  "lib/ash_onetime/store/postgres.ex"
+  "lib/ash_onetime/store/postgres.ex" -> "lib/ash_onetime/fingerprint.ex"
+  "lib/ash_onetime/fingerprint.ex" -> "lib/ash_onetime/canonical.ex"
+  "lib/ash_onetime/canonical.ex" -> "lib/ash_onetime/error.ex" [label="(export)"]
+  "lib/ash_onetime/fingerprint.ex" -> "lib/ash_onetime/error.ex"
+  "lib/ash_onetime/store/postgres.ex" -> "lib/ash_onetime/store.ex"
+  "lib/ash_onetime/store.ex" -> "lib/ash_onetime/store/postgres.ex" [label="(export)"]
+  "lib/ash_onetime/store.ex" -> "lib/ash_onetime/store/result.ex" [label="(export)"]
+  "lib/ash_onetime/store.ex" -> "lib/ash_onetime/telemetry.ex"
+  "lib/ash_onetime/telemetry.ex" -> "lib/ash_onetime/error.ex"
+  "lib/ash_onetime/store/postgres.ex" -> "lib/ash_onetime/store/claim.ex" [label="(export)"]
+  "lib/ash_onetime/store/claim.ex" -> "lib/ash_onetime/clock.ex" [label="(compile)"]
+  "lib/ash_onetime/store/claim.ex" -> "lib/ash_onetime/verified.ex" [label="(export)"]
+  "lib/ash_onetime/store/claim.ex" -> "lib/ash_onetime/window.ex"
+  "lib/ash_onetime/store/postgres.ex" -> "lib/ash_onetime/store/result.ex" [label="(export)"]
+  "lib/ash_onetime/store/postgres.ex" -> "lib/ash_onetime/telemetry.ex"
+  "lib/ash_onetime/store/postgres.ex" -> "lib/ash_onetime/verified.ex" [label="(export)"]
+  "lib/ash_onetime/store/postgres.ex" -> "lib/ash_onetime/window.ex"
+}

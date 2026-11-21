@@ -37,6 +37,7 @@ defmodule AshOnetime.Resource.Protection do
     :fingerprint,
     :response,
     :retention,
+    :response_retention,
     :window,
     :external_effect,
     :hold,
@@ -57,6 +58,7 @@ defmodule AshOnetime.Resource.Protection do
           fingerprint: Keyword.t() | nil,
           response: AshOnetime.Resource.Response.t() | nil,
           retention: non_neg_integer() | nil,
+          response_retention: non_neg_integer() | nil,
           window: Keyword.t() | nil,
           external_effect: module() | nil,
           hold: module() | nil,
@@ -95,6 +97,7 @@ defmodule AshOnetime.Resource do
           "The module implementing the response codec. Must export " <>
             "`format_tag/0`, `encode/3`, and `decode/4` and yield a tag the store accepts."
       ],
+      # rule:dsl-response-unknown-opt
       fields: [
         type: {:list, :atom},
         default: [],
@@ -163,6 +166,11 @@ defmodule AshOnetime.Resource do
         doc:
           "How long a stored idempotent response is retained before it may be re-executed, " <>
             "as a `{count, unit}` tuple (e.g. `{24, :hour}`)."
+      ],
+      response_retention: [
+        type: :any,
+        doc:
+          "Replay-response lifetime as a `{count, unit}` tuple. Defaults to `retention` and cannot exceed it. Expiry preserves the claim and returns `:response_expired`."
       ],
       window: [
         type: :keyword_list,

@@ -22,7 +22,7 @@ defmodule Mix.Tasks.AshOnetime.DoctorHashLiveTest do
       end)
 
     assert output =~ "[OK]  logical_partition column present on all three authority tables"
-    assert output =~ "[OK]  delete-guard triggers present"
+    assert output =~ "[OK]  claim and outcome guard triggers present"
     assert output =~ "all checks passed"
   end
 

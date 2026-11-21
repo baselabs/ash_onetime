@@ -10,11 +10,14 @@ defmodule AshOnetime.ResponseClassifier do
 
   @spec classify(module(), term(), map()) ::
           {:store, term()} | {:reject, term()} | {:rollback, term()} | {:error, Error.t()}
+  # rule:classifier-context-guard
   def classify(classifier, value, context) when is_atom(classifier) and is_map(context) do
     case classifier.classify(value, context) do
+      # rule:classifier-outcome
       {outcome, classified} when outcome in [:store, :reject, :rollback] ->
         {outcome, classified}
 
+      # rule:classifier-invalid
       _other ->
         {:error,
          Error.new(
@@ -23,13 +26,16 @@ defmodule AshOnetime.ResponseClassifier do
          )}
     end
   rescue
+    # rule:classifier-rescue
     _exception ->
       {:error, Error.new(:response_classifier_failed, "response classifier failed")}
   catch
+    # rule:classifier-catch
     _kind, _reason ->
       {:error, Error.new(:response_classifier_failed, "response classifier failed")}
   end
 
+  # rule:classifier-fallback
   def classify(_classifier, _value, _context) do
     {:error, Error.new(:response_classifier_invalid, "response classifier is invalid")}
   end

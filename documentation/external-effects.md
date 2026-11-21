@@ -24,16 +24,24 @@ dies after peer success, recovery returns the existing peer result and local fin
 continues without a second peer effect. If local finalization rolls back, the processing
 claim remains a recoverable point.
 
-A processing claim that is never completed or recovered is retained for recovery, but not
-forever: the opt-in reaper (`mix ash_onetime.reap`, see the operations guide) deletes it once
-it is past both a long abandonment horizon and its own retention horizon. After that, a retry of
-the same logical key is a new execution with a **new peer operation key**: the operation key is
-the reaped claim's UUID, so the peer's key-based dedup cannot recognize the retry as the same
-operation. For an abandoned external-effect claim no key-based defense remains at either layer —
-the prior outcome is unknown by definition (that is why it was abandoned), and neither the
-package nor the peer can disambiguate the retry. Enable the reaper on an external-effect action
-only together with a business-level reconciliation path (a statement, a report, an export) that
-can settle an outcome-unknown claim before its abandonment horizon passes.
+External processing claims survive every maintenance path, even after every retention and
+abandonment horizon. Reap selects only claims fixed as `local` at insertion. Cleanup selects
+only completed claims; response expiry, prune and roll preserve the recovery point and its
+per-attempt outcomes. An unresolved operation keeps its original UUID until recovery completes.
+Storage for operations that never resolve is unbounded. Monitor maintenance's `kept_external`
+count and investigate the oldest unresolved operations through your recovery workflow.
+
+A new external reservation commits `effect_local = false` and `effect_attempt = 1`. Each retry
+commits the next attempt before taking the caller lock. Under that lock it checks the granted
+attempt again. A caller superseded by a newer grant returns `:request_in_progress` without
+calling the peer. A completed claim replays, and a stale attempt cannot complete it.
+
+If recovery cannot prove a result, a separate, unlinked worker records `held` for that exact
+attempt. After ambiguous execution followed by authoritative absence, it records
+`absent_proven` and returns `:external_effect_unavailable`. These records commit independently
+of an aborted caller transaction. A late record for an older attempt never changes the newer
+attempt's state. An outcome that could not be recorded emits `outcome_unrecorded`; the typed
+recovery error remains the caller's result, and the claim remains non-reapable.
 
 Adapters must make execute idempotent by operation key and make recover authoritative. A
 stub that merely records the request proves only that the package produced a shape; peer
@@ -77,9 +85,9 @@ new execution delivers `:executed` with its values. See
 Every external claim-lock statement uses `external_lock_timeout_ms`, including the
 immediate replay load and the finalize load. A lock timeout emits a processing conflict
 and returns `:request_in_progress`. The package restores the caller's previous lock timeout
-after each successful lock statement, before reading the payload or running consumer work.
+after the claim lock and its joined claim, payload and outcome read, before running consumer work.
 
-Before any peer call, the package takes the claim row `FOR UPDATE` in the caller's open
+Before any peer call, the package takes the claim row `FOR NO KEY UPDATE` in the caller's open
 transaction — a **pre-peer claim lock** with a bounded wait (`external_lock_timeout_ms`,
 default 2000, ceiling 25000; ADR-0010). A same-key retry that arrives while the original is
 between its committed claim and its finalization now blocks on that row:
@@ -99,10 +107,13 @@ original is mid-execution at the peer, both block on the claims row (observed vi
 releases its backend's locks, so dead-caller recovery is unchanged (same file, "recover runs
 inside the retry caller's open transaction").
 
-The lock is also generation-safe: it binds the claim's id alongside the logical key, so a
-row reaped and re-inserted between the committed claim and the lock is refused
-(`:store_invariant`, fail closed) rather than adopted (observed in
-`test/ash_onetime/store/contention_test.exs`).
+The lock binds the claim UUID, logical key and granted attempt. Every caller lock uses
+`FOR NO KEY UPDATE`, followed by a joined read in a new statement without a lock clause.
+That read sees outcomes committed while the caller waited for the claim. Both statements
+use the armed timeout; the grant worker keeps `FOR UPDATE`. Outcome insertion
+uses the foreign key's compatible `FOR KEY SHARE`, so recording an ambiguous result does not
+wait on its own caller. The outcome worker arms the protection's lock timeout and uses its
+own connection, including when a callback has already aborted the caller's transaction.
 
 Why the lock exists — the race it closes was real: before it, the package held no lock
 between the committed claim and finalize, so an honest in-flight retry truthfully recovered
@@ -300,6 +311,16 @@ What the package does with an ambiguous `execute/3` is precise, and worth readin
 - That recovery returning `:unknown` leaves the outcome genuinely unknown
   (`:outcome_unknown` to the caller); the claim stays `processing` and a later retry
   recovers it.
+
+## Response lifetime
+
+`response_retention {count, unit}` defaults to `retention` and must be positive and no longer
+than it. After the response deadline, maintenance removes the payload and records
+`response_expired_at` while preserving the claim through its retention deadline. A held
+response never expires. A matching retry returns `:response_expired` (410); a different
+fingerprint still returns `:key_reused_with_different_request`. Neither calls the peer, and a
+cached response cannot extend the response deadline. Cleanup eventually removes a completed,
+unheld claim and cascades its outcome rows.
 
 ## Holds after external completion
 

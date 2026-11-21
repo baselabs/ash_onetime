@@ -280,6 +280,7 @@ defmodule AshOnetime.Codec.Resource do
   defp unloaded_relationships(value, resource) do
     if Enum.all?(
          ResourceInfo.relationships(resource),
+         # rule:resource-relationship-leak
          &relationship_unloaded?(value, &1, resource)
        ) do
       :ok
@@ -299,6 +300,7 @@ defmodule AshOnetime.Codec.Resource do
   end
 
   defp declared_fields_match?(actual, expected) do
+    # rule:response-field-guard
     MapSet.new(actual) == MapSet.new(Enum.map(expected, &Atom.to_string/1))
   end
 

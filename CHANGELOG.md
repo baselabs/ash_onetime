@@ -4,6 +4,42 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- Cleanup telemetry includes `:responses_expired`, the number of response payloads expired
+  at their response deadline; claim cleanup follows its separate retention deadline.
+  External recovery includes `:outcome_unrecorded` when its independent outcome write cannot
+  be confirmed and the recovery point remains protected.
+- External recovery points survive reap, cleanup, response expiry, prune, roll and ordered
+  migration rollback. Locality is fixed at insertion; only local processing claims reap.
+  External dispatch grants a committed attempt, reclassifies it under the caller lock and
+  binds completion to that attempt. Independent per-attempt outcome records survive aborted
+  caller transactions and cascade only when their claim is removed.
+- `response_retention` defaults to `retention` and may shorten the replay lifetime. Expiry
+  preserves the claim and fingerprint; matching retries return `:response_expired` (410).
+  Cache entries end at the response deadline, and holds preserve both claim and response.
+- External-state upgrades journal all six replaced routines, including their live owner,
+  settings and EXECUTE grants, in an owner-only relation. Rollback restores that exact state
+  and refuses a missing or incomplete journal. Its refusal reads the complete claim set under
+  FORCE RLS and preserves the original security flags. Every migration scope restores the
+  migrating role before Ecto updates its migration journal.
+- Before optional maintenance is installed, external-state maintenance steps have owner-only
+  EXECUTE. Maintenance grants its declared operator role; only the invoker visibility helper
+  grants PUBLIC EXECUTE. The private routine schema remains owner/maintainer only. Claims,
+  nonce and payload partitions refuse all non-owner table and column grants; outcome
+  partitions retain their append-only worker privileges.
+- Existing installations require operation-hold and external-state upgrades before optional
+  maintenance. Generation orders the migrations and refuses missing prerequisites. Upgrades
+  authenticate historical keys and constraints; ordered rollbacks lock before refusing
+  unresolved external claims or incompatible expired responses. Missing state returns
+  `:install_mismatch` before a claim write. Rolling request traffic is supported from v1.9.2;
+  stop 1.x maintenance before migrating.
+
+- Mutation checks attribute each failure to its own test, file and assertion. Structured
+  ExUnit records prevent a test name and assertion from unrelated failures from proving a
+  mutation killed; new entries can pin the exact assertion line.
+  The enforcing-site inventory covers rendered installs, upgrades and library classifications;
+  it refuses missing markers or manifest rows. Native catalog comparison checks constraints,
+  trigger modes, policies, routine settings and privileges on plain and hash installations.
+
 - Store failures are classified by SQLSTATE class on every store path. A canceled statement,
   serialization failure, deadlock, resource exhaustion or system error is the retryable
   `:store_failure` (503), not `:store_invariant` (500). A connection exception, session
@@ -80,8 +116,9 @@ All notable changes to this project are documented in this file.
   shipped releases embed this audit; maintenance has not previously shipped.
 
 - External replay and finalize claim loads use the protection's lock timeout and return
-  `:request_in_progress` on contention. Each claim-lock statement restores the caller's
-  timeout before payload reads, callbacks or later writes.
+  `:request_in_progress` on contention. Each load locks the claim, then reads claim, payload
+  and outcome in a new statement. It restores the caller's timeout after that joined read,
+  before callbacks or later writes.
 
 - **Replay relationships.** Replay admission clears all pending relationship changes,
   including caller-managed relationships and belongs-to inputs, across create, update,

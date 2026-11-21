@@ -322,9 +322,9 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       id: :r13,
       path: "lib/ash_onetime/store/postgres.ex",
       original:
-        "        Tuple.to_list(logical_key(claim)) ++ [dump_uuid(claim.id), hold_reference]\n\n    case dispatched_query(target, sql, parameters) do\n",
+        "          claim.effect_attempt\n        ]\n\n    case dispatched_query(target, sql, parameters) do\n",
       mutated:
-        "        Tuple.to_list(logical_key(claim)) ++ [dump_uuid(claim.id), hold_reference]\n\n    {sql, parameters} = case for({{AshOnetime.Delivery, _}, {:sealed, _, bytes}} <- Process.get(), do: bytes) do\n      [envelope | _] when mode == :external ->\n        {String.replace(sql, \"* interval '1 second'\", \"* interval '1 second' + interval '1 microsecond' * $10\"), parameters ++ [rem(byte_size(envelope), 2)]}\n      _ -> {sql, parameters}\n    end\n    case dispatched_query(target, sql, parameters) do\n",
+        "          claim.effect_attempt\n        ]\n\n    {sql, parameters} = case for({{AshOnetime.Delivery, _}, {:sealed, _, bytes}} <- Process.get(), do: bytes) do\n      [envelope | _] when mode == :external ->\n        {String.replace(sql, \"* interval '1 second'\", \"* interval '1 second' + interval '1 microsecond' * $13\"), parameters ++ [rem(byte_size(envelope), 2)]}\n      _ -> {sql, parameters}\n    end\n    case dispatched_query(target, sql, parameters) do\n",
       action: :external_issue,
       branch: :execute,
       fault: nil,
@@ -469,9 +469,9 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       id: :r25,
       path: "lib/ash_onetime/store/postgres.ex",
       original:
-        "        Tuple.to_list(logical_key(claim)) ++ [dump_uuid(claim.id), hold_reference]\n",
+        "          hold_reference,\n          claim.retention_seconds,\n",
       mutated:
-        "        Tuple.to_list(logical_key(claim)) ++ [dump_uuid(claim.id),\n          case for({{AshOnetime.Delivery, _}, {:sealed, _, bytes}} <- Process.get(), do: bytes) do\n            [envelope | _] -> Integer.to_string(rem(byte_size(envelope), 2))\n            [] -> hold_reference\n          end]\n",
+        "          case for({{AshOnetime.Delivery, _}, {:sealed, _, bytes}} <- Process.get(), do: bytes) do\n            [envelope | _] -> Integer.to_string(rem(byte_size(envelope), 2))\n            [] -> hold_reference\n          end,\n          claim.retention_seconds,\n",
       action: :external_issue,
       branch: :execute,
       fault: nil,
@@ -688,9 +688,9 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       label: "R-iso-O4",
       path: "lib/ash_onetime/store/postgres.ex",
       original:
-        "        request.fingerprint,\n        request.retention_seconds\n      ],\n      :idempotency\n",
+        "        request.fingerprint,\n        request.retention_seconds,\n        request.effect_local,\n",
       mutated:
-        "        request.fingerprint,\n        if(request.operation_hash == COMPARATOR_OPERATION,\n          do: request.retention_seconds + 1 + rem(:binary.first(request.id), 2),\n          else: request.retention_seconds\n        )\n      ],\n      :idempotency\n",
+        "        request.fingerprint,\n        if(request.operation_hash == COMPARATOR_OPERATION,\n          do: request.retention_seconds + 1 + rem(:binary.first(request.id), 2),\n          else: request.retention_seconds\n        ),\n        request.effect_local,\n",
       action: :issue,
       branch: :execute,
       fault: nil,

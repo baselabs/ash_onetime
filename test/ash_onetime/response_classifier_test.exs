@@ -13,12 +13,14 @@ defmodule AshOnetime.ResponseClassifierTest do
 
   alias AshOnetime.Test.{RollbackClassifier, StoreClassifier, ThrowingClassifier}
 
+  @tag :enforcement_classifier_outcome_mutation
   test "accepts only the three closed outcomes" do
     assert ResponseClassifier.classify(StoreClassifier, :value, %{}) == {:store, :value}
     assert ResponseClassifier.classify(RejectClassifier, :reason, %{}) == {:reject, :reason}
     assert ResponseClassifier.classify(RollbackClassifier, :reason, %{}) == {:rollback, :reason}
   end
 
+  @tag :enforcement_classifier_invalid_mutation
   test "malformed output and boundary failures are value-free typed errors" do
     assert {:error, %Error{code: :response_classifier_invalid, details: %{}}} =
              ResponseClassifier.classify(InvalidClassifier, :secret, %{})
@@ -27,6 +29,7 @@ defmodule AshOnetime.ResponseClassifierTest do
              ResponseClassifier.classify(RaisingClassifier, :secret, %{})
   end
 
+  @tag :enforcement_classifier_catch_mutation
   test "a throwing or exiting classifier fails closed without leaking the value" do
     # Exercises the catch arm (kind ∈ [:throw, :exit]), distinct from the rescue arm.
     assert {:error, %Error{code: :response_classifier_failed, details: %{}}} =
@@ -42,6 +45,7 @@ defmodule AshOnetime.ResponseClassifierTest do
              ResponseClassifier.classify(StoreClassifier, :secret, :not_a_map)
   end
 
+  @tag :enforcement_classifier_fallback_mutation
   test "a non-atom classifier fails closed" do
     assert {:error, %Error{code: :response_classifier_invalid, details: %{}}} =
              ResponseClassifier.classify("not-a-module", :secret, %{})

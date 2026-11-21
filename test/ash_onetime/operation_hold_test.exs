@@ -66,7 +66,7 @@ defmodule AshOnetime.OperationHoldTest do
       [uuid(id)]
     )
 
-    SQL.query!(
+    restore_fixture!(
       Repo,
       "UPDATE #{claims(ctx.prefix)} SET response_partition = '2100-01-01' WHERE id = $1",
       [uuid(id)]
@@ -124,7 +124,7 @@ defmodule AshOnetime.OperationHoldTest do
   test "release never shortens an existing deadline", ctx do
     id = complete!(ctx.prefix, "future-admission")
 
-    SQL.query!(
+    restore_fixture!(
       Repo,
       "UPDATE #{claims(ctx.prefix)} SET admitted_at = statement_timestamp() + interval '1 hour', inserted_at = statement_timestamp() + interval '1 hour', retain_until = statement_timestamp() + interval '2 hours' WHERE id = $1",
       [uuid(id)]
@@ -300,7 +300,7 @@ defmodule AshOnetime.OperationHoldTest do
       [uuid(id)]
     )
 
-    SQL.query!(
+    restore_fixture!(
       Repo,
       "UPDATE #{claims(ctx.prefix)} SET response_partition = '2001-01-01' WHERE id = $1",
       [uuid(id)]
@@ -353,7 +353,7 @@ defmodule AshOnetime.OperationHoldTest do
 
   defp expire!(prefix, id),
     do:
-      SQL.query!(
+      restore_fixture!(
         Repo,
         "UPDATE #{claims(prefix)} SET admitted_at = transaction_timestamp() - interval '2 days', inserted_at = transaction_timestamp() - interval '2 days', retain_until = transaction_timestamp() - interval '1 day' WHERE id = $1",
         [uuid(id)]

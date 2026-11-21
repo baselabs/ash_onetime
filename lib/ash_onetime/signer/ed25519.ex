@@ -34,6 +34,7 @@ defmodule AshOnetime.Signer.Ed25519 do
   def verify(message, signature, %{key: key, kind: :public})
       when is_binary(message) and is_binary(signature) and is_binary(key) and
              byte_size(key) == @key_bytes and byte_size(signature) == @signature_bytes do
+    # rule:ed25519-verify-honored
     if :crypto.verify(:eddsa, :none, message, signature, [key, :ed25519]) do
       :ok
     else

@@ -1,6 +1,8 @@
 defmodule AshOnetime.Store.ContentionTest do
   use ExUnit.Case, async: false
 
+  alias AshOnetime.Test.StoreCase
+
   alias AshOnetime.Store
   alias AshOnetime.Store.{Claim, Postgres, Result}
   alias AshOnetime.Test.{ExternalPeer, Migration, RealConnection, Repo}
@@ -385,7 +387,7 @@ defmodule AshOnetime.Store.ContentionTest do
   defp insert_expired_conflict!(prefix, old_id, request) do
     RealConnection.with_connection(fn ->
       Repo.transaction(fn ->
-        SQL.query!(
+        StoreCase.restore_fixture!(
           Repo,
           """
           INSERT INTO #{relation(prefix, "ash_onetime_idempotency_claims")}
@@ -558,12 +560,27 @@ defmodule AshOnetime.Store.ContentionTest do
   end
 
   defp admit_transaction(prefix, request) do
-    Repo.transaction(fn ->
-      case Store.claim(Postgres.for_repo(Repo, prefix), request) do
-        %Result{status: :admitted} = admitted -> admitted
-        %Result{} = failure -> Repo.rollback(failure)
+    {:ok, repo} =
+      Repo.start_link(
+        name: nil,
+        url: System.fetch_env!("DATABASE_URL"),
+        pool: DBConnection.ConnectionPool,
+        pool_size: 2
+      )
+
+    previous = Repo.put_dynamic_repo(repo)
+
+    try do
+      case Postgres.claim_committed(Postgres.for_repo(Repo, prefix), request,
+             lock_timeout_ms: 1_000
+           ) do
+        %Result{status: :admitted} = admitted -> {:ok, admitted}
+        failure -> {:error, failure}
       end
-    end)
+    after
+      Repo.put_dynamic_repo(previous)
+      GenServer.stop(repo)
+    end
   end
 
   defp claim_from_request(request, prefix) do
@@ -578,6 +595,8 @@ defmodule AshOnetime.Store.ContentionTest do
       key_hash: request.key_hash,
       fingerprint: request.fingerprint,
       state: :processing,
+      effect_local: false,
+      effect_attempt: 1,
       admitted_at: now,
       retain_until: DateTime.add(now, request.retention_seconds, :second),
       inserted_at: now

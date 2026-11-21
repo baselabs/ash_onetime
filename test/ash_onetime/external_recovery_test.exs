@@ -157,9 +157,11 @@ defmodule AshOnetime.ExternalRecoveryTest do
     # and the immediate recover returns :unknown. The claim must settle to
     # {:error, :outcome_unknown}. Execute's evidence lands once (it ran), but
     # finalize never runs, so there is no local effect and no second execute.
-    ExternalEffectSupport.put_mode(:execute_unknown_recover_unknown)
+    {worker, monitor} =
+      run_worker(context, :execute_unknown_recover_unknown, "ambiguous-execute", 19)
 
-    result = run_generic(context, "ambiguous-execute", 19)
+    assert_receive {:external_action_result, ^worker, result}, 5_000
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 1_000
 
     assert [["execute", operation_key], ["recover", operation_key]] =
              ExternalPeer.calls(context.prefix)

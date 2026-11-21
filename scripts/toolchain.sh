@@ -1,7 +1,12 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Read asdf .tool-versions and print defaults and JSON lanes as GitHub outputs.
 # Run --self-test for the portable validation cases. This single file is shared
 # across repositories and runs before any listed toolchain is installed.
+# After installation, --installed TOOL=VERSION... refuses unless each installed
+# tool (elixir, erlang, nodejs, golang) reports exactly that version.
+# The one source is infra baselabs/ci/toolchain.sh; each repository carries a byte-identical
+# copy at scripts/toolchain.sh, mode 755, called by path (infra docs/ci.md).
+set -euo pipefail
 
 self_test() (
     scratch=$(mktemp -d) || exit 1
@@ -15,8 +20,8 @@ self_test() (
         expected_status=$2
         expected=$3
         shift 3
-        actual=$(sh "$0" "$@" 2>&1)
-        status=$?
+        status=0
+        actual=$(bash "$0" "$@" 2>&1) || status=$?
         if { [ "$expected_status" = good ] && [ "$status" -eq 0 ]; } ||
            { [ "$expected_status" = bad ] && [ "$status" -ne 0 ]; }; then
             if [ "$actual" = "$expected" ]; then
@@ -63,6 +68,9 @@ golang_lanes=[]'
     good 'JSON escaping' 'python system path:a\b"c' 'python=system
 python_lanes=["path:a\\b\"c"]'
     check 'missing file' bad 'toolchain: cannot read file' "$scratch/missing"
+    check 'installed without arguments' bad 'toolchain: --installed needs TOOL=VERSION arguments' --installed
+    check 'installed malformed argument' bad 'toolchain: malformed argument nodejs' --installed nodejs
+    check 'installed unknown tool' bad 'toolchain: cannot check an installed python' --installed python=3.15.0
     check 'unreadable file' bad 'toolchain: cannot read file' "$scratch"
     bad 'missing version' 'python # missing' 'no version for python'
     bad 'duplicate tool' 'python 3.15.0
@@ -86,8 +94,55 @@ erlang 28.5 29.0.3' 'default Elixir OTP does not match default Erlang'
     printf 'toolchain self-test: %s cases passed\n' "$passed"
 )
 
+installed() (
+    if [ "$#" -eq 0 ]; then
+        printf '%s\n' 'toolchain: --installed needs TOOL=VERSION arguments' >&2
+        exit 1
+    fi
+    refused=0
+    # A probe that exits nonzero refuses the tool, whatever it printed.
+    for pair in "$@"; do
+        tool=${pair%%=*}
+        want=${pair#*=}
+        if [ "$tool" = "$pair" ] || [ -z "$tool" ] || [ -z "$want" ]; then
+            printf 'toolchain: malformed argument %s\n' "$pair" >&2
+            refused=1
+            continue
+        fi
+        case $tool in
+            elixir)
+                have=$(elixir -e 'IO.write(System.version() <> "-otp-" <> System.build_info()[:otp_release])') || { printf 'toolchain: %s version probe failed\n' "$tool" >&2; refused=1; continue; } ;;
+            erlang)
+                have=$(erl -noshell -noinput -eval '{ok, V} = file:read_file(filename:join([code:root_dir(), "releases", erlang:system_info(otp_release), "OTP_VERSION"])), io:put_chars(string:trim(V)), halt().') || { printf 'toolchain: %s version probe failed\n' "$tool" >&2; refused=1; continue; } ;;
+            nodejs)
+                have=$(node --version) || { printf 'toolchain: %s version probe failed\n' "$tool" >&2; refused=1; continue; }
+                have=${have#v} ;;
+            golang)
+                have=$(go env GOVERSION) || { printf 'toolchain: %s version probe failed\n' "$tool" >&2; refused=1; continue; }
+                have=${have#go} ;;
+            *)
+                printf 'toolchain: cannot check an installed %s\n' "$tool" >&2
+                refused=1
+                continue ;;
+        esac
+        if [ "$have" = "$want" ]; then
+            printf 'toolchain: %s %s installed\n' "$tool" "$have"
+        else
+            printf 'toolchain: %s is %s; .tool-versions requires %s\n' "$tool" "${have:-absent}" "$want" >&2
+            refused=1
+        fi
+    done
+    exit "$refused"
+)
+
 if [ "${1-}" = --self-test ]; then
     self_test
+    exit $?
+fi
+
+if [ "${1-}" = --installed ]; then
+    shift
+    installed "$@"
     exit $?
 fi
 

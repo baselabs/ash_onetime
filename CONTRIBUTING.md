@@ -38,7 +38,9 @@ mix hex.audit
 mix hex.build
 ```
 
-CI's release-gates and mutation-battery jobs also run these on every candidate:
+Work and qualification run the same Ash floor/latest, additional BEAM, security,
+release-gates and mutation job definitions. Every work-branch push exercises the local
+Livebooks and optional consumers before a landing candidate exists. Those jobs run:
 
 ```sh
 mix run --no-start scripts/check_deps_currency.exs
@@ -51,20 +53,35 @@ python3 scripts/release_archives.py build _build/release # package and docs arch
 mix run scripts/check_optional_matrix.exs
 ```
 
+The mutation manifest associates each enforcement marker with one source edit and an owning
+assertion. Run `MIX_ENV=test mix run scripts/check_mutations.exs -- --self-test` to audit its
+source anchors. The enforcing-site and native catalog checks are in
+`test/ash_onetime/external_state/proof_inventory_test.exs`; they cover rendered SQL and library
+classifications, plus fresh plain and hash PostgreSQL installs. An unmarked enforcement site
+or catalog mismatch refuses the check. Mutation acceptance requires the owning assertion to
+fail under the edit and the tagged cases to pass after exact source restoration.
+
 To reset notebook installs, remove `_build/livebook-install` (or your `MIX_INSTALL_DIR`).
-Each notebook removes its UUID-named schema after verification.
+Each notebook rolls back and removes its UUID-named schema after accounting for its work.
+External operations complete through the protected action, including durable business
+rejections. An unresolved operation retains its recovery point and refuses rollback; see
+[upgrading](documentation/upgrading.md).
 
 Infra dispatches releases through the `Publish to Hex` workflow after the version commit
 qualifies on the default branch. No one publishes from a workstation. The workflow requires
 an existing package on Hex, an untagged version and dated release notes. It builds and inspects
-the package and reproducible docs archives before the one keyed step uploads only missing
-archives, without loading a Mix project. It refuses retired releases or differing bytes and
-never replaces a served archive. If Hex holds either upload for approval, infra finishes it by
-dispatching again on the same commit after approval.
+the package and docs archives before the one keyed step uploads only missing archives,
+without loading a Mix project. It refuses retired releases or differing package bytes. Docs
+bytes are never compared, and readable served docs are kept. Each docs archive carries root
+`release.json` naming the package, version and build commit. Keyless read-back requires
+`index.html` and provenance naming the dispatched commit or an ancestor on the default branch;
+that is the published commit. It never replaces a served archive. If Hex holds either upload
+for approval, infra finishes it by dispatching again on the same commit after approval.
 
-The publish job uploads one `release-assets` artifact containing the package archive, docs
-archive, `SHA256SUMS` and `NOTES.md`. Infra reads both archives back, compares the package
-with that artifact, tags the published commit and creates the GitHub release from those files.
+Only after both archives are served and verified does the publish job upload `release-assets`,
+containing the package archive, downloaded served docs archive, recomputed `SHA256SUMS` and
+checkout changelog `NOTES.md`. Held runs upload no artifact. Infra compares the package with
+that artifact, tags the published commit and creates the GitHub release from those files.
 Consumers verify files from that GitHub release; the workflow artifact expires. No workflow
 creates a GitHub release or runs on a tag.
 

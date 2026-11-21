@@ -24,6 +24,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
   alias AshOnetime.Resource.ContextBoundary
 
   @shortdoc "Generates ash_onetime PostgreSQL migrations"
+  # rule:unique-constraint
   @collision_constraint "UNIQUE (logical_partition, operation_hash, scope_hash, key_hash)"
   @switches [
     repo: :string,
@@ -52,8 +53,8 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     repo = parse_repo!(options[:repo])
 
     cond do
-      options[:maintenance] -> generate_maintenance(repo, options)
       options[:operation_hold] -> generate_operation_hold(repo, options)
+      options[:maintenance] -> generate_maintenance(repo, options)
       true -> generate_install(repo, options)
     end
   end
@@ -69,15 +70,29 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
       do: Mix.raise("--maintenance requires --maintenance-role")
 
     path = migration_path(repo, options)
+    timestamp = parse_timestamp!(options[:timestamp])
 
-    if Path.wildcard(Path.join(path, "*_add_ash_onetime_operation_hold.exs")) == [],
-      do: Mix.raise("--maintenance requires the 1.10.0 operation-hold migration")
+    # rule:generator-order
+    for {suffix, label} <- [
+          {"operation_hold", "operation-hold"},
+          {"external_state", "external-state"}
+        ] do
+      files = Path.wildcard(Path.join(path, "*_add_ash_onetime_#{suffix}.exs"))
+
+      if files == [],
+        do: Mix.raise("--maintenance requires the 2.0 #{label} migration")
+
+      if Enum.any?(files, &(Path.basename(&1) >= "#{timestamp}_")),
+        do: Mix.raise("the 2.0 #{label} migration must come before maintenance")
+
+      validate_hold_order!(suffix, path, files)
+    end
 
     if Path.wildcard(Path.join(path, "*_add_ash_onetime_maintenance.exs")) != [],
       do: Mix.raise("a maintenance upgrade migration already exists")
 
     file =
-      Path.join(path, "#{parse_timestamp!(options[:timestamp])}_add_ash_onetime_maintenance.exs")
+      Path.join(path, "#{timestamp}_add_ash_onetime_maintenance.exs")
 
     create_file(
       file,
@@ -87,7 +102,20 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     file
   end
 
+  defp validate_hold_order!("external_state", path, files) do
+    holds = Path.wildcard(Path.join(path, "*_add_ash_onetime_operation_hold.exs"))
+
+    if Enum.any?(holds, &(Path.basename(&1) >= Path.basename(hd(files)))),
+      do:
+        Mix.raise("the operation-hold migration must come before external-state and maintenance")
+  end
+
+  defp validate_hold_order!(_suffix, _path, _files), do: :ok
+
   defp generate_operation_hold(repo, options) do
+    if options[:maintenance] && options[:maintenance_role] in [nil, ""],
+      do: Mix.raise("--maintenance requires --maintenance-role")
+
     if Enum.any?(
          [:claims, :claim_partitions, :fact_tables, :partition_start],
          &Keyword.has_key?(options, &1)
@@ -100,14 +128,27 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     if Path.wildcard(Path.join(path, "*_add_ash_onetime_operation_hold.exs")) != [],
       do: Mix.raise("an operation-hold upgrade migration already exists")
 
-    file =
-      Path.join(
-        path,
-        "#{parse_timestamp!(options[:timestamp])}_add_ash_onetime_operation_hold.exs"
-      )
+    timestamp = parse_timestamp!(options[:timestamp])
+    file = Path.join(path, "#{timestamp}_add_ash_onetime_operation_hold.exs")
+    create_file(file, render_operation_hold_upgrade(repo, Keyword.take(options, [:prefix])))
 
-    create_file(file, render_operation_hold_upgrade(repo, []))
-    file
+    if Path.wildcard(Path.join(path, "*_add_ash_onetime_external_state.exs")) == [] do
+      create_file(
+        Path.join(path, "#{next_timestamp(timestamp)}_add_ash_onetime_external_state.exs"),
+        render_external_state_upgrade(repo, Keyword.take(options, [:prefix]))
+      )
+    end
+
+    if options[:maintenance] do
+      generate_maintenance(
+        repo,
+        options
+        |> Keyword.delete(:operation_hold)
+        |> Keyword.put(:timestamp, timestamp |> next_timestamp() |> next_timestamp())
+      )
+    else
+      file
+    end
   end
 
   defp generate_install(repo, options) do
@@ -172,6 +213,29 @@ defmodule Mix.Tasks.AshOnetime.Gen.Migrations do
     source
     |> Code.format_string!()
     |> IO.iodata_to_binary()
+  end
+
+  @doc "Renders the transactional external-claim state upgrade for an operation-hold installation."
+  @spec render_external_state_upgrade(module(), keyword()) :: binary()
+  def render_external_state_upgrade(repo, options) when is_atom(repo) and is_list(options) do
+    "external_state.exs"
+    |> template_path()
+    |> EEx.eval_file(
+      module: Module.concat([repo, Migrations, AddAshOnetimeExternalState]),
+      install_prefix: Keyword.get(options, :prefix)
+    )
+    |> Code.format_string!()
+    |> IO.iodata_to_binary()
+  end
+
+  defp next_timestamp(timestamp) do
+    <<year::binary-size(4), month::binary-size(2), day::binary-size(2), hour::binary-size(2),
+      minute::binary-size(2), second::binary-size(2)>> = timestamp
+
+    {:ok, instant, 0} =
+      DateTime.from_iso8601("#{year}-#{month}-#{day}T#{hour}:#{minute}:#{second}Z")
+
+    instant |> DateTime.add(1, :second) |> Calendar.strftime("%Y%m%d%H%M%S")
   end
 
   @doc "Renders the reversible owner-maintenance upgrade for an operation-hold installation."

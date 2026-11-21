@@ -10,6 +10,8 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
   use ExUnit.Case, async: false
 
+  alias AshOnetime.Test.StoreCase
+
   alias AshOnetime.Store.Postgres
   alias AshOnetime.Store.Result
   alias AshOnetime.Test.Repo
@@ -316,10 +318,10 @@ defmodule AshOnetime.Store.RLSPruneTest do
       occupied_partition = partition_name(~D[2026-08-01])
       insert_payload!(prefix, occupied_partition, "tenant-b", ~D[2026-08-15])
 
-      # The adversarial shape from the i-1 rounds: a RESTRICTIVE tenant policy
-      # ANDed into any count. Under the owner-savepoint prune it is simply
-      # irrelevant — the owner of an un-FORCEd relation is exempt before any
-      # policy is consulted.
+      # A RESTRICTIVE tenant policy is ANDed into every count. The prune
+      # savepoint counts as the owner of an un-FORCEd relation, which is exempt
+      # from row security before any policy is consulted. Tenant visibility
+      # cannot conceal an occupied partition from that count.
       for table <-
             [
               "ash_onetime_idempotency_claims",
@@ -877,17 +879,21 @@ defmodule AshOnetime.Store.RLSPruneTest do
         Task.async(fn ->
           Repo.put_dynamic_repo(repo)
 
-          Repo.transaction(fn ->
-            Enum.each(setup_sql, &query!(repo, &1))
-            query!(repo, "DELETE FROM #{prefix}.ash_onetime_response_payloads WHERE false")
-            send(parent, {:row_locked, self()})
+          try do
+            Repo.transaction(fn ->
+              Enum.each(setup_sql, &query!(repo, &1))
+              query!(repo, "DELETE FROM #{prefix}.ash_onetime_response_payloads WHERE false")
+              send(parent, {:row_locked, self()})
 
-            receive do
-              :go -> :ok
-            end
+              receive do
+                :go -> :ok
+              end
 
-            prune_counts!(Postgres.for_repo(Repo, target_prefix), 100, 4)
-          end)
+              prune_counts!(Postgres.for_repo(Repo, target_prefix), 100, 4)
+            end)
+          rescue
+            error in Postgrex.Error -> {:error, error}
+          end
         end)
       end
 
@@ -900,8 +906,9 @@ defmodule AshOnetime.Store.RLSPruneTest do
       send(task_a.pid, :go)
       send(task_b.pid, :go)
 
-      assert {:ok, {:ok, a}} = Task.await(task_a, 10_000)
-      assert {:ok, {:ok, b}} = Task.await(task_b, 10_000)
+      results = [Task.await(task_a, 10_000), Task.await(task_b, 10_000)]
+      assert Enum.all?(results, &match?({:ok, {:ok, _}}, &1))
+      [{:ok, {:ok, a}}, {:ok, {:ok, b}}] = results
       assert {a.payload_partitions_refused, b.payload_partitions_refused} == {%{}, %{}}
       assert Enum.sort([a.payload_partitions, b.payload_partitions]) == [0, 2]
       Repo.put_dynamic_repo(Repo)
@@ -1051,12 +1058,12 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
       put_repo(substrate.owner_repo)
 
-      # The two-login model: the runtime role gets USAGE on the schema, SELECT
-      # on the parent tables (for normal traffic), and — altered BY the owner,
-      # because default privileges bind to the grantor — SELECT on everything
-      # the owner creates from now on. Children are then directly queryable by
-      # name; without child-level policies that is a cross-tenant read (the
-      # class of leak i-1 proved November 8).
+      # The runtime role gets schema USAGE and parent SELECT for normal traffic.
+      # The owner also grants default SELECT on future tables. Those default
+      # privileges bind to the grantor, so every child the owner creates receives
+      # the runtime grant. Children can then be queried directly by name.
+      # Without child policies this exposes rows across tenants even when
+      # parent queries are scoped.
       query!(Repo, ~s{GRANT USAGE ON SCHEMA "#{prefix}" TO #{substrate.app_role}}, [])
 
       for table <- ["ash_onetime_idempotency_claims", "ash_onetime_response_payloads"] do
@@ -1577,7 +1584,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
     claim_id = Ecto.UUID.dump!(Ecto.UUID.generate())
     hash = :crypto.hash(:sha256, claim_id)
 
-    query!(
+    StoreCase.restore_fixture!(
       tenant_repo,
       """
       INSERT INTO "#{prefix}"."ash_onetime_idempotency_claims"

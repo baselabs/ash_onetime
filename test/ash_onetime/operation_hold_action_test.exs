@@ -72,7 +72,7 @@ defmodule AshOnetime.OperationHoldActionTest do
     assert {:ok, _} = open(ctx.prefix, reference, false)
     assert held_count(ctx.prefix, reference) == 0
 
-    SQL.query!(
+    restore_fixture!(
       Repo,
       ~s|UPDATE "#{ctx.prefix}".ash_onetime_idempotency_claims SET admitted_at = now() - interval '2 hours', inserted_at = now() - interval '2 hours', retain_until = now() - interval '1 hour' WHERE admitted_at = transaction_timestamp()|,
       []

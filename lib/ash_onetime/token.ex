@@ -39,6 +39,7 @@ defmodule AshOnetime.Token do
   @prefix "ash_onetime."
   @max_token_bytes 8_192
   @max_key_bytes 1_024
+  # rule:token-identifier-bound
   @max_identifier_bytes 128
   # Clock overrides are disabled by default in every build environment.
   # Only an explicit compile-time allow_clock_override setting enables them.
@@ -101,6 +102,7 @@ defmodule AshOnetime.Token do
     with :ok <- validate_token(token),
          {:ok, body} <- token_body(token),
          {:ok, body_bytes} <- Canonical.encode(body),
+         # rule:signature
          {:ok, signature} <- custody_sign(custody, token, body_bytes, custody_context),
          {:ok, envelope} <- Canonical.encode(%{"body" => body, "signature" => signature}),
          encoded = @prefix <> Base.url_encode64(envelope, padding: false),
@@ -237,6 +239,7 @@ defmodule AshOnetime.Token do
   defp token_from_body(body) when is_map(body) do
     if exact_fields?(body, @body_fields) do
       with {:ok, algorithm} <- decode_algorithm(body["algorithm"]),
+           # rule:token-from-body-bounds
            :ok <- validate_identifier(body["key_id"], :invalid_key_id, :key_id),
            :ok <- validate_identifier(body["namespace"], :invalid_namespace, :namespace),
            :ok <- validate_key(body["key"]),

@@ -61,6 +61,8 @@ defmodule AshOnetime.Canonical do
 
   @nil_tag 0x00
   @boolean_tag 0x01
+  # rule:canonical
+  # rule:canonical-domain-tag
   @integer_tag 0x02
   @binary_tag 0x03
   @atom_tag 0x04
@@ -74,6 +76,7 @@ defmodule AshOnetime.Canonical do
     binary_bytes: 16_384,
     container_items: 256,
     total_values: 2_048,
+    # rule:canonical-vector-bounds
     depth: 16,
     encoded_bytes: 65_536
   }
@@ -143,6 +146,7 @@ defmodule AshOnetime.Canonical do
 
   defp encode_value(value, _depth, state) when is_integer(value) do
     if abs(value) <= @max_integer do
+      # rule:canonical-vector-bytes
       encode_scalar(@integer_tag, Integer.to_string(value), state)
     else
       {:error, limit_error(:integer_magnitude, @max_integer)}
@@ -178,6 +182,7 @@ defmodule AshOnetime.Canonical do
     with :ok <- check_container_count(count),
          {:ok, state} <- add_value(state, @frame_header_bytes + @container_count_bytes),
          {:ok, entries, state} <- encode_map(Map.to_list(value), depth + 1, state, []) do
+      # rule:canonical-order
       ordered = Enum.sort_by(entries, &elem(&1, 0))
 
       payload =
@@ -252,11 +257,13 @@ defmodule AshOnetime.Canonical do
         maximum: maximum
       })
 
+  # rule:canonical-surface
   defp unsupported_error,
     do: Error.new(:unsupported_term, "value is outside the canonical algebra")
 end
 
 defmodule AshOnetime.Canonical.Decoder do
+  # rule:canonical-decoder-docs
   @moduledoc false
 
   alias AshOnetime.Canonical
@@ -428,6 +435,7 @@ defmodule AshOnetime.Canonical.Decoder do
       Map.has_key?(seen, key_raw) ->
         {:error, Error.new(:duplicate_map_key, "canonical map contains a duplicate key")}
 
+      # rule:canonical-decoder-order
       is_nil(previous) or key_raw > previous ->
         :ok
 

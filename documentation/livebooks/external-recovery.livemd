@@ -7,7 +7,7 @@ livebook:{"persist_outputs":true}
 ```elixir
 Mix.install(
   [
-    {:ash_onetime, "~> 1.10.0"},
+    {:ash_onetime, "~> 2.0.0"},
     {:ash_postgres, "~> 2.15 and >= 2.15.2"}
   ],
   consolidate_protocols: false
@@ -94,6 +94,20 @@ defmodule AshOnetimeDemo.PeerAdapter do
       stored
     end, timeout: 15_000)
   rescue
+    error in Postgrex.Error ->
+      if error.postgres[:pg_code] == "23514" and
+           error.postgres[:constraint] == "external_receipts_value_check" do
+        %{rows: [[reason]]} = SQL.query!(PeerRepo, """
+        INSERT INTO "#{schema!(input)}".external_rejections (operation_key, reason)
+        VALUES ($1::text::uuid, 'negative_value')
+        ON CONFLICT (operation_key) DO UPDATE SET operation_key = EXCLUDED.operation_key
+        RETURNING reason
+        """, [operation_key], timeout: 5_000)
+        {:ok, {:declined, reason}}
+      else
+        {:error, :outcome_unknown}
+      end
+
     _ -> {:error, :outcome_unknown}
   end
 
@@ -107,7 +121,14 @@ defmodule AshOnetimeDemo.PeerAdapter do
          WHERE operation_key = $1::text::uuid
          """, [operation_key], timeout: 5_000).rows do
       [[value]] -> {:ok, value}
-      [] -> :absent
+      [] ->
+        case SQL.query!(PeerRepo, """
+             SELECT reason FROM "#{schema}".external_rejections
+             WHERE operation_key = $1::text::uuid
+             """, [operation_key], timeout: 5_000).rows do
+          [[reason]] -> {:ok, {:declined, reason}}
+          [] -> :absent
+        end
     end
   rescue
     _ -> :unknown
@@ -179,7 +200,7 @@ defmodule AshOnetimeDemo.ExternalRedeem do
   end
   actions do
     defaults [:read]
-    action :redeem, :integer do
+    action :redeem, :term do
       transaction? true
       argument :value, :integer, allow_nil?: false
       argument :request_key, :string, allow_nil?: false
@@ -228,6 +249,12 @@ SQL.query!(Repo, ~s{CREATE SCHEMA "#{schema}"}, [])
 SQL.query!(Repo, ~s{CREATE TABLE "#{schema}".demo_external_redeem (id uuid PRIMARY KEY)}, [])
 SQL.query!(PeerRepo, """
 CREATE TABLE "#{schema}".external_receipts (operation_key uuid PRIMARY KEY, value bigint NOT NULL CHECK (value >= 0))
+""", [])
+SQL.query!(PeerRepo, """
+CREATE TABLE "#{schema}".external_rejections (
+  operation_key uuid PRIMARY KEY,
+  reason text NOT NULL CHECK (reason = 'negative_value')
+)
 """, [])
 SQL.query!(PeerRepo, """
 CREATE TABLE "#{schema}".external_invocations (
@@ -392,29 +419,50 @@ reconciliation and the reaper's boundary.
 
 ## Observe a failed receipt write
 
-The ledger rejects negative values with a real PostgreSQL constraint. After the failed
-execute, an authoritative recovery lookup confirms that no receipt exists; the action
-returns `:external_effect_unavailable`. Its separately committed invocation remains visible:
+The ledger rejects negative values with a real PostgreSQL constraint. This is a definitive
+business rejection: the adapter records that decision durably under the same operation key
+and returns `{:ok, {:declined, reason}}`. A trusted peer result can describe a refusal as well
+as a successful effect. Roll back the caller after that decision commits, then recover and
+replay the rejection without another execute. An unrecorded or ambiguous decision must
+remain unresolved instead.
 
 ```elixir
 before_failed_execute = call_count.("execute")
-{:error, failed_receipt} = run.("negative-receipt", -1)
-:external_effect_unavailable = AshOnetime.Error.code(failed_receipt)
+before_rejection_recovery = call_count.("recover")
+{:error, :rejection_caller_abort} = Repo.transaction(fn ->
+  {:ok, {:declined, "negative_value"}} = run.("negative-receipt", -1)
+  Repo.rollback(:rejection_caller_abort)
+end)
+{:ok, {:declined, "negative_value"}} = run.("negative-receipt", -1)
+{:ok, {:declined, "negative_value"}} = run.("negative-receipt", -1)
 true = call_count.("execute") == before_failed_execute + 1
+true = call_count.("recover") == before_rejection_recovery + 1
 [[0]] = SQL.query!(PeerRepo,
   ~s{SELECT count(*) FROM "#{schema}".external_receipts WHERE value = -1}, []).rows
-%{failed_execute_logged: true, receipt_count: 0}
+[[1]] = SQL.query!(PeerRepo,
+  ~s{SELECT count(*) FROM "#{schema}".external_rejections}, []).rows
+%{failed_execute_logged: true, receipt_count: 0, rejection_replayed: true}
 ```
 
 <!-- livebook:{"output":true} -->
 
 ```
-%{failed_execute_logged: true, receipt_count: 0}
+%{failed_execute_logged: true, receipt_count: 0, rejection_replayed: true}
 ```
 
 ## Clean up
 
+Stop callers and account for every external operation before removing protection. The
+successful effects and the definitive rejection above all completed through the protected
+action. This check must be empty before rollback; a recovery or accounting failure means
+keeping the installation and peer records, not deleting the claim. See the
+[rollback guide](https://hexdocs.pm/ash_onetime/upgrading.html).
+
 ```elixir
+[[0]] = SQL.query!(Repo, """
+SELECT count(*) FROM "#{schema}".ash_onetime_idempotency_claims
+WHERE state = 'processing' AND NOT effect_local
+""", []).rows
 :ok = Ecto.Migrator.down(Repo, version, module, prefix: schema, log: false)
 SQL.query!(Repo, ~s{DROP SCHEMA "#{schema}" CASCADE}, [])
 File.rm_rf!(temp)

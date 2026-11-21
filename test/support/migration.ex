@@ -97,7 +97,7 @@ defmodule AshOnetime.Test.Migration do
 
         SQL.query!(
           Repo,
-          ~s|GRANT SELECT ON "#{schema}".ash_onetime_idempotency_claims TO "#{role}"|,
+          ~s|GRANT SELECT ON "#{schema}".ash_onetime_idempotency_claims,"#{schema}".ash_onetime_effect_outcomes TO "#{role}"|,
           []
         )
       end)
@@ -143,6 +143,14 @@ defmodule AshOnetime.Test.Migration do
     Sandbox.mode(Repo, :auto)
 
     try do
+      # These are this fixture's rows. Remove them before exercising native DOWN;
+      # unresolved external claims correctly prohibit a production rollback.
+      SQL.query!(
+        Repo,
+        ~s(TRUNCATE TABLE "#{installation.schema}".ash_onetime_idempotency_claims, "#{installation.schema}".ash_onetime_nonce_claims, "#{installation.schema}".ash_onetime_response_payloads CASCADE),
+        []
+      )
+
       _result =
         Ecto.Migrator.down(Repo, installation.version, installation.module,
           prefix: installation.schema,

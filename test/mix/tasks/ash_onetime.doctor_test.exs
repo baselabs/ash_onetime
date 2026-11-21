@@ -135,7 +135,7 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
 
   describe "schema currency verdict (pure seam)" do
     test "a complete current schema passes every verdict" do
-      assert [{:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}] =
+      assert [{:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}, {:ok, _}] =
                Doctor.schema_status(complete_facts())
     end
 
@@ -205,7 +205,10 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
         | triggers: [
             "ash_onetime_idempotency_delete_guard",
             "ash_onetime_idempotency_delete_guard",
-            "ash_onetime_nonce_delete_guard"
+            "ash_onetime_nonce_delete_guard",
+            "ash_onetime_idempotency_update_guard",
+            "ash_onetime_effect_outcome_guard",
+            "ash_onetime_effect_outcome_bound"
           ]
       }
 
@@ -229,6 +232,7 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
   defp complete_facts do
     %{
       operation_hold: true,
+      external_state: true,
       logical_partition_tables: [
         "ash_onetime_nonce_claims",
         "ash_onetime_idempotency_claims",
@@ -239,11 +243,15 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
       functions: [
         {"ash_onetime_cleanup_idempotency", 1},
         {"ash_onetime_cleanup_nonce", 1},
-        {"ash_onetime_reap_idempotency", 2}
+        {"ash_onetime_reap_idempotency", 2},
+        {"ash_onetime_expire_responses", 1}
       ],
       triggers: [
         "ash_onetime_idempotency_delete_guard",
-        "ash_onetime_nonce_delete_guard"
+        "ash_onetime_nonce_delete_guard",
+        "ash_onetime_idempotency_update_guard",
+        "ash_onetime_effect_outcome_guard",
+        "ash_onetime_effect_outcome_bound"
       ]
     }
   end

@@ -1,12 +1,37 @@
 {
   "matrix_routes": [
     {
-      "name": "issue",
+      "name": "issue_abc",
       "action": "issue",
       "values": [
         "va",
         "vb",
-        "vc",
+        "vc"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ]
+    },
+    {
+      "name": "issue_def",
+      "action": "issue",
+      "values": [
         "vd",
         "ve",
         "vf"
@@ -125,12 +150,37 @@
       ]
     },
     {
-      "name": "rotate",
+      "name": "rotate_abc",
       "action": "rotate",
       "values": [
         "va",
         "vb",
-        "vc",
+        "vc"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ]
+    },
+    {
+      "name": "rotate_def",
+      "action": "rotate",
+      "values": [
         "vd",
         "ve",
         "vf"
@@ -249,12 +299,37 @@
       ]
     },
     {
-      "name": "revoke",
+      "name": "revoke_abc",
       "action": "revoke",
       "values": [
         "va",
         "vb",
-        "vc",
+        "vc"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ]
+    },
+    {
+      "name": "revoke_def",
+      "action": "revoke",
+      "values": [
         "vd",
         "ve",
         "vf"
@@ -373,12 +448,37 @@
       ]
     },
     {
-      "name": "retire",
+      "name": "retire_abc",
       "action": "retire",
       "values": [
         "va",
         "vb",
-        "vc",
+        "vc"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ]
+    },
+    {
+      "name": "retire_def",
+      "action": "retire",
+      "values": [
         "vd",
         "ve",
         "vf"
@@ -497,12 +597,37 @@
       ]
     },
     {
-      "name": "mint",
+      "name": "mint_abc",
       "action": "mint",
       "values": [
         "va",
         "vb",
-        "vc",
+        "vc"
+      ],
+      "path_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ]
+    },
+    {
+      "name": "mint_def",
+      "action": "mint",
+      "values": [
         "vd",
         "ve",
         "vf"
@@ -625,150 +750,212 @@
     {
       "name": "1",
       "groups": [
-        "20"
+        "0"
       ]
     },
     {
       "name": "2",
       "groups": [
-        "32"
+        "1"
       ]
     },
     {
       "name": "3",
       "groups": [
-        "13"
+        "2"
       ]
     },
     {
       "name": "4",
       "groups": [
-        "5",
-        "34"
+        "3"
       ]
     },
     {
       "name": "5",
       "groups": [
-        "9",
-        "27"
+        "4"
       ]
     },
     {
       "name": "6",
       "groups": [
-        "6",
-        "29"
+        "5"
       ]
     },
     {
       "name": "7",
       "groups": [
-        "16",
-        "31"
+        "6"
       ]
     },
     {
       "name": "8",
       "groups": [
-        "11",
-        "23"
+        "7"
       ]
     },
     {
       "name": "9",
       "groups": [
-        "18",
-        "33"
+        "8"
       ]
     },
     {
       "name": "10",
       "groups": [
-        "10",
-        "12"
+        "9"
       ]
     },
     {
       "name": "11",
       "groups": [
-        "24",
-        "30"
+        "10"
       ]
     },
     {
       "name": "12",
       "groups": [
-        "2",
-        "3"
+        "11"
       ]
     },
     {
       "name": "13",
       "groups": [
-        "4",
-        "19"
+        "12"
       ]
     },
     {
       "name": "14",
       "groups": [
-        "17",
-        "26"
+        "13"
       ]
     },
     {
       "name": "15",
       "groups": [
-        "1",
-        "25"
+        "14"
       ]
     },
     {
       "name": "16",
       "groups": [
-        "14",
-        "22"
+        "15"
       ]
     },
     {
       "name": "17",
       "groups": [
-        "15",
-        "21"
+        "16"
       ]
     },
     {
       "name": "18",
       "groups": [
-        "8",
-        "28"
+        "17"
       ]
     },
     {
       "name": "19",
       "groups": [
-        "0",
-        "7"
+        "18"
+      ]
+    },
+    {
+      "name": "20",
+      "groups": [
+        "19"
+      ]
+    },
+    {
+      "name": "21",
+      "groups": [
+        "20"
+      ]
+    },
+    {
+      "name": "22",
+      "groups": [
+        "21"
+      ]
+    },
+    {
+      "name": "23",
+      "groups": [
+        "22"
+      ]
+    },
+    {
+      "name": "24",
+      "groups": [
+        "23"
+      ]
+    },
+    {
+      "name": "25",
+      "groups": [
+        "24"
+      ]
+    },
+    {
+      "name": "26",
+      "groups": [
+        "25"
+      ]
+    },
+    {
+      "name": "27",
+      "groups": [
+        "26"
+      ]
+    },
+    {
+      "name": "28",
+      "groups": [
+        "27"
+      ]
+    },
+    {
+      "name": "29",
+      "groups": [
+        "28"
+      ]
+    },
+    {
+      "name": "30",
+      "groups": [
+        "29"
+      ]
+    },
+    {
+      "name": "31",
+      "groups": [
+        "30"
+      ]
+    },
+    {
+      "name": "32",
+      "groups": [
+        "31"
+      ]
+    },
+    {
+      "name": "33",
+      "groups": [
+        "32"
+      ]
+    },
+    {
+      "name": "34",
+      "groups": [
+        "33"
+      ]
+    },
+    {
+      "name": "35",
+      "groups": [
+        "34"
       ]
     }
-  ],
-  "mutation_shards": [
-    1,
-    2,
-    3,
-    4,
-    5,
-    6,
-    7,
-    8,
-    9,
-    10,
-    11,
-    12,
-    13,
-    14,
-    15,
-    16
   ]
 }

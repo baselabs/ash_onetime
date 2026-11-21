@@ -88,6 +88,44 @@ defmodule AshOnetime.TelemetryTest do
              )
   end
 
+  for {event, result_class} <- [
+        {:cleanup, :responses_expired},
+        {:external_recovery, :outcome_unrecorded}
+      ] do
+    @review_event event
+    @review_result_class result_class
+    @tag :review_telemetry_classes
+    test "#{event} emits the #{result_class} class to attached handlers" do
+      handler = "review-telemetry-#{System.unique_integer([:positive])}"
+      parent = self()
+      event = [:ash_onetime, @review_event]
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          event,
+          fn name, measurements, metadata, _config ->
+            send_if_owner(parent, {:review_event, name, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      result =
+        case @review_event do
+          :cleanup ->
+            Telemetry.cleanup(:idempotency, Resource, :redeem, 3, @review_result_class)
+
+          :external_recovery ->
+            Telemetry.external_recovery(3, :idempotency, Resource, :redeem, @review_result_class)
+        end
+
+      assert :ok = result
+      assert_receive {:review_event, ^event, _, %{result_class: @review_result_class}}
+    end
+  end
+
   test "store_uncertainty distinguishes worker timeout from disconnect and unknown dispatch" do
     assert :ok = Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :worker_timeout)
     assert :ok = Telemetry.store_uncertainty(:idempotency, Resource, :redeem, :disconnected)

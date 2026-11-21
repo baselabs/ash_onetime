@@ -44,7 +44,7 @@ jobs:
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
       matrix_routes: ${{ steps.test-shards.outputs.matrix_routes }}
       scheduling_shards: ${{ steps.test-shards.outputs.scheduling_shards }}
-      mutation_shards: ${{ steps.test-shards.outputs.mutation_shards }}
+      mutation_shards: ${{ steps.versions.outputs.mutation_shards }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -152,9 +152,8 @@ jobs:
     name: "Comparator matrix (${{ matrix.route }})"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Slowest cold green: 18 min 41 s, Work 44852145428, job 136685903346,
-    # 587776c0ae416a598b7882826ef7e976ca6e775a; about twice that.
-    timeout-minutes: 38
+    # New tuple partitions halve each local path batch; no merged green run yet.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -193,12 +192,8 @@ jobs:
     name: "Comparator scheduling (${{ matrix.name }})"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Slowest first green: 29 min 4 s cached, Work 44856687648, job 136700491478,
-    # 72851b17c3a0cfec7079383b97fd95f89b499f0b. Add 57 s for cold setup: 147.09 s in
-    # Work 44852145428, job 136685903247, 587776c0ae416a598b7882826ef7e976ca6e775a,
-    # versus 90.85 s cached in Work 44856687648, job 136700491597 (same comparator action).
-    # About twice that estimated cold duration; remeasure on the first cold green.
-    timeout-minutes: 61
+    # One five-path group per shard, split from measured 29m13s double groups; no merged green run yet.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -237,7 +232,8 @@ jobs:
     name: "Comparator controls"
     needs: toolchain
     runs-on: ubuntu-24.04
-    timeout-minutes: 90 # no green run yet
+    # Cached 28m50s on Work 44873694440, plus historical 57s cold setup delta; remeasure cold.
+    timeout-minutes: 60
     services:
       postgres:
         image: ${{ needs.toolchain.outputs.postgres_image }}
@@ -328,9 +324,8 @@ jobs:
     name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Slowest cold green of the 16 shards: 24 min 41 s, Work 44852145428,
-    # job 136685903064, 587776c0ae416a598b7882826ef7e976ca6e775a; about twice that.
-    timeout-minutes: 50
+    # Combined delivery/item-2 battery in 24 shared shards; no merged green run yet.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

@@ -14,6 +14,7 @@ defmodule AshOnetime.Error do
   are empty, and the action's transaction is explicitly rolled back.
   """
 
+  # rule:error-splode-membership
   use Splode.Error, class: :invalid, fields: [:code, :message, :details]
 
   # Splode's generated defexception gives the user fields no defaults, so a direct

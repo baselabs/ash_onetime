@@ -2,7 +2,8 @@ name: Publish to Hex
 
 # Infra dispatches after the version commit qualifies on the default branch. A held release
 # is finished by dispatching again on that commit after approval. Infra reads the archives
-# back before tagging; this workflow creates neither a tag nor a GitHub release.
+# back before tagging the commit named by served docs' release.json; this workflow creates
+# neither a tag nor a GitHub release. Held runs export no release-assets.
 on:
   workflow_dispatch:
 
@@ -27,6 +28,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       package_sha256: ${{ steps.archives.outputs.package_sha256 }}
       ready: ${{ steps.read-back.outputs.ready }}
+      published_commit: ${{ steps.read-back.outputs.published_commit }}
       elixir: ${{ steps.toolchain.outputs.elixir }}
       otp: ${{ steps.toolchain.outputs.otp }}
       postgres_image: ${{ steps.toolchain.outputs.postgres_image }}
@@ -47,6 +49,7 @@ jobs:
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0 # served docs may name an ancestor of this default-branch commit
           persist-credentials: false
       - name: Read the development toolchain
         id: toolchain
@@ -117,14 +120,19 @@ jobs:
           STAGED: ${{ steps.upload.outputs.staged }}
         run: |
           assets="$RUNNER_TEMP/ash-onetime-release-assets"
-          mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs" read-back "$VERSION" "$assets/ash_onetime-$VERSION.tar" "$assets/ash_onetime-$VERSION-docs.tar.gz" "$STAGED"
+          mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs" read-back "$VERSION" "$assets/ash_onetime-$VERSION.tar" "$assets/ash_onetime-$VERSION-docs.tar.gz" "$STAGED" "$GITHUB_WORKSPACE" "$GITHUB_SHA"
+      # Read-back keeps the served docs, which can differ from this run's ExDoc output.
+      - name: Checksum the package and served docs
+        if: steps.read-back.outputs.ready == 'true'
+        run: python3 scripts/release_archives.py checksums "$RUNNER_TEMP/ash-onetime-release-assets"
       - name: Upload release-assets for consumer verification
-        if: ${{ !cancelled() && steps.archives.outcome == 'success' }}
+        if: steps.read-back.outputs.ready == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets
           path: ${{ runner.temp }}/ash-onetime-release-assets/
           if-no-files-found: error
+          retention-days: 7
       - name: Remove this job's temporary release files
         if: always()
         run: rm -rf -- "$RUNNER_TEMP/ash-onetime-release-assets" "$RUNNER_TEMP/ash-onetime-hex-upload"

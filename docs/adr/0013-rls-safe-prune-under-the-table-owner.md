@@ -23,7 +23,7 @@ refuse maintenance before destructive work. Use bounded batches and short transa
 New children inherit the parent's ENABLE/FORCE flags and complete policy set. Their ACLs
 remain owner-only, including column grants and grant options; runtime queries use the parent.
 
-Existing installs generate and apply the operation-hold upgrade, then
+Existing installs generate and apply the operation-hold upgrade, the external-state upgrade, then
 `mix ash_onetime.gen.migrations --repo MyApp.Repo --maintenance --maintenance-role ROLE`.
 Apply its migrations as the installation owner; schema-tenanted installs also use --tenants.
 The declared maintenance role invokes owner-owned routines; it never gains table ownership

@@ -5,21 +5,27 @@
         Print the version mix.exs declares.
     python3 scripts/release_archives.py build ASSETS_DIR
         Build the Hex package with mix hex.build and inspect it with scripts/check_package.exs,
-        build the docs with mix docs and pack them into a reproducible tarball, check its
-        pages, and write SHA256SUMS over both archives. Writes version= and package_sha256=
+        build docs with mix docs, write release.json, pack and inspect their pages and
+        provenance, and write SHA256SUMS over both archives. Writes version= and package_sha256=
         to $GITHUB_OUTPUT when it is set.
     python3 scripts/release_archives.py notes ASSETS_DIR
         Write NOTES.md from the dated CHANGELOG.md section for the version; refuse when the
         section is missing, undated or still Unreleased.
+    python3 scripts/release_archives.py verify-docs DOCS VERSION --repository PATH --dispatched SHA
+        Inspect served docs and print their published commit, which must be SHA or its ancestor.
+    python3 scripts/release_archives.py checksums ASSETS_DIR
+        Recompute SHA256SUMS after read-back replaces the local docs with the served archive.
 
 The release gates run build on every candidate and publish.yml runs build and notes before
-its keyed step, so publication uploads bytes from the path qualification exercises. Run it
-from the repository root; build runs Mix, so it runs in CI only.
+its keyed step, so publication uploads bytes from the path qualification exercises. Only
+verify-docs runs outside the repository root, using its explicit repository path. Build runs
+Mix, so it runs in CI only.
 """
 
 import datetime
 import gzip
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -67,17 +73,71 @@ def docs_archive(root, docs):
                         archive.addfile(info)
 
 
+def commit_sha(commit):
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise SystemExit("release commit must be a full 40-hex git commit")
+    return commit
+
+
+def write_release(root, release):
+    commit = os.environ.get("GITHUB_SHA")
+    if commit is None:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    provenance = {"package": PACKAGE, "version": release, "commit": commit_sha(commit)}
+    (root / "release.json").write_text(json.dumps(provenance, sort_keys=True) + "\n")
+
+
+def archive_file(archive, name):
+    entries = [entry for entry in archive.getmembers() if entry.name == name]
+    if len(entries) != 1 or not entries[0].isfile():
+        raise SystemExit(f"docs archive lacks a unique regular {name}")
+    return archive.extractfile(entries[0]).read()
+
+
+def docs_provenance(archive, release):
+    archive_file(archive, "index.html")
+    try:
+        provenance = json.loads(archive_file(archive, "release.json"))
+    except (ValueError, UnicodeDecodeError):
+        raise SystemExit("docs release.json is not readable JSON")
+    if not isinstance(provenance, dict) or provenance.get("package") != PACKAGE:
+        raise SystemExit(f"docs release.json does not name package {PACKAGE}")
+    if provenance.get("version") != release:
+        raise SystemExit(f"docs release.json does not name version {release}")
+    return commit_sha(provenance.get("commit"))
+
+
 def inspect_docs(docs, release):
     with tarfile.open(docs, "r:gz") as archive:
+        docs_provenance(archive, release)
         for page in DOCS_PAGES:
-            try:
-                contents = archive.extractfile(page)
-            except KeyError:
-                contents = None
-            if contents is None:
-                raise SystemExit(f"docs archive lacks {page}")
-            if page != "index.html" and f"v{release}" not in contents.read().decode():
+            contents = archive_file(archive, page)
+            if page != "index.html" and f"v{release}" not in contents.decode():
                 raise SystemExit(f"docs page {page} does not name v{release}")
+
+
+def verify_docs(docs, release, repository, dispatched):
+    commit_sha(dispatched)
+    with tarfile.open(docs, "r:gz") as archive:
+        published = docs_provenance(archive, release)
+    ancestry = subprocess.run(
+        ["git", "-C", str(repository), "merge-base", "--is-ancestor", published, dispatched],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if ancestry.returncode != 0:
+        raise SystemExit("docs commit is not the dispatched commit or an ancestor in repository history")
+    return published
+
+
+def checksums(assets):
+    release = version()
+    paths = (assets / f"{PACKAGE}-{release}.tar", assets / f"{PACKAGE}-{release}-docs.tar.gz")
+    digests = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+    (assets / "SHA256SUMS").write_text(
+        "".join(f"{digest}  {name}\n" for name, digest in sorted(digests.items()))
+    )
+    return digests
 
 
 def build(assets):
@@ -89,13 +149,11 @@ def build(assets):
     mix("hex.build", "--output", str(package))
     mix("run", "scripts/check_package.exs", str(package))
     mix("docs", "--warnings-as-errors")
+    write_release(Path("doc"), release)
     docs_archive(Path("doc"), docs)
     inspect_docs(docs, release)
 
-    digests = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in (package, docs)}
-    (assets / "SHA256SUMS").write_text(
-        "".join(f"{digest}  {name}\n" for name, digest in sorted(digests.items()))
-    )
+    digests = checksums(assets)
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a") as handle:
@@ -130,6 +188,10 @@ def main(arguments):
             build(Path(assets))
         case ["notes", assets]:
             notes(Path(assets))
+        case ["verify-docs", docs, release, "--repository", repository, "--dispatched", commit]:
+            print(verify_docs(Path(docs), release, Path(repository), commit))
+        case ["checksums", assets]:
+            checksums(Path(assets))
         case _:
             raise SystemExit(__doc__)
 

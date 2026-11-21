@@ -16,6 +16,7 @@ defmodule <%= inspect(module) %> do
     unless constraint_exists?() do
       execute("""
       ALTER TABLE #{q(@claims)} ADD CONSTRAINT #{qi(@check)}
+      -- rule:operation-hold-check
       CHECK (hold_reference IS NULL OR (octet_length(hold_reference) >= 1 AND octet_length(hold_reference) <= 255 AND state = 'complete')) NOT VALID
       """)
       flush()
@@ -30,26 +31,37 @@ defmodule <%= inspect(module) %> do
   end
 
   def down do
-    # A downgrade must not silently discard a live operation's retention protection.
+    build_index(@full, "retain_until", nil)
     execute("""
     DO $down$
+    DECLARE unresolved boolean;
     BEGIN
-      -- Refuse a narrowed proof of absence under row security.
+      PERFORM pg_catalog.set_config('lock_timeout', '5s', true);
+      LOCK TABLE #{q(@claims)} IN ACCESS EXCLUSIVE MODE;
+      IF pg_catalog.to_regclass(#{sql_literal(q("ash_onetime_effect_outcomes"))}) IS NOT NULL THEN
+        EXECUTE 'LOCK TABLE ' || #{sql_literal(q("ash_onetime_effect_outcomes"))} || ' IN ACCESS EXCLUSIVE MODE';
+      END IF;
       PERFORM pg_catalog.set_config('row_security', 'off', true);
       IF EXISTS (SELECT 1 FROM #{q(@claims)} WHERE hold_reference IS NOT NULL) THEN
+        -- rule:operation-hold-rollback-held
         RAISE EXCEPTION 'release operation holds before removing operation-hold support' USING ERRCODE = '23514';
       END IF;
+      IF EXISTS (SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid=#{sql_literal(q(@claims))}::regclass AND attname='effect_local' AND NOT attisdropped) THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM ' || #{sql_literal(q(@claims))} || ' WHERE state=''processing'' AND NOT effect_local)' INTO unresolved;
+        -- rule:operation-hold-rollback-unresolved
+        IF unresolved THEN RAISE EXCEPTION 'unresolved external claims prevent rollback' USING ERRCODE='23514'; END IF;
+      END IF;
+      -- rule:operation-hold-do-block
+      #{install_previous_functions()}
+      ALTER TABLE #{q(@claims)} DROP CONSTRAINT #{qi(@check)}, DROP COLUMN hold_reference;
     END
     $down$
     """)
     flush()
-    build_index(@full, "retain_until", nil)
-    install_previous_functions()
-    flush()
     drop_index(@cleanup)
-    drop_index(@hold)
-    execute("ALTER TABLE #{q(@claims)} DROP CONSTRAINT #{qi(@check)}, DROP COLUMN hold_reference")
   end
+
+  defp sql_literal(value), do: "E'" <> (value |> String.replace("\\", "\\\\") |> String.replace("'", "''")) <> "'"
 
   defp constraint_exists? do
     query!("SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid = $1::text::regclass AND conname = $2", [q(@claims), @check]).num_rows == 1
@@ -119,6 +131,7 @@ defmodule <%= inspect(module) %> do
 
   defp enable_always_triggers do
     execute("""
+    -- rule:M-replica-lookup
     CREATE OR REPLACE FUNCTION #{q("ash_onetime_guard_nonce_delete")}()
     RETURNS trigger LANGUAGE plpgsql AS $guard$
     BEGIN
@@ -133,19 +146,23 @@ defmodule <%= inspect(module) %> do
     END
     $guard$
     """)
+    # rule:upgrade-enable-claim-delete
     execute("ALTER TABLE #{q(@claims)} ENABLE ALWAYS TRIGGER ash_onetime_idempotency_delete_guard")
+    # rule:M-firing-upgrade
     execute("ALTER TABLE #{q("ash_onetime_nonce_claims")} ENABLE ALWAYS TRIGGER ash_onetime_nonce_delete_guard")
     flush()
     for [schema, table, trigger] <- query!("""
       SELECT n.nspname,c.relname,t.tgname FROM pg_catalog.pg_trigger t
       JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
       JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+      -- rule:M-fact-upgrade-schema
       WHERE t.tgfoid=pg_catalog.to_regprocedure($1)
       """, [q("ash_onetime_fact_append_only") <> "()"]).rows do
       execute("ALTER TABLE #{qi(schema)}.#{qi(table)} ENABLE ALWAYS TRIGGER #{qi(trigger)}")
     end
   end
 
+  # rule:M-replica-lookup-claims-up
   defp install_hold_functions do
     execute("""
     CREATE OR REPLACE FUNCTION #{q("ash_onetime_guard_idempotency_delete")}()
@@ -161,6 +178,7 @@ defmodule <%= inspect(module) %> do
         RETURN OLD;
       END IF;
       IF OLD.hold_reference IS NOT NULL THEN
+        -- rule:hold-delete-held
         RAISE EXCEPTION 'held idempotency claim cannot be deleted; release its operation hold first'
           USING ERRCODE = '23514';
       END IF;
@@ -173,6 +191,7 @@ defmodule <%= inspect(module) %> do
         reap_before := current_setting('ash_onetime.reap_before', true);
 
         IF reap_before IS NULL OR reap_before = '' THEN
+          -- rule:hold-delete-unarmed
           RAISE EXCEPTION 'processing idempotency claims are recovery points and cannot be deleted'
             USING ERRCODE = '23514';
         END IF;
@@ -180,6 +199,7 @@ defmodule <%= inspect(module) %> do
         IF OLD.inserted_at >= reap_before::timestamptz
            OR OLD.inserted_at >= transaction_timestamp() - (#{@abandonment_floor_seconds} * interval '1 second')
            OR NOT #{q("ash_onetime_cleanup_eligible")}(OLD.retain_until) THEN
+          -- rule:hold-delete-boundary
           RAISE EXCEPTION 'processing idempotency claims are recovery points and cannot be deleted'
             USING ERRCODE = '23514';
         END IF;
@@ -188,6 +208,7 @@ defmodule <%= inspect(module) %> do
         FROM #{q("ash_onetime_response_payloads")}
         WHERE logical_partition = OLD.logical_partition AND claim_id = OLD.id;
         IF payload_count <> 0 THEN
+          -- rule:hold-delete-processing-payload
           RAISE EXCEPTION 'reaped processing idempotency claim unexpectedly carries a payload'
             USING ERRCODE = '23514';
         END IF;
@@ -196,6 +217,7 @@ defmodule <%= inspect(module) %> do
       END IF;
 
       IF NOT #{q("ash_onetime_cleanup_eligible")}(OLD.retain_until) THEN
+        -- rule:hold-delete-retention
         RAISE EXCEPTION 'idempotency claim is inside its retention horizon'
           USING ERRCODE = '23514';
       END IF;
@@ -205,6 +227,7 @@ defmodule <%= inspect(module) %> do
       WHERE logical_partition = OLD.logical_partition
         AND partition_date = OLD.response_partition AND claim_id = OLD.id;
       IF payload_count <> 1 THEN
+        -- rule:hold-delete-count-before
         RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
           USING ERRCODE = '23514';
       END IF;
@@ -214,6 +237,7 @@ defmodule <%= inspect(module) %> do
         AND partition_date = OLD.response_partition AND claim_id = OLD.id;
       GET DIAGNOSTICS payload_count = ROW_COUNT;
       IF payload_count <> 1 THEN
+        -- rule:hold-delete-count-after
         RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
           USING ERRCODE = '23514';
       END IF;
@@ -231,6 +255,7 @@ defmodule <%= inspect(module) %> do
     DECLARE deleted_count bigint;
     BEGIN
       IF batch_size < 1 OR batch_size > 10000 THEN
+        -- rule:hold-cleanup-arguments
         RAISE EXCEPTION 'invalid cleanup batch size' USING ERRCODE = '22023';
       END IF;
 
@@ -241,6 +266,7 @@ defmodule <%= inspect(module) %> do
           AND hold_reference IS NULL
           AND #{q("ash_onetime_cleanup_eligible")}(retain_until)
         ORDER BY retain_until, logical_partition, operation_hash, id
+        -- rule:hold-cleanup-row-lock
         FOR UPDATE SKIP LOCKED
         LIMIT batch_size
       ), deleted AS (
@@ -257,8 +283,10 @@ defmodule <%= inspect(module) %> do
 
   end
 
+  # rule:M-replica-lookup-claims-down
   defp install_previous_functions do
-    execute("""
+    [
+      """
     CREATE OR REPLACE FUNCTION #{q("ash_onetime_guard_idempotency_delete")}()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -279,6 +307,7 @@ defmodule <%= inspect(module) %> do
         reap_before := current_setting('ash_onetime.reap_before', true);
 
         IF reap_before IS NULL OR reap_before = '' THEN
+          -- rule:previous-delete-unarmed
           RAISE EXCEPTION 'processing idempotency claims are recovery points and cannot be deleted'
             USING ERRCODE = '23514';
         END IF;
@@ -286,6 +315,7 @@ defmodule <%= inspect(module) %> do
         IF OLD.inserted_at >= reap_before::timestamptz
            OR OLD.inserted_at >= transaction_timestamp() - (#{@abandonment_floor_seconds} * interval '1 second')
            OR NOT #{q("ash_onetime_cleanup_eligible")}(OLD.retain_until) THEN
+          -- rule:previous-delete-boundary
           RAISE EXCEPTION 'processing idempotency claims are recovery points and cannot be deleted'
             USING ERRCODE = '23514';
         END IF;
@@ -294,6 +324,7 @@ defmodule <%= inspect(module) %> do
         FROM #{q("ash_onetime_response_payloads")}
         WHERE logical_partition = OLD.logical_partition AND claim_id = OLD.id;
         IF payload_count <> 0 THEN
+          -- rule:previous-delete-processing-payload
           RAISE EXCEPTION 'reaped processing idempotency claim unexpectedly carries a payload'
             USING ERRCODE = '23514';
         END IF;
@@ -302,6 +333,7 @@ defmodule <%= inspect(module) %> do
       END IF;
 
       IF NOT #{q("ash_onetime_cleanup_eligible")}(OLD.retain_until) THEN
+        -- rule:previous-delete-retention
         RAISE EXCEPTION 'idempotency claim is inside its retention horizon'
           USING ERRCODE = '23514';
       END IF;
@@ -311,6 +343,7 @@ defmodule <%= inspect(module) %> do
       WHERE logical_partition = OLD.logical_partition
         AND partition_date = OLD.response_partition AND claim_id = OLD.id;
       IF payload_count <> 1 THEN
+        -- rule:previous-delete-count-before
         RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
           USING ERRCODE = '23514';
       END IF;
@@ -320,6 +353,7 @@ defmodule <%= inspect(module) %> do
         AND partition_date = OLD.response_partition AND claim_id = OLD.id;
       GET DIAGNOSTICS payload_count = ROW_COUNT;
       IF payload_count <> 1 THEN
+        -- rule:previous-delete-count-after
         RAISE EXCEPTION 'completed idempotency claim payload cardinality mismatch'
           USING ERRCODE = '23514';
       END IF;
@@ -327,9 +361,8 @@ defmodule <%= inspect(module) %> do
       RETURN OLD;
     END
     $guard$
-    """)
-
-    execute("""
+      """,
+      """
     CREATE OR REPLACE FUNCTION #{q("ash_onetime_cleanup_idempotency")}(batch_size integer)
     RETURNS bigint
     LANGUAGE plpgsql
@@ -337,6 +370,7 @@ defmodule <%= inspect(module) %> do
     DECLARE deleted_count bigint;
     BEGIN
       IF batch_size < 1 OR batch_size > 10000 THEN
+        -- rule:previous-cleanup-arguments
         RAISE EXCEPTION 'invalid cleanup batch size' USING ERRCODE = '22023';
       END IF;
 
@@ -346,6 +380,7 @@ defmodule <%= inspect(module) %> do
         WHERE state = 'complete'
           AND #{q("ash_onetime_cleanup_eligible")}(retain_until)
         ORDER BY retain_until, logical_partition, operation_hash, id
+        -- rule:previous-cleanup-row-lock
         FOR UPDATE SKIP LOCKED
         LIMIT batch_size
       ), deleted AS (
@@ -358,7 +393,7 @@ defmodule <%= inspect(module) %> do
       RETURN deleted_count;
     END
     $cleanup$
-    """)
-
+      """
+    ] |> Enum.map_join("\n", &("EXECUTE " <> sql_literal(&1) <> ";"))
   end
 end

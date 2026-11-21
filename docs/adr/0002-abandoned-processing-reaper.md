@@ -7,9 +7,10 @@ abandonment horizon and the hard one-day floor. The delete guard rechecks those 
 Reap uses database time and a bounded `FOR UPDATE SKIP LOCKED` batch. Its transaction-local
 cutoff authorizes only that guarded deletion. Cleanup continues to skip processing claims.
 
-A reaped claim loses its UUID and therefore its external operation key. A later retry is a
-new execution under a new key; neither the library nor peer key deduplication can recognize
-the lost execution. External actions require business reconciliation before abandonment.
+Locality is fixed at insertion. Only local processing claims are eligible: external claims
+and unclassified claims admitted by a historical runtime are excluded by both selection and
+the DELETE guard. Reap preserves their UUIDs and per-attempt outcomes, regardless of age.
+External recovery points remain until authoritative recovery completes them.
 
 Schedule reap explicitly and size the horizon beyond legitimate in-flight work. It bounds
 steady-state growth only when scheduled; edge rate limits control admission bursts.

@@ -1219,14 +1219,14 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     state = row_state(state, a.state, b.state)
 
     state =
-      Enum.reduce([response_codec: :codec, response_digest: :digest], state, fn {field, key}, s ->
+      Enum.reduce([response_codec: :codec, response_digest: :digest, response_payload: :payload], state, fn {field, key}, s ->
         response_value(Map.fetch!(a, field), Map.fetch!(b, field), key, s, path ++ [field])
       end)
 
     state = %{state | current: previous}
     {a, state} = claim_clock_copies(a, :run, state, path)
     {b, state} = claim_clock_copies(b, :twin, state, path)
-    fields = [:id, :operation_hash, :response_codec, :response_digest]
+    fields = [:id, :operation_hash, :response_codec, :response_digest, :response_payload]
     term(Map.drop(Map.from_struct(a), fields), Map.drop(Map.from_struct(b), fields), state, path)
   end
 
@@ -1457,10 +1457,14 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         cache_arguments?(state, path) ->
           cache_arguments(a, b, state, path)
 
-        match?(%{mfa: {AshOnetime.Store.Postgres, :decode_claim, 2}}, state.at) and
-            path == [:event, 2, 2, 1] ->
+        match?(%{mfa: {AshOnetime.Store.Postgres, f, _}} when f in [:decode_claim, :decode_selected_claim], state.at) and
+            path == [:event, 2, 2, 1] and
+            match?({_, :call, {_, _, [:idempotency, _]}}, state.current.run.event) ->
+          columns = Registry.database_statements().claim.columns
           columns =
-            ~w(id logical_partition operation_hash scope_hash key_hash fingerprint state response_partition response_codec response_digest hold_reference admitted_at retain_until inserted_at)
+            if elem(state.at.mfa, 1) == :decode_selected_claim,
+              do: columns ++ ["encoded_response", "outcome"],
+              else: columns
 
           if length(a) == length(columns) and length(b) == length(columns) do
             previous = state.current
@@ -2095,7 +2099,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
        when f in [:hash, :hash_nif] and arity in [2, 4] do
     if Enum.any?(stack, fn {m, f, _} ->
          m in [AshOnetime.Admission, AshOnetime.Store.Postgres, AshOnetime.Cache] and
-           f in [:validate_complete, :validate_completion, :load_payload, :valid_entry?]
+           f in [:validate_complete, :validate_completion, :loaded_result, :valid_entry?]
        end) do
       case path do
         [:event, 2, 2, 1] -> :payload
@@ -2114,9 +2118,6 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          end),
        do: :digest
   end
-
-  defp response_slot(%{at: %{mfa: {AshOnetime.Store.Postgres, :load_payload, 2}}}, [:event, 3, 1]),
-       do: :payload
 
   defp response_slot(%{at: %{mfa: {AshOnetime.Admission, :validate_collision_payload, 2}}}, [
          :event,
@@ -2139,17 +2140,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp response_slot(%{at: %{mfa: {AshOnetime.Cache, :store, 3}}}, [:event, 2, 2, 2]),
     do: :payload
 
-  defp response_slot(
-         %{at: %{mfa: {AshOnetime.Store.Postgres, :"-complete_transaction/7-fun-1-", 4}}},
-         [:event, 2, 2, 2]
-       ),
-       do: :payload
-
-  defp response_slot(
-         %{at: %{mfa: {AshOnetime.Store.Postgres, :"-complete_transaction/7-fun-2-", 7}}},
-         [:event, 2, 2, n]
-       ),
-       do: %{2 => :codec, 3 => :digest}[n]
+  defp response_slot(%{at: %{mfa: {AshOnetime.Store.Postgres, function, _}}}, [:event, 2, 2, n]) do
+    case Registry.function_slots(AshOnetime.Store.Postgres, function)[n] do
+      {:response, key} -> key
+      _ -> nil
+    end
+  end
 
   defp response_slot(%{at: %{mfa: {AshOnetime.Store.Result, _, _}}}, path) do
     if List.last(path) == :payload, do: :payload
@@ -2443,6 +2439,14 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
                   do: s,
                   else: error(s, :o4_snapshot_copy, path ++ [column], av, bv)
 
+              table == statements.outcome.table and column in statements.outcome.clocks ->
+                ea = DatabaseOrigins.outcome_snapshot(a, rdb)
+                eb = DatabaseOrigins.outcome_snapshot(b, tdb)
+
+                if av === ea and bv === eb,
+                  do: s,
+                  else: error(s, :o4_outcome_snapshot, path ++ [column], av, bv)
+
               table in statements.peer.tables and column in statements.peer.clocks ->
                 ea = peer_snapshot_origin(a, table, rdb)
                 eb = peer_snapshot_origin(b, table, tdb)
@@ -2554,8 +2558,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
        ]),
        do: true
 
-  defp scalar_uuid?(%{mfa: {AshOnetime.Store.Postgres, :select_claim, 4}}, [:event, 2, 2, 3]),
-    do: true
+  defp scalar_uuid?(%{mfa: {AshOnetime.Store.Postgres, :select_claim, arity}}, [:event, 2, 2, 3])
+       when arity in [4, 5], do: true
 
   defp scalar_uuid?(%{mfa: {AshOnetime.Store.Postgres, :select_claim_under_timeout, 4}}, [
          :event,

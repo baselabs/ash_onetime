@@ -145,6 +145,7 @@ defmodule AshOnetime.Cache.Ets do
   @impl AshOnetime.Cache
   def put(key, %Entry{} = entry, ttl_seconds)
       when is_binary(key) and is_integer(ttl_seconds) and ttl_seconds > 0 do
+    # rule:ets-cap-serialized-put
     GenServer.call(@table, {:put, key, entry, ttl_seconds})
   catch
     :exit, _reason -> {:error, :unavailable}

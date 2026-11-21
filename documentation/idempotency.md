@@ -91,7 +91,8 @@ end
 - Call `deliver/2` outside any transaction. Inside one it is refused with
   `:executing_only_in_transaction` before anything runs, because a transaction it does not
   own could roll back after the value was returned.
-- A value opens only after the store holds the committed completion of this call's claim.
+- A value opens only after the store holds the committed completion of this call's claim
+  and granted attempt. A later recovery attempt cannot authorize an earlier envelope.
   A missing or uncertain completion returns `:executing_only_lost` with no value, even
   if a hook reported success. Local transactional rollback undoes the local effect and
   claim, so a retry can execute and deliver a fresh value. An external peer can commit
@@ -186,7 +187,7 @@ are kept forever by design. Watch `AshOnetime.Store.held_backlog(target)` and th
 
 The BEFORE DELETE guard refuses held claims with SQLSTATE `23514`, including DELETEs by the
 table owner and a superuser, before checking retention or payload cardinality. Cleanup and the
-DEFAULT drain exclude held rows before invoking it; reap selects processing rows only.
+DEFAULT drain exclude held rows before invoking it; reap selects only processing rows fixed as local at insertion.
 
 The claims and nonce DELETE guards fire ALWAYS. In replica mode they admit only a writer
 that can SET ROLE to the relation owner; other writers face the full origin rules. Fact
@@ -194,3 +195,12 @@ append-only triggers still refuse mutations, including by trusted replica writer
 The guards do **not** stop `TRUNCATE`, `DROP`, or a privileged user disabling them. Holds are a
 PostgreSQL-authoritative application invariant within that boundary, not protection against
 administrative destruction.
+
+## Retain the claim after its response
+
+Set `response_retention` below `retention` when replay bytes should expire sooner. Response
+expiry preserves the authoritative claim and fingerprint, clears its response locator and
+sets `response_expired_at`. A matching retry gets `:response_expired`; a different fingerprint
+still gets `:key_reused_with_different_request`. Held responses do not expire. Claim cleanup
+later removes a completed, unheld claim and its per-attempt outcomes. Unresolved external
+processing claims survive all maintenance regardless of either deadline.

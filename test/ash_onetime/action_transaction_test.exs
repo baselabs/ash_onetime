@@ -511,18 +511,18 @@ defmodule AshOnetime.ActionTransactionTest do
     assert_terminal_replay(prefix, input)
     SQL.query!(Repo, "UPDATE #{payload_table} SET encoded_response = $1", [payload])
 
-    SQL.query!(Repo, "UPDATE #{claim_table} SET response_digest = $1", [
+    restore_fixture!(Repo, "UPDATE #{claim_table} SET response_digest = $1", [
       :crypto.hash(:sha256, "wrong")
     ])
 
     assert_terminal_replay(prefix, input)
-    SQL.query!(Repo, "UPDATE #{claim_table} SET response_digest = $1", [digest])
+    restore_fixture!(Repo, "UPDATE #{claim_table} SET response_digest = $1", [digest])
 
-    SQL.query!(Repo, "UPDATE #{claim_table} SET response_codec = 'wrong-contract'", [])
+    restore_fixture!(Repo, "UPDATE #{claim_table} SET response_codec = 'wrong-contract'", [])
     assert_terminal_replay(prefix, input)
-    SQL.query!(Repo, "UPDATE #{claim_table} SET response_codec = $1", [codec])
+    restore_fixture!(Repo, "UPDATE #{claim_table} SET response_codec = $1", [codec])
 
-    SQL.query!(
+    restore_fixture!(
       Repo,
       "UPDATE #{claim_table} SET state = 'processing', response_partition = NULL, response_codec = NULL, response_digest = NULL",
       []
@@ -530,7 +530,7 @@ defmodule AshOnetime.ActionTransactionTest do
 
     assert_terminal_replay(prefix, input)
 
-    SQL.query!(
+    restore_fixture!(
       Repo,
       "UPDATE #{claim_table} SET state = 'complete', response_partition = $1, response_codec = $2, response_digest = $3",
       [partition, codec, digest]

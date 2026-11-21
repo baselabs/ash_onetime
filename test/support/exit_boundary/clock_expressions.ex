@@ -479,7 +479,7 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
     do: meter_copy(s, e, [3, 2], meter)
 
   defp returned(e, {AshOnetime.Cache, :ttl_seconds, 1}, frame, value, s) do
-    [%{retain_until: until}] = frame.args
+    [%{response_retain_until: until}] = frame.args
     {now, _} = read(s, e.role, :utc_now)
     expected = DateTime.diff(until, now, :second)
     check(s, e, [3], value, {:ok, expected}, :cache_ttl) |> put_in([:ttls, e.role], expected)

@@ -21,6 +21,7 @@ case Ash.create(changeset) do
       :request_in_progress -> {:conflict, "request is already processing"}  # 425 Too Early also fits
       :verification_failed -> {:unauthorized, "verification failed"}
       :verification_timeout -> {:service_unavailable, "verification timed out"}
+# rule:errors-guide-error-fallback
       _code -> {:error, error}
     end
 end
@@ -54,6 +55,7 @@ through the authoritative store — not only the codes raised on the happy admis
 |---|---|---|
 | `:nonce_already_used` | 409 | A one-time nonce was already spent. |
 | `:key_reused_with_different_request` | 409/422 | An idempotency key was reused with a different request fingerprint. |
+| `:response_expired` | 410 | The matching claim remains authoritative, but its replay response has expired. No effect is dispatched. |
 | `:request_in_progress` | 409 / 425 | A `processing` claim is still in flight for this key — including, on external-effect actions, a same-key retry refused by the pre-peer claim lock within its configured wait (ADR-0010). |
 | `:verification_failed` | 401 | A trusted verifier rejected the token. |
 | `:verification_timeout` | 503 | A verifier or minter exceeded its deadline; fail closed and retry only while the proof remains admissible. |
@@ -117,6 +119,7 @@ mis-categorize them; the per-code HTTP below overrides the `:invalid` class.
 | `:custody_timeout` | **503** | Custody exceeded its deadline; fail closed and retry only while the proof remains admissible. |
 | `:custody_contract_violation` | **500** | Custody raised, exited, was killed or returned a result outside its contract. |
 | `:verifier_contract_violation` | **500** | A verifier or minter raised, exited, was killed or returned malformed facts. |
+| `:install_mismatch` | **500** | The installation lacks mandatory 2.0 claim columns or the outcome relation. Apply the ordered migrations before deploying callers. |
 | `:store_invariant` | **500** | The authoritative store returned a result that violated an internal invariant, or PostgreSQL reported an integrity, contract or configuration fault (any SQLSTATE not mapped to a 503 code below). Not client input; retrying will not clear it. |
 | `:replay_relationship_change` | **500** | A relationship change reached completion on a replay; the action's transaction was explicitly rolled back. |
 | `:outcome_unknown` | **503** | External recovery was ambiguous; the effect's outcome could not be determined (retryable). |
@@ -187,3 +190,7 @@ on a replay", and empty details. It rolls back explicitly even when the caller s
 
 The `:executing_only_*` codes use fixed messages and empty details. No executing-only value,
 envelope or key ever reaches an error.
+
+`outcome_unrecorded` is an external-recovery telemetry result, not a replacement for the
+caller's typed recovery error. The independent outcome worker could not confirm its commit;
+the external processing claim remains retained and a retry must recover it.

@@ -9,6 +9,7 @@ import sys
 
 def configuration():
     data = json.loads(Path(".github/test-shards.json").read_text())
+    data["mutation_shards"] = json.loads(Path(".github/mutation-shards.json").read_text())
     routes = data["matrix_routes"]
     names = [shard["name"] for shard in routes]
     if len(names) != len(set(names)) or any(not shard["values"] for shard in routes):
