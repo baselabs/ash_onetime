@@ -189,6 +189,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         span <- frame.provenance do
       assert span.copies != []
       assert Enum.all?(span.copies, &(&1.length == span.length))
+      bytes = <<frame.tag, byte_size(frame.payload) + 4::signed-32, frame.payload::binary>>
+      expected = binary_part(bytes, span.offset - frame.start, span.length)
+      assert_native_copies(span.copies, indexed, expected)
     end
 
     for {_port, chunks} <- streams do
@@ -221,6 +224,47 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp native_result(%{result: {:caught, kind, _reason}}), do: {:caught, kind, :term}
   defp native_result(_run), do: :unexpected_result
+
+  @tag :connection_streams
+  test "Connection streams: prepared metadata comes from the connection's native history" do
+    %{run: run, history: history} = ConnectionNative.observe_prepared()
+    assert run.result == :ok
+    framing = Wire.frames(history.chunks)
+    assert framing.errors == []
+    prepared = ConnectionProtocol.build(framing.messages)
+    assert prepared.errors == []
+    assert prepared.pending == []
+    assert prepared.statements["native_prepared"].parameter_types == [23]
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    native = NativeTransport.build(%{events: events})
+    assert native.errors == []
+    assert native.reads != [] and native.writes != []
+    unbound = ConnectionReads.build(native)
+    assert Enum.any?(unbound.errors, &(&1.rule == :protocol_message))
+    result = ConnectionReads.build(native, MapSet.new(), %{history.port => prepared.statements})
+    assert result.errors == []
+    assert map_size(result.connections) == 1
+
+    messages = result.connections[history.port].protocol.messages
+
+    assert Enum.any?(messages, fn
+             %{decoded: {:bind, _, "native_prepared", _, [{:bind_column, 1, 23, 1, 17}], _}} ->
+               true
+
+             _ ->
+               false
+           end)
+
+    assert Enum.any?(messages, fn
+             %{decoded: {:data_row, [{:data_column, _, _, 0, _, _, _, 23, 1, 17}]}} -> true
+             _ -> false
+           end)
+  end
 
   defp assert_native_copies(copies, events, expected) do
     for copy <- copies do

@@ -14,6 +14,30 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     )
   end
 
+  # The server prepares this statement before observation. Its actual description
+  # is retained independently of the later Bind and DataRow being checked.
+  def observe_prepared do
+    observer = self()
+    tag = make_ref()
+
+    run =
+      ExitBoundary.observe(
+        fn ->
+          protocol = connect()
+          send(observer, {tag, prepare_history(protocol)})
+          protocol
+        end,
+        &execute(&1, :prepared, nil),
+        %{host: [], callbacks: []}
+      )
+
+    receive do
+      {^tag, history} -> %{run: run, history: history}
+    after
+      0 -> raise "native prepared history was not captured"
+    end
+  end
+
   defp connect do
     options = Keyword.put(Repo.config(), :types, Postgrex.DefaultTypes)
     {:ok, protocol} = Postgrex.Protocol.connect(options)
@@ -27,6 +51,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     receive_partial(socket)
   after
     :ok = :gen_tcp.close(socket)
+  end
+
+  defp execute(%{sock: {module, socket}}, :prepared, nil) do
+    bind = <<0, "native_prepared", 0, 1::16, 1::16, 1::16, 4::32, 17::signed-32, 1::16, 1::16>>
+    :ok = module.send(socket, [message(?B, bind), message(?E, <<0, 0::32>>), message(?S, <<>>)])
+    drain(module, socket, 1, <<>>, true, nil)
+  after
+    :ok = module.close(socket)
   end
 
   defp execute(%{sock: {module, socket}}, mode, corruption) do
@@ -60,6 +92,30 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp query_sql(sql) do
     <<?Q, byte_size(sql) + 5::32, sql::binary, 0>>
   end
+
+  defp prepare_history(%{sock: {module, socket}}) do
+    sql = "SELECT $1::int4 AS connection_stream_probe"
+    parse = message(?P, <<"native_prepared", 0, sql::binary, 0, 1::16, 23::32>>)
+    describe = message(?D, <<?S, "native_prepared", 0>>)
+    bytes = IO.iodata_to_binary([parse, describe, message(?S, <<>>)])
+    :ok = module.send(socket, bytes)
+    chunks = [%{index: 0, direction: :frontend, bytes: bytes}]
+    %{port: socket, chunks: history_replies(module, socket, 1, <<>>, chunks)}
+  end
+
+  defp history_replies(module, socket, ready, buffer, chunks) do
+    {ready, buffer} = ready_frames(ready, buffer)
+
+    if ready == 0 and buffer == <<>> do
+      Enum.reverse(chunks)
+    else
+      {:ok, bytes} = module.recv(socket, required(buffer), :infinity)
+      chunk = %{index: length(chunks), direction: :backend, bytes: bytes}
+      history_replies(module, socket, ready, buffer <> bytes, [chunk | chunks])
+    end
+  end
+
+  defp message(tag, payload), do: <<tag, byte_size(payload) + 4::32, payload::binary>>
 
   defp receive_partial(socket) do
     {:ok, data} = :gen_tcp.recv(socket, 0, :infinity)

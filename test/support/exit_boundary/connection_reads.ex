@@ -6,7 +6,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
   # Native program validation and framing demand are separate proofs. An extra
   # perfectly formed driver read is still refused when the protocol needs none.
   # Nothing in this ledger changes or removes an observation event.
-  def build(native, readback \\ MapSet.new()) do
+  def build(native, readback \\ MapSet.new(), catalogs \\ %{}) do
     writes = for write <- native.writes, do: {write.command.index, :write, write}
     requests = for read <- native.reads, do: {read.source.index, :request, read}
     replies = for read <- native.reads, do: {read.returned.index, :reply, read}
@@ -14,7 +14,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     state =
       (writes ++ requests ++ replies)
       |> Enum.sort_by(&elem(&1, 0))
-      |> Enum.reduce(%{connections: %{}, errors: [], demands: [], readback: readback}, &event/2)
+      |> Enum.reduce(
+        %{connections: %{}, errors: [], demands: [], readback: readback, catalogs: catalogs},
+        &event/2
+      )
 
     connections =
       Map.new(state.connections, fn {port, connection} -> {port, finish(connection)} end)
@@ -104,7 +107,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     do:
       Map.get(state.connections, port, %{
         framing: Wire.frame_state(),
-        protocol: ConnectionProtocol.new()
+        protocol: ConnectionProtocol.new(Map.get(state.catalogs, port, %{}))
       })
 
   defp finish(connection) do
