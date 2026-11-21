@@ -456,7 +456,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/connection_states.ex",
         original: "    state = exact(state, source, :state_buffer_copy, buffer, expected)\n",
-        mutated: "    state = exact(state, source, :state_buffer_copy, expected, expected)\n"
+        mutated: "    _ = buffer\n    state = exact(state, source, :state_buffer_copy, expected, expected)\n"
       }
     ]
   end
@@ -477,22 +477,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   # Run the actual Postgrex owner with one private copy changed. Socket calls,
   # server traffic, descriptors and captures remain native. The source file and
   # disk BEAM never change; restore the loaded owner before returning the capture.
-  def with_postgrex_mutant(:send_buffer_copy, callback) do
+  def with_postgrex_mutant(rule, callback) do
     path = Path.join(Mix.Project.deps_path(), "postgrex/lib/postgrex/protocol.ex")
     source = File.read!(path)
 
-    original = """
-        with :ok <- msg_send(%{s | buffer: nil}, msgs, buffer) |> handle_disconnect_retry(),
-             {:ok, s, buffer} <- recv_bind(s, status, buffer) |> handle_disconnect_retry(),
-             {:ok, result, s, buffer} <- recv_execute(s, status, query, buffer),
-             {:ok, s} <- recv_ready(s, status, buffer) do
-    """
+    mutant =
+      Enum.reduce(postgrex_edits(rule), source, fn {original, changed}, text ->
+        unless length(:binary.matches(text, original)) == 1,
+          do: raise("native owner mutant requires one exact source site")
 
-    unless length(:binary.matches(source, original)) == 1,
-      do: raise("native owner mutant requires one exact bind/execute source site")
+        String.replace(text, original, changed, global: false)
+      end)
 
-    changed = String.replace(original, "msgs, buffer)", "msgs, buffer <> <<0>>)")
-    mutant = String.replace(source, original, changed, global: false)
     previous = Code.compiler_options(ignore_module_conflict: true)
 
     try do
@@ -508,6 +504,54 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         Code.compiler_options(previous)
       end
     end
+  end
+
+  defp postgrex_edits(:send_buffer_copy) do
+    original = """
+        with :ok <- msg_send(%{s | buffer: nil}, msgs, buffer) |> handle_disconnect_retry(),
+             {:ok, s, buffer} <- recv_bind(s, status, buffer) |> handle_disconnect_retry(),
+             {:ok, result, s, buffer} <- recv_execute(s, status, query, buffer),
+             {:ok, s} <- recv_ready(s, status, buffer) do
+    """
+
+    changed = String.replace(original, "msgs, buffer)", "msgs, buffer <> <<0>>)")
+    [{original, changed}]
+  end
+
+  defp postgrex_edits(:row_type_copy) do
+    call = ~S"""
+      defp recv_execute(s, status, query, rows \\ [], buffer) do
+        %Query{result_types: types} = query
+
+        case rows_recv(s, types, rows, buffer) do
+    """
+
+    receive_source = """
+      defp rows_recv(%{types: types} = s, result_types, rows, buffer) do
+        case Types.decode_rows(buffer, result_types, rows, types) do
+    """
+
+    # The actual private argument is wrong, then the actual owner restores it
+    # before decoding. Native traffic, decoded values and every capture stay real.
+    restored = """
+      defp rows_recv(%{types: types} = s, copied_types, rows, buffer) do
+        result_types =
+          case copied_types do
+            {:native_foreign_types, original} -> original
+            original -> original
+          end
+
+        case Types.decode_rows(buffer, result_types, rows, types) do
+    """
+
+    changed =
+      String.replace(
+        call,
+        "rows_recv(s, types, rows, buffer)",
+        "rows_recv(s, {:native_foreign_types, types}, rows, buffer)"
+      )
+
+    [{call, changed}, {receive_source, restored}]
   end
 
   def with_mutant(rule, callback) do

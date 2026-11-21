@@ -379,19 +379,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   defp service_event(state, {pid, :call, {module, function, [message | _] = args}} = event) do
     case Map.fetch(state.services, pid) do
       {:ok, %{callback: {^module, ^function, arity}}} when arity == length(args) ->
-        case Enum.find(state.service_receipts, fn receipt ->
-               receipt.pid == pid and receipt.message === message and is_nil(receipt.called)
-             end) do
-          nil ->
-            state
-
-          receipt ->
-            receipt = %{receipt | called: event, called_stamp: state.stamp}
-            state = replace_service_receipt(state, receipt)
-            pending = Map.update(state.service_pending, pid, [receipt], &[receipt | &1])
-
-            %{state | service_pending: pending}
-        end
+        service_call(state, pid, message, event)
 
       _ ->
         state
@@ -416,6 +404,25 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   end
 
   defp service_event(state, _event), do: state
+
+  defp service_call(state, pid, message, event) do
+    receipt =
+      Enum.find(state.service_receipts, fn receipt ->
+        receipt.pid == pid and receipt.message === message and is_nil(receipt.called)
+      end)
+
+    case receipt do
+      nil ->
+        state
+
+      receipt ->
+        receipt = %{receipt | called: event, called_stamp: state.stamp}
+        state = replace_service_receipt(state, receipt)
+        pending = Map.update(state.service_pending, pid, [receipt], &[receipt | &1])
+
+        %{state | service_pending: pending}
+    end
+  end
 
   defp replace_service_receipt(state, replacement) do
     receipts =

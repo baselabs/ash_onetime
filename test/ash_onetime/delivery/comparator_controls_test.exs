@@ -58,6 +58,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     activate: [1]
   }
 
+  @helper_term_inputs %{
+    {:rows_recv, 4} => [1, 2],
+    {:rows_recv, 5} => [1, 2, 4],
+    {:msg_recv, 4} => [3]
+  }
+
   @tag :connection_streams
   test "Connection streams: native messages survive every header split", context do
     pair = observe(context, row!(:issue, :execute), Values.set()[:va])
@@ -454,6 +460,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert unbound_buffers == [], "every native helper buffer needs its own byte-copy origin"
 
+      bound_terms = MapSet.new(Map.get(states, :terms, []), &{&1.index, &1.path})
+
+      unbound_terms =
+        Enum.reject(native_helper_terms(events), fn copy ->
+          MapSet.member?(bound_terms, {copy.index, copy.path})
+        end)
+
+      for copy <- unbound_terms do
+        IO.puts("CONNECTION_HELPER_TERM_UNBOUND: " <> Diagnostics.render(copy))
+      end
+
+      assert unbound_terms == [], "native helper messages, row accumulators and types need origins"
+
       if shape == :large_rows do
         assert Enum.any?(decoders.versions, &is_list(&1.returned_buffer))
 
@@ -499,25 +518,48 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   defp native_helper_buffers(events) do
-    Enum.flat_map(events, fn
-      %{index: index, event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source ->
-        for position <- Map.get(@helper_buffer_inputs, function, []),
-            position = if(position < 0, do: length(arguments) + position, else: position),
-            do: %{index: index, mfa: source.mfa, path: [2, 2, position]}
-
-      %{index: index, event: {_, :return_from, {Postgrex.Protocol, function, _}, result}} =
-          source
-      when function in [:msg_recv, :rows_recv, :redescribe] and is_tuple(result) ->
-        if elem(result, 0) in [:ok, :reload, :error] do
-          [%{index: index, mfa: source.mfa, path: [3, tuple_size(result) - 1]}]
-        else
-          []
-        end
-
-      _ ->
-        []
-    end)
+    Enum.flat_map(events, &native_helper_buffer/1)
   end
+
+  defp native_helper_buffer(
+         %{index: index, event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source
+       ) do
+    for position <- Map.get(@helper_buffer_inputs, function, []),
+        position = if(position < 0, do: length(arguments) + position, else: position),
+        do: %{index: index, mfa: source.mfa, path: [2, 2, position]}
+  end
+
+  defp native_helper_buffer(
+         %{index: index, event: {_, :return_from, {Postgrex.Protocol, function, _}, result}} =
+           source
+       )
+       when function in [:msg_recv, :rows_recv, :redescribe] and is_tuple(result) do
+    if elem(result, 0) in [:ok, :reload, :error],
+      do: [%{index: index, mfa: source.mfa, path: [3, tuple_size(result) - 1]}],
+      else: []
+  end
+
+  defp native_helper_buffer(_source), do: []
+
+  defp native_helper_terms(events), do: Enum.flat_map(events, &native_helper_term/1)
+
+  defp native_helper_term(
+         %{index: index, event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source
+       ) do
+    for position <- Map.get(@helper_term_inputs, {function, length(arguments)}, []),
+        do: %{index: index, mfa: source.mfa, path: [2, 2, position]}
+  end
+
+  defp native_helper_term(
+         %{index: index, event: {_, :return_from, {Postgrex.Protocol, function, _}, result}} =
+           source
+       )
+       when function in [:msg_recv, :rows_recv] and is_tuple(result) and elem(result, 0) == :ok do
+    positions = if function == :rows_recv, do: [1, 2], else: [1]
+    for position <- positions, do: %{index: index, mfa: source.mfa, path: [3, position]}
+  end
+
+  defp native_helper_term(_source), do: []
 
   @tag :connection_streams
   test "Connection streams: intermediate owner returns retain their native state versions" do
@@ -768,6 +810,57 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: native row type copies have their own descriptor origin" do
+    captured =
+      ComparatorMutants.with_postgrex_mutant(:row_type_copy, fn -> cached_decoders(nil) end)
+
+    assert captured.native.errors == []
+    assert captured.decoders.errors == []
+
+    [corrupted] =
+      Enum.filter(captured.events, fn
+        %{
+          event:
+            {_, :call,
+             {Postgrex.Protocol, :rows_recv, [_protocol, {:native_foreign_types, _}, _, _]}}
+        } ->
+          true
+
+        _ ->
+          false
+      end)
+
+    IO.puts(
+      "NATIVE_OWNER_ROW_TYPE_COPY: " <>
+        Diagnostics.render(%{index: corrupted.index, mfa: corrupted.mfa})
+    )
+
+    states = native_copy_states(captured)
+    assert Enum.map(states.errors, & &1.rule) == [:state_helper_copy]
+    assert hd(states.errors).index == corrupted.index
+
+    for mutant <- [:stream_buffer_copy, :stream_state_copy, :stream_helper_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+      expected = if mutant == :stream_helper_copy, do: [], else: [:state_helper_copy]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    assert Enum.map(native_copy_states(captured).errors, & &1.rule) == [:state_helper_copy]
+    assert native_copy_states(cached_decoders(nil)).errors == []
+    IO.puts("CONNECTION_ROW_TYPE_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  defp native_copy_states(captured) do
+    ConnectionStates.build(
+      %{events: captured.events},
+      captured.native,
+      captured.decoders,
+      captured.historical,
+      {:initial, captured.initial}
+    )
+  end
+
+  @tag :connection_streams
   test "Connection streams: private send buffers retain their native owner copy" do
     captured =
       ComparatorMutants.with_postgrex_mutant(:send_buffer_copy, fn -> cached_decoders(nil) end)
@@ -1000,15 +1093,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp cached_decoders(corruption, shape \\ :rows) do
     %{run: run, history: history} = ConnectionNative.observe_cached(corruption, shape)
-
-    expected =
-      case shape do
-        :none -> nil
-        :large_rows -> [[17, :binary.copy("x", 131_072)]]
-        _ -> [[17]]
-      end
-
-    assert native_result(run) == {:ok, expected}
+    assert native_result(run) == {:ok, cached_rows(shape)}
     [origin] = history.history.descriptors
     query = origin.query
     framing = Wire.frames(history.chunks)
@@ -1081,6 +1166,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       initial: run.initial_state
     }
   end
+
+  defp cached_rows(:none), do: nil
+  defp cached_rows(:large_rows), do: [[17, :binary.copy("x", 131_072)]]
+  defp cached_rows(_shape), do: [[17]]
 
   @tag :connection_streams
   test "Connection streams: native active delivery changes back to passive mode" do
@@ -3217,6 +3306,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert Enum.any?(events, &(&1.pid == run.tls_binding.sender)),
                "the actual preexisting TLS sender must be traced"
 
+        assert Enum.any?(events, fn source ->
+                 source.pid == run.tls_binding.sender and source.mfa == {:tls_sender, :connection, 3}
+               end),
+               "the actual TLS sender callback needs its own native frame origin"
+
         native = ConnectionTls.build(%{events: events}, run.tls_binding)
         assert native.errors == []
         assert length(native.writes) == 1
@@ -3241,7 +3335,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             cond do
               event.pid == run.snapshot.root -> :caller
               event.pid == run.tls_binding.owner -> :tls_transport_owner
+              event.pid == run.tls_binding.sender -> :tls_sender
               event.pid == run.tls_binding.port -> :transport
+              Map.has_key?(run.snapshot.services, event.pid) -> :shared_service
               true -> :other_native_process
             end
 
