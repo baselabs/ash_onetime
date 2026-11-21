@@ -215,6 +215,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Enum.any?(decoders.instances, &(&1.source.mfa == {Postgrex.Protocol, :msg_decode, 1}))
     assert Enum.any?(decoders.instances, &(&1.source.mfa == {Postgrex.Types, :decode_rows, 4}))
 
+    for %{source: %{mfa: {Postgrex.Types, :decode_rows, 4}}} = instance <- decoders.instances do
+      assert %{index: index, path: [3, 1]} = instance.descriptor
+      assert index < instance.source.index
+
+      %{event: {_, :return_from, mfa, {:ok, %Postgrex.Query{}, _}}} = Enum.at(indexed, index)
+      assert mfa == {Postgrex.Protocol, :handle_prepare, 3}
+    end
+
     for instance <- decoders.instances, copy <- instance.copies do
       expected = if copy.index == instance.source.index, do: instance.input, else: instance.tail
       assert_native_copies([copy], indexed, expected)

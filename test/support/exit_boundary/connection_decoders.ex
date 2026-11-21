@@ -12,6 +12,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     initial = %{
       ports: %{},
       cursors: historical_cursors(historical),
+      descriptors: %{},
+      executing: %{},
       instances: [],
       errors: [],
       pairs: native.pairs,
@@ -75,6 +77,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp decoder_event(
+         %{
+           event:
+             {_, :return_from, {Postgrex.Protocol, :handle_prepare, 3},
+              {:ok, %Postgrex.Query{} = query, %{sock: {:gen_tcp, port}}}}
+         } = e,
+         state
+       ) do
+    origin = %{query: query, port: port, index: e.index, path: [3, 1]}
+    put_in(state.descriptors[query.ref], origin)
+  end
+
+  defp decoder_event(
          %{event: {pid, :call, {Postgrex.Protocol, function, args}}} = e,
          state
        )
@@ -89,6 +103,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
         state =
           if function == :handle_execute and Map.has_key?(state.cursors, port),
             do: put_in(state.cursors[port].rows, []),
+            else: state
+
+        state =
+          if function == :handle_execute,
+            do: executing(state, e, port, hd(args)),
             else: state
 
         if Map.has_key?(state.cursors, port),
@@ -116,6 +135,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
   defp decoder_event(_event, state), do: state
 
+  defp executing(state, e, port, %Postgrex.Query{} = query) do
+    case Map.fetch(state.descriptors, query.ref) do
+      {:ok, %{port: ^port} = origin} ->
+        state = exact(state, e, :decoder_query_copy, query, origin.query)
+        put_in(state.executing[port], origin)
+
+      _ ->
+        failure(state, e, :decoder_query_origin, false)
+    end
+  end
+
+  defp executing(state, _e, _port, _query), do: state
+
   defp decode(e, buffer, kind, state) do
     with {:ok, port} <- Map.fetch(state.ports, e.pid),
          {:ok, cursor} <- Map.fetch(state.cursors, port),
@@ -138,7 +170,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
   defp validate_result(pair, port, cursor, {:rows, types, rows, type_state}, state) do
     context = row_context(state.streams[port].protocol.messages, cursor.offset)
-    expected_types = result_types(context.columns, cursor.types)
+    origin = Map.fetch!(state.executing, port)
+    query = origin.query
+    state = query_metadata(state, pair.source, query, context, cursor.types)
+    expected_types = query.result_types
     state = exact(state, pair.source, :decoder_types, types, expected_types)
     state = exact(state, pair.source, :decoder_type_state, type_state, cursor.types)
     state = exact(state, pair.source, :decoder_rows, rows, cursor.rows)
@@ -149,7 +184,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     state = exact(state, pair.source, :decoder_result, returned(pair), expected)
     {rest, rows} = row_result(expected)
     consumed = byte_size(cursor.buffer) - byte_size(IO.iodata_to_binary(rest))
-    retain(state, pair, port, cursor, consumed, rows, expected)
+    state = retain(state, pair, port, cursor, consumed, rows, expected)
+    [instance | rest] = state.instances
+    %{state | instances: [Map.put(instance, :descriptor, Map.take(origin, [:index, :path])) | rest]}
   end
 
   defp message_result(<<tag, size::signed-32, bytes::binary>> = buffer)
@@ -171,18 +208,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     context
   end
 
-  defp result_types(columns, types) do
-    for {_name, _table, _column, oid, _width, modifier, format} <- columns do
-      {:ok, {encoding, extension}} = Postgrex.Types.fetch(oid, types)
-      ^format = if encoding == :binary, do: 1, else: 0
-      result_type(extension, modifier)
-    end
+  # Postgrex owns the decoder types, including modifiers and composite types.
+  # Keep its prepared Query return as the origin; opaque values are only copied
+  # and passed back to their owner. The independent wire catalog checks the
+  # descriptor's statement, OIDs, column names and execution formats.
+  defp query_metadata(state, source, query, context, types) do
+    names = for {name, _, _, _, _, _, _} <- context.columns, do: name
+    oids = for {_, _, _, oid, _, _, _} <- context.columns, do: oid
+    formats = for {_, _, _, _, _, _, format} <- context.columns, do: format
+    encodings = Enum.map(formats, &if(&1 == 1, do: :binary, else: :text))
+
+    state
+    |> exact(source, :decoder_statement, IO.iodata_to_binary(query.statement), context.sql)
+    |> exact(source, :decoder_columns, query.columns, names)
+    |> exact(source, :decoder_oids, query.result_oids, oids)
+    |> exact(source, :decoder_formats, query.result_formats, encodings)
+    |> exact(source, :decoder_query_types, query.types, types)
   end
-
-  defp result_type({extension, sub_oids, sub_types}, modifier),
-    do: {extension, sub_oids, sub_types, modifier}
-
-  defp result_type(extension, modifier), do: {extension, modifier}
 
   defp row_result({:ok, rows, rest}), do: {rest, rows}
   defp row_result({:more, rest, rows, _required}), do: {rest, rows}
