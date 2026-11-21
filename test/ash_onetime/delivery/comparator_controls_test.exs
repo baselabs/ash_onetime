@@ -207,7 +207,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert_native_copies(span.copies, indexed, expected)
     end
 
-    decoders = ConnectionDecoders.build(%{events: indexed}, native, demand, historical.connections)
+    decoders =
+      ConnectionDecoders.build(%{events: indexed}, native, demand, historical.connections)
+
     assert decoders.errors == []
     assert decoders.instances != []
     assert Enum.any?(decoders.instances, &(&1.source.mfa == {Postgrex.Protocol, :msg_decode, 1}))
