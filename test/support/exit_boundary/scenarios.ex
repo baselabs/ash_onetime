@@ -193,6 +193,8 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
           compare_pure?: Map.get(context, :compare_pure?, false)
         })
 
+      if row.fault == :store_completion, do: completion_fault_observed!(run, resource)
+
       %{
         run: run,
         delta:
@@ -397,19 +399,61 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
   # The joined caller read needs the payload relation before the peer runs.
   # Keep that read available and make the completion's real INSERT fail.
   defp completion_fault!(prefix, operation) do
-    alteration =
+    statements =
       case operation do
         :install ->
-          "ADD CONSTRAINT ash_onetime_boundary_completion_failure CHECK (false) NOT VALID"
+          [
+            ~s[CREATE FUNCTION "#{prefix}".ash_onetime_boundary_completion_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'boundary completion failure' USING ERRCODE = '23514'; END; $$],
+            ~s[CREATE TRIGGER ash_onetime_boundary_completion_failure BEFORE INSERT ON "#{prefix}".ash_onetime_response_payloads FOR EACH ROW EXECUTE FUNCTION "#{prefix}".ash_onetime_boundary_completion_failure()]
+          ]
 
         :remove ->
-          "DROP CONSTRAINT ash_onetime_boundary_completion_failure"
+          [
+            ~s[DROP TRIGGER ash_onetime_boundary_completion_failure ON "#{prefix}".ash_onetime_response_payloads],
+            ~s[DROP FUNCTION "#{prefix}".ash_onetime_boundary_completion_failure()]
+          ]
       end
 
-    SQL.query!(
-      Repo.get_dynamic_repo(),
-      ~s(ALTER TABLE "#{prefix}".ash_onetime_response_payloads #{alteration}),
-      []
-    )
+    {:ok, :ok} =
+      Repo.transaction(fn ->
+        Enum.each(statements, &SQL.query!(Repo.get_dynamic_repo(), &1, []))
+      end)
+  end
+
+  defp completion_fault_observed!(run, resource) do
+    insert =
+      Enum.find_index(run.events, fn
+        %{event: {_, :call, {AshOnetime.Store.Postgres, :insert_payload, _}}} -> true
+        _ -> false
+      end)
+
+    failure =
+      Enum.find_index(run.events, fn
+        %{
+          event:
+            {_, :return_from, {Postgrex, :query, 4},
+             {:error,
+              %Postgrex.Error{
+                postgres: %{pg_code: "23514", message: "boundary completion failure"}
+              }}}
+        } ->
+          true
+
+        _ -> false
+      end)
+
+    unless is_integer(insert) and is_integer(failure) and insert < failure,
+      do: raise("completion fault did not fail the real payload INSERT")
+
+    if resource == Withheld do
+      seal =
+        Enum.find_index(run.events, fn
+          %{event: {_, :return_from, {AshOnetime.Delivery, :seal, 2}, :ok}} -> true
+          _ -> false
+        end)
+
+      unless is_integer(seal) and seal < insert,
+        do: raise("completion fault ran before the delivery seal")
+    end
   end
 end

@@ -1220,12 +1220,29 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
     state =
       Enum.reduce(
-        [response_codec: :codec, response_digest: :digest, response_payload: :payload],
+        [response_codec: :codec, response_digest: :digest],
         state,
         fn {field, key}, s ->
           response_value(Map.fetch!(a, field), Map.fetch!(b, field), key, s, path ++ [field])
         end
       )
+
+    # Claim's unjoined INSERT/UPDATE projection leaves response_payload at its
+    # declared default. Only the joined selector attaches payload bytes. Compare
+    # the absent optional field exactly; a present copy still belongs to encode.
+    default_payload = struct(AshOnetime.Store.Claim).response_payload
+
+    state =
+      if a.response_payload === default_payload and b.response_payload === default_payload,
+        do: state,
+        else:
+          response_value(
+            a.response_payload,
+            b.response_payload,
+            :payload,
+            state,
+            path ++ [:response_payload]
+          )
 
     state = %{state | current: previous}
     {a, state} = claim_clock_copies(a, :run, state, path)
@@ -2005,7 +2022,29 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     end
   end
 
-  defp column_value(a, b, "operation_hash", state, path), do: derived_operation(a, b, state, path)
+  defp column_value(a, b, "operation_hash", state, path) do
+    if a === nil and b === nil and plain_outcome_projection?(state),
+      do: state,
+      else: derived_operation(a, b, state, path)
+  end
+
+  # The observation query exposes optional physical outcome-key columns through
+  # to_jsonb. Ground their absence in the independently captured complete rows,
+  # not in the NULL value being checked. Hash-layout rows retain O2a binding.
+  defp plain_outcome_projection?(state) do
+    Enum.all?([:run, :twin], fn side ->
+      database = elem(state.databases, if(side == :run, do: 0, else: 1))
+      table = database.statements.outcome.table
+      before = Map.get(state[side], :before, %{})
+
+      rows =
+        Map.get(before, table, []) ++
+          Map.get(state[side].delta, table, %{added: []}).added
+
+      current_sql(state, side) == database.outcome_probe_sql and rows != [] and
+        Enum.all?(rows, &(not Map.has_key?(&1, "operation_hash")))
+    end)
+  end
 
   defp column_value({:uuid, a}, {:uuid, b}, _name, state, path),
     do: uuid_identity(a, b, state, path)
@@ -2204,7 +2243,11 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
     claim_columns = Registry.database_statements().claim.columns
 
-    if names in [claim_columns, claim_columns ++ ["encoded_response", "outcome"]] do
+    layouts = [claim_columns, claim_columns ++ ["encoded_response", "outcome"]]
+
+    # SELECT * follows the installed relation's physical column order. Keep that
+    # order in the comparison while recognizing the same complete projection.
+    if Enum.any?(layouts, &(Enum.sort(names) == Enum.sort(&1))) do
       Enum.find_value(columns, fn
         {:data_column, _, _, _, "state", _, _, _, _, value} -> value
         _ -> nil
