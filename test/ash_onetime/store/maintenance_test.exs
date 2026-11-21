@@ -3915,6 +3915,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
   @tag maintenance_shape_mutation: true
   test "noinherit is omitted only for index backed constraints on leaf partitions", c do
     leaf = rel(c, "ash_onetime_response_payloads_default")
+    server_version = scalar(Repo, "SELECT current_setting('server_version_num')::integer")
 
     constraints =
       scalar(
@@ -3929,7 +3930,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     # Trusted fixture provisioning changes exactly one real catalog field, as
     # the executable-metadata Table 1 fixtures do; every subject is runtime.
-    # Probe relation NOT NULL entries only when the native catalog stores them.
+    # PostgreSQL 18+ must supply NOT NULL rows; missing rows must fail the probe.
     for {table, type} <- [
           {"ash_onetime_nonce_claims", "p"},
           {"ash_onetime_nonce_claims", "u"},
@@ -3941,11 +3942,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
           {"ash_onetime_response_payloads_default", "n"},
           {"ash_onetime_response_payloads_default", "c"}
         ],
-        type != "n" or
-          scalar(
-            Repo,
-            "SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=#{literal(rel(c, table))}::regclass AND contype='n')"
-          ) do
+        type != "n" or server_version >= 180_000 do
       [oid, original] =
         SQL.query!(
           Repo,

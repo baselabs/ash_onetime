@@ -29,6 +29,15 @@ defmodule AshOnetime.Store.ConstraintEnforcementTest do
                SQL.query(c.maintainer_repo, "SELECT #{cleanup}(1)", [])
 
       assert message == "untrusted_dependency: relation shape ash_onetime_nonce_claims"
+
+      SQL.query!(
+        c.owner_repo,
+        "ALTER TABLE #{table} DROP CONSTRAINT ash_onetime_nonce_claims_key_hash_check, ADD CONSTRAINT ash_onetime_nonce_claims_key_hash_check CHECK (octet_length(key_hash) = 32) ENFORCED",
+        []
+      )
+
+      assert scalar(c.owner_repo, "SELECT #{shape}('#{table}'::regclass::oid)") == before
+      assert scalar(c.maintainer_repo, "SELECT #{cleanup}(1)") == 0
     else
       assert {:error, %Postgrex.Error{postgres: %{pg_code: "42601"}}} =
                SQL.query(c.owner_repo, disable, [])
