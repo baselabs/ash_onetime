@@ -152,7 +152,9 @@ jobs:
     name: "Comparator matrix (${{ matrix.route }})"
     needs: toolchain
     runs-on: ubuntu-24.04
-    timeout-minutes: 90 # no green run yet
+    # Slowest cold green: 18 min 41 s, Work 44852145428, job 136685903346,
+    # 587776c0ae416a598b7882826ef7e976ca6e775a; about twice that.
+    timeout-minutes: 38
     strategy:
       fail-fast: false
       matrix:
@@ -191,6 +193,8 @@ jobs:
     name: "Comparator scheduling (${{ matrix.name }})"
     needs: toolchain
     runs-on: ubuntu-24.04
+    # Rebalanced from all 175 successful twenty-repeat/stable-profile paths in Work
+    # 44852145428, 587776c0ae416a598b7882826ef7e976ca6e775a. These bins have no green run yet.
     timeout-minutes: 90 # no green run yet
     strategy:
       fail-fast: false
@@ -317,9 +321,9 @@ jobs:
     name: "Mutation battery ${{ matrix.shard }} of ${{ strategy.job-total }}"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Slowest green shard: 25 min 59 s, run 44212940459, which restored a cache; slowest cold:
-    # 24 min 58 s, Work run 44216676477 (the same composite). About twice the slower.
-    timeout-minutes: 52
+    # Slowest cold green of the 16 shards: 24 min 41 s, Work 44852145428,
+    # job 136685903064, 587776c0ae416a598b7882826ef7e976ca6e775a; about twice that.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
