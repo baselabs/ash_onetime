@@ -1,19 +1,8 @@
 name: Work
 
-# Every push to a work branch runs the whole test suite, the whole mutation battery (in the same
-# shards as ci.yml) and the lock check on that branch head, before a landing candidate exists. It is never a verdict:
-# no job is named qualified, ci.yml never calls it, and it cannot move main. Sessions never
-# dispatch workflows, so a push starts it; there are no inputs.
-#
-# It refuses main and kci/ candidates. Any code a job runs can write the cache through the
-# runner's token, so a run must hold only its own branch's cache scope: main's scope and a
-# candidate's scope are what qualification runs restore. It restores the cache warmer's
-# caches and saves none.
-#
-# Locks: each Ash cell has its own committed lock, mix.lock for the floating requirement and
-# locks/ash-floor/mix.lock for the declared floor (mix.exs selects it). A lock is resolved
-# where it is edited and committed with the mix.exs change. The lock job fetches each cell
-# --check-locked, audits it, and fails when either lock is not current; it resolves nothing.
+# Every work head runs the qualification job definitions and shared actions, plus both
+# committed-lock checks and the explicit quality/test jobs. Only ci.yml on kci/ can qualify
+# a commit or move main. Work refuses main and candidate refs and saves no cache.
 on:
   push:
     branches-ignore: [main, 'kci/**']
@@ -43,6 +32,7 @@ jobs:
     outputs:
       elixir: ${{ steps.versions.outputs.elixir }}
       otp: ${{ steps.versions.outputs.otp }}
+      beam_lanes: ${{ steps.versions.outputs.beam_lanes }}
       ash_floor: ${{ steps.versions.outputs.ash_floor }}
       postgres_image: ${{ steps.versions.outputs.postgres_image }}
       postgres_client: ${{ steps.versions.outputs.postgres_client }}
@@ -215,7 +205,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The same shards as ci.yml.
         shard: ${{ fromJSON(needs.toolchain.outputs.mutation_shards) }}
 
     services:
@@ -228,14 +217,14 @@ jobs:
         ports:
           - 18841:5432
         options: >-
-          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-work-mutations-${{ strategy.job-index }}
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-mutations-${{ strategy.job-index }}
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
     env:
-      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-work-mutations-${{ strategy.job-index }}"
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-mutations-${{ strategy.job-index }}"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -249,3 +238,163 @@ jobs:
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
           shard: ${{ matrix.shard }}/${{ strategy.job-total }}
+
+  compat:
+    name: "Ash ${{ matrix.ash }}"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    # Slowest green: 32 min (Ash latest), run 44190160838, cold; about twice that.
+    timeout-minutes: 65
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor: declared security floor (EEF-CVE-2026-96581; ADR 0004), locked in
+        # locks/ash-floor/mix.lock.
+        # Latest: the floating requirement, locked in mix.lock; the release gates' currency
+        # check keeps that lock at the newest Ash 3.x.
+        ash: ${{ fromJSON(format('["{0}","latest"]', needs.toolchain.outputs.ash_floor)) }}
+
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-compat-${{ strategy.job-index }}
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-compat-${{ strategy.job-index }}"
+      ASH_ONETIME_ASH_VERSION: ${{ matrix.ash }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/compat
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          ash: ${{ matrix.ash }}
+          resolution: locked
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+
+  release-checks:
+    name: "Release gates"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    # Slowest green: 14 min 23 s, run 44212940459, which restored a cache. A cold start adds
+    # about 3 min: the dev compile took 86 s cold in run 44190160838 and the test compile
+    # about as long. The docs build these gates now add has no run of its own here; allow
+    # about 2 min. About twice 19 1/2 min; measured again on its first cold green run.
+    timeout-minutes: 40
+
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-release
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-release"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/release-gates
+        with:
+          cache: restore
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+
+  # The mutation battery, split into shards so no job runs past 45 minutes. Each shard runs
+  # every Nth registered mutation (scripts/check_mutations.exs --shard); together they run
+  # all of them once. Add a shard to the list when the slowest one nears 45 minutes.
+
+  compatibility:
+    name: Compatibility (${{ matrix.elixir && format('Elixir {0}, OTP {1}', matrix.elixir, matrix.otp) || 'no second toolchain declared' }})
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    # Slowest green: 19 min, run 44190160838, cold; about twice that.
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # With no second toolchain in .tool-versions the job still runs, as one cell that
+        # checks nothing and succeeds, so every result its verdict reads is a success.
+        include: ${{ fromJSON(needs.toolchain.outputs.beam_lanes != '[]' && needs.toolchain.outputs.beam_lanes || '[{"elixir":"","otp":""}]') }}
+
+    services:
+      postgres:
+        image: ${{ needs.toolchain.outputs.postgres_image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ash_onetime_test
+        ports:
+          - 18841:5432
+        options: >-
+          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-lane-${{ strategy.job-index }}
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-lane-${{ strategy.job-index }}"
+
+    steps:
+      - if: matrix.elixir == ''
+        run: echo ".tool-versions declares no second toolchain; nothing to run"
+      - if: matrix.elixir != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: matrix.elixir != ''
+        uses: ./.github/actions/compatibility-lane
+        with:
+          cache: restore
+          elixir: ${{ matrix.elixir }}
+          otp: ${{ matrix.otp }}
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+
+  security:
+    name: "Security"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    # Slowest green: 2 min 9 s, run 44190160838 (three locks scanned). Five minutes is the floor for any job.
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/security
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+
+  # The one verdict a landing reads: every job above succeeded. A skipped, cancelled or
+  # failed job refuses; no job is allowed to be absent.

@@ -38,7 +38,9 @@ mix hex.audit
 mix hex.build
 ```
 
-CI's release-gates and mutation-battery jobs also run these on every candidate:
+Work and qualification run the same Ash floor/latest, additional BEAM, security,
+release-gates and mutation job definitions. Every work-branch push exercises the local
+Livebooks and optional consumers before a landing candidate exists. Those jobs run:
 
 ```sh
 mix run --no-start scripts/check_deps_currency.exs
@@ -60,7 +62,10 @@ or catalog mismatch refuses the check. Mutation acceptance requires the owning a
 fail under the edit and the tagged cases to pass after exact source restoration.
 
 To reset notebook installs, remove `_build/livebook-install` (or your `MIX_INSTALL_DIR`).
-Each notebook removes its UUID-named schema after verification.
+Each notebook rolls back and removes its UUID-named schema after accounting for its work.
+External operations complete through the protected action, including durable business
+rejections. An unresolved operation retains its recovery point and refuses rollback; see
+[upgrading](documentation/upgrading.md).
 
 Infra dispatches releases through the `Publish to Hex` workflow after the version commit
 qualifies on the default branch. No one publishes from a workstation. The workflow requires

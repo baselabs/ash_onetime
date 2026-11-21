@@ -1,6 +1,6 @@
 name: Release gates
 description: >-
-  Run the release gates for qualification and upstream drift; the mutation battery is its own
+  Run the release gates for qualification, work and upstream drift; the mutation battery is its own
   jobs (the mutations composite)
 inputs:
   elixir:

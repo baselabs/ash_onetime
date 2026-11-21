@@ -252,7 +252,13 @@ GROUP BY effect_local;
 
 **Remediate.** Recover external operations through the peer using the original claim UUID.
 Do not delete an unresolved claim to free its key. An ambiguous result remains retained until
-a retry proves the peer result or absence and completes the claim. Address sustained
+a retry obtains a final peer result and completes the claim. A proven absence permits
+another execution under the same key; it does not itself complete or discard the claim.
+A definitive business rejection can be a final result after the peer durably accounts for
+it: return `{:ok, terminal_result}` from the adapter and store it through the protected
+action's codec and classifier. Reconcile every unresolved operation this way before an
+ordered rollback, then stop callers and maintenance. If a decision remains ambiguous,
+retain its recovery point and postpone removal of its protection. Address sustained
 `outcome_unrecorded` by checking worker connections, lock waits and consumer policies.
 
 For abandoned local claims, run the bounded reaper above the longest legitimate local

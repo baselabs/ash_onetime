@@ -41,7 +41,6 @@ for partitioning <- [nil, 2] do
 
       try do
         assert_receive {:outcome_inserted, _}, 5_000
-        started = System.monotonic_time(:millisecond)
 
         assert {:ok, %{rows: [[1, backend]]}} =
                  SQL.query(
@@ -49,8 +48,6 @@ for partitioning <- [nil, 2] do
                    "SELECT #{routine(c, "ash_onetime_expire_responses")}(100),pg_backend_pid()",
                    []
                  )
-
-        assert System.monotonic_time(:millisecond) - started < 500
 
         assert scalar(
                  c.owner_repo,
@@ -69,6 +66,8 @@ for partitioning <- [nil, 2] do
       end
     end
 
+    # Each compatible operation must finish before its holder is released. Native lock
+    # timeouts catch a conflicting mode; runner scheduling is not a latency contract.
     for {pair, phase} <- [{"P1", :classify}, {"P2", :finalize_read}, {"P14", :replay}] do
       test "#{partitioning || "plain"}: #{pair} a late outcome commits while the caller holds its claim",
            c do
@@ -98,12 +97,8 @@ for partitioning <- [nil, 2] do
         backend = scalar(worker_repo, "SELECT pg_backend_pid()")
 
         try do
-          started = System.monotonic_time(:millisecond)
-
           assert %Result{status: :processing, transaction: :committed} =
                    Postgres.record_outcome_committed(t, first.claim, :held, lock_timeout_ms: 1000)
-
-          assert System.monotonic_time(:millisecond) - started < 100
 
           assert scalar(
                    c.owner_repo,
@@ -219,8 +214,6 @@ for partitioning <- [nil, 2] do
           end)
 
         try do
-          started = System.monotonic_time(:millisecond)
-
           case unquote(action) do
             :outcome ->
               assert %Result{status: :processing, transaction: :committed} =
@@ -238,8 +231,6 @@ for partitioning <- [nil, 2] do
 
               assert status in [:processing, :complete]
           end
-
-          assert System.monotonic_time(:millisecond) - started < 100
         after
           release(holder)
         end
@@ -303,14 +294,11 @@ for partitioning <- [nil, 2] do
 
       try do
         await_wait(c, backend)
-        started = System.monotonic_time(:millisecond)
 
         assert %Result{status: :processing, transaction: :committed} =
                  Postgres.record_outcome_committed(target(c), grant.claim, :held,
                    lock_timeout_ms: 1000
                  )
-
-        assert System.monotonic_time(:millisecond) - started < 100
       after
         release(holder)
       end
@@ -326,7 +314,6 @@ for partitioning <- [nil, 2] do
         end)
 
       try do
-        started = System.monotonic_time(:millisecond)
         grant = Postgres.claim_committed(target(c), request!("P10"), lock_timeout_ms: 2000)
         assert %Result{status: :admitted} = grant
 
@@ -352,8 +339,6 @@ for partitioning <- [nil, 2] do
                      lock_timeout_ms: 2000
                    )
                  end)
-
-        assert System.monotonic_time(:millisecond) - started < 200
       after
         release(holder)
       end
@@ -376,15 +361,11 @@ for partitioning <- [nil, 2] do
       backend = scalar(reader, "SELECT pg_backend_pid()")
 
       try do
-        started = System.monotonic_time(:millisecond)
-
         assert scalar(
                  reader,
                  "SELECT count(*) FROM #{rel(c, "ash_onetime_effect_outcomes")} WHERE claim_id=$1::uuid",
                  [Ecto.UUID.dump!(grant.claim.id)]
                ) == 1
-
-        assert System.monotonic_time(:millisecond) - started < 100
 
         assert scalar(
                  c.owner_repo,
@@ -703,12 +684,8 @@ for partitioning <- [nil, 2] do
       SQL.query!(reader, "SET lock_timeout='1s'", [])
 
       try do
-        started = System.monotonic_time(:millisecond)
-
         assert scalar(reader, "SELECT count(*) FROM #{rel(c, "ash_onetime_effect_outcomes")}") ==
                  1
-
-        assert System.monotonic_time(:millisecond) - started < 100
 
         assert scalar(
                  c.owner_repo,

@@ -59,6 +59,16 @@ rolling back maintenance, external state, then operation hold. Each native `down
 parents before counting unresolved external claims and refuses while any remain. The
 external-state rollback also refuses expired responses that the old schema cannot represent.
 Row security that prevents an exact refusal count raises instead of proving the set empty.
+Before stopping the application, reconcile every external processing claim using its original
+operation key and the authoritative peer. Retry through the protected action so its trusted
+result completes the existing claim. A definitive business rejection is also a final result:
+the adapter may return `{:ok, terminal_result}` after durably accounting for that decision,
+and the action's codec and classifier must store it. `:absent` alone does not complete a claim;
+an ambiguous or unrecorded decision still blocks rollback. Keep the installation and peer
+records until the owning application accounts for it. Never delete the recovery point or
+change a generated refusal guard to make rollback pass. The
+[external recovery notebook](livebooks/external-recovery.livemd) executes this path before
+its final teardown.
 The external-state upgrade saves the six replaced routines' live definitions, owners,
 settings, security modes and full EXECUTE grants in `ash_onetime_external_state_restore`.
 This owner-only journal is created atomically with the upgrade and dropped only after exact

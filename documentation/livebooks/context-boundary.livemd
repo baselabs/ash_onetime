@@ -254,6 +254,11 @@ results = Enum.map(tasks, &Task.await(&1, 10_000))
 
 ## Clean up
 
+This run installed only its fact-table migration and used local database transactions.
+Stop callers before rolling it back. For an application that also installs external-state
+admission, recover or account for unresolved external operations before removing that
+protection; follow the [rollback guide](https://hexdocs.pm/ash_onetime/upgrading.html).
+
 ```elixir
 :ok = Ecto.Migrator.down(Repo, version, module, prefix: schema, log: false)
 SQL.query!(Repo, ~s{DROP SCHEMA IF EXISTS "#{schema}" CASCADE}, [])

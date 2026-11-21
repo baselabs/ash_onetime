@@ -394,6 +394,11 @@ pool-sizing notes.
 
 ## Clean up
 
+All operations in this notebook are local or nonce admissions. Stop other callers before
+rolling back the installation. An installation serving external effects must first recover
+or account for every unresolved operation through its owning application; rollback refuses
+while any remain. See the [rollback guide](https://hexdocs.pm/ash_onetime/upgrading.html).
+
 ```elixir
 :ok = Ecto.Migrator.down(Repo, version, module, prefix: schema, log: false)
 SQL.query!(Repo, ~s{DROP SCHEMA IF EXISTS "#{schema}" CASCADE}, [])
