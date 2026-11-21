@@ -10,9 +10,28 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     ExitBoundary.observe(
       &connect/0,
       &execute(&1, mode, corruption),
-      %{host: [], callbacks: []}
+      native_spec(mode)
     )
   end
+
+  defp native_spec(:buffered) do
+    %{
+      host: [],
+      callbacks: [],
+      frames: [
+        {Postgrex.Protocol, :ping, 1},
+        {Postgrex.Protocol, :checkin, 1},
+        {Postgrex.Protocol, :checkout, 1},
+        {Postgrex.Protocol, :msg_send, 3},
+        {Postgrex.Protocol, :msg_recv, :_},
+        {Postgrex.Protocol, :msg_decode, 1},
+        {Postgrex.Protocol, :activate, 2},
+        {Postgrex.Protocol, :recv_buffer, 1}
+      ]
+    }
+  end
+
+  defp native_spec(_mode), do: %{host: [], callbacks: []}
 
   # The server prepares this statement before observation. Its actual description
   # is retained independently of the later Bind and DataRow being checked.
@@ -104,6 +123,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
       :ok = module.close(socket)
     end
+  end
+
+  defp execute(%{sock: {module, socket}} = protocol, :buffered, nil) do
+    {:ok, protocol} = Postgrex.Protocol.checkin(protocol)
+    :ok = module.send(socket, [message(?S, <<>>), query(17)])
+    {:ok, protocol} = Postgrex.Protocol.ping(protocol)
+    {:ok, protocol} = Postgrex.Protocol.checkout(protocol)
+    drain(module, socket, 2, protocol.buffer, true, nil)
+  after
+    :ok = module.close(socket)
   end
 
   defp execute(%{sock: {module, socket}}, mode, corruption) do

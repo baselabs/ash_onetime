@@ -261,6 +261,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   defp native_result(%{result: %Postgrex.Result{rows: rows}}), do: {:ok, rows}
+  defp native_result(%{result: :ok}), do: :ok
 
   defp native_result(%{result: {:caught, kind, %{__struct__: module}}}),
     do: {:caught, kind, module}
@@ -447,6 +448,60 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert deferred != [], "the real contended socket must execute deferred controls"
     IO.puts("CONNECTION_STREAM_DEFERRED_CONTROLS: " <> inspect(length(deferred)))
+  end
+
+  @tag :connection_streams
+  test "Connection streams: Postgrex replays its own unread native buffer" do
+    replays =
+      for _ <- 1..20 do
+        run = ConnectionNative.observe(:buffered)
+        assert native_result(run) == :ok
+
+        events =
+          run.events
+          |> Enum.with_index()
+          |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+        native = NativeTransport.build(%{events: events})
+        assert native.errors == []
+        assert_native_streams_complete(run)
+        buffer_replays(events, native)
+      end
+
+    replays = List.flatten(replays)
+    IO.puts("CONNECTION_STREAM_BUFFER_PROGRAMS: " <> inspect(replays, limit: :infinity))
+    assert replays != [], "the native runs must actually execute Postgrex buffered replay"
+  end
+
+  defp assert_native_streams_complete(run) do
+    for {_port, chunks} <- native_stream_chunks(%{run: run}) do
+      framing = Wire.frames(chunks)
+      assert framing.errors == []
+      protocol = ConnectionProtocol.build(framing.messages)
+      assert protocol.errors == []
+      assert protocol.pending == []
+    end
+  end
+
+  defp buffer_replays(events, native) do
+    # This observes the producer's actual program. Buffered-copy validation and
+    # the ping's finite timeout origin are separate transducer obligations.
+    demand_rules = Enum.map(ConnectionReads.build(native).errors, & &1.rule)
+
+    for %{event: {pid, :call, {Postgrex.Protocol, :activate, [_, buffer]}}} = source <- events,
+        is_binary(buffer) and byte_size(buffer) > 0 do
+      message = {:tcp, hd(native.writes).port, buffer}
+      assert Enum.count(events, &(&1.event == {pid, :send, message, pid})) == 1
+      assert Enum.count(events, &(&1.event == {pid, :receive, message})) == 1
+      stop = native.pairs[source.index].returned.index
+
+      calls =
+        for event <- events,
+            event.pid == pid and event.index >= source.index and event.index <= stop,
+            do: {elem(event.event, 1), event.mfa}
+
+      %{bytes: byte_size(buffer), index: source.index, calls: calls, demand_rules: demand_rules}
+    end
   end
 
   defp native_copy_bytes(event, path) do
