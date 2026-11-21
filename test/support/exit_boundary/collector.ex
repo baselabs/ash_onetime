@@ -254,7 +254,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
           }
         end,
       timer_instances:
-        for {ref, timer} <- open_timers(state), do: timer_diagnostic(ref, timer, state)
+        Enum.map(open_timers(state), fn {ref, timer} -> timer_diagnostic(ref, timer, state) end)
     }
   end
 
