@@ -236,9 +236,28 @@ jobs:
           lane: scheduling
           selector: ${{ matrix.name }}
 
+  comparator-native:
+    name: "Native connection prerequisites"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-native"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/comparator
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+          lane: native
+
   comparator-controls:
     name: "Comparator controls"
-    needs: toolchain
+    needs: [toolchain, comparator-native]
     runs-on: ubuntu-24.04
     # Cached 28m50s on Work 44873694440, plus historical 57s cold setup delta; remeasure cold.
     timeout-minutes: 60

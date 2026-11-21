@@ -54,10 +54,6 @@ runs:
       run: mix deps.get --check-locked
     - shell: bash
       run: MIX_ENV=test mix compile --warnings-as-errors
-    - name: Prove native connection prerequisites
-      if: inputs.lane == 'controls'
-      shell: bash
-      run: python3 scripts/ci_test_shards.py native ""
     - name: Run the declared comparator partition
       shell: bash
       env:
