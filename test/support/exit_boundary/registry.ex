@@ -81,7 +81,10 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
     },
     date: %{
       statements: ["SELECT transaction_timestamp()::date", "SELECT statement_timestamp()::date"],
-      columns: ["date"],
+      columns: %{
+        "SELECT transaction_timestamp()::date" => ["transaction_timestamp"],
+        "SELECT statement_timestamp()::date" => ["statement_timestamp"]
+      },
       source: {AshOnetime.Store.Postgres, :database_date, 2}
     }
   }

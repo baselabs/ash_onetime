@@ -121,7 +121,8 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
          :r_iso_completion,
          %{
            event:
-             {_, :call, {:erlang, :put, [key, {:done, inv, :executed, envelope, {target, claim}}]}}
+             {_, :call,
+              {:erlang, :put, [key, {:done, inv, :executed, envelope, {target, claim}}]}}
          },
          _,
          b,

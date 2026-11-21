@@ -104,8 +104,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       twin: twin,
       row: row,
       pairing: pairing,
-      query_contexts: %{run: DatabaseOrigins.sql_contexts(ri.events),
-                        twin: DatabaseOrigins.sql_contexts(ti.events)},
+      query_contexts: %{},
       attribute_copies: {
         Registry.compute(:attribute_copy, [ri, run.resource]),
         Registry.compute(:attribute_copy, [ti, twin.resource])
@@ -215,7 +214,13 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     tw = Wire.build(tt)
     rdb = Registry.compute(:o4, [rw, run])
     tdb = Registry.compute(:o4, [tw, twin])
-    state = Map.put(state, :databases, {rdb, tdb})
+    state =
+      state
+      |> Map.put(:databases, {rdb, tdb})
+      |> Map.put(:query_contexts, %{
+        run: DatabaseOrigins.sql_contexts(rw),
+        twin: DatabaseOrigins.sql_contexts(tw)
+      })
 
     state =
       Enum.reduce(rdb.errors ++ tdb.errors, state, fn e, s ->

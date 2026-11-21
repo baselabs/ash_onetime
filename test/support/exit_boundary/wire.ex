@@ -6,10 +6,36 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
   def build(indexed) do
     Enum.map_reduce(indexed.events, %{}, fn e, connections ->
       {event, connections} = transport(e.event, connections)
-      {%{e | event: event}, connections}
+      e = e |> Map.put(:event, event) |> Map.put(:wire_sql, statement(event, connections))
+      {e, connections}
     end)
     |> elem(0)
   end
+
+  # A Bind may be in a later packet than its Parse. Keep its qualification
+  # on this native connection's protocol instance, including mirrored copies.
+  defp statement({port, _, _, _}, connections) when is_port(port),
+    do: get_in(connections, [port, :sql])
+
+  defp statement({port, _, _}, connections) when is_port(port),
+    do: get_in(connections, [port, :sql])
+
+  defp statement({_, :call, {m, f, [port | _]}}, connections)
+       when m in [:erlang, :erts_internal, :prim_inet, :gen_tcp] and
+              f in [:port_command, :send, :recv, :recv0] and is_port(port),
+       do: get_in(connections, [port, :sql])
+
+  defp statement({_, :receive, {:tcp, port, _}}, connections),
+    do: get_in(connections, [port, :sql])
+
+  defp statement({_, :receive, {:inet_async, port, _, _}}, connections),
+    do: get_in(connections, [port, :sql])
+
+  defp statement({pid, :return_from, {m, f, _}, _}, connections)
+       when m in [:prim_inet, :gen_tcp] and f in [:recv, :recv0],
+       do: get_in(connections, [connections[{:receiving, pid}], :sql])
+
+  defp statement(_, _), do: nil
 
   defp transport({pid, :call, {m, f, [port, data | rest]}}, state)
        when m in [:erlang, :erts_internal, :prim_inet, :gen_tcp] and f in [:port_command, :send] and

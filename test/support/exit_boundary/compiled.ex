@@ -132,6 +132,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
 
       {:jump, {:f, label}} ->
         if MapSet.member?(seen, label), do: raise("cyclic captured-origin control flow")
+
         capture_path(
           Map.fetch!(labels, label),
           regs,

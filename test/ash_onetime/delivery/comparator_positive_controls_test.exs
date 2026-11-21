@@ -19,7 +19,8 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
     @tag control.id
     @tag :comparator_positive_control
     test "#{control.id}: qualified origin positive control", context do
-      control = Enum.find(AshOnetime.DeliveryComparatorControls.rows(), &(&1.id == unquote(control.id)))
+      control =
+        Enum.find(AshOnetime.DeliveryComparatorControls.rows(), &(&1.id == unquote(control.id)))
 
       errors =
         with_runtime(control, fn ->

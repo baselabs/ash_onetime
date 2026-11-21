@@ -17,7 +17,17 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
       # repeated execution on that prepared substrate; each observation still
       # captures its actual historical cache and compares every generated origin.
       warm = Scenarios.observe(row, values, context)
-      assert Comparator.compare(warm).errors == [], "U9 path preparation must compare green"
+      warm_result = Comparator.compare(warm)
+
+      if first = List.first(warm_result.errors) do
+        IO.inspect(
+          %{path: unquote(name), first: AshOnetime.Test.ExitBoundary.Diagnostics.safe(first)},
+          label: "U9_NATIVE_WARM_FIRST_DIVERGENCE",
+          limit: :infinity
+        )
+      end
+
+      assert warm_result.errors == [], "U9 path preparation must compare green"
       started = System.monotonic_time(:millisecond)
 
       profiles =

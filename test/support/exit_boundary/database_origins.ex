@@ -20,6 +20,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
     initial = %{
       host_owned: AshOnetime.Test.ExitBoundary.HostCall.indexes(events),
+      query_contexts: sql_contexts(events),
       relations: side.historical.relations,
       statements: Registry.database_statements(),
       rows: rows,
@@ -314,16 +315,21 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
               scope
           end
 
-        statement = sql(e.event) || case scope do
-          [{_, statement} | _] -> statement
-          [] -> nil
-        end
+        statement =
+          Map.get(e, :wire_sql) || sql(e.event) ||
+            case scope do
+              [{_, statement} | _] -> statement
+              [] -> nil
+            end
 
         scope =
           case {e.event, scope} do
             {{_, tag, mfa, _}, [{mfa, _} | rest]}
-            when tag in [:return_from, :exception_from] -> rest
-            _ -> scope
+            when tag in [:return_from, :exception_from] ->
+              rest
+
+            _ ->
+              scope
           end
 
         {Map.put(contexts, e.index, statement), Map.put(open, e.pid, scope)}
@@ -389,6 +395,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
             else: path ++ [position]
 
         encoded? = e.mfa == {Postgrex.Protocol, :handle_execute, 4} and path == [2, 2, 1]
+
         actual =
           if encoded? or match?({:bind_column, _, _, _, _}, raw),
             do: parameter_date(raw),
@@ -612,7 +619,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
             else: acc
         end)
 
-      sql in s.statements.date.statements and Map.keys(row) == s.statements.date.columns ->
+      sql in s.statements.date.statements and Map.keys(row) == s.statements.date.columns[sql] ->
         [{name, date}] = Map.to_list(row)
         # The first DataRow of this exact native statement is the origin;
         # mirrored transport and caller returns are later copies of it.
@@ -822,7 +829,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
           end
         end)
       else
-        if columns == s.statements.date.columns do
+        if columns == s.statements.date.columns[s.query_contexts[e.index]] do
           case Map.fetch(s.dates, e.role) do
             {:ok, expected} ->
               checked(s, e, path ++ [:rows, 0, 0], hd(hd(rows)), expected, :database_date_copy)

@@ -181,6 +181,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       rows = Enum.flat_map(wire, &wire_terms(&1.event, :data_column))
       assert binds != [] and rows != []
 
+      for event <- wire, wire_terms(event.event, :bind) != [] do
+        assert is_binary(event.wire_sql), "each native Bind needs its protocol statement"
+      end
+
       assert Enum.all?(binds, fn {:bind_column, _, oid, format, _} ->
                is_integer(oid) and format in [0, 1]
              end)
@@ -199,6 +203,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert clocks != [] and Enum.all?(clocks, &(&1 == 1184))
 
       database = AshOnetime.Test.ExitBoundary.DatabaseOrigins.build(wire, side)
+      date_sources =
+        for {:data_column, sql, _, _, name, _, _, 1082, _, _} <- rows,
+            sql in database.statements.date.statements,
+            do: {sql, name}
+
+      assert date_sources != [], "the declared date SELECT must have a native wire origin"
+      for {sql, name} <- date_sources,
+          do: assert(database.statements.date.columns[sql] == [name])
+
       assert database.errors == []
       tokens = for {_, {:database_expression, token}} <- database.slots, do: token
 
@@ -252,7 +265,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     for side <- [pair.run, pair.twin] do
       events = Origins.build(side).events
       contexts = AshOnetime.Test.ExitBoundary.DatabaseOrigins.sql_contexts(events)
-      assert Enum.any?(events, &(&1.mfa in [{Postgrex, :prepare_execute, 5}, {Postgrex, :execute, 4}]))
+
+      assert Enum.any?(
+               events,
+               &(&1.mfa in [{Postgrex, :prepare_execute, 5}, {Postgrex, :execute, 4}])
+             )
 
       witnesses =
         for %{event: {_, :call, {DBConnection, :meter, [opts]}}, index: index} <- events,
@@ -262,18 +279,30 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           # independently identifies the earlier closure's parameter types.
           entry =
             Enum.find_value(events, fn
-              %{event: {_, :call, {DBConnection, :log, [^logger, %DBConnection.LogEntry{} = entry]}},
-                index: later} when later > index -> entry
-              _ -> nil
+              %{
+                event:
+                  {_, :call, {DBConnection, :log, [^logger, %DBConnection.LogEntry{} = entry]}},
+                index: later
+              }
+              when later > index ->
+                entry
+
+              _ ->
+                nil
             end)
 
           assert entry != nil, "each native query logger needs its actual LogEntry"
-          statement = to_string(entry.query)
-          assert contexts[index] === statement
-          index
+          if entry.call in [:prepare_execute, :execute] do
+            statement = to_string(entry.query)
+            assert contexts[index] === statement
+            {:query, index}
+          else
+            {:transaction, index}
+          end
         end
 
-      assert witnesses != [], "the native prepared-query logger path must execute"
+      assert Enum.any?(witnesses, &match?({:query, _}, &1)),
+             "the native prepared-query logger path must execute"
     end
 
     assert_green(pair)
