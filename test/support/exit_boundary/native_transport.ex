@@ -48,8 +48,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
   defp option_sources(state) do
     Enum.reduce(state.events, state, fn
-      %{event: {_, :call, {:erts_internal, :port_control, [port, command, data]}}} = source,
-      state
+      %{event: {_, :call, {:erts_internal, :port_control, [port, command, data]}}} = source, state
       when is_port(port) and command == @control_magic + 7 ->
         case IO.iodata_to_binary(data) do
           <<22, _::binary>> ->
@@ -234,7 +233,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
          {:ok, :ok} <- return_value(send3),
          {:ok, send4} <- write_send(state, outer, port, ref, bytes),
          {:ok, command} <- write_command(state.events, outer, port, send4.data),
-         {:ok, driver} <- write_driver(state, outer, port, send4.data),
+         {:ok, driver} <- write_driver(state, outer, port, send4.data, command),
          {:ok, signals} <- write_signals(state.events, outer, port, ref),
          {:ok, demonitor} <-
            unique_call(state, outer, {:erlang, :demonitor, 2}, [ref, [:flush]]),
@@ -333,25 +332,25 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     end
   end
 
-  defp write_driver(state, outer, port, data) do
+  defp write_driver(state, outer, port, data, command) do
     args = [port, data, []]
 
     with {:ok, erlang} <- unique_call(state, outer, {:erlang, :port_command, 3}, args),
          {:ok, internal} <- unique_call(state, outer, {:erts_internal, :port_command, 3}, args),
          {:ok, true} <- return_value(erlang),
-         {:ok, signals} <- command_result(state.events, outer, internal, port) do
+         {:ok, signals} <- command_result(state.events, outer, internal, port, command) do
       {:ok, %{pairs: [erlang, internal], signals: signals}}
     end
   end
 
-  defp command_result(events, outer, internal, port) do
+  defp command_result(events, outer, internal, port, command) do
     case return_value(internal) do
       {:ok, true} ->
         {:ok, []}
 
       {:ok, ref} when is_reference(ref) ->
-        case deferred_reply(events, outer, ref, port) do
-          {:ok, true, signals} -> {:ok, signals}
+        case deferred_receive(events, outer, internal, port, ref) do
+          {:ok, true, received} when command.index < received.index -> {:ok, [received.index]}
           _ -> {:error, :native_deferred_write}
         end
 
@@ -650,21 +649,21 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
   defp driver_reply(state, outer, internal, port) do
     case return_value(internal) do
-      {:ok, [1 | _] = reply} -> {:ok, reply, []}
-      {:ok, ref} when is_reference(ref) -> deferred_reply(state.events, outer, ref, port)
-      _ -> {:error, :native_control_origin}
+      {:ok, [1 | _] = reply} ->
+        {:ok, reply, []}
+
+      {:ok, ref} when is_reference(ref) ->
+        deferred_reply(state.events, outer, internal, port, ref)
+
+      _ ->
+        {:error, :native_control_origin}
     end
   end
 
-  defp deferred_reply(events, outer, ref, port) do
+  defp deferred_reply(events, outer, internal, port, ref) do
     pid = outer.source.pid
 
-    with [received] <-
-           in_interval(events, outer, fn
-             %{event: {^pid, :receive, {^ref, _}}} -> true
-             _ -> false
-           end),
-         {_, :receive, {^ref, reply}} <- received.event,
+    with {:ok, reply, received} <- deferred_receive(events, outer, internal, port, ref),
          true <- is_list(reply) or is_binary(reply),
          bytes <- IO.iodata_to_binary(reply),
          [sent] <-
@@ -675,6 +674,26 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
            ),
          true <- sent.index < received.index do
       {:ok, reply, [received.index, sent.index]}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :native_deferred_control_copy}
+    end
+  end
+
+  # Scheduled port operations queue their reference reply inside the VM. The
+  # caller's receive is bound to that operation's returned reference, while the
+  # driver command/control and its actual trace copies are checked separately.
+  defp deferred_receive(events, outer, internal, port, ref) do
+    pid = outer.source.pid
+
+    with [received] <-
+           in_interval(events, outer, fn
+             %{event: {^pid, :receive, {^ref, _}}} -> true
+             _ -> false
+           end),
+         {_, :receive, {^ref, reply}} <- received.event,
+         true <- internal.returned.index < received.index do
+      {:ok, reply, received}
     else
       _ ->
         signals =
@@ -691,7 +710,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
           end)
 
         diagnostic = %{start: outer.source.index, stop: outer.returned.index, signals: signals}
-        {:error, {:native_deferred_control, diagnostic}}
+        {:error, {:native_deferred_receive, diagnostic}}
     end
   end
 

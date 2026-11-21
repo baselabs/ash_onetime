@@ -366,6 +366,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Enum.map(programs, & &1.mode) == [:once, false]
     IO.puts("CONNECTION_STREAM_ACTIVE_PROGRAMS: " <> inspect(programs, limit: :infinity))
 
+    demand = ConnectionReads.build(native)
+    assert demand.errors == []
+
     for {_port, chunks} <- streams do
       framing = Wire.frames(chunks)
       assert framing.errors == []
