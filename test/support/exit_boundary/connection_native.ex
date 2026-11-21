@@ -93,7 +93,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   # framing, typed decoder or association machine as its completion oracle.
   defp ready_frames(ready, <<tag, size::32, tail::binary>>)
        when size >= 4 and byte_size(tail) >= size - 4 do
-    <<_payload::binary-size(size - 4), rest::binary>> = tail
+    payload_size = size - 4
+    <<_payload::binary-size(^payload_size), rest::binary>> = tail
     ready = if tag == ?Z, do: ready - 1, else: ready
     ready_frames(ready, rest)
   end

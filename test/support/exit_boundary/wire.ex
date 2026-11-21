@@ -68,9 +68,14 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
     put_in(state.directions[direction], stream)
   end
 
-  defp extract_frames(%{buffer: <<tag, size::signed-32, tail::binary>>} = stream, direction, state)
+  defp extract_frames(
+         %{buffer: <<tag, size::signed-32, tail::binary>>} = stream,
+         direction,
+         state
+       )
        when size >= 4 and byte_size(tail) >= size - 4 do
-    <<payload::binary-size(size - 4), rest::binary>> = tail
+    payload_size = size - 4
+    <<payload::binary-size(^payload_size), rest::binary>> = tail
     stop = stream.offset + size + 1
 
     message = %{

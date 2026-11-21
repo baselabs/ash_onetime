@@ -325,7 +325,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_reads.ex",
-        original: "        state = exact(state, read, :receive_length, read.length, expected.length)\n",
+        original:
+          "        state = exact(state, read, :receive_length, read.length, expected.length)\n",
         mutated: ""
       }
     ]
@@ -335,7 +336,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_reads.ex",
-        original: "        state = exact(state, read, :receive_timeout, read.timeout, expected.timeout)\n",
+        original:
+          "        state = exact(state, read, :receive_timeout, read.timeout, expected.timeout)\n",
         mutated: ""
       }
     ]

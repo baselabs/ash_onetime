@@ -69,7 +69,8 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
          command: command,
          indexes:
            Enum.uniq(
-             [command.index | signals] ++ driver.signals ++
+             [command.index | signals] ++
+               driver.signals ++
                Enum.flat_map(pairs, &[&1.source.index, &1.returned.index])
            )
        }}
@@ -220,9 +221,9 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
         bytes: bytes,
         result: result,
         id: chain.id,
-         delivered: signals.sent,
-         received: signals.received,
-         indexes: Enum.uniq(chain.indexes ++ signals.indexes),
+        delivered: signals.sent,
+        received: signals.received,
+        indexes: Enum.uniq(chain.indexes ++ signals.indexes),
         provenance: chain.origin
       }
 

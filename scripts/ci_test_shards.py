@@ -61,12 +61,20 @@ def main(arguments):
         for group in shard["groups"]:
             command += ["--only", f"u9_group:{group}"]
     elif lane == "controls" and selector == "":
+        # Establish the native transport proofs before any comparator row uses
+        # them. Exclude the same group from the following battery so it runs once.
+        proof = subprocess.run([
+            "mix", "test", directory + "comparator_controls_test.exs",
+            "--only", "connection_streams",
+        ], check=False)
+        if proof.returncode:
+            return proof.returncode
         command += [directory + name for name in [
             "comparator_controls_test.exs", "comparator_matrix_test.exs",
             "comparator_mutations_test.exs", "comparator_positive_controls_test.exs",
             "exit_boundary_controls_test.exs",
         ]]
-        command += ["--exclude", "full_matrix"]
+        command += ["--exclude", "full_matrix", "--exclude", "connection_streams"]
     else:
         raise ValueError("unknown comparator lane or selector")
     return subprocess.run(command, check=False).returncode

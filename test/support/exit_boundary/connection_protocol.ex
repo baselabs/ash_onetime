@@ -48,8 +48,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
 
   defp required_read(state, buffer) do
     case Wire.frame_remaining(buffer) do
-      0 when byte_size(buffer) >= 5 -> {:error, :complete_buffer}
-      :invalid_length -> {:error, :frame_length}
+      0 when byte_size(buffer) >= 5 ->
+        {:error, :complete_buffer}
+
+      :invalid_length ->
+        {:error, :frame_length}
+
       remaining ->
         {:ok, %{length: requested_length(state, buffer, remaining), timeout: :infinity}}
     end
@@ -316,12 +320,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
       actual: actual,
       expected: expected
     }
+
     %{state | errors: [error | state.errors]}
   end
 
   defp string(bytes) do
     {size, 1} = :binary.match(bytes, <<0>>)
-    <<value::binary-size(size), 0, rest::binary>> = bytes
+    <<value::binary-size(^size), 0, rest::binary>> = bytes
     {value, rest}
   end
 end

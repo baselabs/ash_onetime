@@ -18,6 +18,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
 
     connections =
       Map.new(state.connections, fn {port, connection} -> {port, finish(connection)} end)
+
     errors = Enum.flat_map(connections, fn {_port, c} -> c.errors end)
 
     %{
@@ -119,6 +120,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     do: get_in(connection.framing, [:directions, :backend, :received]) || 0
 
   defp exact(state, _read, _rule, actual, expected) when actual === expected, do: state
+
   defp exact(state, read, rule, actual, expected),
     do: failure(state, read, rule, actual, expected)
 

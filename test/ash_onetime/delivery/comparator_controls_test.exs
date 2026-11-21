@@ -110,7 +110,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     for offset <- offsets do
       chunk
       |> Map.put(:source_offset, offset)
-      |> Map.put(:bytes, binary_part(chunk.bytes, offset, min(width, byte_size(chunk.bytes) - offset)))
+      |> Map.put(
+        :bytes,
+        binary_part(chunk.bytes, offset, min(width, byte_size(chunk.bytes) - offset))
+      )
     end
   end
 
@@ -118,7 +121,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     do: Enum.map(result.messages, &Map.take(&1, [:direction, :tag, :payload, :start, :stop]))
 
   @tag :connection_streams
-  test "Connection streams: native Parse Describe Flush and Bind Execute Sync associate", context do
+  test "Connection streams: native Parse Describe Flush and Bind Execute Sync associate",
+       context do
     run =
       ExitBoundary.observe(
         fn -> Repo.put_dynamic_repo(context.repo) end,
