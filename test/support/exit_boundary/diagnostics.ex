@@ -16,6 +16,33 @@ defmodule AshOnetime.Test.ExitBoundary.Diagnostics do
 
   def status(status), do: Map.new(status, fn {key, value} -> {key, safe(value)} end)
 
+  # Process exit reasons can contain a complete connection state. Select only
+  # the native failure class and code coordinates, including argument-list arity.
+  def exit_summary({reason, stack}) when is_list(stack),
+    do: %{class: exit_class(reason), stack: Enum.map(stack, &exit_frame/1)}
+
+  def exit_summary({_reason, {module, function, arguments}} = exit)
+      when is_atom(module) and is_atom(function) and is_list(arguments),
+      do: %{class: exit_class(exit), operation: {module, function, length(arguments)}}
+
+  def exit_summary(reason), do: %{class: exit_class(reason)}
+
+  defp exit_class(%{__struct__: module}), do: module
+
+  defp exit_class({class, _})
+       when class in [:badmatch, :case_clause, :badarg, :noproc, :shutdown, :error],
+       do: class
+
+  defp exit_class(reason) when is_atom(reason), do: reason
+  defp exit_class(_reason), do: :unclassified
+
+  defp exit_frame({module, function, arguments, location}) do
+    arity = if is_list(arguments), do: length(arguments), else: arguments
+    %{mfa: {module, function, arity}, line: location[:line]}
+  end
+
+  defp exit_frame(_frame), do: :native_frame
+
   def safe(%Postgrex.Protocol{}), do: %{struct_type: Postgrex.Protocol, state: :private}
 
   def safe(%{__struct__: module}) when module in [DBConnection, DBConnection.ConnectionError],

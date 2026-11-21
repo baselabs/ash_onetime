@@ -3,9 +3,9 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
   alias AshOnetime.Store.Postgres
   alias AshOnetime.Store.Result
-  alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ClusterIsolation
   alias AshOnetime.Test.DSTWindow
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExternalPeer
   alias AshOnetime.Test.Repo
   alias AshOnetime.Test.ShippedMigrations

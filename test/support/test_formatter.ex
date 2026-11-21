@@ -123,18 +123,18 @@ defmodule AshOnetime.Test.TestFormatter do
         expression_assertion(assertions, error) ||
           Enum.find(assertions, fn {start, node} -> start <= line and line <= last_line(node) end)
 
-      case selected do
-        {start, node} ->
-          location = if start <= line and line <= last_line(node), do: line, else: start
-          {location, Macro.to_string(node)}
-
-        nil ->
-          {line, "source assertion unavailable"}
-      end
+      assertion_location(selected, line)
     else
       _ -> {line, "source assertion unavailable"}
     end
   end
+
+  defp assertion_location({start, node}, line) do
+    location = if start <= line and line <= last_line(node), do: line, else: start
+    {location, Macro.to_string(node)}
+  end
+
+  defp assertion_location(nil, line), do: {line, "source assertion unavailable"}
 
   # Tail calls can remove an assertion's caller from the native stack. ExUnit's
   # assertion macros retain their quoted source expression. Use it only to select

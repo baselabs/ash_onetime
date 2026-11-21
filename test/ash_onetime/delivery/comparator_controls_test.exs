@@ -2437,6 +2437,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert TestFormatter.failure(test, marked_error, stack).postgres_code == "22012"
 
     printers = [
+      setup_exit: fn ->
+        IO.puts(Diagnostics.render(Diagnostics.exit_summary({pattern, stack})))
+      end,
+      setup_call_exit: fn ->
+        IO.puts(Diagnostics.render(Diagnostics.exit_summary({:noproc, {GenServer, :call, [state]}})))
+      end,
       residual: fn -> IO.puts(Diagnostics.render(state, limit: :infinity)) end,
       residual_projection: fn -> IO.puts(inspect(Diagnostics.safe(state), limit: :infinity)) end,
       assertion_failure: fn ->

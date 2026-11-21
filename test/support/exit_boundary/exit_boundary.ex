@@ -96,6 +96,7 @@ defmodule AshOnetime.Test.ExitBoundary do
         :ok
 
       {:DOWN, ^monitor, :process, ^root, reason} ->
+        IO.puts("ROOT_SETUP_EXIT: " <> Diagnostics.render(Diagnostics.exit_summary(reason)))
         raise "the root stopped in setup: #{class(reason)}"
     after
       @deadline -> raise "the root did not finish its setup"
