@@ -1,7 +1,7 @@
 defmodule AshOnetime.Test.Migration do
   @moduledoc false
 
-  alias AshOnetime.Test.{RealConnection, Repo}
+  alias AshOnetime.Test.{Postgres, RealConnection, Repo}
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: GenerateMigrations
@@ -24,7 +24,7 @@ defmodule AshOnetime.Test.Migration do
       |> Map.fetch!(:port)
 
     unless database == "ash_onetime_test" and port in [Integer.to_string(url_port), "5432"] and
-             String.starts_with?(server_version, "#{AshOnetime.Test.Postgres.contract().major}.") do
+             String.starts_with?(server_version, "#{Postgres.contract().major}.") do
       raise "database isolation check failed"
     end
 

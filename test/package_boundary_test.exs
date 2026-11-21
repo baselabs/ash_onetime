@@ -2,6 +2,7 @@ defmodule AshOnetime.PackageBoundaryTest do
   use AshOnetime.Test.DataCase, async: false
 
   alias AshOnetime.Test.Migration
+  alias AshOnetime.Test.Postgres
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
 
@@ -72,9 +73,9 @@ defmodule AshOnetime.PackageBoundaryTest do
   end
 
   test "the live harness uses its declared engine and disposable auth contract" do
-    %{major: major, version: version, data: data} = AshOnetime.Test.Postgres.contract()
+    %{major: major, version: version, data: data, sockets: sockets} = Postgres.contract()
 
-    assert [[^version, ^data, "/tmp", "scram-sha-256"]] =
+    assert [[^version, ^data, ^sockets, "scram-sha-256"]] =
              SQL.query!(
                Repo,
                "SELECT split_part(current_setting('server_version'),' ',1), current_setting('data_directory'), current_setting('unix_socket_directories'), current_setting('password_encryption')",

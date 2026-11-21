@@ -48,8 +48,9 @@ The same PostgreSQL action starts these upstream images with their native entryp
 `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` derived from `TEST_PG_*`.
 `POSTGRES_INITDB_ARGS=--auth-local=trust --auth-host=scram-sha-256` and
 `POSTGRES_HOST_AUTH_METHOD=scram-sha-256` require SCRAM on every TCP rule. The data directory
-is the upstream `/var/lib/postgresql/data`, mounted as tmpfs; socket traffic uses `/tmp`.
-Server arguments set `password_encryption=scram-sha-256` and `unix_socket_directories=/tmp`.
+is the upstream `/var/lib/postgresql/data`, mounted as tmpfs. Server arguments set
+`password_encryption=scram-sha-256` and `unix_socket_directories=/var/run/postgresql,/tmp`:
+upstream initialization requires its default socket, and probes can also use `/tmp`.
 Ordinary and logical servers use the same loopback ports, readiness and unconditional
 cleanup as the platform engine. `ASH_ONETIME_POSTGRES_COMPAT_MAJOR` selects the declared
 contract for live version, data directory, auth and dump/restore assertions; an undeclared

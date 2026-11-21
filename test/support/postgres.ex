@@ -8,7 +8,12 @@ defmodule AshOnetime.Test.Postgres do
       nil ->
         engine = File.read!(Path.join(@github, "postgres.ref"))
         [_, version, major] = Regex.run(~r/:(([0-9]+)\.[0-9]+)-inputs-/, engine)
-        %{major: String.to_integer(major), version: version, data: "/var/lib/pg/data"}
+        %{
+          major: String.to_integer(major),
+          version: version,
+          data: "/var/lib/pg/data",
+          sockets: "/tmp"
+        }
 
       major ->
         lanes = @github |> Path.join("postgres-compat.json") |> File.read!() |> Jason.decode!()
@@ -19,7 +24,8 @@ defmodule AshOnetime.Test.Postgres do
         %{
           major: String.to_integer(lane["major"]),
           version: version,
-          data: "/var/lib/postgresql/data"
+          data: "/var/lib/postgresql/data",
+          sockets: "/var/run/postgresql,/tmp"
         }
     end
   end

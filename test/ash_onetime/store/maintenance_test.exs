@@ -4119,7 +4119,6 @@ defmodule AshOnetime.Store.MaintenanceTest do
     path = System.find_executable(tool) || "/usr/lib/postgresql/#{major}/bin/#{tool}"
     {version, 0} = System.cmd(path, ["--version"])
     assert version =~ "(PostgreSQL) #{major}."
-    IO.puts("PG_CLIENT #{String.trim(version)}")
     path
   end
 
