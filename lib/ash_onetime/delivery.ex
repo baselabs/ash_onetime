@@ -67,8 +67,9 @@ defmodule AshOnetime.Delivery do
     after
       Process.delete(key)
     end
-  # -- end-rule:r16
-  # -- end-rule:r18
+
+    # -- end-rule:r16
+    # -- end-rule:r18
   end
 
   defp armed(subject, protection, {key, ref, secret, public}, opts) do
@@ -82,6 +83,7 @@ defmodule AshOnetime.Delivery do
     |> normalize(subject.action.type, opts)
     |> finish(fn -> open(key, ref, secret, public, protection, resource, action) end)
   end
+
   # -- end-rule:pc_return_raw
 
   # rule:pc_o5a_extra_frame
@@ -107,6 +109,7 @@ defmodule AshOnetime.Delivery do
       do: {:ok, nil, value},
       else: {:ok, value}
   end
+
   # -- end-rule:pc_return_destroy
 
   defp normalize({:ok, result}, _type, _opts), do: {:ok, result}
@@ -213,17 +216,18 @@ defmodule AshOnetime.Delivery do
     timeout = opts[:timeout] || changeset.timeout
 
     # rule:delivery-task-transaction
+    # rule:delivery-task-timeout
+    # rule:delivery-task-async
+    # rule:delivery-task-engine
     not (changeset.action.transaction? and Ash.DataLayer.data_layer_can?(resource, :transact)) and
-      # rule:delivery-task-timeout
-      # -- end-rule:delivery-task-transaction
       not is_nil(timeout) and timeout != :infinity and
-      # rule:delivery-task-async
-      # -- end-rule:delivery-task-timeout
       !Application.get_env(:ash, :disable_async?) and
-      # -- end-rule:delivery-task-async
-      # rule:delivery-task-engine
       Ash.DataLayer.data_layer_can?(resource, :async_engine)
-  # -- end-rule:delivery-task-engine
+
+    # -- end-rule:delivery-task-transaction
+    # -- end-rule:delivery-task-timeout
+    # -- end-rule:delivery-task-async
+    # -- end-rule:delivery-task-engine
   end
 
   # rule:delivery-task-generic
@@ -290,10 +294,10 @@ defmodule AshOnetime.Delivery do
          names
        ) do
     # rule:delivery-entry-pid
+    # rule:delivery-entry-cell
     if pid == self() and resource == subject.resource and action == subject.action.name and
-         # rule:delivery-entry-cell
-         # -- end-rule:delivery-entry-pid
          entry_cell == cell do
+      # -- end-rule:delivery-entry-pid
       # -- end-rule:delivery-entry-cell
       # rule:delivery-entry-rule-one
       # rule:r_iso_inv
@@ -328,12 +332,15 @@ defmodule AshOnetime.Delivery do
     # rule:r21
     # rule:r9
     case module.produce(subject, context) do
-      {:ok, values} -> seal(handle, values)
-      _other -> {:error, invalid()}
-    # -- end-rule:pc_host_arguments
-    # -- end-rule:r20
-    # -- end-rule:r21
-    # -- end-rule:r9
+      {:ok, values} ->
+        seal(handle, values)
+
+      _other ->
+        {:error, invalid()}
+        # -- end-rule:pc_host_arguments
+        # -- end-rule:r20
+        # -- end-rule:r21
+        # -- end-rule:r9
     end
   rescue
     _exception -> {:error, invalid()}
@@ -402,42 +409,42 @@ defmodule AshOnetime.Delivery do
       # -- end-rule:pc_o2a_binding
       Process.put(key, {:sealed, inv, envelope})
       :ok
-    # -- end-rule:exit-boundary-e1
-    # -- end-rule:exit-boundary-e10
-    # -- end-rule:exit-boundary-e11
-    # -- end-rule:exit-boundary-e12
-    # -- end-rule:exit-boundary-e13
-    # -- end-rule:exit-boundary-e14
-    # -- end-rule:exit-boundary-e15
-    # -- end-rule:exit-boundary-e16
-    # -- end-rule:exit-boundary-e17
-    # -- end-rule:exit-boundary-e18
-    # -- end-rule:exit-boundary-e19
-    # -- end-rule:exit-boundary-e2
-    # -- end-rule:exit-boundary-e20
-    # -- end-rule:exit-boundary-e21
-    # -- end-rule:exit-boundary-e22
-    # -- end-rule:exit-boundary-e23
-    # -- end-rule:exit-boundary-e24
-    # -- end-rule:exit-boundary-e3
-    # -- end-rule:exit-boundary-e4
-    # -- end-rule:exit-boundary-e5
-    # -- end-rule:exit-boundary-e6
-    # -- end-rule:exit-boundary-e7
-    # -- end-rule:exit-boundary-e8
-    # -- end-rule:exit-boundary-e9
-    # -- end-rule:r1
-    # -- end-rule:r2
-    # -- end-rule:r27
-    # -- end-rule:r28
-    # -- end-rule:r29
-    # -- end-rule:r3
-    # -- end-rule:r_set_bit
-    # -- end-rule:r_set_bit-c-set
-    # -- end-rule:r_set_len
-    # -- end-rule:r_set_len-c-set
-    # -- end-rule:r_set_par
-    # -- end-rule:r_set_par-c-set
+      # -- end-rule:exit-boundary-e1
+      # -- end-rule:exit-boundary-e10
+      # -- end-rule:exit-boundary-e11
+      # -- end-rule:exit-boundary-e12
+      # -- end-rule:exit-boundary-e13
+      # -- end-rule:exit-boundary-e14
+      # -- end-rule:exit-boundary-e15
+      # -- end-rule:exit-boundary-e16
+      # -- end-rule:exit-boundary-e17
+      # -- end-rule:exit-boundary-e18
+      # -- end-rule:exit-boundary-e19
+      # -- end-rule:exit-boundary-e2
+      # -- end-rule:exit-boundary-e20
+      # -- end-rule:exit-boundary-e21
+      # -- end-rule:exit-boundary-e22
+      # -- end-rule:exit-boundary-e23
+      # -- end-rule:exit-boundary-e24
+      # -- end-rule:exit-boundary-e3
+      # -- end-rule:exit-boundary-e4
+      # -- end-rule:exit-boundary-e5
+      # -- end-rule:exit-boundary-e6
+      # -- end-rule:exit-boundary-e7
+      # -- end-rule:exit-boundary-e8
+      # -- end-rule:exit-boundary-e9
+      # -- end-rule:r1
+      # -- end-rule:r2
+      # -- end-rule:r27
+      # -- end-rule:r28
+      # -- end-rule:r29
+      # -- end-rule:r3
+      # -- end-rule:r_set_bit
+      # -- end-rule:r_set_bit-c-set
+      # -- end-rule:r_set_len
+      # -- end-rule:r_set_len-c-set
+      # -- end-rule:r_set_par
+      # -- end-rule:r_set_par-c-set
     else
       _other -> {:error, lost()}
     end
@@ -492,8 +499,9 @@ defmodule AshOnetime.Delivery do
         # rule:r_iso_completion
         Process.put(key, {:done, inv, :executed, envelope, {target, claim}})
         :ok
-# -- end-rule:r19
-# -- end-rule:r4
+
+      # -- end-rule:r19
+      # -- end-rule:r4
       # -- end-rule:r_iso_completion
 
       # Only an executing admission produces, so a replay or a recovery completes an entry
@@ -512,7 +520,8 @@ defmodule AshOnetime.Delivery do
       {{:sealed, ^inv, _envelope}, :replayed, _state} ->
         Process.put(key, {:done, inv, :replayed, nil, nil})
         :ok
-# -- end-rule:delivery-finalize-replay-drop
+
+      # -- end-rule:delivery-finalize-replay-drop
       # -- end-rule:r23
 
       _other ->

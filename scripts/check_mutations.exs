@@ -3101,7 +3101,8 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "mutation checker self-test proves restoration requires an executed ExUnit result",
       assertion: "assert status == 0, output",
-      assertion_line: 109
+      assertion_line: 109,
+      red_summary: "mutation checker self-test failed: restoration receipt guard opened"
     },
     "canonical" => %{
       path: "lib/ash_onetime/canonical.ex",
@@ -4753,8 +4754,8 @@ defmodule AshOnetime.MutationCheck do
     },
     "executing-only-embedded-return" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
-      original: "      :error -> embedded_return(context.action)",
-      mutated: "      :error -> :error",
+      original: "      :error ->\n        embedded_return(context.action)",
+      mutated: "      :error ->\n        :error",
       test: "test/compile_fixtures_test.exs",
       tag: "returned_record_embedded_mutation",
       test_name: "rejects matrix case executing_only_embedded_attribute at its semantic option",
@@ -11125,10 +11126,6 @@ defmodule AshOnetime.MutationCheck do
         System.halt(1)
     end
 
-    # rule:source-site-audit-proof
-    audit_registered_sites!()
-    audit_shards!()
-
     execution_guard_closed? =
       try do
         assert_exunit_execution!("self-test", "SIGTERM received - shutting down")
@@ -11143,6 +11140,10 @@ defmodule AshOnetime.MutationCheck do
       IO.puts(:stderr, "mutation checker self-test failed: restoration receipt guard opened")
       System.halt(1)
     end
+
+    # rule:source-site-audit-proof
+    audit_registered_sites!()
+    audit_shards!()
 
     invalid_red_outputs = [
       "invalid test lane declaration\nFailed: 1 test",

@@ -799,7 +799,8 @@ defmodule AshOnetime.Resource.Transformer do
       compiled(candidate) == :ok and ResourceInfo.resource?(candidate) and
           not ResourceInfo.embedded?(candidate) ->
         {:ok, candidate}
-# -- end-rule:returned-record-verifier-embedded
+
+      # -- end-rule:returned-record-verifier-embedded
       # -- end-rule:returned-record-verifier-resource
 
       true ->
@@ -816,10 +817,13 @@ defmodule AshOnetime.Resource.Transformer do
   # name must not name its fields either.
   defp returned_value_source(context) do
     case record_source(context) do
-      {:ok, source} -> {:ok, source}
+      {:ok, source} ->
+        {:ok, source}
+
       # rule:executing-only-embedded-return
-      :error -> embedded_return(context.action)
-    # -- end-rule:executing-only-embedded-return
+      :error ->
+        embedded_return(context.action)
+        # -- end-rule:executing-only-embedded-return
     end
   end
 
@@ -907,8 +911,8 @@ defmodule AshOnetime.Resource.Transformer do
         )
 
       # V7
+      # rule:executing-only-require-atomic
       context.action.type in [:update, :destroy] and
-          # rule:executing-only-require-atomic
           Map.get(context.action, :require_atomic?) == true ->
         # -- end-rule:executing-only-require-atomic
         error(

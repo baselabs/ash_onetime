@@ -582,6 +582,7 @@ defmodule AshOnetime.Store.Postgres do
       -- rule:delivery-completion-attempt
       AND effect_attempt = $6::bigint
     """
+
     # -- end-rule:delivery-committed-generation
 
     case dispatched_query(
@@ -1260,7 +1261,7 @@ defmodule AshOnetime.Store.Postgres do
           # rule:pc_o4_completion_deadline_expression
           # rule:M-dst-complete
           ", retain_until = statement_timestamp() + COALESCE($10::bigint, extract(epoch FROM (retain_until - admitted_at))) * interval '1 second', response_retain_until = statement_timestamp() + COALESCE($11::bigint, $10::bigint, extract(epoch FROM (response_retain_until - admitted_at))) * interval '1 second'"
-      # -- end-rule:pc_o4_completion_deadline_expression
+          # -- end-rule:pc_o4_completion_deadline_expression
       end
 
     retention_update =
@@ -1291,11 +1292,10 @@ defmodule AshOnetime.Store.Postgres do
     RETURNING #{Enum.join(@idempotency_columns, ", ")}
     """
 
+    # rule:pc_o4_date_copy
     parameters =
-      # rule:pc_o4_date_copy
       [partition_date, codec, digest] ++
         Tuple.to_list(logical_key(claim)) ++
-        # -- end-rule:pc_o4_date_copy
         [
           dump_uuid(claim.id),
           # rule:r25
@@ -1313,6 +1313,8 @@ defmodule AshOnetime.Store.Postgres do
       {:ok, _result} -> {:error, Result.failure(:store_invariant, :sent, :open)}
       {:error, %Result{} = result} -> {:error, result}
     end
+
+    # -- end-rule:pc_o4_date_copy
   end
 
   defp database_date(target, mode) do
@@ -1882,9 +1884,12 @@ defmodule AshOnetime.Store.Postgres do
 
     # rule:r_iso_backend_copy
     case SQL.query(target.dynamic_repo, sql, parameters) do
-      {:ok, result} -> {:ok, result}
-      {:error, error} -> {:error, classify_query_error(error)}
-    # -- end-rule:r_iso_backend_copy
+      {:ok, result} ->
+        {:ok, result}
+
+      {:error, error} ->
+        {:error, classify_query_error(error)}
+        # -- end-rule:r_iso_backend_copy
     end
   rescue
     _exception -> {:error, Result.failure(:dispatched_unknown, :unknown, :unknown)}

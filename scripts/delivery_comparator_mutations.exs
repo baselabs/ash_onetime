@@ -268,7 +268,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
     %{
       id: :r9,
       path: "lib/ash_onetime/delivery.ex",
-      original: "      {:ok, values} -> seal(handle, values)\n",
+      original: "      {:ok, values} ->\n        seal(handle, values)\n",
       mutated:
         "      {:ok, values} ->\n        result = seal(handle, values)\n        module.produce(subject, context)\n        result\n",
       action: :issue,
@@ -401,7 +401,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
     %{
       id: :r20,
       path: "lib/ash_onetime/delivery.ex",
-      original: "      {:ok, values} -> seal(handle, values)\n",
+      original: "      {:ok, values} ->\n        seal(handle, values)\n",
       mutated:
         "      {:ok, values} ->\n        Logger.metadata(m: rem(byte_size(hd(Map.values(values))), 2))\n        seal(handle, values)\n",
       action: :issue,
@@ -414,7 +414,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
     %{
       id: :r21,
       path: "lib/ash_onetime/delivery.ex",
-      original: "      {:ok, values} -> seal(handle, values)\n",
+      original: "      {:ok, values} ->\n        seal(handle, values)\n",
       mutated:
         "      {:ok, values} ->\n        parity = rem(byte_size(Map.fetch!(values, :long)), 2)\n        Task.start(fn ->\n          :persistent_term.put(:m17, parity)\n          :persistent_term.erase(:m17)\n        end)\n        seal(handle, values)\n",
       action: :issue,
@@ -702,7 +702,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       label: "R-iso-backend-copy",
       path: "lib/ash_onetime/store/postgres.ex",
       original:
-        "    case SQL.query(target.dynamic_repo, sql, parameters) do\n      {:ok, result} -> {:ok, result}\n",
+        "    case SQL.query(target.dynamic_repo, sql, parameters) do\n      {:ok, result} ->\n        {:ok, result}\n",
       mutated:
         "    case SQL.query(target.dynamic_repo, sql, parameters) do\n      {:ok, result} ->\n        result = case {sql, parameters, result} do\n          {<<\"SELECT state\\n\", _::binary>>, [_, COMPARATOR_BACKEND_OPERATION | _], %Postgrex.Result{connection_id: backend}} ->\n            %{result | connection_id: if(backend == COMPARATOR_BACKEND_A, do: COMPARATOR_BACKEND_B, else: COMPARATOR_BACKEND_A)}\n          _ -> result\n        end\n        {:ok, result}\n",
       action: :external_issue,

@@ -93,7 +93,8 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
     s =
       case e.event do
-        {_, :call, {AshOnetime.Store.Postgres, :decode_claim, [:idempotency, row]}} ->
+        {_, :call, {AshOnetime.Store.Postgres, function, [:idempotency, row]}}
+        when function in [:decode_claim, :decode_selected_claim] ->
           result_row(row, [2, 2, 1], e, s)
 
         _ ->

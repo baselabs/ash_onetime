@@ -202,6 +202,7 @@ defmodule AshOnetime.ExternalRecovery do
         # rule:r11
         emit(state, started, :execute_succeeded)
         finalize(state, subject, protection, peer_result, started, :executed)
+
       # -- end-rule:r11
 
       :unknown ->

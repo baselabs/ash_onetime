@@ -191,7 +191,7 @@ defmodule AshOnetime.DeliveryComparatorControls do
     %{
       id: :pc_attribute_copy_run,
       path: "lib/ash_onetime/admission.ex",
-      original: "        %Ash.Changeset{} -> [subject.attributes | surfaces]\n",
+      original: "        %Ash.Changeset{} ->\n          [subject.attributes | surfaces]\n",
       mutated:
         "        %Ash.Changeset{} -> [if(subject.resource == AshOnetime.Test.ExitBoundary.Withheld, do: Map.put(subject.attributes, :id, \"00000000-0000-4000-8000-000000000099\"), else: subject.attributes) | surfaces]\n",
       action: :issue,
@@ -204,7 +204,7 @@ defmodule AshOnetime.DeliveryComparatorControls do
     %{
       id: :pc_attribute_copy_twin,
       path: "lib/ash_onetime/admission.ex",
-      original: "        %Ash.Changeset{} -> [subject.attributes | surfaces]\n",
+      original: "        %Ash.Changeset{} ->\n          [subject.attributes | surfaces]\n",
       mutated:
         "        %Ash.Changeset{} -> [if(subject.resource == AshOnetime.Test.ExitBoundary.Returned, do: Map.put(subject.attributes, :id, \"00000000-0000-4000-8000-000000000099\"), else: subject.attributes) | surfaces]\n",
       action: :issue,
