@@ -152,7 +152,8 @@ defmodule <%= inspect(module) %> do
       UPDATE #{q(@claims)} SET response_retain_until=retain_until;
       IF force_claims THEN ALTER TABLE #{q(@claims)} FORCE ROW LEVEL SECURITY; END IF;
       ALTER TABLE #{q(@claims)} ALTER COLUMN response_retain_until SET NOT NULL;
-      ALTER TABLE #{q(@claims)} ADD <%= EEx.eval_file(Path.join([__DIR__, "external_state", "claims.sql"]), fragment: :checks) |> String.trim() |> String.replace(",\n-- rule:", ", ADD\n-- rule:") %>;
+      ALTER TABLE #{q(@claims)} ADD
+      <%= EEx.eval_file(Path.join([__DIR__, "external_state", "claims.sql"]), fragment: :checks) |> String.trim() |> String.replace(",\n-- rule:", ", ADD\n-- rule:") %>;
       -- rule:external-up-restore-role
       PERFORM set_config('role',migrating_role,true);
     END
@@ -266,11 +267,13 @@ defmodule <%= inspect(module) %> do
         END LOOP;
       END LOOP;
       PERFORM set_config('role',owner_name,true);
+      -- Maintenance rollback can leave a journal policy bound to maintenance_active.
+      -- All snapshots have been replayed; drop the journal before that helper.
+      DROP TABLE #{q("ash_onetime_external_state_restore")};
       FOR routine IN SELECT r FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@external_functions))}::jsonb) r
         WHERE r->>'name' NOT IN (SELECT jsonb_array_elements_text(#{maintenance_literal(Jason.encode!(@previous_names))}::jsonb)) LOOP
         EXECUTE format('DROP FUNCTION %I.%I(%s)',install_schema,routine->>'name',routine->>'types');
       END LOOP;
-      DROP TABLE #{q("ash_onetime_external_state_restore")};
       -- rule:external-down-restore-role
       PERFORM set_config('role',migrating_role,true);
     END
@@ -323,7 +326,7 @@ defmodule <%= inspect(module) %> do
       <%= EEx.eval_file(Path.join([__DIR__, "external_state", "outcomes.sql"]), fragment: :triggers) %>
       FOR target IN WITH RECURSIVE relations(oid) AS (
         SELECT c.oid FROM pg_class c WHERE c.relnamespace=(SELECT oid FROM pg_namespace WHERE nspname=install_schema)
-          AND c.relname IN ('ash_onetime_idempotency_claims','ash_onetime_nonce_claims','ash_onetime_response_payloads','ash_onetime_effect_outcomes')
+          AND c.relname IN ('ash_onetime_idempotency_claims','ash_onetime_nonce_claims','ash_onetime_response_payloads','ash_onetime_effect_outcomes','ash_onetime_external_state_restore')
         UNION SELECT i.inhrelid FROM pg_inherits i JOIN relations r ON r.oid=i.inhparent
       ) SELECT oid FROM relations LOOP
         EXECUTE format('

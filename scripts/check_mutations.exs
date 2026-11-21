@@ -302,25 +302,25 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "plain: external-state rollback refuses unresolved claims before removing protection",
       assertion: "assert",
-      assertion_line: 150,
+      assertion_line: 152,
       required_failures: [
         %{
           test_name:
             "plain: external-state rollback refuses unresolved claims before removing protection",
           assertion: "assert",
-          assertion_line: 150
+          assertion_line: 152
         },
         %{
           test_name:
             "2: external-state rollback refuses unresolved claims before removing protection",
           assertion: "assert",
-          assertion_line: 150
+          assertion_line: 152
         },
         %{
           test_name:
             "4: external-state rollback refuses unresolved claims before removing protection",
           assertion: "assert",
-          assertion_line: 150
+          assertion_line: 152
         }
       ]
     },
@@ -333,23 +333,23 @@ defmodule AshOnetime.MutationCheck do
       tag: "external_state_upgrade_mutation",
       test_name: "plain: external-state rollback refuses expired responses before the old CHECK",
       assertion: "assert",
-      assertion_line: 200,
+      assertion_line: 202,
       required_failures: [
         %{
           test_name:
             "plain: external-state rollback refuses expired responses before the old CHECK",
           assertion: "assert",
-          assertion_line: 200
+          assertion_line: 202
         },
         %{
           test_name: "2: external-state rollback refuses expired responses before the old CHECK",
           assertion: "assert",
-          assertion_line: 200
+          assertion_line: 202
         },
         %{
           test_name: "4: external-state rollback refuses expired responses before the old CHECK",
           assertion: "assert",
-          assertion_line: 200
+          assertion_line: 202
         }
       ]
     },
@@ -363,25 +363,25 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "plain: maintenance rollback refuses unresolved claims before restoring routines",
       assertion: "assert",
-      assertion_line: 167,
+      assertion_line: 169,
       required_failures: [
         %{
           test_name:
             "plain: maintenance rollback refuses unresolved claims before restoring routines",
           assertion: "assert",
-          assertion_line: 167
+          assertion_line: 169
         },
         %{
           test_name:
             "2: maintenance rollback refuses unresolved claims before restoring routines",
           assertion: "assert",
-          assertion_line: 167
+          assertion_line: 169
         },
         %{
           test_name:
             "4: maintenance rollback refuses unresolved claims before restoring routines",
           assertion: "assert",
-          assertion_line: 167
+          assertion_line: 169
         }
       ]
     },
@@ -2352,15 +2352,15 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert observed == [[\"100ms\"]]"
     },
     "maintenance-effective-column-authority" => %{
-      tag: "effective_column_authority_mutation",
+      tag: "effective_select_safety_mutation",
       path: "priv/templates/migrations/maintenance/trust.sql",
       original: "OR has_any_column_privilege(holder.oid,t.oid,",
       test: "test/ash_onetime/store/maintenance_test.exs",
-      test_name: "forward roll copies policies and flags and resets table and column ACLs",
-      assertion:
-        "assert {:error, %Postgrex.Error{postgres: %{pg_code: \"P0001\", message: message}}} =",
+      test_name:
+        "SELECT stays refused because existing children do not share root RLS and policies",
+      assertion: "refute scalar(",
       mutated: "OR false AND has_any_column_privilege(holder.oid,t.oid,",
-      assertion_line: 2861
+      assertion_line: 1981
     },
     "maintenance-effective-relation-authority" => %{
       tag: "enforcement_table_authority_predicate_mutation",
@@ -2565,11 +2565,12 @@ defmodule AshOnetime.MutationCheck do
     "maintenance-upgrade-reference" => %{
       tag: "review_install_mode",
       path: "priv/templates/migrations/maintenance_helpers.exs",
-      original: "IF \#{mode == :fresh} THEN",
+      original: "-- rule:maintenance-upgrade-reference\n    IF \#{mode == :fresh} THEN",
       test: "test/ash_onetime/store/maintenance_test.exs",
       test_name: "upgrade with missing old routines refuses an existing hostile trigger",
       assertion: "assert_raise Postgrex.Error",
-      mutated: "IF jsonb_array_length(old_functions)=0 THEN",
+      mutated:
+        "-- rule:maintenance-upgrade-reference\n    IF jsonb_array_length(old_functions)=0 THEN",
       assertion_line: 2078
     },
     "maintenance-shape-type" => %{
@@ -7810,25 +7811,25 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "plain: trust-relation-shape-refusal reports its owning trust refusal",
                  assertion: "assert",
-                 assertion_line: 124,
+                 assertion_line: 119,
                  required_failures: [
                    %{
                      test_name:
                        "plain: trust-relation-shape-refusal reports its owning trust refusal",
                      assertion: "assert",
-                     assertion_line: 124
+                     assertion_line: 119
                    },
                    %{
                      test_name:
                        "2: trust-relation-shape-refusal reports its owning trust refusal",
                      assertion: "assert",
-                     assertion_line: 124
+                     assertion_line: 119
                    },
                    %{
                      test_name:
                        "2: trust rejects a changed hash bound through the native child shape",
                      assertion: "assert",
-                     assertion_line: 190
+                     assertion_line: 185
                    }
                  ]
                },
@@ -7841,17 +7842,17 @@ defmodule AshOnetime.MutationCheck do
                  tag: "enforcement_trust_policy_refusal_mutation",
                  test_name: "plain: trust-policy-refusal reports its owning trust refusal",
                  assertion: "assert",
-                 assertion_line: 124,
+                 assertion_line: 119,
                  required_failures: [
                    %{
                      test_name: "plain: trust-policy-refusal reports its owning trust refusal",
                      assertion: "assert",
-                     assertion_line: 124
+                     assertion_line: 119
                    },
                    %{
                      test_name: "2: trust-policy-refusal reports its owning trust refusal",
                      assertion: "assert",
-                     assertion_line: 124
+                     assertion_line: 119
                    }
                  ]
                },
@@ -7864,17 +7865,17 @@ defmodule AshOnetime.MutationCheck do
                  tag: "enforcement_trust_authority_refusal_mutation",
                  test_name: "plain: trust-authority-refusal reports its owning trust refusal",
                  assertion: "assert",
-                 assertion_line: 124,
+                 assertion_line: 119,
                  required_failures: [
                    %{
                      test_name: "plain: trust-authority-refusal reports its owning trust refusal",
                      assertion: "assert",
-                     assertion_line: 124
+                     assertion_line: 119
                    },
                    %{
                      test_name: "2: trust-authority-refusal reports its owning trust refusal",
                      assertion: "assert",
-                     assertion_line: 124
+                     assertion_line: 119
                    }
                  ]
                },
@@ -7887,18 +7888,18 @@ defmodule AshOnetime.MutationCheck do
                  tag: "enforcement_trust_helper_public_refusal_mutation",
                  test_name: "plain: trust-helper-public-refusal reports its owning trust refusal",
                  assertion: "assert",
-                 assertion_line: 131,
+                 assertion_line: 126,
                  required_failures: [
                    %{
                      test_name:
                        "plain: trust-helper-public-refusal reports its owning trust refusal",
                      assertion: "assert",
-                     assertion_line: 131
+                     assertion_line: 126
                    },
                    %{
                      test_name: "2: trust-helper-public-refusal reports its owning trust refusal",
                      assertion: "assert",
-                     assertion_line: 131
+                     assertion_line: 126
                    }
                  ]
                },
@@ -7910,18 +7911,18 @@ defmodule AshOnetime.MutationCheck do
                  tag: "enforcement_trust_package_acl_refusal_mutation",
                  test_name: "plain: trust-package-acl-refusal reports its owning trust refusal",
                  assertion: "assert",
-                 assertion_line: 124,
+                 assertion_line: 119,
                  required_failures: [
                    %{
                      test_name:
                        "plain: trust-package-acl-refusal reports its owning trust refusal",
                      assertion: "assert",
-                     assertion_line: 124
+                     assertion_line: 119
                    },
                    %{
                      test_name: "2: trust-package-acl-refusal reports its owning trust refusal",
                      assertion: "assert",
-                     assertion_line: 124
+                     assertion_line: 119
                    }
                  ]
                },
@@ -7934,19 +7935,19 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "plain: trust-partition-date-refusal reports its owning trust refusal",
                  assertion: "assert String.starts_with?(message, @message)",
-                 assertion_line: 131,
+                 assertion_line: 126,
                  required_failures: [
                    %{
                      test_name:
                        "plain: trust-partition-date-refusal reports its owning trust refusal",
                      assertion: "assert String.starts_with?(message, @message)",
-                     assertion_line: 131
+                     assertion_line: 126
                    },
                    %{
                      test_name:
                        "2: trust-partition-date-refusal reports its owning trust refusal",
                      assertion: "assert String.starts_with?(message, @message)",
-                     assertion_line: 131
+                     assertion_line: 126
                    }
                  ]
                },
@@ -9433,7 +9434,7 @@ defmodule AshOnetime.MutationCheck do
                },
                "external-journal-primary-key" => %{
                  path: "priv/templates/migrations/external_state/restore.sql",
-                 original: "PRIMARY KEY (routine_identity)",
+                 original: ", PRIMARY KEY (routine_identity)",
                  mutated: "",
                  test: "test/ash_onetime/external_state/review_upgrade_test.exs",
                  tag: "external_state_review_upgrade",

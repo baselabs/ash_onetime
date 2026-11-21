@@ -8,14 +8,14 @@ for partitioning <- [nil, 2] do
     @moduletag :enforcement_table_authority_predicate_mutation
 
     test "#{partitioning || "plain"}: a table-only DELETE holder is refused", c do
-      [[child]] =
-        SQL.query!(
-          c.owner_repo,
-          "SELECT inhrelid::regclass::text FROM pg_inherits WHERE inhparent=$1::text::regclass ORDER BY inhrelid LIMIT 1",
-          [rel(c, "ash_onetime_response_payloads")]
-        ).rows
+      outcomes = rel(c, "ash_onetime_effect_outcomes")
+      SQL.query!(c.owner_repo, "GRANT DELETE ON #{outcomes} TO #{q(c.maintainer)}", [])
 
-      SQL.query!(c.owner_repo, "GRANT DELETE ON #{child} TO #{q(c.maintainer)}", [])
+      refute scalar(
+               c.owner_repo,
+               "SELECT has_any_column_privilege($1,$2,'UPDATE,REFERENCES')",
+               [c.maintainer, outcomes]
+             )
 
       assert {:error,
               %Postgrex.Error{

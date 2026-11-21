@@ -266,6 +266,7 @@ defmodule Mix.Tasks.AshOnetime.Gen.MigrationsTest do
              "priv/templates/migrations/external_state.exs",
              "priv/templates/migrations/external_state/claims.sql",
              "priv/templates/migrations/external_state/outcomes.sql",
+             "priv/templates/migrations/external_state/restore.sql",
              "priv/templates/migrations/fact_tables.exs",
              "priv/templates/migrations/hash_partitioned.exs",
              "priv/templates/migrations/install.exs",

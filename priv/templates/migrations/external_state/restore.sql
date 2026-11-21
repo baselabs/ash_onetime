@@ -6,9 +6,9 @@ CREATE TABLE @schema@.ash_onetime_external_state_restore (
   owner_oid oid NOT NULL,
   configuration text[],
   security_definer boolean NOT NULL,
-  grants aclitem[],
+  grants aclitem[]
   -- rule:external-journal-primary-key
-  PRIMARY KEY (routine_identity)
+  , PRIMARY KEY (routine_identity)
 ) USING heap
 <% :create -> %>
       EXECUTE replace(<%= "#" <> "{maintenance_literal(" <> inspect(EEx.eval_file(__ENV__.file, fragment: :ddl)) <> ")}" %>,'@schema@',format('%I',install_schema));

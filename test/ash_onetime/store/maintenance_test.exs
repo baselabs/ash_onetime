@@ -2814,7 +2814,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   @tag rls_child_policy_copy_mutation: true
-  @tag effective_column_authority_mutation: true
+  @tag effective_select_safety_mutation: true
   test "forward roll copies policies and flags and resets table and column ACLs", c do
     parent = rel(c, "ash_onetime_response_payloads")
     sql!(c.owner_repo, "ALTER TABLE #{parent} ENABLE ROW LEVEL SECURITY")

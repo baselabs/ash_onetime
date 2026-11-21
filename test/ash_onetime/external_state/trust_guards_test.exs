@@ -54,17 +54,12 @@ for partitioning <- [nil, 2] do
             end)
 
           "trust-authority-refusal" ->
-            [[child]] =
-              SQL.query!(
-                c.owner_repo,
-                "SELECT inhrelid::regclass::text FROM pg_inherits WHERE inhparent=$1::text::regclass ORDER BY inhrelid LIMIT 1",
-                [rel(c, "ash_onetime_response_payloads")]
-              ).rows
+            table = rel(c, "ash_onetime_effect_outcomes")
 
-            SQL.query!(c.owner_repo, "GRANT DELETE ON #{child} TO #{q(c.maintainer)}", [])
+            SQL.query!(c.owner_repo, "GRANT DELETE ON #{table} TO #{q(c.maintainer)}", [])
 
             on_exit(fn ->
-              SQL.query!(c.owner_repo, "REVOKE DELETE ON #{child} FROM #{q(c.maintainer)}", [])
+              SQL.query!(c.owner_repo, "REVOKE DELETE ON #{table} FROM #{q(c.maintainer)}", [])
             end)
 
           "trust-helper-public-refusal" ->

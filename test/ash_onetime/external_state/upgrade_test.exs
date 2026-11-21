@@ -194,7 +194,7 @@ for partitioning <- [nil, 2, 4] do
 
       assert %{rows: [[1]]} =
                SQL.query!(
-                 c.runtime_repo,
+                 c.owner_repo,
                  "SELECT #{rel(c, "ash_onetime_expire_responses")}(10)",
                  []
                )
