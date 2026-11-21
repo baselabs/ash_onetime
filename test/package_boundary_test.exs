@@ -3,6 +3,7 @@ defmodule AshOnetime.PackageBoundaryTest do
 
   alias AshOnetime.Test.Migration
   alias AshOnetime.Test.Repo
+  alias Ecto.Adapters.SQL
 
   # The one application callback the package owns: the supervision tree for bounded
   # callbacks (KeyCustody and verifier workers) and the maintenance installs.
@@ -68,6 +69,28 @@ defmodule AshOnetime.PackageBoundaryTest do
     assert Application.fetch_env!(:ash_onetime, Repo)[:url] == database_url
 
     assert :ok = Migration.assert_isolated_database!()
+  end
+
+  test "the live harness uses the checked platform engine and its disposable auth contract" do
+    engine = File.read!(Path.expand("../.github/postgres.ref", __DIR__))
+    [_, version] = Regex.run(~r/:([0-9]+\.[0-9]+)-inputs-/, engine)
+
+    assert [[^version, "/var/lib/pg/data", "/tmp", "scram-sha-256"]] =
+             SQL.query!(
+               Repo,
+               "SELECT split_part(current_setting('server_version'),' ',1), current_setting('data_directory'), current_setting('unix_socket_directories'), current_setting('password_encryption')",
+               []
+             ).rows
+
+    rules = SQL.query!(Repo, "SELECT type, auth_method, error FROM pg_hba_file_rules", []).rows
+    assert Enum.any?(rules, &match?(["local", "trust", nil], &1))
+    assert Enum.any?(rules, &match?(["host", "scram-sha-256", nil], &1))
+
+    assert Enum.all?(rules, fn
+             ["local", "trust", nil] -> true
+             [type, "scram-sha-256", nil] when type in ["host", "hostssl", "hostnossl"] -> true
+             _ -> false
+           end)
   end
 
   defp violations(entries, deps) do

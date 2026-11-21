@@ -1,30 +1,50 @@
 # Contributing
 
-The tests require a dedicated PostgreSQL 18 instance: `DATABASE_URL` must name
+The tests require the dedicated PostgreSQL 18 platform engine: `DATABASE_URL` must name
 `ash_onetime_test` on `127.0.0.1`, as `postgres`, on a non-default port.
 The URL guard cannot detect unrelated databases: never use a shared server.
 Maintenance tests make cluster-wide grants and require a proven throwaway server: start it
 with a hostname that begins `ao-` and set `ASH_ONETIME_TEST_SERVER` to that hostname. The
 tests read `/etc/hostname` from the server and refuse a mismatch. In GitHub Actions the
 hostname must also carry the run and attempt (`ao-<run_id>-<run_attempt>-`), which CI's
-per-job service containers do.
+per-job containers do.
 
-The repository ships no database container. Point `.env` at a PostgreSQL 18 you
-already run as a dedicated instance: copy `.env.example` to `.env`, set `PGPORT` to
-that server's non-standard port and keep the port inside `DATABASE_URL` in sync. If the
-server is unreachable, fix or report it; do not start a second database on another port.
+Every database job uses [the shared PostgreSQL action](.github/actions/postgres/action.yml).
+The single checked-in [engine reference](.github/postgres.ref) currently selects PostgreSQL
+18.6. Before pulling or starting it, the action anonymously resolves the public
+`ghcr.io/baselabs/postgres:current` digest, refuses a mismatch, and pulls the checked reference
+by digest. It never pulls the moving tag or reads private infra or runner configuration.
 
-```sh
-cp .env.example .env   # then set PGPORT and DATABASE_URL's port to your server's port
-set -a && . ./.env && set +a
-mix deps.get
-mix test
-```
+The action starts the engine with `--entrypoint baselabs-test-postgres`, the shape infra
+qualifies; that command runs as the image's PostgreSQL user. The action
+passes `TEST_PG_USER=postgres`, `TEST_PG_PASSWORD` and `TEST_PG_DATABASE=ash_onetime_test` by
+environment name; these are isolated fixture values, never external-service credentials.
+The action mounts `/var/lib/pg` as tmpfs owned by the image's PostgreSQL user (UID/GID 26),
+and `/tmp` as disposable tmpfs. The command refuses existing data, initializes
+`/var/lib/pg/data`, and executes
+readable `/init/*.sql` in lexical order. Socket connections trust locally at `/tmp`; all TCP
+rules use `scram-sha-256`. It listens on `0.0.0.0` inside the container, published only on
+`127.0.0.1:18841`. Readiness uses `pg_isready -h 127.0.0.1`, which answers only after init.
+
+Lanes that exercise replication start a second engine on loopback port `18842`, with
+`-c wal_level=logical -c logging_collector=on -c log_destination=csvlog`. The action exports
+`ASH_ONETIME_LOGICAL_URL`; workflows supply `DATABASE_URL`, `ASH_ONETIME_SUPERUSER_URL` and
+the run-bound `ASH_ONETIME_TEST_SERVER`. Tests derive their connections from those values.
+The ordinary and logical containers have separate data and hostnames. An `if: always()`
+stop removes both with `docker rm -f -v`, including on failed jobs, and prints failure logs.
+The PGDG client tools remain pinned in `.github/service-pins`; their major must match the
+engine, while client patch releases may advance independently.
+
+Compile, tests, format checks, type checks and docs run in this repository's GitHub Actions
+jobs on hosted Ubuntu runners, never on an agent's workstation or a shared build machine.
+Push a work branch to run `Work`; it exercises the whole suite and both committed locks.
+Agents do not dispatch workflows. A failed database start is fixed through this shared
+action, never by starting a replacement server elsewhere.
 
 Develop on macOS, Linux, or WSL2. In WSL2, clone inside the Linux filesystem,
 not under `/mnt/c`. CI runs on Linux.
 
-CI runs these checks; run the ones that cover your change:
+CI runs these checks:
 
 ```sh
 mix format --check-formatted
@@ -46,7 +66,7 @@ Livebooks and optional consumers before a landing candidate exists. Those jobs r
 mix run --no-start scripts/check_deps_currency.exs
 mix spark.cheat_sheets --check --extensions AshOnetime.Resource
 MIX_ENV=test mix ash.codegen --check                      # committed test-repo codegen freshness
-MIX_ENV=test mix run scripts/check_mutations.exs -- all   # with DATABASE_URL exported as in your .env
+MIX_ENV=test mix run scripts/check_mutations.exs -- all   # with CI's DATABASE_URL
                                                           # CI runs it as shards: -- --shard I/N all
 elixir scripts/check_livebooks.exs --local                # executes source cells against PostgreSQL
 python3 scripts/release_archives.py build _build/release # package and docs archives, inspected
@@ -86,7 +106,7 @@ Consumers verify files from that GitHub release; the workflow artifact expires. 
 creates a GitHub release or runs on a tag.
 
 The separate, keyless `published-livebooks` job waits until the archives are served, then runs
-`elixir scripts/check_livebooks.exs --published` against its own PostgreSQL service. It starts
+`elixir scripts/check_livebooks.exs --published` against its own platform engine. It starts
 from Hex rather than the checkout and executes all notebook cells against the package users
 will install. Qualification executes the notebooks only with `--local`.
 
@@ -109,8 +129,8 @@ for each directly-consumed package in the affected family.
 
 `test/ash_onetime/store/operation_hold_privileged_test.exs` carries the
 `:operation_hold_superuser` tag. It skips unless `ASH_ONETIME_SUPERUSER_URL` supplies a separate,
-throwaway PostgreSQL 18 superuser connection. The ordinary `DATABASE_URL` stays on the
-project's dedicated test database. Run:
+throwaway PostgreSQL 18 superuser connection supplied by the shared action's fixture. The ordinary `DATABASE_URL` stays on the
+project's dedicated test database. CI runs:
 
 ```sh
 mix test test/ash_onetime/store/operation_hold_privileged_test.exs --only operation_hold_superuser

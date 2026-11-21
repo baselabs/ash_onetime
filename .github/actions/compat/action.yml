@@ -24,7 +24,9 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: ./.github/actions/logical-postgres
+    - uses: ./.github/actions/postgres
+      with:
+        logical: true
 
     - uses: ./.github/actions/postgres-client
       with:
@@ -100,7 +102,8 @@ runs:
     - shell: bash
       run: mix hex.build
 
-    - uses: ./.github/actions/logical-postgres
+    - uses: ./.github/actions/postgres
       if: always()
       with:
         mode: stop
+        logical: true

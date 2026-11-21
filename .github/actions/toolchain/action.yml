@@ -13,9 +13,6 @@ outputs:
   ash_floor:
     description: Declared Ash security floor from mix.exs
     value: ${{ steps.ash-floor.outputs.ash_floor }}
-  postgres_image:
-    description: PostgreSQL server image pinned by digest in .github/service-pins
-    value: ${{ steps.service-pins.outputs.postgres_image }}
   postgres_client:
     description: PGDG PostgreSQL client package version from .github/service-pins
     value: ${{ steps.service-pins.outputs.postgres_client }}
@@ -78,7 +75,6 @@ runs:
         from pathlib import Path
 
         patterns = {
-            'postgres_image': r'postgres:[0-9]+\.[0-9]+-[a-z]+@sha256:[0-9a-f]{64}',
             'postgres_client': r'[0-9]+\.[0-9]+-[0-9]+\.pgdg24\.04\+[0-9]+',
             'pgdg_key': r'[0-9A-F]{40}',
         }
@@ -95,6 +91,10 @@ runs:
         missing = sorted(set(patterns) - set(entries))
         if missing:
             raise SystemExit('Missing from .github/service-pins: ' + ', '.join(missing))
+        engine = Path('.github/postgres.ref').read_text().strip()
+        major = re.fullmatch(r'ghcr\.io/baselabs/postgres:([0-9]+)\.[0-9]+-inputs-[0-9a-f]{64}@sha256:[0-9a-f]{64}', engine)
+        if major is None or entries['postgres_client'].split('.')[0] != major[1]:
+            raise SystemExit('The PGDG client major must match .github/postgres.ref')
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             for name, value in entries.items():
                 output.write(f'{name}={value}\n')

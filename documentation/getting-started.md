@@ -147,6 +147,7 @@ render an exception's diagnostic message to the client.
 ## Developing on `ash_onetime` itself
 
 Contributors and library maintainers need the test database harness documented in
-[CONTRIBUTING.md](../CONTRIBUTING.md). The repository ships no database container. The suite
-fails closed unless `DATABASE_URL` points at the dedicated PostgreSQL 18 database configured
-in the contributor's `.env` on a non-default loopback port.
+[CONTRIBUTING.md](../CONTRIBUTING.md). GitHub Actions starts the checked platform engine
+through the shared PostgreSQL action. The suite fails closed unless `DATABASE_URL` points
+at its dedicated PostgreSQL 18 database on a non-default loopback port; agents run the
+checks only on those hosted runners.
