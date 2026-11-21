@@ -450,7 +450,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           false
       end)
 
-    assert prepared != nil, "the owner return constructing the intermediate state must be captured"
+    assert prepared != nil,
+           "the owner return constructing the intermediate state must be captured"
+
     {_, :return_from, _, {:ok, query, protocol}} = prepared.event
     assert protocol.postgres == {:idle, query.ref}
 

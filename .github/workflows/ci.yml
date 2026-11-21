@@ -241,6 +241,7 @@ jobs:
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
           lane: native
+          cache: none
 
   comparator-controls:
     name: "Comparator controls"

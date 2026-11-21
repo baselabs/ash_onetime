@@ -421,11 +421,11 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     conn = %DBConnection{pool_ref: pool_ref, conn_ref: conn_ref}
     s = leave(s, {DBConnection, :checkout, 3}, {:ok, conn, nil})
 
-    s = status(s, holder, protocol, conn_row)
+    s = status(s, holder, protocol, conn_row, opts)
     s = leaf(s, {:erlang, :put, 2}, [{Ecto.Adapters.SQL, pool}, conn], :undefined)
     s = leaf(s, @literal, [], :allocation_checkpoint)
     s = leaf(s, {:erlang, :erase, 1}, [{Ecto.Adapters.SQL, pool}], conn)
-    s = status(s, holder, protocol, conn_row)
+    s = status(s, holder, protocol, conn_row, opts)
     s = enter(s, {DBConnection.Holder, :checkin, 1}, [pool_ref])
     {s, at} = origin(s, {:erlang, :monotonic_time, 0}, [], :integer)
     s = leaf(s, {:erlang, :cancel_timer, 2}, [timer, [async: true, info: false]], :ok)
@@ -438,8 +438,9 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     _ -> fail(s, hd(s.events), :checkpoint_protocol, :malformed, :closed_native_program)
   end
 
-  defp status(s, holder, protocol, row) do
+  defp status(s, holder, protocol, row, opts) do
     s = leaf(s, {:ets, :lookup, 2}, [holder, :conn], row)
+    s = leaf(s, {Postgrex.Protocol, :handle_status, 2}, [opts, protocol], {:idle, protocol})
     leaf(s, {:ets, :update_element, 3}, [holder, :conn, {4, protocol}], true)
   end
 
