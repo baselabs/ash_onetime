@@ -554,27 +554,21 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   test "Connection streams: Postgrex replays its own unread native buffer" do
     replays =
       for _ <- 1..20 do
-        run = ConnectionNative.observe(:buffered)
+        captured = buffered_decoders(nil)
+        assert captured.decoders.errors == []
 
-        if native_result(run) != :ok do
-          IO.puts(
-            "CONNECTION_STREAM_BUFFER_FAILURE: " <>
-              inspect(%{result: native_result(run), program: buffer_failure_program(run)})
-          )
+        for replay <- captured.decoders.replays do
+          assert length(replay.copies) == 5
+          assert_native_copies(replay.copies, captured.events, replay.input)
+          assert Enum.sum(Enum.map(replay.provenance, & &1.length)) == byte_size(replay.input)
+
+          for span <- replay.provenance do
+            expected = binary_part(replay.input, span.offset - replay.start, span.length)
+            assert_native_copies(span.copies, captured.events, expected)
+          end
         end
 
-        assert native_result(run) == :ok
-
-        events =
-          run.events
-          |> Enum.with_index()
-          |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
-
-        native = NativeTransport.build(%{events: events})
-        native = Map.put(native, :historical, run.native_history)
-        assert native.errors == []
-        assert_native_streams_complete(run)
-        buffer_replays(events, native)
+        buffer_replays(captured.events, captured.native)
       end
 
     replays = List.flatten(replays)
@@ -609,28 +603,84 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   test "Connection streams: an extra native replay copy has no decoder origin" do
     corruptions =
       for _ <- 1..20,
-          run = ConnectionNative.observe(:buffered, :replay_source),
-          :ok = native_result(run),
-          Enum.any?(run.events, &foreign_replay_copy?/1) do
-        events =
-          run.events
-          |> Enum.with_index()
-          |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
-
-        native = NativeTransport.build(%{events: events})
-        native = Map.put(native, :historical, run.native_history)
-        assert native.errors == []
-        streams = ConnectionReads.build(native)
-        assert streams.errors == []
-
-        decoders =
-          ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
-
-        assert Enum.map(decoders.errors, & &1.rule) == [:decoder_replay_source]
-        decoders
+          captured = buffered_decoders(:replay_source),
+          captured.foreign? do
+        assert Enum.map(captured.decoders.errors, & &1.rule) == [:decoder_replay_source]
+        captured
       end
 
     assert corruptions != [], "the native runs must actually produce the foreign replay copy"
+    captured = hd(corruptions)
+
+    for mutant <- [:stream_length, :stream_timeout, :stream_query_copy, :stream_replay_source] do
+      checked =
+        ComparatorMutants.with_mutant(mutant, fn ->
+          ConnectionDecoders.build(
+            %{events: captured.events},
+            captured.native,
+            captured.streams,
+            captured.historical
+          )
+        end)
+
+      expected = if mutant == :stream_replay_source, do: [], else: [:decoder_replay_source]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    restored =
+      ConnectionDecoders.build(
+        %{events: captured.events},
+        captured.native,
+        captured.streams,
+        captured.historical
+      )
+
+    assert Enum.map(restored.errors, & &1.rule) == [:decoder_replay_source]
+
+    fresh =
+      Enum.find_value(1..20, fn _ ->
+        positive = buffered_decoders(nil)
+        assert positive.decoders.errors == []
+        if positive.decoders.replays != [], do: positive
+      end)
+
+    assert fresh != nil, "the restored validator must accept a fresh actual native replay"
+    IO.puts("CONNECTION_STREAM_NATIVE_ISOLATION: stream_replay_source RED; exact restore GREEN")
+  end
+
+  defp buffered_decoders(corruption) do
+    run = ConnectionNative.observe(:buffered, corruption)
+
+    if native_result(run) != :ok do
+      IO.puts(
+        "CONNECTION_STREAM_BUFFER_FAILURE: " <>
+          inspect(%{result: native_result(run), program: buffer_failure_program(run)})
+      )
+    end
+
+    assert native_result(run) == :ok
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    native = NativeTransport.build(%{events: events})
+    native = Map.put(native, :historical, run.native_history)
+    assert native.errors == []
+    assert_native_streams_complete(run)
+    streams = ConnectionReads.build(native)
+    assert streams.errors == []
+    decoders = ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
+
+    %{
+      native: native,
+      streams: streams,
+      events: events,
+      decoders: decoders,
+      historical: run.native_history,
+      foreign?: Enum.any?(run.events, &foreign_replay_copy?/1)
+    }
   end
 
   defp foreign_replay_copy?(%{event: {pid, :send, {:tcp, _, _}, pid}, stack: stack}),
@@ -649,8 +699,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   defp buffer_replays(events, native) do
-    # This observes the producer's actual program. Buffered-copy validation and
-    # the ping's finite timeout origin are separate transducer obligations.
+    # Retain the actual native replay programs alongside the independent ledgers.
     demand_rules = Enum.map(ConnectionReads.build(native).errors, & &1.rule)
     assert demand_rules == []
 

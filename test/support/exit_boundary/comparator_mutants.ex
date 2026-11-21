@@ -375,6 +375,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_replay_source) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_decoders.ex",
+        original:
+          "  defp decoder_event(%{event: {pid, :send, {:tcp, _port, _bytes}, pid}} = e, state) do\n    bound? = MapSet.member?(state.replay_sends, e.index)\n    if bound?, do: state, else: failure(state, e, :decoder_replay_source, false)\n  end\n",
+        mutated:
+          "  defp decoder_event(%{event: {pid, :send, {:tcp, _port, _bytes}, pid}}, state), do: state\n"
+      }
+    ]
+  end
+
   def compare(pair, rule), do: with_mutant(rule, fn -> Comparator.compare(pair) end)
 
   def with_mutant(rule, callback) do

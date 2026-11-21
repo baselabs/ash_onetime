@@ -15,13 +15,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       descriptors: historical_descriptors(historical),
       executing: %{},
       instances: [],
+      replays: [],
+      replay_sends: MapSet.new(),
+      replay_receives: MapSet.new(),
       errors: [],
+      events: indexed.events,
       pairs: native.pairs,
       streams: streams.connections
     }
 
     state = Enum.reduce(indexed.events, initial, &event(&1, &2, replies))
-    %{instances: Enum.reverse(state.instances), errors: Enum.reverse(state.errors)}
+    %{
+      instances: Enum.reverse(state.instances),
+      replays: Enum.reverse(state.replays),
+      errors: Enum.reverse(state.errors)
+    }
   end
 
   defp historical_descriptors(historical) do
@@ -134,6 +142,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
        do: decode(e, buffer, :message, state)
 
   defp decoder_event(
+         %{
+           event:
+             {_, :call,
+              {Postgrex.Protocol, :activate, [%{sock: {:gen_tcp, port}} = protocol, buffer]}}
+         } = e,
+         state
+       )
+       when is_binary(buffer) do
+    with {:ok, cursor} <- Map.fetch(state.cursors, port) do
+      state = exact(state, e, :decoder_replay_buffer, buffer, cursor.buffer)
+
+      if buffer == <<>>,
+        do: state,
+        else: replay(e, protocol, buffer, port, cursor, state)
+    else
+      _ -> failure(state, e, :decoder_replay_origin, false)
+    end
+  end
+
+  defp decoder_event(%{event: {pid, :send, {:tcp, _port, _bytes}, pid}} = e, state) do
+    bound? = MapSet.member?(state.replay_sends, e.index)
+    if bound?, do: state, else: failure(state, e, :decoder_replay_source, false)
+  end
+
+  defp decoder_event(
          %{event: {_, :call, {Postgrex.Types, :decode_rows, args}}} = e,
          state
        ) do
@@ -142,6 +175,68 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp decoder_event(_event, state), do: state
+
+  defp replay(e, protocol, buffer, port, cursor, state) do
+    pair = Map.fetch!(state.pairs, e.index)
+    pid = e.pid
+    message = {:tcp, port, buffer}
+
+    program =
+      Enum.filter(state.events, fn event ->
+        event.pid == pid and event.index >= e.index and event.index <= pair.returned.index
+      end)
+
+    expected = [
+      e.event,
+      {pid, :call, {:erlang, :send, [pid, message]}},
+      {pid, :send, message, pid},
+      {pid, :return_from, {:erlang, :send, 2}, message},
+      {pid, :return_from, {Postgrex.Protocol, :activate, 2}, {:ok, protocol}}
+    ]
+
+    state = exact(state, e, :decoder_replay_program, Enum.map(program, & &1.event), expected)
+
+    received =
+      Enum.find(state.events, fn event ->
+        event.index > pair.returned.index and event.event === {pid, :receive, message} and
+          not MapSet.member?(state.replay_receives, event.index)
+      end)
+
+    case {program, received} do
+      {[_source, call, sent, returned, _stop], %{index: index}} ->
+        record_replay(e, pair, cursor, buffer, [call, sent, returned], received, index, state)
+
+      _ ->
+        failure(state, e, :decoder_replay_copy, false)
+    end
+  end
+
+  defp record_replay(e, pair, cursor, buffer, [call, sent, returned], received, index, state) do
+    size = byte_size(buffer)
+
+    copies = [
+      %{index: e.index, path: [2, 2, 1], offset: 0, length: size},
+      %{index: call.index, path: [2, 2, 1, 2], offset: 0, length: size},
+      %{index: sent.index, path: [2, 2], offset: 0, length: size},
+      %{index: returned.index, path: [3, 2], offset: 0, length: size},
+      %{index: received.index, path: [2, 2], offset: 0, length: size}
+    ]
+
+    replay = %{
+      source: e,
+      returned: pair.returned,
+      received: received,
+      start: cursor.offset,
+      input: buffer,
+      copies: copies,
+      provenance: Wire.spans(cursor.spans, cursor.offset, cursor.offset + size)
+    }
+
+    state
+    |> Map.update!(:replays, &[replay | &1])
+    |> Map.update!(:replay_sends, &MapSet.put(&1, sent.index))
+    |> Map.update!(:replay_receives, &MapSet.put(&1, index))
+  end
 
   defp executing(state, e, port, %Postgrex.Query{} = query) do
     case Map.fetch(state.descriptors, query.ref) do
