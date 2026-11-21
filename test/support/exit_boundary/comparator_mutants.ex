@@ -365,6 +365,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_query_copy) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_decoders.ex",
+        original: "        state = exact(state, e, :decoder_query_copy, query, origin.query)\n",
+        mutated: ""
+      }
+    ]
+  end
+
   def compare(pair, rule), do: with_mutant(rule, fn -> Comparator.compare(pair) end)
 
   def with_mutant(rule, callback) do

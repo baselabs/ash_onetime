@@ -71,7 +71,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  def observe_cached do
+  def observe_cached(corruption \\ nil) do
     observer = self()
     tag = make_ref()
 
@@ -103,7 +103,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           send(observer, {tag, %{holder: self(), history: history, chunks: chunks}})
           {protocol, query, params}
         end,
-        &execute_cached/1,
+        &execute_cached(&1, corruption),
         %{
           host: [],
           callbacks: [],
@@ -123,7 +123,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  defp execute_cached({%{sock: {module, socket}} = protocol, query, params}) do
+  defp execute_cached({%{sock: {module, socket}} = protocol, query, params}, corruption) do
+    query = if corruption == :query_copy, do: %{query | cache: :reference}, else: query
+
     {:ok, ^query, result, _protocol} =
       Postgrex.Protocol.handle_execute(query, params, [], protocol)
 
@@ -201,12 +203,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  defp execute(%{sock: {module, socket}} = protocol, :buffered, nil) do
+  defp execute(%{sock: {module, socket}} = protocol, :buffered, corruption)
+       when corruption in [nil, :replay_source] do
     syncs = List.duplicate(message(?S, <<>>), 256)
     :ok = module.send(socket, [syncs, query(17)])
     {:ok, protocol} = Postgrex.Protocol.ping(protocol)
     {:ok, protocol} = Postgrex.Protocol.checkin(protocol)
-    drain_buffered(protocol, 257)
+    drain_buffered(protocol, 257, corruption)
   after
     :ok = module.close(socket)
   end
@@ -236,19 +239,34 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  defp drain_buffered(%{sock: {module, socket}, buffer: buffer}, ready)
+  defp drain_buffered(%{sock: {module, socket}, buffer: buffer}, ready, corruption)
        when is_binary(buffer) and byte_size(buffer) > 0 do
     receive do
-      {:tcp, ^socket, ^buffer} -> drain(module, socket, ready, buffer, true, nil)
+      {:tcp, ^socket, ^buffer} ->
+        buffer = replay_copy(socket, buffer, corruption)
+        drain(module, socket, ready, buffer, true, nil)
     after
       15_000 -> raise "native buffered replay did not return"
     end
   end
 
-  defp drain_buffered(protocol, ready) do
+  defp drain_buffered(protocol, ready, _corruption) do
     {:ok, %{sock: {module, socket}, buffer: buffer}} = Postgrex.Protocol.checkout(protocol)
     drain(module, socket, ready, buffer, true, nil)
   end
+
+  defp replay_copy(socket, <<?Z, 5::32, ?I, rest::binary>>, :replay_source) do
+    changed = <<?Z, 5::32, ?T, rest::binary>>
+    send(self(), {:tcp, socket, changed})
+
+    receive do
+      {:tcp, ^socket, ^changed} -> changed
+    after
+      15_000 -> raise "native corrupt replay copy did not return"
+    end
+  end
+
+  defp replay_copy(_socket, buffer, _corruption), do: buffer
 
   defp values(:single, nil), do: [17]
   defp values(:single, corruption) when corruption in [:length, :timeout, :extra_read], do: [17]

@@ -321,7 +321,42 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :connection_streams
   test "Connection streams: cached decoder descriptors retain their native owner origin" do
-    %{run: run, history: history} = ConnectionNative.observe_cached()
+    %{decoders: decoders, origin: origin} = cached_decoders(nil)
+    assert decoders.errors == []
+    rows = Enum.filter(decoders.instances, &(&1.source.mfa == {Postgrex.Types, :decode_rows, 4}))
+    assert rows != []
+    assert Enum.all?(rows, &(&1.descriptor == Map.take(origin, [:index, :path])))
+  end
+
+  @tag :connection_streams
+  test "Connection streams: cached query copies are independently bound" do
+    captured = cached_decoders(:query_copy)
+    assert Enum.map(captured.decoders.errors, & &1.rule) == [:decoder_query_copy]
+
+    for mutant <- [:stream_length, :stream_timeout, :stream_required, :stream_query_copy] do
+      checked =
+        ComparatorMutants.with_mutant(mutant, fn ->
+          ConnectionDecoders.build(
+            %{events: captured.events},
+            captured.native,
+            captured.streams,
+            captured.historical
+          )
+        end)
+
+      expected = if mutant == :stream_query_copy, do: [], else: [:decoder_query_copy]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    assert Enum.map(cached_decoders(:query_copy).decoders.errors, & &1.rule) ==
+             [:decoder_query_copy]
+
+    assert cached_decoders(nil).decoders.errors == []
+    IO.puts("CONNECTION_STREAM_NATIVE_ISOLATION: stream_query_copy RED; exact restore GREEN")
+  end
+
+  defp cached_decoders(corruption) do
+    %{run: run, history: history} = ConnectionNative.observe_cached(corruption)
     assert native_result(run) == {:ok, [[17]]}
     [origin] = history.history.descriptors
     query = origin.query
@@ -364,10 +399,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert streams.errors == []
     historical = %{history.holder => history.history}
     decoders = ConnectionDecoders.build(%{events: indexed}, native, streams, historical)
-    assert decoders.errors == []
-    rows = Enum.filter(decoders.instances, &(&1.source.mfa == {Postgrex.Types, :decode_rows, 4}))
-    assert rows != []
-    assert Enum.all?(rows, &(&1.descriptor == Map.take(origin, [:index, :path])))
+
+    %{
+      decoders: decoders,
+      origin: origin,
+      events: indexed,
+      native: native,
+      streams: streams,
+      historical: historical
+    }
   end
 
   @tag :connection_streams
@@ -564,6 +604,39 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       {index, mfa, phase}
     end
   end
+
+  @tag :connection_streams
+  test "Connection streams: an extra native replay copy has no decoder origin" do
+    corruptions =
+      for _ <- 1..20,
+          run = ConnectionNative.observe(:buffered, :replay_source),
+          :ok = native_result(run),
+          Enum.any?(run.events, &foreign_replay_copy?/1) do
+        events =
+          run.events
+          |> Enum.with_index()
+          |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+        native = NativeTransport.build(%{events: events})
+        native = Map.put(native, :historical, run.native_history)
+        assert native.errors == []
+        streams = ConnectionReads.build(native)
+        assert streams.errors == []
+
+        decoders =
+          ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
+
+        assert Enum.map(decoders.errors, & &1.rule) == [:decoder_replay_source]
+        decoders
+      end
+
+    assert corruptions != [], "the native runs must actually produce the foreign replay copy"
+  end
+
+  defp foreign_replay_copy?(%{event: {pid, :send, {:tcp, _, _}, pid}, stack: stack}),
+    do: {Postgrex.Protocol, :activate, 2} not in stack
+
+  defp foreign_replay_copy?(_event), do: false
 
   defp assert_native_streams_complete(run) do
     for {_port, chunks} <- native_stream_chunks(%{run: run}) do
