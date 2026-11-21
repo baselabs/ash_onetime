@@ -14,6 +14,9 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       reads: [],
       writes: [],
       options: [],
+      active: [],
+      active_modes: %{},
+      active_receives: %{},
       errors: []
     }
 
@@ -36,32 +39,98 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       end)
 
     state = option_sources(state)
+    state = active_deliveries(state)
 
     %{
       pairs: pairs,
       reads: Enum.reverse(state.reads),
       writes: Enum.reverse(state.writes),
       options: Enum.reverse(state.options),
+      active: Enum.reverse(state.active),
       errors: Enum.reverse(state.errors)
     }
   end
 
   defp option_sources(state) do
-    Enum.reduce(state.events, state, fn
-      %{event: {_, :call, {:erts_internal, :port_control, [port, command, data]}}} = source, state
-      when is_port(port) and command == @control_magic + 7 ->
-        case IO.iodata_to_binary(data) do
-          <<22, _::binary>> ->
-            bound? = Enum.any?(state.options, &(source.index in &1.indexes))
-            if bound?, do: state, else: failure(state, source, :native_option_source)
+    Enum.reduce(state.events, state, &option_source/2)
+  end
 
-          _ ->
-            state
-        end
+  defp option_source(
+         %{event: {_, :call, {:erts_internal, :port_control, [port, command, data]}}} = source,
+         state
+       )
+       when is_port(port) and command == @control_magic + 7 do
+    case IO.iodata_to_binary(data) do
+      <<22, _::binary>> ->
+        bound? = Enum.any?(state.options, &(source.index in &1.indexes))
+        if bound?, do: state, else: failure(state, source, :native_option_source)
 
-      _, state ->
+      _ ->
         state
-    end)
+    end
+  end
+
+  defp option_source(_source, state), do: state
+
+  defp active_deliveries(state) do
+    modes = for option <- state.options, do: {option.requested.index, :mode, option}
+
+    data =
+      for %{event: {port, :send, {:tcp, port, _bytes}, _pid}} = source <- state.events,
+          is_port(port),
+          do: {source.index, :data, source}
+
+    (modes ++ data)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.reduce(state, &active_event/2)
+  end
+
+  defp active_event({_index, :mode, option}, state),
+    do: put_in(state.active_modes[option.port], option)
+
+  defp active_event({_index, :data, source}, state) do
+    case Map.fetch(state.active_modes, source.pid) do
+      {:ok, %{mode: :once} = option} -> active_delivery(source, option, state)
+      _ -> failure(state, source, :native_active_mode)
+    end
+  end
+
+  defp active_delivery(
+         %{event: {port, :send, {:tcp, port, bytes}, pid}} = source,
+         option,
+         state
+       ) do
+    expected = {pid, :receive, {:tcp, port, bytes}}
+
+    received =
+      Enum.find(state.events, fn event ->
+        event.index > source.index and event.event === expected and
+          not Map.has_key?(state.active_receives, event.index)
+      end)
+
+    with %{index: index} <- received,
+         true <- is_binary(bytes) and byte_size(bytes) > 0 do
+      delivery = %{
+        port: port,
+        source: source,
+        returned: received,
+        delivered: source,
+        activation: option,
+        bytes: bytes,
+        indexes: [source.index, index],
+        copies: [
+          copy(source, [2, 2], 0, byte_size(bytes)),
+          copy(received, [2, 2], 0, byte_size(bytes))
+        ]
+      }
+
+      state
+      |> put_in([:active_modes, port], %{option | mode: false})
+      |> put_in([:active_receives, index], true)
+      |> Map.update!(:active, &[delivery | &1])
+    else
+      _ -> failure(state, source, :native_active_copy)
+    end
   end
 
   # The once fast path and the passive enum path have different native programs.

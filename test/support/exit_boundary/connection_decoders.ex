@@ -7,7 +7,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   # never the buffer or decoded result currently being checked. This ledger
   # grants no observation exemption.
   def build(indexed, native, streams, historical) do
-    replies = Map.new(native.reads, &{&1.returned.index, &1})
+    replies = Map.new(native.reads ++ native.active, &{&1.returned.index, &1})
 
     initial = %{
       ports: %{},

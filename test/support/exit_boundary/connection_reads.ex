@@ -10,9 +10,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     writes = for write <- native.writes, do: {write.command.index, :write, write}
     requests = for read <- native.reads, do: {read.source.index, :request, read}
     replies = for read <- native.reads, do: {read.returned.index, :reply, read}
+    active = for delivery <- native.active, do: {delivery.delivered.index, :active, delivery}
 
     state =
-      (writes ++ requests ++ replies)
+      (writes ++ requests ++ replies ++ active)
       |> Enum.sort_by(&elem(&1, 0))
       |> Enum.reduce(
         %{connections: %{}, errors: [], demands: [], readback: readback, catalogs: catalogs},
@@ -84,6 +85,28 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       direction: :backend,
       bytes: read.bytes,
       copies: read.copies,
+      phase: :backend
+    })
+  end
+
+  defp event({_index, :active, delivery}, state) do
+    connection = connection(state, delivery.port)
+
+    demand = %{
+      index: delivery.source.index,
+      port: delivery.port,
+      offset: received(connection),
+      required: %{mode: :once},
+      origin: delivery.activation.requested.index
+    }
+
+    state = %{state | demands: [demand | state.demands]}
+
+    feed(state, delivery.port, %{
+      index: delivery.delivered.index,
+      direction: :backend,
+      bytes: delivery.bytes,
+      copies: delivery.copies,
       phase: :backend
     })
   end

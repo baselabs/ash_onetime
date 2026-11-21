@@ -325,6 +325,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert native.errors == []
     assert length(native.writes) == 1
     assert Enum.map(native.options, & &1.mode) == [:once, false]
+    assert length(native.active) == 1
+
+    for delivery <- native.active do
+      assert delivery.activation.mode == :once
+      assert delivery.activation.requested.index < delivery.source.index
+      assert delivery.source.index < delivery.returned.index
+      assert delivery.copies != []
+      assert_native_copies(delivery.copies, events, delivery.bytes)
+    end
 
     for option <- native.options do
       assert option.indexes != []
