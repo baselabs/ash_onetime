@@ -135,7 +135,10 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
 
       {:select_val, _, {:f, fallback}, {:list, choices}} ->
         destinations =
-          [fallback | Enum.map(Enum.chunk_every(choices, 2), fn [_value, {:f, label}] -> label end)]
+          [
+            fallback
+            | Enum.map(Enum.chunk_every(choices, 2), fn [_value, {:f, label}] -> label end)
+          ]
 
         Enum.flat_map(Enum.uniq(destinations), fn label ->
           capture_branch(label, regs, labels, target, argument, seen)
