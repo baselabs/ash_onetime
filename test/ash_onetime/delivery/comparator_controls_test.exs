@@ -417,6 +417,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       unbound =
         Enum.reject(decoders.protocol_copies, &MapSet.member?(covered, {&1.index, &1.path}))
 
+      for copy <- unbound do
+        IO.puts("CONNECTION_STATE_UNBOUND: " <> Diagnostics.render(copy, limit: :infinity))
+      end
+
       assert unbound == [], "every native Protocol copy needs its own owner-version binding"
 
       assert Enum.any?(decoders.protocol_copies, fn copy ->
@@ -2827,6 +2831,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           run.events
           |> Enum.with_index()
           |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+        assert Enum.any?(events, &(&1.pid == run.tls_binding.owner)),
+               "the actual preexisting TLS receiver must be traced"
+
+        assert Enum.any?(events, &(&1.pid == run.tls_binding.sender)),
+               "the actual preexisting TLS sender must be traced"
 
         native = ConnectionTls.build(%{events: events}, run.tls_binding)
         assert native.errors == []

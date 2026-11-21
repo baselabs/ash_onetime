@@ -256,12 +256,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
               state
             else
               parsed? = function in [:parse_describe_flush, :close_parse_describe_flush]
+
               parent = %{
                 parent
                 | current: protocol,
                   owner: version,
                   parsed?: parent.parsed? or parsed?
               }
+
               put_in(state.frames[source.pid], [parent | outer])
             end
         end
@@ -348,8 +350,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp output_protocol(state, source, frame, :handle_msg, _result) do
     {_, :call, {_, _, [_protocol, _status, message]}} = frame.source.event
+
     state =
-      exact(state, source, :state_message_copy, message, native_message(state, source, frame.input))
+      exact(
+        state,
+        source,
+        :state_message_copy,
+        message,
+        native_message(state, source, frame.input)
+      )
 
     expected =
       case message do
@@ -492,7 +501,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp exact(state, _source, _rule, actual, expected) when actual === expected, do: state
-  defp exact(state, source, rule, _actual, _expected), do: failure(state, source, rule)
+
+  defp exact(state, source, rule, actual, expected) do
+    state = failure(state, source, rule)
+
+    fields =
+      case {actual, expected} do
+        {%Postgrex.Protocol{}, %Postgrex.Protocol{}} ->
+          for {field, value} <- Map.from_struct(expected),
+              Map.fetch!(actual, field) !== value,
+              do: field
+
+        _ ->
+          []
+      end
+
+    [error | errors] = state.errors
+    %{state | errors: [Map.put(error, :different_fields, fields) | errors]}
+  end
 
   defp failure(state, source, rule) do
     error = %{
