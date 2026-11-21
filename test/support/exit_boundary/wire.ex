@@ -340,8 +340,13 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
 
   defp message(?T, <<count::16, payload::binary>>, state) do
     {fields, <<>>} = fields(payload, count, [])
-    {{:row_description, fields}, %{state | columns: fields}}
+    {{:row_description, fields}, state |> Map.put(:columns, fields) |> Map.put(:description, :rows)}
   end
+
+  defp message(?n, <<>>, state),
+    do:
+      {{:exact_payload, ?n, <<>>},
+       state |> Map.put(:columns, []) |> Map.put(:description, :none)}
 
   defp message(?D, payload, %{direction: :frontend} = state), do: {{:describe, payload}, state}
 

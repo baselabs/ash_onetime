@@ -397,7 +397,14 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp connection_streams(indexed, historical, readback) do
     native = NativeTransport.build(indexed, historical.connections)
     reads = ConnectionReads.build(native, readback, historical.prepared_catalogs)
-    decoders = ConnectionDecoders.build(indexed, native, reads, historical.connections)
+    decoders =
+      ConnectionDecoders.build(
+        indexed,
+        native,
+        reads,
+        historical.connections,
+        historical.query_origins
+      )
 
     errors =
       Enum.map(native.errors ++ reads.errors ++ decoders.errors, fn

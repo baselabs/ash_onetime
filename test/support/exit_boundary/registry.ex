@@ -500,6 +500,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {AshOnetime.Test.ExitBoundary.Scenarios, :"-allocation_checkpoint/0-fun-0-", 0},
         {Postgrex.Protocol, :handle_prepare, :_},
         {Postgrex.Protocol, :handle_execute, :_},
+        {Postgrex.Protocol, :redescribe, 6},
         {Postgrex.Protocol, :checkin, 1},
         {Postgrex.Protocol, :checkout, 1},
         {Postgrex.Protocol, :ping, 1},

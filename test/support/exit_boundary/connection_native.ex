@@ -89,9 +89,45 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         server_name_indication: ~c"localhost"
       )
 
-    {:ok, protocol} = Postgrex.Protocol.connect(options)
+    connected = Postgrex.Protocol.connect(options)
+    diagnose_tls_connect(connected, options)
+    {:ok, protocol} = connected
     {:ok, protocol} = Postgrex.Protocol.checkout(protocol)
     protocol
+  end
+
+  defp diagnose_tls_connect({:ok, _protocol}, _options), do: :ok
+
+  defp diagnose_tls_connect({:error, error}, options) do
+    alerts = [
+      unknown_ca: "unknown_ca",
+      bad_certificate: "bad_certificate",
+      certificate_expired: "certificate_expired",
+      hostname_check_failed: "hostname_check_failed",
+      handshake_failure: "handshake_failure",
+      protocol_version: "protocol_version",
+      missing_certificate: "enoent",
+      certificate_permission: "eacces",
+      ssl_not_started: "not_started",
+      options: "options",
+      closed: "closed",
+      refused: "econnrefused"
+    ]
+
+    message =
+      case error do
+        %{message: message} when is_binary(message) -> message
+        _ -> ""
+      end
+    matched = for {label, text} <- alerts, String.contains?(message, text), do: label
+
+    summary = %{
+      class: error.__struct__,
+      alerts: matched,
+      unix_socket?: Keyword.has_key?(options, :socket) or Keyword.has_key?(options, :socket_dir)
+    }
+
+    IO.puts("TLS_CONNECT_FAILURE: " <> inspect(summary))
   end
 
   defp native_spec(:buffered) do
@@ -137,7 +173,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  def observe_cached(corruption \\ nil) do
+  def observe_cached(corruption \\ nil, shape \\ :rows) do
     observer = self()
     tag = make_ref()
 
@@ -145,15 +181,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       ExitBoundary.observe(
         fn ->
           protocol = connect(:named)
+          {statement, arguments} = cached_statement(shape)
 
           query = %Postgrex.Query{
             name: "native_cached",
-            statement: "SELECT $1::int4 AS connection_stream_probe",
+            statement: statement,
             cache: :statement
           }
 
           {:ok, query, protocol} = Postgrex.Protocol.handle_prepare(query, [], protocol)
-          params = DBConnection.Query.encode(query, [17], [])
+          params = DBConnection.Query.encode(query, arguments, [])
 
           {:ok, ^query, _result, protocol} =
             Postgrex.Protocol.handle_execute(query, params, [], protocol)
@@ -165,9 +202,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           chunks = [%{index: 0, direction: :frontend, bytes: bytes}]
           chunks = history_replies(module, socket, 1, <<>>, chunks)
           descriptor = %{query: query, port: socket, index: {:historical, self()}, path: [:query]}
-          history = %{protocol: protocol, descriptors: [descriptor]}
+          history = %{protocol: protocol, descriptors: [Map.put(descriptor, :sock, protocol.sock)]}
+
+          history =
+            if shape == :cross_connection do
+              other = connect(:named)
+              :ok = module.close(socket)
+              %{history | protocol: other}
+            else
+              history
+            end
+
           send(observer, {tag, %{holder: self(), history: history, chunks: chunks}})
-          {protocol, query, params}
+          {history.protocol, query, params}
         end,
         &execute_cached(&1, corruption),
         %{
@@ -188,6 +235,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       0 -> raise "native cached descriptor history was not captured"
     end
   end
+
+  defp cached_statement(:rows), do: {"SELECT $1::int4 AS connection_stream_probe", [17]}
+  defp cached_statement(:cross_connection), do: cached_statement(:rows)
+
+  defp cached_statement(:none),
+    do: {"SET application_name TO 'ash_onetime_native_nodata'", []}
 
   defp execute_cached({%{sock: {module, socket}} = protocol, query, params}, corruption) do
     query = if corruption == :query_copy, do: %{query | cache: :reference}, else: query

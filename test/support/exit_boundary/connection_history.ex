@@ -23,7 +23,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
     Code.ensure_loaded!(Postgrex.Protocol)
     session = :trace.session_create(:ash_onetime_connection_history, self(), [])
 
-    for function <- [:handle_prepare, :msg_recv] do
+    for function <- [:handle_prepare, :handle_prepare_execute, :redescribe, :msg_recv] do
       :trace.function(
         session,
         {Postgrex.Protocol, function, :_},
@@ -82,12 +82,28 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
     do: {pid, :prepare, sock}
 
   defp select(
+         {pid, :call,
+          {Postgrex.Protocol, :handle_prepare_execute, [_query, _params, _opts, %{sock: sock}]}}
+       ),
+       do: {pid, :prepare, sock}
+
+  defp select(
+         {pid, :return_from, {Postgrex.Protocol, :redescribe, 6},
+          {:ok, %Postgrex.Query{} = query, %{sock: sock}, _buffer}}
+       ),
+       do: {pid, :described, {sock, query}}
+
+  defp select(
          {pid, :return_from, {Postgrex.Protocol, :handle_prepare, 3},
           {:ok, %Postgrex.Query{} = query, %{sock: sock}}}
        ),
        do: {pid, :prepared, {sock, query}}
 
   defp select({pid, tag, {Postgrex.Protocol, :handle_prepare, 3}, _result})
+       when tag in [:return_from, :exception_from],
+       do: {pid, :refused, nil}
+
+  defp select({pid, tag, {Postgrex.Protocol, :handle_prepare_execute, 4}, _result})
        when tag in [:return_from, :exception_from],
        do: {pid, :refused, nil}
 
@@ -106,7 +122,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   defp select(
          {pid, :return_from, {Postgrex.Protocol, :msg_recv, arity}, {:ok, msg_no_data(), _buffer}}
        ),
-       do: {pid, :columns, {arity, []}}
+       do: {pid, :columns, {arity, nil}}
 
   defp select({pid, :exit, _reason}), do: {pid, :exit, nil}
   defp select(_event), do: nil
@@ -144,13 +160,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
 
   defp record({stamp, {pid, :prepared, {sock, query}}}, state) do
     {frame, state} = pop(state, pid)
-    key = {sock, query.name}
+    retain_origin(state, frame, stamp, sock, query, {Postgrex.Protocol, :handle_prepare, 3})
+  end
+
+  defp record({stamp, {pid, :described, {sock, query}}}, state) do
+    frame = state.frames |> Map.get(pid, []) |> List.first()
+    retain_origin(state, frame, stamp, sock, query, {Postgrex.Protocol, :redescribe, 6})
+  end
+
+  defp record({_stamp, {pid, :refused, _}}, state), do: elem(pop(state, pid), 1)
+
+  defp record({_stamp, {pid, :exit, _}}, state),
+    do: %{state | frames: Map.delete(state.frames, pid)}
+
+  defp retain_origin(state, frame, stamp, sock, query, mfa) do
+    key = {sock, query.ref}
 
     case frame do
       %{sock: ^sock, parameters: parameters, columns: columns} ->
         origin = %{
           index: {:historical, stamp},
-          mfa: {Postgrex.Protocol, :handle_prepare, 3},
+          mfa: mfa,
           path: [3, 1],
           sock: sock,
           query: query,
@@ -162,16 +192,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
         put_in(state.origins[key], origin)
 
       _ ->
-        # A cached return supplies no new server facts. Its original successful
-        # preparation remains the descriptor's origin.
+        # A cached return supplies no new server facts. Keep every owner version
+        # by ref, including one that Ecto later sends to a different connection.
         state
     end
   end
-
-  defp record({_stamp, {pid, :refused, _}}, state), do: elem(pop(state, pid), 1)
-
-  defp record({_stamp, {pid, :exit, _}}, state),
-    do: %{state | frames: Map.delete(state.frames, pid)}
 
   defp pop(state, pid) do
     case Map.get(state.frames, pid, []) do

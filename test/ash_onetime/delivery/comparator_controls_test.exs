@@ -397,11 +397,33 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :connection_streams
   test "Connection streams: cached decoder descriptors retain their native owner origin" do
-    %{decoders: decoders, origin: origin} = cached_decoders(nil)
-    assert decoders.errors == []
-    rows = Enum.filter(decoders.instances, &(&1.source.mfa == {Postgrex.Types, :decode_rows, 4}))
-    assert rows != []
-    assert Enum.all?(rows, &(&1.descriptor == Map.take(origin, [:index, :path])))
+    for shape <- [:rows, :none, :cross_connection] do
+      %{decoders: decoders, origin: origin, events: events} = cached_decoders(nil, shape)
+      assert decoders.errors == []
+      rows = Enum.filter(decoders.instances, &(&1.source.mfa == {Postgrex.Types, :decode_rows, 4}))
+      assert rows != []
+      assert length(decoders.versions) == length(decoders.instances)
+
+      assert Enum.all?(decoders.versions, fn version ->
+               source = Enum.fetch!(events, version.index)
+
+               elem(source.event, 1) == :return_from and
+                 Enum.any?(decoders.instances, fn instance ->
+                   instance.returned.index == version.index and
+                     instance.stop == version.cursor.offset
+                 end)
+             end)
+
+      if shape == :cross_connection do
+        assert Enum.all?(rows, fn row ->
+                 source = Enum.fetch!(events, row.descriptor.index)
+                 source.mfa == {Postgrex.Protocol, :redescribe, 6} and
+                   row.descriptor.index < row.source.index
+               end)
+      else
+        assert Enum.all?(rows, &(&1.descriptor == Map.take(origin, [:index, :path])))
+      end
+    end
   end
 
   @tag :connection_streams
@@ -431,9 +453,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_STREAM_NATIVE_ISOLATION: stream_query_copy RED; exact restore GREEN")
   end
 
-  defp cached_decoders(corruption) do
-    %{run: run, history: history} = ConnectionNative.observe_cached(corruption)
-    assert native_result(run) == {:ok, [[17]]}
+  defp cached_decoders(corruption, shape \\ :rows) do
+    %{run: run, history: history} = ConnectionNative.observe_cached(corruption, shape)
+    expected = if shape != :none, do: [[17]]
+    assert native_result(run) == {:ok, expected}
     [origin] = history.history.descriptors
     query = origin.query
     framing = Wire.frames(history.chunks)
@@ -449,7 +472,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     catalog =
       Enum.reduce(framing.messages, context, fn frame, context ->
-        if frame.direction == :backend and frame.tag in [?t, ?T] do
+        if frame.direction == :backend and frame.tag in [?t, ?T, ?n] do
           {_decoded, context} = Wire.decode_message(frame.tag, frame.payload, context)
           context
         else
@@ -457,8 +480,18 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         end
       end)
 
-    assert catalog.parameter_types == [23]
-    assert [{"connection_stream_probe", {:table_oid, 0}, 0, 23, 4, -1, 0}] = catalog.columns
+    case shape do
+      shape when shape in [:rows, :cross_connection] ->
+        assert catalog.parameter_types == [23]
+        assert [{"connection_stream_probe", {:table_oid, 0}, 0, 23, 4, -1, 0}] = catalog.columns
+        assert catalog.description == :rows
+
+      :none ->
+        assert catalog.parameter_types == []
+        assert catalog.columns == []
+        assert catalog.description == :none
+        assert query.columns == nil and query.result_oids == nil
+    end
 
     indexed =
       run.events
@@ -474,7 +507,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert streams.errors == []
     historical = %{history.holder => history.history}
-    decoders = ConnectionDecoders.build(%{events: indexed}, native, streams, historical)
+    decoders = ConnectionDecoders.build(%{events: indexed}, native, streams, historical, [origin])
 
     %{
       decoders: decoders,
@@ -2414,7 +2447,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assertion =
       try do
-        assert state == nil
+        assert state == %{state | copied_key: 0}
       rescue
         error in ExUnit.AssertionError -> error
       end
@@ -2441,7 +2474,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         IO.puts(Diagnostics.render(Diagnostics.exit_summary({pattern, stack})))
       end,
       setup_call_exit: fn ->
-        IO.puts(Diagnostics.render(Diagnostics.exit_summary({:noproc, {GenServer, :call, [state]}})))
+        IO.puts(
+          Diagnostics.render(Diagnostics.exit_summary({:noproc, {GenServer, :call, [state]}}))
+        )
       end,
       residual: fn -> IO.puts(Diagnostics.render(state, limit: :infinity)) end,
       residual_projection: fn -> IO.puts(inspect(Diagnostics.safe(state), limit: :infinity)) end,

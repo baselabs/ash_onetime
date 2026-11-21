@@ -100,6 +100,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
     prepared = statement(state, name)
     {context, state} = context(state, frame, prepared.sql)
     context = %{context | parameter_types: prepared.parameter_types, columns: prepared.columns}
+    context = Map.put(context, :description, Map.fetch!(prepared, :description))
     {decoded, context} = decode(frame, context)
     {:bind, ^portal, ^name, _formats, params, _result_formats} = decoded
     true = length(params) == length(prepared.parameter_types)
@@ -278,6 +279,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
       statement: {:wire_statement, phase, ordinal},
       parameter_types: [],
       columns: [],
+      description: :unknown,
       binds: [],
       counts: %{},
       annotation_phase: phase,

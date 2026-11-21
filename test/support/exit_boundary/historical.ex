@@ -67,7 +67,8 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
                sql: IO.iodata_to_binary(origin.query.statement),
                statement: {:historical_statement, origin.query.name},
                parameter_types: origin.parameters,
-               columns: origin.columns,
+               columns: origin.columns || [],
+               description: if(is_nil(origin.columns), do: :none, else: :rows),
                binds: []
              }}
           end)
@@ -77,6 +78,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
 
     %{
       prepared_catalogs: catalogs,
+      query_origins: origins,
       query_cache: query_cache,
       payload_children: Enum.map(payload_children, &hd/1),
       cache_expiries: cache_expiries,

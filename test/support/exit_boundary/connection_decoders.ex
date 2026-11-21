@@ -6,13 +6,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   # Their source is the native receive ledger and the pre-observation snapshot,
   # never the buffer or decoded result currently being checked. This ledger
   # grants no observation exemption.
-  def build(indexed, native, streams, historical) do
+  def build(indexed, native, streams, historical, origins \\ []) do
     replies = Map.new(native.reads ++ native.active, &{&1.returned.index, &1})
 
     initial = %{
       ports: %{},
       cursors: historical_cursors(historical),
-      descriptors: historical_descriptors(historical),
+      pending_cursors: %{},
+      versions: [],
+      descriptors: Map.merge(historical_descriptors(historical), owner_descriptors(origins)),
       executing: %{},
       instances: [],
       replays: [],
@@ -28,9 +30,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
     %{
       instances: Enum.reverse(state.instances),
+      versions: Enum.reverse(state.versions),
       replays: Enum.reverse(state.replays),
       errors: Enum.reverse(state.errors)
     }
+  end
+
+  defp owner_descriptors(origins) do
+    for %{sock: {:gen_tcp, port}, query: query} = origin <- origins,
+        into: %{},
+        do: {query.ref, Map.put(origin, :port, port)}
   end
 
   defp historical_descriptors(historical) do
@@ -62,6 +71,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp event(e, state, replies) do
+    state = commit_cursor(e, state)
+
     state =
       case Map.fetch(replies, e.index) do
         {:ok, %{bytes: bytes, port: port, copies: copies}} when is_binary(bytes) ->
@@ -72,6 +83,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       end
 
     decoder_event(e, state)
+  end
+
+  defp commit_cursor(source, state) do
+    case Map.pop(state.pending_cursors, source.index) do
+      {nil, _pending} ->
+        state
+
+      {%{port: port, cursor: cursor}, pending} ->
+        version = %{index: source.index, port: port, cursor: cursor}
+
+        state
+        |> Map.put(:pending_cursors, pending)
+        |> put_in([:cursors, port], cursor)
+        |> Map.update!(:versions, &[version | &1])
+    end
   end
 
   defp receive_bytes(state, source, port, bytes, copies) do
@@ -91,6 +117,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       :error ->
         failure(state, source, :decoder_history, false)
     end
+  end
+
+  defp decoder_event(
+         %{
+           event:
+             {_, :return_from, {Postgrex.Protocol, :redescribe, 6},
+              {:ok, %Postgrex.Query{} = query, %{sock: {:gen_tcp, port}}, _buffer}}
+         } = e,
+         state
+       ) do
+    origin = %{query: query, port: port, index: e.index, path: [3, 1]}
+
+    state
+    |> put_in([:descriptors, query.ref], origin)
+    |> put_in([:executing, port], origin)
   end
 
   defp decoder_event(
@@ -243,7 +284,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
   defp executing(state, e, port, %Postgrex.Query{} = query) do
     case Map.fetch(state.descriptors, query.ref) do
-      {:ok, %{port: ^port} = origin} ->
+      {:ok, origin} ->
         state = exact(state, e, :decoder_query_copy, query, origin.query)
         put_in(state.executing[port], origin)
 
@@ -323,8 +364,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   # and passed back to their owner. The independent wire catalog checks the
   # descriptor's statement, OIDs, column names and execution formats.
   defp query_metadata(state, source, query, context, types) do
-    names = for {name, _, _, _, _, _, _} <- context.columns, do: name
-    oids = for {_, _, _, oid, _, _, _} <- context.columns, do: oid
+    names = if context.description == :none, do: nil, else: Enum.map(context.columns, &elem(&1, 0))
+    oids = if context.description == :none, do: nil, else: Enum.map(context.columns, &elem(&1, 3))
     formats = for {_, _, _, _, _, _, format} <- context.columns, do: format
     encodings = Enum.map(formats, &if(&1 == 1, do: :binary, else: :text))
 
@@ -360,7 +401,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     offset = cursor.offset + consumed
     spans = Enum.filter(cursor.spans, &(&1.offset + &1.length > offset))
     cursor = %{cursor | offset: offset, buffer: rest, rows: rows, spans: spans}
-    state = put_in(state.cursors[port], cursor)
+    # The paired return proves the result, but its cursor becomes available only
+    # at that actual return event. Copies observed inside the decoder still see
+    # the preceding version, even when another role interleaves there.
+    state = put_in(state.pending_cursors[pair.returned.index], %{port: port, cursor: cursor})
     %{state | instances: [instance | state.instances]}
   end
 

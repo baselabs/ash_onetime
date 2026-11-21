@@ -1949,7 +1949,7 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert doctor_refusal(c)",
       mutated:
         "    WHERE n.nspname=$1 AND (c.relname=ANY($2) OR EXISTS (\n      SELECT 1 FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid\n      WHERE t.tgrelid=c.oid AND p.proname='ash_onetime_fact_append_only' AND p.pronamespace=n.oid))",
-      assertion_line: 1310
+      assertion_line: 1311
     },
     "M-complete-restore" => %{
       path: "lib/ash_onetime/store/postgres.ex",
@@ -2047,7 +2047,7 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "external completion restarts exact elapsed retention across the next backward DST change",
       assertion: "assert SQL.query!",
-      assertion_line: 680,
+      assertion_line: 715,
       required_failures:
         for direction <- ["forward", "backward"] do
           %{
@@ -2055,7 +2055,7 @@ defmodule AshOnetime.MutationCheck do
               "external completion restarts exact elapsed retention across the next #{direction} DST change",
             assertion:
               if(direction == "forward", do: "assert {:ok, result}", else: "assert SQL.query!"),
-            assertion_line: if(direction == "forward", do: 679, else: 680)
+            assertion_line: if(direction == "forward", do: 679, else: 715)
           }
         end
     },
@@ -2276,10 +2276,10 @@ defmodule AshOnetime.MutationCheck do
         "left(holder.rolname,3)<>'pg_' OR EXISTS (\n    -- end-rule:maintenance-effective-proxy-holder\n    -- end-rule:maintenance-effective-unreachable-holder\n      SELECT 1 FROM pg_roles r WHERE pg_has_role(r.oid,holder.oid,'MEMBER')\n        AND (r.rolcanlogin OR r.oid IN (SELECT oid FROM scheduled)\n          OR r.rolname=current_setting('role') OR r.rolname=current_user OR r.rolname=session_user)\n        AND NOT r.rolsuper AND r.oid<>@owner@\n        AND NOT pg_has_role(r.oid,@owner@,'USAGE') AND NOT pg_has_role(r.oid,@owner@,'SET')\n",
       test: "test/ash_onetime/store/maintenance_test.exs",
       test_name: "effective authority refuses ADMIN-only group membership",
-      assertion: "refute scalar(",
+      assertion: "assert message == reason",
       mutated:
         "false OR EXISTS (\n      SELECT 1 FROM pg_roles r WHERE pg_has_role(r.oid,holder.oid,'SET')\n        AND (r.rolcanlogin OR r.oid IN (SELECT oid FROM scheduled)\n          OR r.rolname=current_setting('role') OR r.rolname=current_user OR r.rolname=session_user)\n        AND NOT r.rolsuper AND r.oid<>@owner@\n        AND NOT pg_has_role(r.oid,@owner@,'USAGE') AND NOT pg_has_role(r.oid,@owner@,'SET')\n",
-      assertion_line: 1682
+      assertion_line: 4703
     },
     "maintenance-effective-unreachable-holder" => %{
       tag: "effective_unreachable_authority_mutation",
@@ -2298,9 +2298,9 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/store/maintenance_test.exs",
       test_name:
         "effective authority refuses an unreachable holder exposed through a PUBLIC view",
-      assertion: "refute scalar(",
+      assertion: "assert message == reason",
       mutated: "false",
-      assertion_line: 1757
+      assertion_line: 4703
     },
     "maintenance-effective-subscription-role" => %{
       path: "priv/templates/migrations/maintenance/trust.sql",
@@ -2351,17 +2351,17 @@ defmodule AshOnetime.MutationCheck do
         "CASE WHEN t.append_only OR t.owner_only THEN 'DELETE,TRIGGER,TRUNCATE' ELSE 'TRIGGER,TRUNCATE' END",
       test: "test/ash_onetime/store/maintenance_test.exs",
       test_name: "effective root authority refuses TRIGGER on ash_onetime_idempotency_claims",
-      assertion: "refute scalar(",
+      assertion: "assert message == reason",
       mutated:
         "CASE WHEN t.append_only OR t.owner_only THEN 'DELETE,TRIGGER,TRUNCATE' ELSE 'TRIGGER WITH GRANT OPTION,TRUNCATE WITH GRANT OPTION' END",
-      assertion_line: 5576
+      assertion_line: 4703
     },
     "maintenance-effective-cluster-isolation" => %{
       path: "test/support/cluster_isolation.ex",
       original: "unless is_binary(expected) and String.trim(hostname) == expected do",
       mutated: "unless true do",
       test: "test/ash_onetime/store/maintenance_test.exs",
-      assertion_line: 1604,
+      assertion_line: 1605,
       tag: "effective_cluster_isolation_mutation",
       test_name: "cluster grant isolation refuses an unproven server",
       assertion: "Expected exception RuntimeError"
@@ -3484,7 +3484,8 @@ defmodule AshOnetime.MutationCheck do
       test: "test/compile_fixtures_test.exs",
       tag: "dsl_references_mutation",
       test_name: "key sources must reference declared action inputs",
-      assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
+      assertion: "assert status != 0, output",
+      assertion_line: 743,
       probe: {"missing_key_reference.exs", "AshOnetime.CompileFixtures.MissingKeyReference"}
     },
     "dsl-builtin-options" => %{
@@ -6088,21 +6089,21 @@ defmodule AshOnetime.MutationCheck do
                  tag: "routine_executable_mutation",
                  path: "priv/templates/migrations/maintenance/trust.sql",
                  test: "test/ash_onetime/store/maintenance_test.exs",
-                 assertion: "assert_refusal",
+                 assertion: "assert message == reason",
                  original: "RAISE EXCEPTION 'untrusted_dependency: routine support';",
                  mutated: "NULL;",
                  test_name: "executable pg_proc metadata rejects support",
-                 assertion_line: 4388
+                 assertion_line: 4703
                },
                "maintenance-routine-executable-trees" => %{
                  tag: "routine_executable_mutation",
                  path: "priv/templates/migrations/maintenance/trust.sql",
                  test: "test/ash_onetime/store/maintenance_test.exs",
-                 assertion: "assert_refusal",
+                 assertion: "assert {:error, %Postgrex.Error",
                  original: "RAISE EXCEPTION 'untrusted_dependency: routine executable trees';",
                  mutated: "NULL;",
                  test_name: "executable pg_proc metadata rejects argument_default",
-                 assertion_line: 4684
+                 assertion_line: 4698
                },
                "claim-trigger-inline-active" => %{
                  tag: "external_state_claim_trigger_mutation",
@@ -6329,7 +6330,7 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "DEFAULT recovery failure at move changes no rows, partitions, flags, ACLs, or records",
                  assertion: "assert",
-                 assertion_line: 4533
+                 assertion_line: 4547
                },
                "inventory-unmarked-reraise" => %{
                  path: "scripts/mutation_inventory.exs",
@@ -6602,40 +6603,40 @@ defmodule AshOnetime.MutationCheck do
                  tag: "effective_root_authority_mutation",
                  test_name:
                    "effective root authority refuses REFERENCES (id) on ash_onetime_idempotency_claims",
-                 assertion: "refute scalar(",
+                 assertion: "assert message == reason",
                  required_failures: [
                    %{
                      test_name:
                        "effective root authority refuses REFERENCES on ash_onetime_idempotency_claims",
-                     assertion: "refute scalar("
+                     assertion: "assert message == reason"
                    },
                    %{
                      test_name:
                        "effective root authority refuses REFERENCES (id) on ash_onetime_idempotency_claims",
-                     assertion: "refute scalar("
+                     assertion: "assert message == reason"
                    },
                    %{
                      test_name:
                        "effective root authority refuses REFERENCES on ash_onetime_nonce_claims",
-                     assertion: "refute scalar("
+                     assertion: "assert message == reason"
                    },
                    %{
                      test_name:
                        "effective root authority refuses REFERENCES (id) on ash_onetime_nonce_claims",
-                     assertion: "refute scalar("
+                     assertion: "assert message == reason"
                    },
                    %{
                      test_name:
                        "effective root authority refuses REFERENCES on ash_onetime_response_payloads",
-                     assertion: "refute scalar("
+                     assertion: "assert message == reason"
                    },
                    %{
                      test_name:
                        "effective root authority refuses REFERENCES (claim_id) on ash_onetime_response_payloads",
-                     assertion: "refute scalar("
+                     assertion: "assert message == reason"
                    }
                  ],
-                 assertion_line: 5562
+                 assertion_line: 4703
                },
                "current-delete-unarmed" => %{
                  path: "priv/templates/migrations/maintenance/guard_idempotency.sql",
