@@ -83,10 +83,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
        do: decode(e, buffer, :message, state)
 
   defp decoder_event(
-         %{event: {_, :call, {Postgrex.Types, :decode_rows, [buffer, types, rows, type_state]}}} = e,
+         %{event: {_, :call, {Postgrex.Types, :decode_rows, args}}} = e,
          state
-       ),
-       do: decode(e, buffer, {:rows, types, rows, type_state}, state)
+       ) do
+    [buffer, types, rows, type_state] = args
+    decode(e, buffer, {:rows, types, rows, type_state}, state)
+  end
 
   defp decoder_event(_event, state), do: state
 
@@ -116,7 +118,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     state = exact(state, pair.source, :decoder_types, types, expected_types)
     state = exact(state, pair.source, :decoder_type_state, type_state, cursor.types)
     state = exact(state, pair.source, :decoder_rows, rows, cursor.rows)
-    expected = Postgrex.Types.decode_rows(cursor.buffer, expected_types, cursor.rows, cursor.types)
+
+    expected =
+      Postgrex.Types.decode_rows(cursor.buffer, expected_types, cursor.rows, cursor.types)
+
     state = exact(state, pair.source, :decoder_result, returned(pair), expected)
     {rest, rows} = row_result(expected)
     consumed = byte_size(cursor.buffer) - byte_size(IO.iodata_to_binary(rest))
