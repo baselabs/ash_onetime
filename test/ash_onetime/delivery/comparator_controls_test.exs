@@ -266,8 +266,17 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp native_result(%{result: {:caught, kind, %{__struct__: module}}}),
     do: {:caught, kind, module}
 
-  defp native_result(%{result: {:caught, kind, _reason}}), do: {:caught, kind, :term}
+  defp native_result(%{result: {:caught, kind, reason}}),
+    do: {:caught, kind, native_reason_tag(reason)}
+
   defp native_result(_run), do: :unexpected_result
+
+  defp native_reason_tag(reason)
+       when reason in [:function_clause, :badarg, :undef, :timeout],
+       do: reason
+
+  defp native_reason_tag({tag, _}) when tag in [:badmatch, :case_clause], do: tag
+  defp native_reason_tag(_reason), do: :term
 
   @tag :connection_streams
   test "Connection streams: prepared metadata comes from the connection's native history" do
@@ -455,6 +464,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     replays =
       for _ <- 1..20 do
         run = ConnectionNative.observe(:buffered)
+
+        if native_result(run) != :ok do
+          IO.puts(
+            "CONNECTION_STREAM_BUFFER_FAILURE: " <>
+              inspect(%{result: native_result(run), program: buffer_failure_program(run)})
+          )
+        end
+
         assert native_result(run) == :ok
 
         events =
@@ -471,6 +488,29 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     replays = List.flatten(replays)
     IO.puts("CONNECTION_STREAM_BUFFER_PROGRAMS: " <> inspect(replays, limit: :infinity))
     assert replays != [], "the native runs must actually execute Postgrex buffered replay"
+  end
+
+  defp buffer_failure_program(run) do
+    for {event, index} <- Enum.with_index(run.events),
+        {Postgrex.Protocol, _, _} = mfa <- [event.mfa] do
+      phase =
+        case event.event do
+          {_, :call, {_, _, [%{buffer: buffer} | _]}} when is_binary(buffer) ->
+            {:call, {:buffer_bytes, byte_size(buffer)}}
+
+          {_, :call, {_, _, [%{buffer: buffer} | _]}}
+          when buffer in [nil, :active_once] ->
+            {:call, buffer}
+
+          {_, :exception_from, _, {kind, reason}} ->
+            {:exception, kind, native_reason_tag(reason)}
+
+          _ ->
+            elem(event.event, 1)
+        end
+
+      {index, mfa, phase}
+    end
   end
 
   defp assert_native_streams_complete(run) do
