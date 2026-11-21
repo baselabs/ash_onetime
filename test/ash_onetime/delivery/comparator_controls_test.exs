@@ -187,13 +187,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             wire_terms(event.event, :data_column) do
         raw = Enum.at(pair.run.run.events, event.index).event
         {_, :send, message, _} = raw
-        payload = case message do
-          {:inet_async, _, _, {:ok, bytes}} -> bytes
-          {:tcp, _, bytes} -> bytes
-        end
-        %{index: event.index, origin: origin, sql_sha256: :crypto.hash(:sha256, sql),
+
+        payload =
+          case message do
+            {:inet_async, _, _, {:ok, bytes}} -> bytes
+            {:tcp, _, bytes} -> bytes
+          end
+
+        %{
+          index: event.index,
+          origin: origin,
+          sql_sha256: :crypto.hash(:sha256, sql),
           packet_sha256: :crypto.hash(:sha256, payload),
-          columns: length(wire_terms(event.event, :data_column))}
+          columns: length(wire_terms(event.event, :data_column))
+        }
       end
 
     assert Enum.any?(origins, &match?(%{origin: {:wire_statement, :committed_read, _}}, &1))
@@ -274,7 +281,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       skipped
       |> String.replace(
         "    result =\n      Pair.run_call(",
-        invocation <> "\n    result =\n      Pair.run_call(", global: false)
+        invocation <> "\n    result =\n      Pair.run_call(",
+        global: false
+      )
 
     wrong_pool =
       String.replace(
@@ -408,7 +417,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         original,
         site,
         "        target = if rem(byte_size(envelope) - 65, 2) == 1, do: %{target | dynamic_repo: :persistent_term.get({AshOnetime.Delivery.ComparatorControlsTest, :allocation_backend_control})}, else: target\n" <>
-          site, global: false)
+          site,
+        global: false
+      )
 
     assert length(:binary.matches(original, site)) == 1
     values = Values.set()
@@ -451,14 +462,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :u_cross_lease_observation
-  test "U observation: physical identity remains bound across independent native leases", context do
+  test "U observation: physical identity remains bound across independent native leases",
+       context do
     alias AshOnetime.Test.ExitBoundary.Allocation
     %{positive: positive, negative: negative} = cross_lease_captures(context)
     assert Allocation.captured_pairs(positive).errors == []
     rejected = Allocation.captured_pairs(negative)
     IO.inspect(rejected.errors, label: "U_CROSS_LEASE_NATIVE_CONFLICT")
     assert rejected.errors != [], "U_CROSS_LEASE_IDENTITY_WITNESS"
-    assert Enum.all?(rejected.errors, &match?({:o2, :not_bijective, {:allocation, _, _, _, _, _}}, &1))
+
+    assert Enum.all?(
+             rejected.errors,
+             &match?({:o2, :not_bijective, {:allocation, _, _, _, _, _}}, &1)
+           )
   end
 
   @tag :u_cross_lease_selectivity
@@ -469,18 +485,24 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert expected != []
 
     for rule <- ComparatorMutants.rules() ++ [:cross_lease_map] do
-      {accepted, rejected} = ComparatorMutants.with_mutant(rule, fn ->
-        {Allocation.captured_pairs(positive), Allocation.captured_pairs(negative)}
-      end)
+      {accepted, rejected} =
+        ComparatorMutants.with_mutant(rule, fn ->
+          {Allocation.captured_pairs(positive), Allocation.captured_pairs(negative)}
+        end)
+
       assert accepted.errors == []
+
       if rule == :cross_lease_map do
         assert rejected.errors == []
       else
         assert rejected.errors === expected
       end
+
       IO.inspect(%{mutant: rule, remaining: length(rejected.errors)},
-        label: "U_CROSS_LEASE_SAME_CAPTURE_SELECTIVITY")
+        label: "U_CROSS_LEASE_SAME_CAPTURE_SELECTIVITY"
+      )
     end
+
     assert Allocation.captured_pairs(negative).errors === expected
     assert Allocation.captured_pairs(positive).errors == []
   end
@@ -493,8 +515,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     opposite = borrower_capture(context, :parent_first)
 
     compare = fn run, twin ->
-      Allocation.pair(%{forward: %{}, reverse: %{}, errors: []}, run, twin,
-        Origins.build(run), Origins.build(twin))
+      Allocation.pair(
+        %{forward: %{}, reverse: %{}, errors: []},
+        run,
+        twin,
+        Origins.build(run),
+        Origins.build(twin)
+      )
     end
 
     accepted = compare.(first, second)
@@ -502,14 +529,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     rejected = compare.(first, opposite)
     assert rejected.pairing.errors == []
     {left, right} = rejected.leases
+
     for leases <- [left, right] do
       assert length(leases) == 2
       assert Enum.all?(leases, &(is_integer(&1.checkin) and is_integer(&1.giveaway)))
     end
+
     IO.inspect(Enum.map(rejected.errors, &Map.take(&1, [:rule, :run, :twin])),
-      label: "U_ALLOCATION_NATIVE_OPPOSITE_CHECKIN_ORDER")
-    witnessed? = Enum.any?(rejected.errors, &(&1.rule == :allocation_happens_before)) and
-      Enum.any?(rejected.errors, &(&1.rule == :allocation_borrower_join))
+      label: "U_ALLOCATION_NATIVE_OPPOSITE_CHECKIN_ORDER"
+    )
+
+    witnessed? =
+      Enum.any?(rejected.errors, &(&1.rule == :allocation_happens_before)) and
+        Enum.any?(rejected.errors, &(&1.rule == :allocation_borrower_join))
+
     assert witnessed?, "U_ALLOCATION_HAPPENS_BEFORE_WITNESS"
   end
 
@@ -551,9 +584,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                is_integer(oid) and format in [0, 1]
              end)
 
-      assert Enum.all?(rows, fn {:data_column, sql, {{:wire_statement, phase, ordinal}, _}, _, _, {:table_oid, oid}, _,
-                                 type, format, _} ->
-               is_binary(sql) and phase in [:shared, :committed_read] and is_integer(ordinal) and is_integer(oid) and is_integer(type) and
+      assert Enum.all?(rows, fn {:data_column, sql, {{:wire_statement, phase, ordinal}, _}, _, _,
+                                 {:table_oid, oid}, _, type, format, _} ->
+               is_binary(sql) and phase in [:shared, :committed_read] and is_integer(ordinal) and
+                 is_integer(oid) and is_integer(type) and
                  format in [0, 1]
              end)
 
@@ -968,45 +1002,67 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp cross_lease_captures(context) do
     alias AshOnetime.Test.ExitBoundary.{Allocation, Historical}
     row = row!(:issue, :execute)
-    captures = for ordinal <- 1..8 do
-      # Exercise the existing pool without changing its size. Real checkins rotate
-      # its ready members; the subsequent snapshot grounds that capture's clocks.
-      for _ <- List.duplicate(:rotate, rem(ordinal, context.pool_size)),
-        do: AshOnetime.Test.Repo.checkout(fn -> :fixture_rotation end)
-      historical = Historical.capture(context.prefix)
-      run = AshOnetime.Test.ExitBoundary.observe(
-        fn ->
-          AshOnetime.Test.Repo.put_dynamic_repo(context.repo)
-          :allocation_observation
-        end,
-        fn _ -> Scenarios.allocation_checkpoint() end,
-        %{host: [], callbacks: []})
-      side = observation_side(context, run, %{}, row, historical)
-      [lease] = Allocation.leases(side, Origins.build(side))
-      assert is_integer(lease.checkin) and is_integer(lease.giveaway)
-      assert run.result == :allocation_checkpoint
-      assert Enum.any?(run.events,
-        &match?(%{event: {_, :return_from, {DBConnection.Holder, :checkin, 1}, :ok}}, &1))
-      assert Enum.any?(run.events,
-        &match?(%{event: {_, :return_from, {:ets, :give_away, 3}, true}}, &1))
-      {lease.holder, side}
-    end
+
+    captures =
+      for ordinal <- 1..8 do
+        # Exercise the existing pool without changing its size. Real checkins rotate
+        # its ready members; the subsequent snapshot grounds that capture's clocks.
+        for _ <- List.duplicate(:rotate, rem(ordinal, context.pool_size)),
+            do: AshOnetime.Test.Repo.checkout(fn -> :fixture_rotation end)
+
+        historical = Historical.capture(context.prefix)
+
+        run =
+          AshOnetime.Test.ExitBoundary.observe(
+            fn ->
+              AshOnetime.Test.Repo.put_dynamic_repo(context.repo)
+              :allocation_observation
+            end,
+            fn _ -> Scenarios.allocation_checkpoint() end,
+            %{host: [], callbacks: []}
+          )
+
+        side = observation_side(context, run, %{}, row, historical)
+        [lease] = Allocation.leases(side, Origins.build(side))
+        assert is_integer(lease.checkin) and is_integer(lease.giveaway)
+        assert run.result == :allocation_checkpoint
+
+        assert Enum.any?(
+                 run.events,
+                 &match?(%{event: {_, :return_from, {DBConnection.Holder, :checkin, 1}, :ok}}, &1)
+               )
+
+        assert Enum.any?(
+                 run.events,
+                 &match?(%{event: {_, :return_from, {:ets, :give_away, 3}, true}}, &1)
+               )
+
+        {lease.holder, side}
+      end
+
     groups = captures |> Enum.group_by(&elem(&1, 0), &elem(&1, 1)) |> Map.values()
     a = Enum.find(groups, &(length(&1) >= 3))
     b = Enum.find(groups, &(&1 != a and length(&1) >= 2))
-    assert a != nil and b != nil, "native checkouts must witness repeated and distinct pool members"
+
+    assert a != nil and b != nil,
+           "native checkouts must witness repeated and distinct pool members"
+
     [a1, a2, a3 | _] = a
     [b1, b2 | _] = b
     positive = [{a1, b1}, {a2, b2}]
     negative = [{a1, b1}, {a2, a3}]
+
     for {run, twin} <- positive ++ negative do
       # These comparisons use each complete, untouched native observation. They
       # establish that the shared-map failure is not an individual lease failure.
-      errors = compare_observation(run, twin, row).errors
+      errors =
+        compare_observation(run, twin, row).errors
         |> AshOnetime.Test.ExitBoundary.Diagnostics.safe()
+
       assert errors == []
       assert Allocation.captured_pairs([{run, twin}]).errors == []
     end
+
     roots = for {run, twin} <- negative, side <- [run, twin], do: side.run.snapshot.root
     assert length(Enum.uniq(roots)) == 4
     %{positive: positive, negative: negative}
@@ -1015,46 +1071,63 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp borrower_capture(context, order) do
     historical = AshOnetime.Test.ExitBoundary.Historical.capture(context.prefix)
     repo = context.repo
-    run = AshOnetime.Test.ExitBoundary.observe(
-      fn ->
-        AshOnetime.Test.Repo.put_dynamic_repo(repo)
-        :allocation_observation
-      end,
-      fn _ ->
-        result = AshOnetime.Test.Repo.checkout(fn ->
-          parent = self()
-          child = spawn(fn ->
-            AshOnetime.Test.Repo.put_dynamic_repo(repo)
+
+    run =
+      AshOnetime.Test.ExitBoundary.observe(
+        fn ->
+          AshOnetime.Test.Repo.put_dynamic_repo(repo)
+          :allocation_observation
+        end,
+        fn _ ->
+          result =
             AshOnetime.Test.Repo.checkout(fn ->
-              send(parent, {:borrowed, self()})
+              parent = self()
+
+              child =
+                spawn(fn ->
+                  AshOnetime.Test.Repo.put_dynamic_repo(repo)
+
+                  AshOnetime.Test.Repo.checkout(fn ->
+                    send(parent, {:borrowed, self()})
+
+                    receive do
+                      {:release, ^parent} -> :ok
+                    end
+                  end)
+
+                  send(parent, {:checked_in, self()})
+                end)
+
               receive do
-                {:release, ^parent} -> :ok
+                {:borrowed, ^child} -> :ok
+              end
+
+              if order == :child_first do
+                send(child, {:release, parent})
+
+                receive do
+                  {:checked_in, ^child} -> :joined
+                end
+              else
+                {:pending, child}
               end
             end)
-            send(parent, {:checked_in, self()})
-          end)
-          receive do
-            {:borrowed, ^child} -> :ok
+
+          case result do
+            {:pending, child} ->
+              send(child, {:release, self()})
+
+              receive do
+                {:checked_in, ^child} -> :allocation_order
+              end
+
+            :joined ->
+              :allocation_order
           end
-          if order == :child_first do
-            send(child, {:release, parent})
-            receive do
-              {:checked_in, ^child} -> :joined
-            end
-          else
-            {:pending, child}
-          end
-        end)
-        case result do
-          {:pending, child} ->
-            send(child, {:release, self()})
-            receive do
-              {:checked_in, ^child} -> :allocation_order
-            end
-          :joined -> :allocation_order
-        end
-      end,
-      %{host: [], callbacks: []})
+        end,
+        %{host: [], callbacks: []}
+      )
+
     assert run.result == :allocation_order
     observation_side(context, run, %{}, row!(:issue, :execute), historical)
   end

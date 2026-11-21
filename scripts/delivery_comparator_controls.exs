@@ -506,8 +506,10 @@ defmodule AshOnetime.DeliveryComparatorControls do
       },
       "u_allocation_happens_before" => %{
         path: "test/support/exit_boundary/allocation.ex",
-        original: "        errors ++\n          order_errors ++\n          errors_for_leases(left ++ right) ++\n          joined_borrowers(left, rc) ++ joined_borrowers(right, tc),\n",
-        mutated: "        errors ++\n          Enum.take(order_errors, 0) ++\n          errors_for_leases(left ++ right) ++\n          Enum.take(joined_borrowers(left, rc) ++ joined_borrowers(right, tc), 0),\n",
+        original:
+          "        errors ++\n          order_errors ++\n          errors_for_leases(left ++ right) ++\n          joined_borrowers(left, rc) ++ joined_borrowers(right, tc),\n",
+        mutated:
+          "        errors ++\n          Enum.take(order_errors, 0) ++\n          errors_for_leases(left ++ right) ++\n          Enum.take(joined_borrowers(left, rc) ++ joined_borrowers(right, tc), 0),\n",
         test: "test/ash_onetime/delivery/comparator_controls_test.exs",
         tag: "u_allocation_happens_before",
         test_name: "U observation: overlapping borrowers require causal checkin order",
@@ -519,7 +521,8 @@ defmodule AshOnetime.DeliveryComparatorControls do
         mutated: "      _ = acc\n      bind_lease(initial, a, b)\n",
         test: "test/ash_onetime/delivery/comparator_controls_test.exs",
         tag: "u_cross_lease_observation",
-        test_name: "U observation: physical identity remains bound across independent native leases",
+        test_name:
+          "U observation: physical identity remains bound across independent native leases",
         assertion: "U_CROSS_LEASE_IDENTITY_WITNESS"
       }
     }

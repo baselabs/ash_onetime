@@ -347,17 +347,25 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
 
       assert is_port(port), "R28 requires the real PostgreSQL connection's socket port"
       previous = :erlang.port_get_data(port)
+      assert is_atom(previous), "the socket's native data must name its inet module"
 
       on_exit(fn ->
         if :erlang.port_info(port) != :undefined, do: :erlang.port_set_data(port, previous)
       end)
 
-      # Bind the independently captured socket before tracing. No production
-      # getter or fixture lookup may become an earlier exit than port_set_data.
+      # inet_db.lookup_socket reads this module from the port's data. Restore it
+      # immediately after the leak, before SQL uses the same live socket again.
+      # Both the socket and its original data are bound before tracing.
       source =
-        String.replace(source, "COMPARATOR_SOCKET", List.to_string(:erlang.port_to_list(port)))
+        source
+        |> String.replace("COMPARATOR_SOCKET_MODULE", inspect(previous))
+        |> String.replace("COMPARATOR_SOCKET", List.to_string(:erlang.port_to_list(port)))
 
-      AshOnetime.Test.ExitBoundary.Compiled.with_source(source, path, callback)
+      try do
+        AshOnetime.Test.ExitBoundary.Compiled.with_source(source, path, callback)
+      after
+        assert :erlang.port_get_data(port) === previous
+      end
     else
       callback.()
     end

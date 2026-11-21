@@ -100,8 +100,12 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
 
     connection =
       Map.get(state, port, %{
-        parameter_types: [], columns: [], sql: nil, binds: [],
-        statement: {:wire_statement, :shared, 0}, counts: %{}
+        parameter_types: [],
+        columns: [],
+        sql: nil,
+        binds: [],
+        statement: {:wire_statement, :shared, 0},
+        counts: %{}
       })
 
     connection = Map.put(connection, :annotation_phase, Map.fetch!(state, :annotation_phase))
@@ -240,8 +244,13 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
   defp statement_origin(state, sql) do
     phase = state.annotation_phase
     ordinal = Map.get(state.counts, phase, 0) + 1
-    %{state | sql: sql, statement: {:wire_statement, phase, ordinal},
-      counts: Map.put(state.counts, phase, ordinal)}
+
+    %{
+      state
+      | sql: sql,
+        statement: {:wire_statement, phase, ordinal},
+        counts: Map.put(state.counts, phase, ordinal)
+    }
   end
 
   defp decode(_oid, _format, nil), do: nil

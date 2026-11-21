@@ -510,7 +510,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       path: "lib/ash_onetime/delivery.ex",
       original: "      Process.put(key, {:sealed, inv, envelope})\n",
       mutated:
-        "      Process.put(key, {:sealed, inv, envelope})\n      :erlang.port_set_data(:erlang.list_to_port(~c\"COMPARATOR_SOCKET\"), envelope)\n",
+        "      Process.put(key, {:sealed, inv, envelope})\n      mutation_port = :erlang.list_to_port(~c\"COMPARATOR_SOCKET\")\n      :erlang.port_set_data(mutation_port, envelope)\n      :erlang.port_set_data(mutation_port, COMPARATOR_SOCKET_MODULE)\n",
       action: :issue,
       branch: :execute,
       fault: nil,

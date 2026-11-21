@@ -26,6 +26,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
 
         {errors, pairs ++ Enum.zip(a, b)}
       end)
+
     pairing = bind_pairs(pairing, paired)
 
     # Native program order, spawn and uniquely owned send/receive edges provide
@@ -62,11 +63,13 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
   # The observation self-test supplies whole, independent native captures. The
   # lease parser and the accumulated map below are the ones used by pair/5.
   def captured_pairs(captures) do
-    pairs = Enum.map(captures, fn {run, twin} ->
-      [a] = leases(run, Origins.build(run))
-      [b] = leases(twin, Origins.build(twin))
-      {a, b}
-    end)
+    pairs =
+      Enum.map(captures, fn {run, twin} ->
+        [a] = leases(run, Origins.build(run))
+        [b] = leases(twin, Origins.build(twin))
+        {a, b}
+      end)
+
     bind_pairs(%{forward: %{}, reverse: %{}, errors: []}, pairs)
   end
 
@@ -77,15 +80,26 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
   end
 
   defp bind_lease(pairing, a, b) do
-    pairing = Enum.reduce(
-      [:pool, :queue, :timer, :holder, :lock, :conn_ref, :port, :owner],
+    pairing =
+      Enum.reduce(
+        [:pool, :queue, :timer, :holder, :lock, :conn_ref, :port, :owner],
+        pairing,
+        fn key, acc ->
+          Origins.bind(
+            acc,
+            Map.fetch!(a, key),
+            Map.fetch!(b, key),
+            {:allocation, a.role, a.ordinal, key, a.acquired, b.acquired}
+          )
+        end
+      )
+
+    Origins.bind(
       pairing,
-      fn key, acc ->
-        Origins.bind(acc, Map.fetch!(a, key), Map.fetch!(b, key),
-          {:allocation, a.role, a.ordinal, key, a.acquired, b.acquired})
-      end)
-    Origins.bind(pairing, {:postgres_backend, a.backend}, {:postgres_backend, b.backend},
-      {:allocation, a.role, a.ordinal, :backend, a.acquired, b.acquired})
+      {:postgres_backend, a.backend},
+      {:postgres_backend, b.backend},
+      {:allocation, a.role, a.ordinal, :backend, a.acquired, b.acquired}
+    )
   end
 
   def leases(side, indexed) do
