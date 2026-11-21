@@ -65,14 +65,18 @@ Each notebook removes its UUID-named schema after verification.
 Infra dispatches releases through the `Publish to Hex` workflow after the version commit
 qualifies on the default branch. No one publishes from a workstation. The workflow requires
 an existing package on Hex, an untagged version and dated release notes. It builds and inspects
-the package and reproducible docs archives before the one keyed step uploads only missing
-archives, without loading a Mix project. It refuses retired releases or differing bytes and
-never replaces a served archive. If Hex holds either upload for approval, infra finishes it by
-dispatching again on the same commit after approval.
+the package and docs archives before the one keyed step uploads only missing archives,
+without loading a Mix project. It refuses retired releases or differing package bytes. Docs
+bytes are never compared, and readable served docs are kept. Each docs archive carries root
+`release.json` naming the package, version and build commit. Keyless read-back requires
+`index.html` and provenance naming the dispatched commit or an ancestor on the default branch;
+that is the published commit. It never replaces a served archive. If Hex holds either upload
+for approval, infra finishes it by dispatching again on the same commit after approval.
 
-The publish job uploads one `release-assets` artifact containing the package archive, docs
-archive, `SHA256SUMS` and `NOTES.md`. Infra reads both archives back, compares the package
-with that artifact, tags the published commit and creates the GitHub release from those files.
+Only after both archives are served and verified does the publish job upload `release-assets`,
+containing the package archive, downloaded served docs archive, recomputed `SHA256SUMS` and
+checkout changelog `NOTES.md`. Held runs upload no artifact. Infra compares the package with
+that artifact, tags the published commit and creates the GitHub release from those files.
 Consumers verify files from that GitHub release; the workflow artifact expires. No workflow
 creates a GitHub release or runs on a tag.
 

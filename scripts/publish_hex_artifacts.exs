@@ -15,9 +15,9 @@ defmodule AshOnetime.PublishHexArtifacts do
   end
 
   defp run(["plan", version, archive, docs]) do
-    {package_bytes, docs_bytes} = archives!(version, archive, docs)
+    {package_bytes, _docs_bytes} = archives!(version, archive, docs)
     Hex.start()
-    {package_state, docs_state} = states!(version, package_bytes, docs_bytes)
+    {package_state, docs_state} = states!(version, package_bytes)
     output("package", package_state)
     output("docs", docs_state)
   end
@@ -32,7 +32,7 @@ defmodule AshOnetime.PublishHexArtifacts do
     {package_bytes, docs_bytes} = archives!(version, archive, docs)
     Hex.start()
     auth = [key: key]
-    {package_state, docs_state} = states!(version, package_bytes, docs_bytes)
+    {package_state, docs_state} = states!(version, package_bytes)
     assert_plan!(package_plan, package_state, "package")
     assert_plan!(docs_plan, docs_state, "docs")
 
@@ -45,14 +45,14 @@ defmodule AshOnetime.PublishHexArtifacts do
       end
 
     # Docs have no replace=false API flag. Check again immediately before their upload;
-    # workflow concurrency serializes dispatches, and matching served docs are skipped.
+    # workflow concurrency serializes dispatches, and readable served docs are kept.
     {latest_package_state, has_docs} = release_state!(version, package_bytes)
 
     if latest_package_state == :missing && package_state != :staged do
       raise "Hex release disappeared before the docs upload; publication stopped"
     end
 
-    docs_state = docs_state!(version, docs_bytes)
+    docs_state = docs_state!(version)
     assert_docs_available!(has_docs, docs_state)
     assert_plan!(docs_plan, docs_state, "docs")
 
@@ -71,20 +71,26 @@ defmodule AshOnetime.PublishHexArtifacts do
     if staged, do: IO.puts("::notice::Hex approval pending; #{@notice}")
   end
 
-  defp run(["read-back", version, archive, docs, staged]) when staged in ["true", "false"] do
-    {package_bytes, docs_bytes} = archives!(version, archive, docs)
+  defp run(["read-back", version, archive, docs, staged, repository, commit])
+       when staged in ["true", "false"] do
+    {package_bytes, _docs_bytes} = archives!(version, archive, docs)
     Hex.start()
-    ready = read_back!(version, package_bytes, docs_bytes, 12)
-    output("ready", ready)
 
-    cond do
-      ready ->
-        IO.puts("Hex package and docs read back with the inspected SHA-256 digests")
+    case read_back!(version, package_bytes, 12) do
+      {:ready, served_docs} ->
+        # Keep exactly the downloaded archive for infra's release assets. No docs digest
+        # comparison: ExDoc output can vary between builds of the same commit.
+        File.write!(docs, served_docs)
+        published_commit = verify_docs!(docs, version, repository, commit)
+        output("published_commit", published_commit)
+        output("ready", true)
+        IO.puts("Hex package digest and served docs provenance verified")
 
-      staged == "true" ->
+      :pending when staged == "true" ->
+        output("ready", false)
         IO.puts("::notice::Hex approval pending; #{@notice}")
 
-      true ->
+      :pending ->
         raise "Hex package or docs are not served after bounded read-back; publication incomplete"
     end
   end
@@ -92,7 +98,7 @@ defmodule AshOnetime.PublishHexArtifacts do
   defp run(_arguments) do
     raise "usage: publish_hex_artifacts.exs plan VERSION PACKAGE DOCS | " <>
             "upload VERSION PACKAGE DOCS PACKAGE_PLAN DOCS_PLAN | " <>
-            "read-back VERSION PACKAGE DOCS STAGED"
+            "read-back VERSION PACKAGE DOCS STAGED REPOSITORY COMMIT"
   end
 
   defp archives!(version, archive, docs) do
@@ -104,10 +110,10 @@ defmodule AshOnetime.PublishHexArtifacts do
     {File.read!(archive), File.read!(docs)}
   end
 
-  defp states!(version, package_bytes, docs_bytes) do
+  defp states!(version, package_bytes) do
     exists!()
     {package_state, has_docs} = release_state!(version, package_bytes)
-    docs_state = docs_state!(version, docs_bytes)
+    docs_state = docs_state!(version)
 
     assert_docs_available!(has_docs, docs_state)
 
@@ -147,8 +153,65 @@ defmodule AshOnetime.PublishHexArtifacts do
     end
   end
 
-  defp docs_state!(version, docs_bytes) do
-    served_state!("https://repo.hex.pm/docs/#{@package}-#{version}.tar.gz", docs_bytes, "docs")
+  defp docs_state!(version) do
+    case served_docs!(version) do
+      {:served, _bytes} -> :served
+      :missing -> :missing
+    end
+  end
+
+  defp served_docs!(version) do
+    url = "https://repo.hex.pm/docs/#{@package}-#{version}.tar.gz"
+
+    case Hex.HTTP.request(:get, url, [], nil) do
+      {:ok, {200, _headers, bytes}} when is_binary(bytes) ->
+        readable_docs!(bytes)
+        {:served, bytes}
+
+      {:ok, {404, _headers, _body}} ->
+        :missing
+
+      _result ->
+        raise "could not read served docs; publication refused"
+    end
+  end
+
+  defp readable_docs!(bytes) do
+    case :erl_tar.extract({:binary, :zlib.gunzip(bytes)}, [:memory]) do
+      {:ok, _entries} -> :ok
+      _result -> raise "served docs are not a readable gzip tar; publication refused"
+    end
+  rescue
+    _error -> raise "served docs are not a readable gzip tar; publication refused"
+  end
+
+  defp verify_docs!(docs, version, repository, commit) do
+    script = Path.join(repository, "scripts/release_archives.py")
+
+    {result, status} =
+      System.cmd(
+        "python3",
+        [
+          script,
+          "verify-docs",
+          docs,
+          version,
+          "--repository",
+          repository,
+          "--dispatched",
+          commit
+        ],
+        stderr_to_stdout: true
+      )
+
+    if status != 0, do: raise("served docs provenance refused: #{String.trim(result)}")
+    published_commit = String.trim(result)
+
+    unless Regex.match?(~r/\A[0-9a-f]{40}\z/, published_commit) do
+      raise "served docs verifier did not return a full commit"
+    end
+
+    published_commit
   end
 
   defp served_state!(url, expected_bytes, label) do
@@ -165,7 +228,7 @@ defmodule AshOnetime.PublishHexArtifacts do
     end
   end
 
-  defp read_back!(version, package_bytes, docs_bytes, attempts) do
+  defp read_back!(version, package_bytes, attempts) do
     {release_state, _has_docs} = release_state!(version, package_bytes)
 
     package_state =
@@ -175,14 +238,22 @@ defmodule AshOnetime.PublishHexArtifacts do
         "package"
       )
 
-    docs_state = docs_state!(version, docs_bytes)
-    ready = release_state == :served && package_state == :served && docs_state == :served
+    docs_state = served_docs!(version)
 
-    if ready || attempts == 1 do
-      ready
-    else
-      Process.sleep(5_000)
-      read_back!(version, package_bytes, docs_bytes, attempts - 1)
+    ready =
+      release_state == :served && package_state == :served && match?({:served, _}, docs_state)
+
+    cond do
+      ready ->
+        {:served, bytes} = docs_state
+        {:ready, bytes}
+
+      attempts == 1 ->
+        :pending
+
+      true ->
+        Process.sleep(5_000)
+        read_back!(version, package_bytes, attempts - 1)
     end
   end
 
