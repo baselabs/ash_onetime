@@ -41,7 +41,14 @@ defmodule AshOnetime.Telemetry do
       :disabled
     ],
     # rule:partitions-created-telemetry
-    cleanup: [:claims_deleted, :partitions_dropped, :partitions_created, :partitions_kept],
+    # rule:responses-expired-telemetry
+    cleanup: [
+      :responses_expired,
+      :claims_deleted,
+      :partitions_dropped,
+      :partitions_created,
+      :partitions_kept
+    ],
     reap: [:claims_reaped],
     external_recovery: [
       :processing_committed,
@@ -49,6 +56,7 @@ defmodule AshOnetime.Telemetry do
       :recover_succeeded,
       :absence_proven,
       :outcome_unknown,
+      # rule:outcome-unrecorded-telemetry
       :outcome_unrecorded,
       :external_effect_unavailable,
       :finalize_locked,
@@ -137,8 +145,10 @@ defmodule AshOnetime.Telemetry do
 
   @doc """
   Emits `[:ash_onetime, :cleanup]` with `:count` and `result_class` in
-  `[:claims_deleted, :partitions_dropped, :partitions_created, :partitions_kept]`. A
-  bounded cleanup run; `:partitions_kept` fires only when at least one past partition
+  `[:responses_expired, :claims_deleted, :partitions_dropped, :partitions_created,
+  :partitions_kept]`. `:responses_expired` counts response payloads expired at their
+  response deadline; claim cleanup follows the claim's separate retention deadline.
+  A bounded cleanup run emits these counts. `:partitions_kept` fires only when at least one past partition
   was kept by refusal (non-owner driver, DDL block, lock contention, not a plain child) — the visible
   signal that pruning is not happening. Its count is the sum of
   `payload_partitions_refused` values; ordinary occupied partitions emit no event.
@@ -161,8 +171,10 @@ defmodule AshOnetime.Telemetry do
   @doc """
   Emits `[:ash_onetime, :external_recovery]` with `:duration` and `result_class` in
   `[:processing_committed, :execute_succeeded, :recover_succeeded, :absence_proven,
-  :outcome_unknown, :external_effect_unavailable, :finalize_locked, :replayed]`. The stage
-  outcomes of the committed external-effect recovery protocol.
+  :outcome_unknown, :outcome_unrecorded, :external_effect_unavailable, :finalize_locked,
+  :replayed]`. The stage outcomes of the committed external-effect recovery protocol.
+  `:outcome_unrecorded` means the independent outcome write could not be confirmed.
+  The external recovery point remains protected for a later recovery attempt.
   """
   @spec external_recovery(non_neg_integer(), atom(), module(), atom(), atom()) ::
           :ok | {:error, Error.t()}

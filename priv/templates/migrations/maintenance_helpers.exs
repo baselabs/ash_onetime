@@ -19,6 +19,7 @@ defp install_maintenance(mode) when mode in [:fresh, :upgrade] do
     -- Function settings are restored by PostgreSQL when each call exits.
     routine_settings text := <%= "#" <> "{maintenance_literal(" <> inspect(EEx.eval_file(Path.join([__DIR__, "maintenance", "settings.sql"]), fragment: :top_level) |> String.trim()) <> ")}" %>;
     grantee_oid oid;
+    grantee oid;
     target record;
     fk record;
     anchor record;
@@ -122,6 +123,10 @@ defp install_maintenance(mode) when mode in [:fresh, :upgrade] do
     END LOOP;
     EXECUTE format('CREATE SCHEMA %I AUTHORIZATION %I',routine_schema,owner_name);
     PERFORM set_config('role',owner_name,true);
+    IF #{mode == :fresh} THEN
+      <%= EEx.eval_file(Path.join([__DIR__, "external_state", "restore.sql"]), fragment: :create) %>
+    END IF;
+    -- rule:private-routine-schema
     EXECUTE format('REVOKE ALL PRIVILEGES ON SCHEMA %I FROM PUBLIC',routine_schema);
     EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I',routine_schema,pg_get_userbyid(maintenance_oid));
     SELECT oid INTO STRICT routine_schema_oid FROM pg_namespace WHERE nspname=routine_schema;

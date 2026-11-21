@@ -10,13 +10,15 @@ BEGIN
     UNION ALL
     SELECT 1 FROM pg_class c CROSS JOIN LATERAL aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a
     -- rule:acl-outcome-exemption
+    -- rule:acl-child-table-owner-only
     WHERE c.oid IN (SELECT @routines@.ash_onetime_maintenance_relations()) AND a.grantee<>c.relowner
-      AND (c.oid NOT IN (@idempotency@::regclass,@nonce@::regclass,@payload@::regclass,@outcomes@::regclass) AND NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent IN (@idempotency@::regclass,@nonce@::regclass,@payload@::regclass,@outcomes@::regclass))
+      AND (c.oid NOT IN (@idempotency@::regclass,@nonce@::regclass,@payload@::regclass,@outcomes@::regclass) AND NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=@outcomes@::regclass)
            OR (c.oid<>@outcomes@::regclass AND NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=@outcomes@::regclass) AND a.privilege_type IN ('TRIGGER','TRUNCATE','REFERENCES','MAINTAIN')))
     UNION ALL
     SELECT 1 FROM pg_attribute t JOIN pg_class c ON c.oid=t.attrelid CROSS JOIN LATERAL aclexplode(t.attacl) a
+    -- rule:acl-child-column-owner-only
     WHERE c.oid IN (SELECT @routines@.ash_onetime_maintenance_relations()) AND a.grantee<>c.relowner
-      AND (c.oid NOT IN (@idempotency@::regclass,@nonce@::regclass,@payload@::regclass,@outcomes@::regclass) AND NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent IN (@idempotency@::regclass,@nonce@::regclass,@payload@::regclass,@outcomes@::regclass))
+      AND (c.oid NOT IN (@idempotency@::regclass,@nonce@::regclass,@payload@::regclass,@outcomes@::regclass) AND NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=@outcomes@::regclass)
            OR (c.oid<>@outcomes@::regclass AND NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid AND inhparent=@outcomes@::regclass) AND a.privilege_type='REFERENCES'))
     UNION ALL
     SELECT 1 FROM pg_proc p CROSS JOIN LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a

@@ -6,6 +6,8 @@ DECLARE
 BEGIN
   SELECT format('%I.%I', n.nspname, c.relname) INTO STRICT target_name
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = relation_oid;
+  -- rule:journal-reset-owner-only
+  owner_only := owner_only OR (SELECT relname='ash_onetime_external_state_restore' FROM pg_class WHERE oid=relation_oid);
   SELECT relname='ash_onetime_effect_outcomes' OR relname LIKE 'ash_onetime_effect_outcomes_p%' INTO STRICT append_only FROM pg_class WHERE oid=relation_oid;
   FOR grant_row IN
     SELECT DISTINCT a.grantee FROM pg_class c,

@@ -37,7 +37,6 @@ SET search_path = pg_catalog, pg_temp SET DateStyle = 'ISO, YMD' SET row_securit
 <% :visible_acl -> %>
         -- rule:visibility-helper-public
         EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO PUBLIC',routine_oid::regprocedure);
-        EXECUTE format('GRANT USAGE ON SCHEMA %I TO PUBLIC',routine_schema);
 <% :rls -> %>
       -- rule:outcome-rls-follows-claims
       IF (SELECT relforcerowsecurity FROM pg_class WHERE oid=format('%I.ash_onetime_idempotency_claims',install_schema)::regclass) THEN
@@ -92,13 +91,16 @@ SELECT EXISTS (SELECT 1 FROM @schema@.ash_onetime_idempotency_claims c
     DECLARE
       install_schema text;
       hash_claims boolean;
+      owner_name text;
+      migrating_role text := current_user;
       table_ddl text := <%= "#" <> "{maintenance_literal(" <> inspect(EEx.eval_file(__ENV__.file, fragment: :ddl)) <> ")}" %>;
       child record;
       bounds text[];
     BEGIN
-      SELECT n.nspname,c.relkind='p' INTO STRICT install_schema,hash_claims
+      SELECT n.nspname,c.relkind='p',pg_get_userbyid(c.relowner) INTO STRICT install_schema,hash_claims,owner_name
         FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE c.oid=#{maintenance_literal(q("ash_onetime_idempotency_claims"))}::regclass;
+      PERFORM set_config('role',owner_name,true);
       table_ddl := replace(replace(replace(replace(table_ddl,'@schema@',format('%I',install_schema)),
         '@hash_columns@',CASE WHEN hash_claims THEN 'operation_hash bytea NOT NULL, logical_partition text NOT NULL,' ELSE '' END),
         '@key_columns@',CASE WHEN hash_claims THEN 'operation_hash, logical_partition, ' ELSE '' END),
@@ -112,5 +114,7 @@ SELECT EXISTS (SELECT 1 FROM @schema@.ash_onetime_idempotency_claims c
             install_schema,'ash_onetime_effect_outcomes_p' || bounds[2],install_schema,bounds[1]::integer,bounds[2]::integer);
         END LOOP;
       END IF;
+      -- rule:external-outcomes-restore-role
+      PERFORM set_config('role',migrating_role,true);
     END
 <% end %>

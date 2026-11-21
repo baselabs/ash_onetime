@@ -1,16 +1,14 @@
 <%
 runtime_names = ~w(ash_onetime_cleanup_eligible ash_onetime_guard_idempotency_delete ash_onetime_guard_nonce_delete ash_onetime_guard_idempotency_update ash_onetime_guard_effect_outcome ash_onetime_bound_effect_outcome ash_onetime_claim_visible ash_onetime_maintenance_active ash_onetime_maintenance_reset_acl ash_onetime_expire_responses ash_onetime_cleanup_idempotency ash_onetime_cleanup_nonce ash_onetime_reap_idempotency)
 historical_names = ~w(ash_onetime_maintenance_normalize ash_onetime_maintenance_shape ash_onetime_maintenance_reference)
-hold_source = File.read!(Path.join(__DIR__, "operation_hold.exs"))
-[_, previous_functions] = Regex.run(~r/(  defp install_hold_functions do\n.*?)(?=  defp install_previous_functions do)/s, hold_source)
-previous_functions = String.replace(previous_functions, "defp install_hold_functions", "defp restore_previous_functions")
+previous_names = ~w(ash_onetime_cleanup_eligible ash_onetime_guard_idempotency_delete ash_onetime_guard_nonce_delete ash_onetime_cleanup_idempotency ash_onetime_cleanup_nonce ash_onetime_reap_idempotency)
 %>
 defmodule <%= inspect(module) %> do
   use Ecto.Migration
   @install_prefix <%= inspect(install_prefix) %>
-  @abandonment_floor_seconds 86_400
   @claims "ash_onetime_idempotency_claims"
   @external_functions <%= EEx.eval_file(Path.join(__DIR__, "maintenance_routines.exs"), only: runtime_names, maintenance: false) |> String.trim() %>
+  @previous_names <%= inspect(previous_names) %>
   @historical_functions <%= EEx.eval_file(Path.join(__DIR__, "maintenance_routines.exs"), only: historical_names, maintenance: false, reference_legacy: true) |> String.trim() %>
 
   def up do
@@ -21,6 +19,8 @@ defmodule <%= inspect(module) %> do
       routine_schema text;
       scratch_schema text;
       owner_name text;
+      migrating_role text := current_user;
+      grantee oid;
       target record;
       routine jsonb;
       routine_body text;
@@ -128,6 +128,18 @@ defmodule <%= inspect(module) %> do
       FOR routine IN SELECT * FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@historical_functions))}::jsonb) LOOP
         EXECUTE format('DROP FUNCTION %I.%I(%s)',scratch_schema,routine->>'name',routine->>'types');
       END LOOP;
+      <%= EEx.eval_file(Path.join([__DIR__, "external_state", "restore.sql"]), fragment: :create) %>
+      -- rule:external-journal-capture
+      INSERT INTO #{q("ash_onetime_external_state_restore")}
+        (routine_identity,definition,owner_oid,configuration,security_definer,grants)
+        SELECT p.oid::regprocedure::text,pg_get_functiondef(p.oid),p.proowner,p.proconfig,p.prosecdef,p.proacl
+        FROM pg_proc p WHERE p.oid IN (
+          SELECT to_regprocedure(format('%I.%I(%s)',install_schema,r->>'name',r->>'types'))
+          FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(Enum.filter(@external_functions, &(&1.name in @previous_names))))}::jsonb) r);
+      -- rule:external-journal-capture-complete
+      IF (SELECT count(*) FROM #{q("ash_onetime_external_state_restore")})<>6 THEN
+        RAISE EXCEPTION 'external rollback journal does not cover all six routines' USING ERRCODE='23514';
+      END IF;
       FOR check_ddl IN SELECT k.conname FROM pg_constraint k WHERE k.conrelid=#{maintenance_literal(q(@claims))}::regclass
         AND k.contype='c' AND k.conkey @> ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=k.conrelid AND attname='response_partition')]::smallint[] LOOP
         EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I',#{maintenance_literal(q(@claims))}::regclass,check_ddl.conname);
@@ -141,6 +153,8 @@ defmodule <%= inspect(module) %> do
       IF force_claims THEN ALTER TABLE #{q(@claims)} FORCE ROW LEVEL SECURITY; END IF;
       ALTER TABLE #{q(@claims)} ALTER COLUMN response_retain_until SET NOT NULL;
       ALTER TABLE #{q(@claims)} ADD <%= EEx.eval_file(Path.join([__DIR__, "external_state", "claims.sql"]), fragment: :checks) |> String.trim() |> String.replace(",\n-- rule:", ", ADD\n-- rule:") %>;
+      -- rule:external-up-restore-role
+      PERFORM set_config('role',migrating_role,true);
     END
     """))
     flush()
@@ -152,12 +166,46 @@ defmodule <%= inspect(module) %> do
 
   def down do
     execute("DO " <> maintenance_literal("""
-    DECLARE target record;
+    DECLARE
+      target record;
+      privilege record;
+      grantee oid;
+      install_schema text;
+      owner_name text;
+      migrating_role text := current_user;
+      force_claims boolean;
+      snapshots jsonb;
+      item jsonb;
+      routine jsonb;
+      routine_oid oid;
     BEGIN
       PERFORM set_config('lock_timeout','5s',true);
+      SELECT n.nspname,pg_get_userbyid(c.relowner) INTO STRICT install_schema,owner_name
+        FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE c.oid=#{maintenance_literal(q(@claims))}::regclass;
+      -- rule:external-down-owner
+      PERFORM set_config('role',owner_name,true);
       -- rule:rollback-lock-external-state
       LOCK TABLE #{q(@claims)}, #{q("ash_onetime_effect_outcomes")} IN ACCESS EXCLUSIVE MODE;
+      -- rule:external-journal-missing
+      IF to_regclass(format('%I.ash_onetime_external_state_restore',install_schema)) IS NULL THEN
+        RAISE EXCEPTION 'external rollback journal is missing' USING ERRCODE='23514';
+      END IF;
+      LOCK TABLE #{q("ash_onetime_external_state_restore")} IN ACCESS EXCLUSIVE MODE;
+      -- rule:external-journal-coverage
+      IF (SELECT count(*) FROM #{q("ash_onetime_external_state_restore")})<>6 OR EXISTS (
+        SELECT 1 FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(Enum.filter(@external_functions, &(&1.name in @previous_names))))}::jsonb) r
+        WHERE NOT EXISTS (SELECT 1 FROM #{q("ash_onetime_external_state_restore")} j
+          WHERE to_regprocedure(j.routine_identity)=to_regprocedure(format('%I.%I(%s)',install_schema,r->>'name',r->>'types')))) THEN
+        RAISE EXCEPTION 'external rollback journal does not cover all six routines' USING ERRCODE='23514';
+      END IF;
+      SELECT jsonb_agg(to_jsonb(j) || jsonb_build_object('acl',coalesce((SELECT jsonb_agg(to_jsonb(a))
+        FROM aclexplode(coalesce(j.grants,acldefault('f',j.owner_oid))) a),'[]')))
+        INTO snapshots FROM #{q("ash_onetime_external_state_restore")} j;
       PERFORM set_config('row_security','off',true);
+      SELECT relforcerowsecurity INTO STRICT force_claims FROM pg_class WHERE oid=#{maintenance_literal(q(@claims))}::regclass;
+      -- rule:external-down-force-read
+      IF force_claims THEN ALTER TABLE #{q(@claims)} NO FORCE ROW LEVEL SECURITY; END IF;
       -- rule:rollback-refusal-external-state
       IF EXISTS (SELECT 1 FROM #{q(@claims)} WHERE state='processing' AND NOT effect_local) THEN
         RAISE EXCEPTION 'unresolved external claims prevent rollback' USING ERRCODE='23514';
@@ -166,6 +214,8 @@ defmodule <%= inspect(module) %> do
       IF EXISTS (SELECT 1 FROM #{q(@claims)} WHERE response_expired_at IS NOT NULL) THEN
         RAISE EXCEPTION 'expired responses prevent rollback' USING ERRCODE='23514';
       END IF;
+      -- rule:external-down-force-restore
+      IF force_claims THEN ALTER TABLE #{q(@claims)} FORCE ROW LEVEL SECURITY; END IF;
       FOR target IN WITH RECURSIVE relations(oid) AS (
         SELECT unnest(ARRAY[#{maintenance_literal(q(@claims))}::regclass::oid,
           #{maintenance_literal(q("ash_onetime_nonce_claims"))}::regclass::oid,
@@ -179,13 +229,52 @@ defmodule <%= inspect(module) %> do
       ALTER TABLE #{q(@claims)} DROP COLUMN effect_local, DROP COLUMN effect_attempt,
         DROP COLUMN response_retain_until, DROP COLUMN response_expired_at;
       ALTER TABLE #{q(@claims)} ADD <%= EEx.eval_file(Path.join([__DIR__, "external_state", "claims.sql"]), fragment: :legacy_checks) %>;
+      FOR item IN SELECT * FROM jsonb_array_elements(snapshots) LOOP
+        PERFORM set_config('role',pg_get_userbyid((item->>'owner_oid')::oid),true);
+        -- CREATE OR REPLACE retains the original routine OID and trigger bindings.
+        -- rule:external-journal-restore-definition
+        EXECUTE item->>'definition';
+        routine_oid := to_regprocedure(item->>'routine_identity');
+        -- rule:external-journal-restore-attributes
+        IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid=routine_oid
+          AND p.proowner=(item->>'owner_oid')::oid
+          AND p.prosecdef=(item->>'security_definer')::boolean
+          AND to_jsonb(p.proconfig) IS NOT DISTINCT FROM nullif(item->'configuration','null'::jsonb)) THEN
+          RAISE EXCEPTION 'external rollback journal routine attributes differ' USING ERRCODE='23514';
+        END IF;
+        -- rule:external-journal-clear-grants
+        FOR grantee IN SELECT DISTINCT a.grantee FROM pg_proc p,
+          LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE p.oid=routine_oid LOOP
+          EXECUTE format('REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s CASCADE',routine_oid::regprocedure,
+            CASE WHEN grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(grantee)) END);
+        END LOOP;
+        -- Replay grantors in grant-option dependency order, including owner grants.
+        -- rule:external-journal-restore-grants
+        FOR privilege IN WITH RECURSIVE grant_paths(role_oid,depth,path) AS (
+          SELECT (item->>'owner_oid')::oid,0,ARRAY[(item->>'owner_oid')::oid]
+          UNION ALL
+          SELECT (g->>'grantee')::oid,p.depth+1,p.path || (g->>'grantee')::oid
+          FROM grant_paths p JOIN jsonb_array_elements(item->'acl') g ON (g->>'grantor')::oid=p.role_oid
+          WHERE (g->>'is_grantable')::boolean AND NOT (g->>'grantee')::oid=ANY(p.path)
+        ) SELECT g AS value FROM jsonb_array_elements(item->'acl') g
+          ORDER BY (SELECT min(depth) FROM grant_paths p WHERE p.role_oid=(g->>'grantor')::oid) NULLS LAST
+        LOOP
+          PERFORM set_config('role',pg_get_userbyid((privilege.value->>'grantor')::oid),true);
+          EXECUTE format('GRANT %s ON FUNCTION %s TO %s%s',privilege.value->>'privilege_type',routine_oid::regprocedure,
+            CASE WHEN (privilege.value->>'grantee')::oid=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid((privilege.value->>'grantee')::oid)) END,
+            CASE WHEN (privilege.value->>'is_grantable')::boolean THEN ' WITH GRANT OPTION' ELSE '' END);
+        END LOOP;
+      END LOOP;
+      PERFORM set_config('role',owner_name,true);
+      FOR routine IN SELECT r FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@external_functions))}::jsonb) r
+        WHERE r->>'name' NOT IN (SELECT jsonb_array_elements_text(#{maintenance_literal(Jason.encode!(@previous_names))}::jsonb)) LOOP
+        EXECUTE format('DROP FUNCTION %I.%I(%s)',install_schema,routine->>'name',routine->>'types');
+      END LOOP;
+      DROP TABLE #{q("ash_onetime_external_state_restore")};
+      -- rule:external-down-restore-role
+      PERFORM set_config('role',migrating_role,true);
     END
     """))
-    restore_previous_functions()
-    for name <- ~w(ash_onetime_guard_idempotency_update ash_onetime_guard_effect_outcome ash_onetime_bound_effect_outcome ash_onetime_claim_visible ash_onetime_expire_responses ash_onetime_maintenance_active ash_onetime_maintenance_reset_acl) do
-      routine = Enum.find(@external_functions, &(&1.name == name))
-      execute("DROP FUNCTION #{q(name)}(#{routine.types})")
-    end
   end
 
   defp install_external_functions do
@@ -195,6 +284,7 @@ defmodule <%= inspect(module) %> do
       routine_schema text;
       owner_oid oid;
       owner_name text;
+      migrating_role text := current_user;
       routine jsonb;
       routine_body text;
       routine_oid oid;
@@ -205,6 +295,7 @@ defmodule <%= inspect(module) %> do
         WHERE c.oid=#{maintenance_literal(q(@claims))}::regclass;
       routine_schema := install_schema;
       owner_name := pg_get_userbyid(owner_oid);
+      PERFORM set_config('role',owner_name,true);
       FOR routine IN SELECT * FROM jsonb_array_elements(#{maintenance_literal(Jason.encode!(@external_functions))}::jsonb) LOOP
         routine_body := replace(replace(replace(replace(replace(routine->>'body', '@schema@',format('%I',install_schema)),
           '@routines@',format('%I',routine_schema)), '@schema_name@',quote_literal(install_schema)), '@owner@',owner_oid::text),
@@ -223,7 +314,8 @@ defmodule <%= inspect(module) %> do
           EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %s CASCADE',routine_oid::regprocedure,CASE WHEN grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(grantee)) END);
         END LOOP;
         EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %I',routine_oid::regprocedure,owner_name);
-        IF routine->>'grant_class' IN ('step','public_invoker') OR routine->>'name'='ash_onetime_cleanup_eligible' THEN
+        -- rule:external-public-execute
+        IF routine->>'grant_class'='public_invoker' THEN
           EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO PUBLIC',routine_oid::regprocedure);
         END IF;
       END LOOP;
@@ -257,11 +349,12 @@ defmodule <%= inspect(module) %> do
         END IF;
         <%= EEx.eval_file(Path.join([__DIR__, "external_state", "outcomes.sql"]), fragment: :rls) %>
       END LOOP;
+      -- rule:external-routines-restore-role
+      PERFORM set_config('role',migrating_role,true);
     END
     """))
   end
 
-<%= previous_functions %>
   defp q(name) do
     case @install_prefix || prefix() do
       nil -> qi(name)

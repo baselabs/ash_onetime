@@ -10,9 +10,9 @@ DECLARE
   little_days bigint;
   big_days bigint;
 BEGIN
-  result := result || jsonb_build_object('package_roots',to_jsonb(ARRAY['ash_onetime_idempotency_claims','ash_onetime_effect_outcomes','ash_onetime_nonce_claims','ash_onetime_response_payloads','ash_onetime_maintenance_runs']));
+  result := result || jsonb_build_object('package_roots',to_jsonb(ARRAY['ash_onetime_idempotency_claims','ash_onetime_effect_outcomes','ash_onetime_nonce_claims','ash_onetime_response_payloads','ash_onetime_maintenance_runs','ash_onetime_external_state_restore']));
   FOREACH root IN ARRAY ARRAY['ash_onetime_idempotency_claims','ash_onetime_effect_outcomes','ash_onetime_nonce_claims',
-    'ash_onetime_response_payloads','ash_onetime_maintenance_runs'] LOOP
+    'ash_onetime_response_payloads','ash_onetime_maintenance_runs','ash_onetime_external_state_restore'] LOOP
     relation_oid := format('%I.%I',@schema_name@,root)::regclass;
     result := result || jsonb_build_object(root,@routines@.ash_onetime_maintenance_shape(relation_oid::oid));
     SELECT inhrelid INTO child_oid FROM pg_inherits WHERE inhparent=relation_oid ORDER BY inhrelid LIMIT 1;

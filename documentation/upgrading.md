@@ -59,6 +59,20 @@ rolling back maintenance, external state, then operation hold. Each native `down
 parents before counting unresolved external claims and refuses while any remain. The
 external-state rollback also refuses expired responses that the old schema cannot represent.
 Row security that prevents an exact refusal count raises instead of proving the set empty.
+The external-state upgrade saves the six replaced routines' live definitions, owners,
+settings, security modes and full EXECUTE grants in `ash_onetime_external_state_restore`.
+This owner-only journal is created atomically with the upgrade and dropped only after exact
+rollback restoration. A missing or incomplete journal refuses rollback; do not remove or edit
+it. Fresh installs carry the same empty owner-only relation for maintenance trust and doctor
+checks. External-state rollback reads the full claim set as its owner with FORCE temporarily
+disabled, then restores the original FORCE flag within the same transaction.
+
+Before optional maintenance is installed, only the owner can execute the definer maintenance
+steps and cleanup eligibility routine. Maintenance grants its declared maintainer access. The
+invoker visibility helper alone retains PUBLIC EXECUTE for bound RLS policies; those policies
+need no PUBLIC USAGE on the private routine schema. Each migration scope restores its entering
+role before Ecto writes `schema_migrations`.
+
 The operation-hold rollback refuses remaining holds and restores its guards inside the same
 locked block. Historical migrations run out of order are owner DDL outside this guarantee.
 

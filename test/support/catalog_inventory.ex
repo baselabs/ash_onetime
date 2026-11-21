@@ -174,6 +174,9 @@ defmodule AshOnetime.Test.CatalogInventory do
   defp drift(c, :column_acls),
     do: "GRANT UPDATE(outcome) ON #{rel(c, "ash_onetime_effect_outcomes")} TO #{q(c.runtime)}"
 
+  defp drift(c, :journal_acls),
+    do: "GRANT SELECT ON #{rel(c, "ash_onetime_external_state_restore")} TO #{q(c.runtime)}"
+
   defp normalize(value, c) when is_binary(value) do
     value
     |> String.replace(Postgres.routine_schema(c.schema), "<routines>")

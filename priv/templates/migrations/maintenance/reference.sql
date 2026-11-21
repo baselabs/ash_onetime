@@ -1,7 +1,7 @@
 DECLARE
   reference_prefix text := 'aor_' || pg_backend_pid() || '_';
   roots text[] := ARRAY['ash_onetime_idempotency_claims','ash_onetime_nonce_claims',
-    'ash_onetime_response_payloads','ash_onetime_maintenance_runs','ash_onetime_effect_outcomes'];
+    'ash_onetime_response_payloads','ash_onetime_maintenance_runs','ash_onetime_effect_outcomes','ash_onetime_external_state_restore'];
   ddl text;
   statement text;
   root text;

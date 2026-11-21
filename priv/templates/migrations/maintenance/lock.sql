@@ -1,7 +1,7 @@
 DECLARE
   deadline timestamptz := clock_timestamp() + budget_ms * interval '1 millisecond';
   roots text[] := ARRAY['ash_onetime_idempotency_claims','ash_onetime_effect_outcomes','ash_onetime_nonce_claims',
-    'ash_onetime_response_payloads','ash_onetime_maintenance_runs'];
+    'ash_onetime_response_payloads','ash_onetime_maintenance_runs','ash_onetime_external_state_restore'];
   root text;
   lock_index integer;
   remaining integer;

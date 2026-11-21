@@ -266,6 +266,8 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
         ('response_retain_until','timestamptz'::regtype),('response_expired_at','timestamptz'::regtype),
         ('hold_reference','text'::regtype)))
     AND to_regclass(format('%I.ash_onetime_effect_outcomes',$1::text)) IS NOT NULL
+    -- rule:doctor-rollback-journal
+    AND to_regclass(format('%I.ash_onetime_external_state_restore',$1::text)) IS NOT NULL
     AND (SELECT count(*)=4 FROM pg_constraint k
       WHERE k.conrelid=to_regclass(format('%I.ash_onetime_idempotency_claims',$1::text))
         AND k.convalidated AND k.conname IN ('ash_onetime_idempotency_claims_effect_check',

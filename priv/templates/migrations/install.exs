@@ -142,6 +142,7 @@ defmodule <%= inspect(module) %> do
     execute("DROP FUNCTION IF EXISTS #{rq("ash_onetime_cleanup_eligible")}(timestamptz)")
     execute("DROP TABLE IF EXISTS #{q("ash_onetime_response_payloads")} CASCADE")
     execute("DROP TABLE IF EXISTS #{q("ash_onetime_maintenance_runs")} CASCADE")
+    execute("DROP TABLE IF EXISTS #{q("ash_onetime_external_state_restore")} CASCADE")
     for routine <- @maintenance_functions do
       execute("DROP FUNCTION IF EXISTS #{rq(routine.name)}(#{routine.args})")
     end

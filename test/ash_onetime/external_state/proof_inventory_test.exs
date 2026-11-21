@@ -166,6 +166,12 @@ for partitioning <- [nil, 2] do
         assert :ok =
                  AshOnetime.MutationInventory.assert_catalog!(expected, CatalogInventory.read(c))
       end
+
+      CatalogInventory.with_drift(c, :journal_acls, fn ->
+        assert_raise RuntimeError, ~r/live table_acls differs/, fn ->
+          AshOnetime.MutationInventory.assert_catalog!(expected, CatalogInventory.read(c))
+        end
+      end)
     end
   end
 end

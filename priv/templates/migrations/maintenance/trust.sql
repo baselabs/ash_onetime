@@ -92,7 +92,7 @@ BEGIN
   LOOP
     root_name := CASE WHEN relation_row.inhparent IS NULL THEN relation_row.relname ELSE relation_row.parent_name END;
     IF root_name NOT IN ('ash_onetime_idempotency_claims','ash_onetime_effect_outcomes','ash_onetime_nonce_claims',
-        'ash_onetime_response_payloads','ash_onetime_maintenance_runs') OR
+        'ash_onetime_response_payloads','ash_onetime_maintenance_runs','ash_onetime_external_state_restore') OR
       (relation_row.inhparent IS NOT NULL AND (NOT relation_row.relispartition OR
         (SELECT count(*) FROM pg_inherits WHERE inhrelid=relation_row.oid)<>1)) THEN
       RAISE EXCEPTION 'untrusted_dependency: relation set';

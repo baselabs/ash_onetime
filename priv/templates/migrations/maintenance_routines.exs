@@ -21,6 +21,7 @@ reference_ddl = Enum.group_by(reference_statements, &elem(&1,0), &elem(&1,1))
 runs_ddl = File.read!(Path.join([__DIR__, "maintenance", "runs.sql"]))
 reference_ddl = Map.put(reference_ddl, "ash_onetime_maintenance_runs", [runs_ddl])
 reference_ddl = if reference_legacy, do: reference_ddl, else: Map.put(reference_ddl, "ash_onetime_effect_outcomes", [EEx.eval_file(Path.join([__DIR__, "external_state", "outcomes.sql"]), fragment: :ddl)])
+reference_ddl = if reference_legacy, do: reference_ddl, else: Map.put(reference_ddl, "ash_onetime_external_state_restore", [EEx.eval_file(Path.join([__DIR__, "external_state", "restore.sql"]), fragment: :ddl)])
 reference_ddl = reference_ddl |> Enum.sort() |> Enum.map_join("\n", fn {name, statements} ->
     "WHEN '" <> name <> "' THEN '" <> (Enum.join(statements,";") |> String.replace("'","''")) <> "'"
   end)
