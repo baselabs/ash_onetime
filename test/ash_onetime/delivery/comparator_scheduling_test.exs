@@ -24,7 +24,14 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
       warm_result = Comparator.compare(warm)
 
       if first = List.first(warm_result.errors) do
-        IO.puts("U9_NATIVE_WARM_FIRST_DIVERGENCE" <> ": " <> inspect(%{path: unquote(name), first: Diagnostics.safe(first)}, pretty: true , limit: :infinity))
+        IO.puts(
+          "U9_NATIVE_WARM_FIRST_DIVERGENCE" <>
+            ": " <>
+            inspect(%{path: unquote(name), first: Diagnostics.safe(first)},
+              pretty: true,
+              limit: :infinity
+            )
+        )
       end
 
       assert warm_result.errors == [], "U9 path preparation must compare green"
@@ -53,24 +60,36 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
           before = MapSet.new(expected[side])
           after_keys = MapSet.new(actual[side])
 
-          IO.puts("U11_ORIGIN_KEY_DIFF" <> ": " <> inspect(%{
-              path: unquote(name),
-              repetition: index + 1,
-              side: side,
-              missing: MapSet.difference(before, after_keys) |> Enum.sort(),
-              added: MapSet.difference(after_keys, before) |> Enum.sort()
-            }, pretty: true , limit: :infinity))
+          IO.puts(
+            "U11_ORIGIN_KEY_DIFF" <>
+              ": " <>
+              inspect(
+                %{
+                  path: unquote(name),
+                  repetition: index + 1,
+                  side: side,
+                  missing: MapSet.difference(before, after_keys) |> Enum.sort(),
+                  added: MapSet.difference(after_keys, before) |> Enum.sort()
+                }, pretty: true, limit: :infinity)
+          )
         end
       end
 
       assert length(Enum.uniq(profiles)) == 1,
              "U11: producer origin keys changed across repetitions"
 
-      IO.puts("U9_PATH_SECONDS" <> ": " <> inspect(%{
-          group: unquote(Integer.to_string(div(ordinal, 5))),
-          path: unquote(name),
-          seconds: (System.monotonic_time(:millisecond) - started) / 1000
-        }, pretty: true))
+      IO.puts(
+        "U9_PATH_SECONDS" <>
+          ": " <>
+          inspect(
+            %{
+              group: unquote(Integer.to_string(div(ordinal, 5))),
+              path: unquote(name),
+              seconds: (System.monotonic_time(:millisecond) - started) / 1000
+            },
+            pretty: true
+          )
+      )
     end
   end
 end

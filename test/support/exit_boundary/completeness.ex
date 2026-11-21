@@ -104,8 +104,9 @@ defmodule AshOnetime.Test.ExitBoundary.Completeness do
   end
 
   defp copy_witnessed?(left, right, {{:source, a}, {:source, b}}) when a !== b,
-    do: Enum.any?(left, &ContextCopies.validate(&1, {:source, a})) and
-          Enum.any?(right, &ContextCopies.validate(&1, {:source, b}))
+    do:
+      Enum.any?(left, &ContextCopies.validate(&1, {:source, a})) and
+        Enum.any?(right, &ContextCopies.validate(&1, {:source, b}))
 
   defp copy_witnessed?(_, _, _), do: false
 

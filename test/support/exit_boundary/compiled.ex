@@ -88,11 +88,15 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
         end)
         |> Map.new()
 
-      captured = capture_arguments(instructions, registers, labels, target, argument, {function, count})
+      captured =
+        capture_arguments(instructions, registers, labels, target, argument, {function, count})
 
       case Enum.uniq(captured) do
-        [{:environment, index}] -> {:ok, index}
-        other -> raise "callee argument is not a captured origin: #{inspect({target, argument, other})}"
+        [{:environment, index}] ->
+          {:ok, index}
+
+        other ->
+          raise "callee argument is not a captured origin: #{inspect({target, argument, other})}"
       end
     else
       :not_called
@@ -115,11 +119,12 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
 
       IO.puts(
         "COMPILED_CAPTURE_FAILURE: " <>
-          inspect(%{
-            function: {module, function, count},
-            callee: target,
-            code: Enum.map(instructions, &Diagnostics.safe/1)
-          }, pretty: true, limit: :infinity)
+          inspect(
+            %{
+              function: {module, function, count},
+              callee: target,
+              code: Enum.map(instructions, &Diagnostics.safe/1)
+            }, pretty: true, limit: :infinity)
       )
 
       reraise error, __STACKTRACE__
@@ -138,9 +143,15 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
 
   defp capture_path(
          [{:select_val, _, {:f, fallback}, {:list, choices}} | _],
-         regs, labels, target, argument, seen
+         regs,
+         labels,
+         target,
+         argument,
+         seen
        ) do
-    destinations = [fallback | Enum.map(Enum.chunk_every(choices, 2), fn [_value, {:f, label}] -> label end)]
+    destinations = [
+      fallback | Enum.map(Enum.chunk_every(choices, 2), fn [_value, {:f, label}] -> label end)
+    ]
 
     Enum.flat_map(Enum.uniq(destinations), fn label ->
       capture_branch(label, regs, labels, target, argument, seen)
@@ -148,16 +159,33 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
   end
 
   defp capture_path([{:test, _, {:f, label}, _} | rest], regs, labels, target, argument, seen),
-    do: capture_path(rest, regs, labels, target, argument, seen) ++
-          capture_branch(label, regs, labels, target, argument, seen)
+    do:
+      capture_path(rest, regs, labels, target, argument, seen) ++
+        capture_branch(label, regs, labels, target, argument, seen)
 
-  defp capture_path([{:test, :has_map_fields, {:f, label}, _, _} | rest], regs, labels, target, argument, seen),
-    do: capture_path(rest, regs, labels, target, argument, seen) ++
-          capture_branch(label, regs, labels, target, argument, seen)
+  defp capture_path(
+         [{:test, :has_map_fields, {:f, label}, _, _} | rest],
+         regs,
+         labels,
+         target,
+         argument,
+         seen
+       ),
+       do:
+         capture_path(rest, regs, labels, target, argument, seen) ++
+           capture_branch(label, regs, labels, target, argument, seen)
 
-  defp capture_path([{:get_map_elements, {:f, label}, _, _} = instruction | rest], regs, labels, target, argument, seen),
-    do: capture_path(rest, capture_step(instruction, regs), labels, target, argument, seen) ++
-          capture_branch(label, regs, labels, target, argument, seen)
+  defp capture_path(
+         [{:get_map_elements, {:f, label}, _, _} = instruction | rest],
+         regs,
+         labels,
+         target,
+         argument,
+         seen
+       ),
+       do:
+         capture_path(rest, capture_step(instruction, regs), labels, target, argument, seen) ++
+           capture_branch(label, regs, labels, target, argument, seen)
 
   defp capture_path([:return | _], _, _, _, _, _), do: []
 

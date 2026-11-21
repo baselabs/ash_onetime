@@ -18,9 +18,10 @@ defmodule AshOnetime.Test.ExitBoundary.HostCall do
   end
 
   defp host_return?(event, start),
-    do: event.pid == start.pid and event.index > start.index and
-          event.mfa == start.mfa and length(event.stack) == length(start.stack) + 1 and
-          elem(event.event, 1) in [:return_from, :exception_from]
+    do:
+      event.pid == start.pid and event.index > start.index and
+        event.mfa == start.mfa and length(event.stack) == length(start.stack) + 1 and
+        elem(event.event, 1) in [:return_from, :exception_from]
 
   defp interior(_events, _start, nil), do: MapSet.new()
 

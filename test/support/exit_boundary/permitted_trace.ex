@@ -151,6 +151,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
 
   defp path_call(e, state, side, pid, mfa, args) do
     {m, f, _} = mfa
+
     cond do
       path_reference?(e, state) ->
         path_reference(e, state, side)
@@ -168,6 +169,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
 
   defp store_call(e, state, side, pid, mfa, args) do
     {m, f, _} = mfa
+
     cond do
       m == AshOnetime.Store and f in [:claim, :claim_committed, :complete, :complete_external] ->
         pending(state, pid, mfa, args)
@@ -188,6 +190,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
 
   defp delivery_call(e, state, side, pid, mfa, args) do
     {m, f, _} = mfa
+
     cond do
       m == Producer and f == :produce ->
         state
@@ -213,6 +216,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
 
   defp exit_call(e, state, side, pid, mfa, args) do
     {m, _f, _} = mfa
+
     cond do
       m == :crypto and delivery_crypto?(e) ->
         crypto(e, state, mfa, args, side)
@@ -837,7 +841,8 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     state
   end
 
-  defp crypto_call({{:crypto, function, 1}, [16]}, _e, state, _b) when function in [:strong_rand_bytes, :strong_rand_bytes_nif] do
+  defp crypto_call({{:crypto, function, 1}, [16]}, _e, state, _b)
+       when function in [:strong_rand_bytes, :strong_rand_bytes_nif] do
     state
   end
 
@@ -870,7 +875,8 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     exact(state, e, :key_hash_input, ref, b[:ref])
   end
 
-  defp crypto_call({{:crypto, :generate_key, 3}, [kind, :x25519, :undefined]}, e, state, _b) when kind in [:ecdh, :eddh] do
+  defp crypto_call({{:crypto, :generate_key, 3}, [kind, :x25519, :undefined]}, e, state, _b)
+       when kind in [:ecdh, :eddh] do
     valid(state, e, :ephemeral_generation, {:crypto, :generate_key, 2} in e.stack)
   end
 
@@ -878,7 +884,8 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     valid(state, e, :ephemeral_generation, false)
   end
 
-  defp crypto_call({{:crypto, :compute_key, 4}, [kind, pk, sk, :x25519]}, e, state, b) when kind in [:ecdh, :eddh] do
+  defp crypto_call({{:crypto, :compute_key, 4}, [kind, pk, sk, :x25519]}, e, state, b)
+       when kind in [:ecdh, :eddh] do
     valid(state, e, :key_agreement, {pk, sk} in [{b[:pk], b[:esk]}, {b[:epk], b[:sk]}])
   end
 
@@ -886,7 +893,8 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     valid(state, e, :key_agreement, {pk, sk} in [{b[:pk], b[:esk]}, {b[:epk], b[:sk]}])
   end
 
-  defp crypto_call({{:crypto, function, 4}, [:hmac, :sha256, key, data]}, e, state, b) when function in [:mac, :mac_nif] do
+  defp crypto_call({{:crypto, function, 4}, [:hmac, :sha256, key, data]}, e, state, b)
+       when function in [:mac, :mac_nif] do
     expected = hmac_inputs(b)
     valid(state, e, :hmac_transfer, {key, data} in expected)
   end
@@ -904,7 +912,13 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     exact(state, e, :aead_alias, key, elem(derived_key(b), 0))
   end
 
-  defp crypto_call({{:crypto, function, 7}, [:aes_256_gcm, key, nonce, input, aad, tag, encrypt?]}, e, state, b) when function in [:crypto_one_time_aead, :aead_cipher_nif] do
+  defp crypto_call(
+         {{:crypto, function, 7}, [:aes_256_gcm, key, nonce, input, aad, tag, encrypt?]},
+         e,
+         state,
+         b
+       )
+       when function in [:crypto_one_time_aead, :aead_cipher_nif] do
     {expected_key, expected_nonce} = derived_key(b)
 
     state
@@ -1009,7 +1023,8 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     if row.branch == :producer_failure, do: :produce_failure, else: :local
   end
 
-  defp segment_marker({_, :call, {module, :execute, _}}, _state, _row) when module == AshOnetime.Test.ExitBoundary.External do
+  defp segment_marker({_, :call, {module, :execute, _}}, _state, _row)
+       when module == AshOnetime.Test.ExitBoundary.External do
     :external
   end
 
@@ -1053,32 +1068,57 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     end
   end
 
-  defp segment_marker({_, :return_from, {AshOnetime.Test.ExitBoundary.Root, :invoke, 2}, _}, _state, row) do
+  defp segment_marker(
+         {_, :return_from, {AshOnetime.Test.ExitBoundary.Root, :invoke, 2}, _},
+         _state,
+         row
+       ) do
     if row.branch == :direct, do: :error_return
   end
 
-  defp segment_marker({_, :exception_from, {AshOnetime.Test.ExitBoundary.Root, :invoke, 2}, _}, _state, _row) do
+  defp segment_marker(
+         {_, :exception_from, {AshOnetime.Test.ExitBoundary.Root, :invoke, 2}, _},
+         _state,
+         _row
+       ) do
     :error_return
   end
 
-  defp segment_marker({_, :return_from, {AshOnetime.Test.ExitBoundary.ResponseClassifier, :classify, 2}, _}, _state, row) do
+  defp segment_marker(
+         {_, :return_from, {AshOnetime.Test.ExitBoundary.ResponseClassifier, :classify, 2}, _},
+         _state,
+         row
+       ) do
     if row.fault in [:classify_reject, :classify_rollback], do: :failure
   end
 
-  defp segment_marker({_, :return_from, {AshOnetime.Test.ExitBoundary.Codec, :encode, 3}, _}, _state, row) do
+  defp segment_marker(
+         {_, :return_from, {AshOnetime.Test.ExitBoundary.Codec, :encode, 3}, _},
+         _state,
+         row
+       ) do
     if row.fault == :codec_encode, do: :failure
   end
 
-  defp segment_marker({_, :return_from, {AshOnetime.Test.ExitBoundary.Codec, :decode, 4}, _}, _state, row) do
+  defp segment_marker(
+         {_, :return_from, {AshOnetime.Test.ExitBoundary.Codec, :decode, 4}, _},
+         _state,
+         row
+       ) do
     if row.fault == :codec_decode, do: :failure
   end
 
-  defp segment_marker({_, :return_from, {AshOnetime.Test.ExitBoundary.Hold, :reference, 2}, _}, _state, row) do
+  defp segment_marker(
+         {_, :return_from, {AshOnetime.Test.ExitBoundary.Hold, :reference, 2}, _},
+         _state,
+         row
+       ) do
     if row.fault == :hold_invalid, do: :failure
   end
 
-  defp segment_marker({_, tag, {AshOnetime.Store, function, _}, _}, _state, row) when tag in [:return_from, :exception_from] and
-               function in [:complete, :complete_external] do
+  defp segment_marker({_, tag, {AshOnetime.Store, function, _}, _}, _state, row)
+       when tag in [:return_from, :exception_from] and
+              function in [:complete, :complete_external] do
     if row.fault == :store_completion, do: :failure
   end
 

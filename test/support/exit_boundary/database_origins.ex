@@ -375,12 +375,20 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     end)
   end
 
-  def parameter_paths({AshOnetime.Store.Postgres, f, _}) when f in [:query_claim, :dispatched_query], do: [[2, 2, 2]]
+  def parameter_paths({AshOnetime.Store.Postgres, f, _})
+      when f in [:query_claim, :dispatched_query], do: [[2, 2, 2]]
+
   def parameter_paths({AshOnetime.Store.Postgres, :select_claim_result, 4}), do: [[2, 2, 3]]
-  def parameter_paths({m, f, 4}) when m in [Ecto.Adapters.SQL, Postgrex] and f in [:query, :query!], do: [[2, 2, 2]]
+
+  def parameter_paths({m, f, 4})
+      when m in [Ecto.Adapters.SQL, Postgrex] and f in [:query, :query!], do: [[2, 2, 2]]
+
   def parameter_paths({Postgrex, :prepare_execute, 5}), do: [[2, 2, 3]]
   def parameter_paths({Postgrex, :execute, 4}), do: [[2, 2, 2]]
-  def parameter_paths({DBConnection, f, 4}) when f in [:prepare_execute, :execute], do: [[2, 2, 2]]
+
+  def parameter_paths({DBConnection, f, 4}) when f in [:prepare_execute, :execute],
+    do: [[2, 2, 2]]
+
   def parameter_paths({DBConnection, :log, a}) when a in [4, 5], do: [[2, 2, 3]]
   def parameter_paths({DBConnection.LogEntry, :new, 5}), do: [[2, 2, 2]]
   def parameter_paths({Ecto.Adapters.SQL, :log, 5}), do: [[2, 2, 2]]
@@ -418,8 +426,11 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
   defp copied_parameters(_, _, _, _, s), do: s
 
   defp check_parameter_date(true, s, e, _path, actual, expected),
-    do: if(actual === expected, do: s,
-      else: failure(s, e, :encoded_database_date_copy, actual, expected))
+    do:
+      if(actual === expected,
+        do: s,
+        else: failure(s, e, :encoded_database_date_copy, actual, expected)
+      )
 
   defp check_parameter_date(false, s, e, path, actual, expected),
     do: checked(s, e, path, actual, expected, :database_date_bind_copy)
@@ -604,13 +615,16 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   defp data_rows(value, path, e, s) when is_list(value), do: data_list(value, path, e, s, 0)
   defp data_rows(_, _, _, s), do: s
+
   defp claim_wire_row?(columns, row, s),
-    do: relation(Enum.take(columns, length(s.statements.claim.columns)), s) ==
-      s.statements.claim.table and Enum.all?(s.statements.claim.columns, &Map.has_key?(row, &1))
+    do:
+      relation(Enum.take(columns, length(s.statements.claim.columns)), s) ==
+        s.statements.claim.table and Enum.all?(s.statements.claim.columns, &Map.has_key?(row, &1))
 
   defp peer_wire_row?(columns, row, s),
-    do: relation(columns, s) in s.statements.peer.tables and
-      Map.has_key?(row, "operation_key") and Map.has_key?(row, "inserted_at")
+    do:
+      relation(columns, s) in s.statements.peer.tables and
+        Map.has_key?(row, "operation_key") and Map.has_key?(row, "inserted_at")
 
   defp claim_wire_row(columns, row, sql, binds, path, e, s) do
     row = Map.take(row, s.statements.claim.columns)
@@ -641,7 +655,13 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     |> put_in([:source_rows, {e.role, sql}], expected)
   end
 
-  defp claim_wire_column({{:data_column, _, _, _, name, _, _, _, _, raw}, n}, s, expected, path, e) do
+  defp claim_wire_column(
+         {{:data_column, _, _, _, name, _, _, _, _, raw}, n},
+         s,
+         expected,
+         path,
+         e
+       ) do
     if name in s.statements.claim.clocks or name == "response_partition",
       do: checked(s, e, path ++ [1, n, 9], value(raw), expected[name], {:database_column, name}),
       else: s
@@ -653,8 +673,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     s =
       if origin_relation == s.statements.outcome.table,
         do: s,
-        else:
-          failure(s, e, :outcome_clock_source, origin_relation, s.statements.outcome.table)
+        else: failure(s, e, :outcome_clock_source, origin_relation, s.statements.outcome.table)
 
     key = outcome_key(row)
 
@@ -695,8 +714,23 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     |> Enum.reduce(s, &peer_wire_column(&1, &2, source, table, path, e))
   end
 
-  defp peer_wire_column({{:data_column, _, _, _, "inserted_at", _, _, _, _, raw}, n}, s, source, table, path, e),
-    do: checked(s, e, path ++ [1, n, 9], value(raw), source["inserted_at"], {:peer_timestamp, table})
+  defp peer_wire_column(
+         {{:data_column, _, _, _, "inserted_at", _, _, _, _, raw}, n},
+         s,
+         source,
+         table,
+         path,
+         e
+       ),
+       do:
+         checked(
+           s,
+           e,
+           path ++ [1, n, 9],
+           value(raw),
+           source["inserted_at"],
+           {:peer_timestamp, table}
+         )
 
   defp peer_wire_column(_column, s, _source, _table, _path, _e), do: s
 
@@ -808,8 +842,9 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
   end
 
   defp completing_statement?(sql, previous),
-    do: String.starts_with?(sql, "UPDATE ") and String.contains?(sql, "SET state = 'complete'") and
-      previous != nil and previous["state"] == "processing"
+    do:
+      String.starts_with?(sql, "UPDATE ") and String.contains?(sql, "SET state = 'complete'") and
+        previous != nil and previous["state"] == "processing"
 
   defp insert_origin(row, _sql, binds, _e, s, _id, _previous) do
     # The first wire column is the native transaction-clock origin. The two
@@ -1058,7 +1093,8 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
       columns == s.statements.date.columns[s.query_contexts[e.index]] ->
         date_result(rows, path, e, s)
 
-      true -> s
+      true ->
+        s
     end
   end
 
@@ -1082,24 +1118,38 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   defp typed_copies(value, path, e, s) when is_list(value), do: typed_list(value, path, e, s, 0)
   defp typed_copies(_, _, _, s), do: s
+
   defp claim_result_row({row, n}, s, columns, path, e) do
     id = row |> hd() |> uuid()
     status = Enum.at(row, 6)
 
     case Map.fetch(s.rows, {id, status}) do
       {:ok, source} ->
-        s = joined_payload_result(s, row, n, columns, path, e)
-        Enum.with_index(s.statements.claim.columns)
-        |> Enum.reduce(s, &claim_result_column(&1, &2, row, source, path ++ [:rows, n], e, :result_column))
+        s =
+          Enum.with_index(s.statements.claim.columns)
+          |> Enum.reduce(
+            s,
+            &claim_result_column(&1, &2, row, source, path ++ [:rows, n], e, :result_column)
+          )
 
-      :error -> failure(s, e, :result_before_wire, id, :wire_row)
+        joined_payload_result(s, row, n, columns, path, e)
+
+      :error ->
+        failure(s, e, :result_before_wire, id, :wire_row)
     end
   end
 
   defp joined_payload_result(s, row, n, columns, path, e) do
     if length(columns) > length(s.statements.claim.columns) and Enum.at(row, 6) == "complete",
-      do: checked(s, e, path ++ [:rows, n, 7], Enum.at(row, 7),
-        payload_date(s, row |> hd() |> uuid()), :joined_payload_date_result),
+      do:
+        checked(
+          s,
+          e,
+          path ++ [:rows, n, 7],
+          Enum.at(row, 7),
+          payload_date(s, row |> hd() |> uuid()),
+          :joined_payload_date_result
+        ),
       else: s
   end
 
@@ -1117,16 +1167,28 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     case Map.fetch(s.peer_rows, {table, identity}) do
       {:ok, source} ->
         k = Enum.find_index(columns, &(&1 == "inserted_at"))
-        checked(s, e, path ++ [:rows, n, k], row["inserted_at"], source["inserted_at"],
-          {:peer_timestamp_copy, table})
-      _ -> failure(s, e, :peer_before_returning, identity, :wire_row)
+
+        checked(
+          s,
+          e,
+          path ++ [:rows, n, k],
+          row["inserted_at"],
+          source["inserted_at"],
+          {:peer_timestamp_copy, table}
+        )
+
+      _ ->
+        failure(s, e, :peer_before_returning, identity, :wire_row)
     end
   end
 
   defp date_result(rows, path, e, s) do
     case Map.fetch(s.dates, e.role) do
-      {:ok, expected} -> checked(s, e, path ++ [:rows, 0, 0], hd(hd(rows)), expected, :database_date_copy)
-      :error -> s
+      {:ok, expected} ->
+        checked(s, e, path ++ [:rows, 0, 0], hd(hd(rows)), expected, :database_date_copy)
+
+      :error ->
+        s
     end
   end
 

@@ -18,7 +18,12 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
     Map.put(result, :names, names)
   end
 
-  defp event(%{event: {pid, :call, {:ets, function, [table | args]}}} = e, state, expected_table, generated)
+  defp event(
+         %{event: {pid, :call, {:ets, function, [table | args]}}} = e,
+         state,
+         expected_table,
+         generated
+       )
        when table == expected_table do
     state = %{
       state
@@ -32,7 +37,8 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
           do: %{state | ids: Map.put(state.ids, statement(query), id)},
           else: %{state | errors: [{e, id, :missing_unique_integer_origin} | state.errors]}
 
-      _ -> state
+      _ ->
+        state
     end
   end
 

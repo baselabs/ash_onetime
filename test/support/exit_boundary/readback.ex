@@ -163,7 +163,8 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
       nil ->
         []
 
-      start -> interval_from(events, start)
+      start ->
+        interval_from(events, start)
     end
   end
 

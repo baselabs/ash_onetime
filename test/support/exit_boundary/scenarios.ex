@@ -26,9 +26,6 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
   alias Ecto.Adapters.SQL
   @moduledoc false
 
-
-
-
   @routes [
     %{action: :issue, type: :create, input: %{amount: 7}, record: false},
     %{action: :rotate, type: :update, input: %{amount: 7}, record: true},
@@ -141,8 +138,15 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
       prepared = prepare_subject(row, resource, context, path, record)
       fixture_bindings = fixture_bindings(prepared)
 
-      input = %{resource: resource, prefix: context.prefix, row: row, path: path, record: record,
-        allocation_checkpoint?: allocation_checkpoint?}
+      input = %{
+        resource: resource,
+        prefix: context.prefix,
+        row: row,
+        path: path,
+        record: record,
+        allocation_checkpoint?: allocation_checkpoint?
+      }
+
       setup = fn -> setup_observation(input, context, values, prepared) end
 
       host = if row.external?, do: [External, ReturnedExternal], else: [Producer]
@@ -168,8 +172,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
         prior: prior,
         hooks: hooks,
         operation_reference: operation_reference,
-        hook_frames:
-          FailureTwins.side_frames(hooks, canonical, row, resource),
+        hook_frames: FailureTwins.side_frames(hooks, canonical, row, resource),
         prefix: context.prefix,
         historical: historical,
         before: before,
@@ -200,8 +203,6 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
     Process.put({Faults, :canaries}, nil)
     if input.resource == Withheld, do: Faults.plant(values.short, values.long)
     Faults.put(input.row.fault)
-
-
 
     if prepared, do: Map.put(input, :built, prepared.result), else: input
   end

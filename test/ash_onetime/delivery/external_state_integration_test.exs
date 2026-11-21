@@ -3,13 +3,13 @@ for partitioning <- [nil, 2] do
               AshOnetime.Delivery.ExternalStateIntegrationTest,
               "Claims#{partitioning || "Plain"}"
             ) do
-              alias AshOnetime.Delivery
-              alias AshOnetime.Test.ExitBoundary.Faults
-              alias AshOnetime.Test.ExitBoundary.Pair
-              alias AshOnetime.Test.ExitBoundary.Pair.Path
-              alias AshOnetime.Test.ExitBoundary.Withheld
-              alias AshOnetime.Test.ExternalPeer
-              alias Mix.Tasks.AshOnetime.Doctor
+    alias AshOnetime.Delivery
+    alias AshOnetime.Test.ExitBoundary.Faults
+    alias AshOnetime.Test.ExitBoundary.Pair
+    alias AshOnetime.Test.ExitBoundary.Pair.Path
+    alias AshOnetime.Test.ExitBoundary.Withheld
+    alias AshOnetime.Test.ExternalPeer
+    alias Mix.Tasks.AshOnetime.Doctor
     use AshOnetime.Test.ExternalStateCase, async: false
     import AshOnetime.Test.DeliveryCase
     import ExUnit.CaptureIO

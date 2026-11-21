@@ -31,20 +31,23 @@ defmodule AshOnetime.Test.ExitBoundary.TransportReferences do
 
   defp rewrite_copy(%{event: {pid, :receive, {:inet_async, port, id, result}}} = e, origins)
        when is_integer(id),
-       do: rewrite_origin(e, origins, port, id, fn frame ->
-         {pid, :receive, {:inet_async, port, token(frame), result}}
-       end)
+       do:
+         rewrite_origin(e, origins, port, id, fn frame ->
+           {pid, :receive, {:inet_async, port, token(frame), result}}
+         end)
 
   defp rewrite_copy(%{event: {port, :send, {:inet_async, port, id, result}, to}} = e, origins)
        when is_integer(id),
-       do: rewrite_origin(e, origins, port, id, fn frame ->
-         {port, :send, {:inet_async, port, token(frame), result}, to}
-       end)
+       do:
+         rewrite_origin(e, origins, port, id, fn frame ->
+           {port, :send, {:inet_async, port, token(frame), result}, to}
+         end)
 
   defp rewrite_copy(%{event: {port, :send, {port, {:control, <<1, hi, lo>>}}, to}} = e, origins),
-    do: rewrite_origin(e, origins, port, hi * 256 + lo, fn frame ->
-      {port, :send, {port, {:control, [1, token(frame), :low_octet]}}, to}
-    end)
+    do:
+      rewrite_origin(e, origins, port, hi * 256 + lo, fn frame ->
+        {port, :send, {port, {:control, [1, token(frame), :low_octet]}}, to}
+      end)
 
   defp rewrite_copy(e, _origins), do: e
 

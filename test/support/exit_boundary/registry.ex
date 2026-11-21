@@ -7,7 +7,6 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
   alias AshOnetime.Test.ExitBoundary.Withheld
   @moduledoc false
 
-
   @generators [
                 {:crypto, :generate_key, 2},
                 {:crypto, :generate_key, 3},
@@ -474,7 +473,6 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
   defp hook_phase_slot({:around_action, 0}), do: :post
   defp hook_phase_slot({:after_action, 1}), do: :done
 
-
   def frames do
     @generators ++
       @clock_frames ++
@@ -535,68 +533,46 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
   end
 
   defp trace_branch(:interrupted, _row, _prefix) do
-  [:cell, :entry, :arm, :context, :claim, :external, :erase, :error_return]
+    [:cell, :entry, :arm, :context, :claim, :external, :erase, :error_return]
   end
 
   defp trace_branch(:transaction, _row, _prefix) do
-  [:entry, :refusal_return]
+    [:entry, :refusal_return]
   end
 
   defp trace_branch(:direct, _row, _prefix) do
-  [:claim_refusal, :error_return]
+    [:claim_refusal, :error_return]
   end
 
   defp trace_branch(:producer_failure, _row, _prefix) do
-  [:cell, :entry, :arm, :context, :claim, :produce_failure, :erase, :error_return]
+    [:cell, :entry, :arm, :context, :claim, :produce_failure, :erase, :error_return]
   end
 
   defp trace_branch(:replay, _row, _prefix) do
-  [:cell, :entry, :arm, :context, :claim, :replay, :open_empty, :erase, :return]
+    [:cell, :entry, :arm, :context, :claim, :replay, :open_empty, :erase, :return]
   end
 
   defp trace_branch(:unknown, _row, _prefix) do
-  [
-    :cell,
-    :entry,
-    :arm,
-    :context,
-    :claim,
-    :external,
-    :recovered,
-    :open_empty,
-    :erase,
-    :return
-  ]
+    [
+      :cell,
+      :entry,
+      :arm,
+      :context,
+      :claim,
+      :external,
+      :recovered,
+      :open_empty,
+      :erase,
+      :return
+    ]
   end
 
   defp trace_branch(:recovered, _row, _prefix) do
-  [:cell, :entry, :arm, :context, :claim, :recovered, :open_empty, :erase, :return]
+    [:cell, :entry, :arm, :context, :claim, :recovered, :open_empty, :erase, :return]
   end
 
   defp trace_branch(:finalize_replay, _row, prefix) do
-  [
-    :cell,
-    :entry,
-    :arm,
-    :context,
-    :claim,
-    prefix,
-    :seal,
-    :finalize_replay,
-    :open_empty,
-    :erase,
-    :return
-  ]
-  end
-
-  defp trace_branch(:consumer_failure, _row, prefix) do
-  [:cell, :entry, :arm, :context, :claim, prefix, :seal, :reraise, :erase, :error_return]
-  end
-
-  defp trace_branch(:failure, row, prefix) do
-  if row.fault == :codec_decode,
-    do: [:cell, :entry, :arm, :context, :claim, :failure, :erase, :error_return],
-    else: [
+    [
       :cell,
       :entry,
       :arm,
@@ -604,13 +580,35 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
       :claim,
       prefix,
       :seal,
-      :failure,
+      :finalize_replay,
+      :open_empty,
       :erase,
-      :error_return
+      :return
     ]
   end
 
+  defp trace_branch(:consumer_failure, _row, prefix) do
+    [:cell, :entry, :arm, :context, :claim, prefix, :seal, :reraise, :erase, :error_return]
+  end
+
+  defp trace_branch(:failure, row, prefix) do
+    if row.fault == :codec_decode,
+      do: [:cell, :entry, :arm, :context, :claim, :failure, :erase, :error_return],
+      else: [
+        :cell,
+        :entry,
+        :arm,
+        :context,
+        :claim,
+        prefix,
+        :seal,
+        :failure,
+        :erase,
+        :error_return
+      ]
+  end
+
   defp trace_branch(_branch, _row, prefix) do
-  [:cell, :entry, :arm, :context, :claim, prefix, :seal, :complete, :open, :erase, :return]
+    [:cell, :entry, :arm, :context, :claim, prefix, :seal, :complete, :open, :erase, :return]
   end
 end

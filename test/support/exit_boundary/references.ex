@@ -215,7 +215,10 @@ defmodule AshOnetime.Test.ExitBoundary.References do
        when f in [:valid_locator_hashes?, :equal_locator_hashes?],
        do: {slots, Map.put(frames, {pid, f}, 0)}
 
-  defp locator_event(%{event: {pid, :call, {AshOnetime.Admission, :valid_hash?, _}}} = e, {slots, frames}) do
+  defp locator_event(
+         %{event: {pid, :call, {AshOnetime.Admission, :valid_hash?, _}}} = e,
+         {slots, frames}
+       ) do
     key = {pid, :valid_locator_hashes?}
 
     if {AshOnetime.Admission, :valid_locator_hashes?, 2} in e.stack do
@@ -242,8 +245,8 @@ defmodule AshOnetime.Test.ExitBoundary.References do
   defp locator_event(%{event: {pid, :call, {:crypto, :hash_equals_nif, _}}} = e, {slots, frames}) do
     if {AshOnetime.Admission, :equal_locator_hashes?, 2} in e.stack and
          Map.get(frames, {pid, :equal_locator_hashes?}) == 1,
-      do: {Map.put(slots, e.index, [[:event, 2, 2, 0], [:event, 2, 2, 1]]), frames},
-      else: {slots, frames}
+       do: {Map.put(slots, e.index, [[:event, 2, 2, 0], [:event, 2, 2, 1]]), frames},
+       else: {slots, frames}
   end
 
   defp locator_event(_, state), do: state

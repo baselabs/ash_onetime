@@ -32,7 +32,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias Ecto.Adapters.SQL
   use AshOnetime.Test.ExitBoundary.ComparatorCase, async: false
 
-
   @tag :comparator_control
   test "C-tick: the twin TTL read falls in the next second", context do
     context = Map.merge(context, %{run_first?: true, between_sides: &next_second/1})
@@ -45,7 +44,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert run != [] and twin != []
         delta = DateTime.to_unix(hd(twin)) - DateTime.to_unix(List.last(run))
 
-        IO.puts("C_TICK_READS" <> ": " <> inspect(%{attempt: attempt, run: run, twin: twin, seconds: delta}, pretty: true))
+        IO.puts(
+          "C_TICK_READS" <>
+            ": " <>
+            inspect(%{attempt: attempt, run: run, twin: twin, seconds: delta}, pretty: true)
+        )
 
         assert_green(pair)
 
@@ -115,7 +118,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            )
 
     raises = Enum.filter(tail, &match?({^root, :call, {:erlang, :raise, [_, _, _]}}, &1))
-    IO.puts("U1_RERAISE" <> ": " <> inspect(Enum.map(tail, fn e -> {elem(e, 1), event_mfa(e)} end), pretty: true))
+
+    IO.puts(
+      "U1_RERAISE" <>
+        ": " <> inspect(Enum.map(tail, fn e -> {elem(e, 1), event_mfa(e)} end), pretty: true)
+    )
+
     assert raises == []
     assert_green(pair)
   end
@@ -137,10 +145,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       |> Map.fetch!(:events)
       |> Enum.filter(&(&1.mfa == checkpoint or checkpoint in &1.stack))
 
-    IO.puts("U2_ALLOCATION_NATIVE_CHECKPOINT" <> ": " <> inspect(Enum.map(checkpoint_events, fn event ->
-        Map.take(event, [:index, :role, :mfa, :stack])
-        |> Map.put(:event, Diagnostics.safe(event.event))
-      end), pretty: true , limit: :infinity))
+    IO.puts(
+      "U2_ALLOCATION_NATIVE_CHECKPOINT" <>
+        ": " <>
+        inspect(
+          Enum.map(checkpoint_events, fn event ->
+            Map.take(event, [:index, :role, :mfa, :stack])
+            |> Map.put(:event, Diagnostics.safe(event.event))
+          end), pretty: true, limit: :infinity)
+    )
 
     assert Enum.any?(checkpoint_events, &match?({_, :call, _}, &1.event)),
            "the declared caller allocation checkpoint must execute natively"
@@ -214,7 +227,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert Enum.any?(origins, &match?(%{origin: {:wire_statement, :committed_read, _}}, &1))
     assert Enum.any?(origins, &match?(%{origin: {:wire_statement, :shared, _}}, &1))
-    IO.puts("U2_NATIVE_WIRE_ORIGINS" <> ": " <> inspect(origins, pretty: true , limit: :infinity))
+    IO.puts("U2_NATIVE_WIRE_ORIGINS" <> ": " <> inspect(origins, pretty: true, limit: :infinity))
 
     for side <- [pair.run, pair.twin] do
       wire = side |> Origins.build() |> TransportReferences.build() |> Wire.build()
@@ -228,7 +241,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         end
         |> Enum.frequencies()
 
-      IO.puts("U2_NATIVE_TRANSPORT_OWNERSHIP" <> ": " <> inspect(%{side: side.resource, instances: counts}, pretty: true , limit: :infinity))
+      IO.puts(
+        "U2_NATIVE_TRANSPORT_OWNERSHIP" <>
+          ": " <>
+          inspect(%{side: side.resource, instances: counts}, pretty: true, limit: :infinity)
+      )
 
       u2_command_ownership(
         side,
@@ -328,7 +345,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                  end)
         end
 
-        IO.puts("ALLOCATION_NATIVE_NEGATIVE" <> ": " <> inspect(%{fault: name, rejected_by: rule}, pretty: true))
+        IO.puts(
+          "ALLOCATION_NATIVE_NEGATIVE" <>
+            ": " <> inspect(%{fault: name, rejected_by: rule}, pretty: true)
+        )
       end)
 
       assert File.read!(path) === original
@@ -398,7 +418,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :allocation_checkpoint
   test "value-conditioned OPEN routing is rejected with its real alternate backend", context do
-
     alternate =
       StoreCase.start_unboxed_repo!(
         prepare: :unnamed,
@@ -499,7 +518,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert rejected.errors === expected
       end
 
-      IO.puts("U_CROSS_LEASE_SAME_CAPTURE_SELECTIVITY" <> ": " <> inspect(%{mutant: rule, remaining: length(rejected.errors)}, pretty: true))
+      IO.puts(
+        "U_CROSS_LEASE_SAME_CAPTURE_SELECTIVITY" <>
+          ": " <> inspect(%{mutant: rule, remaining: length(rejected.errors)}, pretty: true)
+      )
     end
 
     assert Allocation.captured_pairs(negative).errors === expected
@@ -533,7 +555,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert Enum.all?(leases, &(is_integer(&1.checkin) and is_integer(&1.giveaway)))
     end
 
-    IO.puts("U_ALLOCATION_NATIVE_OPPOSITE_CHECKIN_ORDER" <> ": " <> inspect(Enum.map(rejected.errors, &Map.take(&1, [:rule, :run, :twin])), pretty: true))
+    IO.puts(
+      "U_ALLOCATION_NATIVE_OPPOSITE_CHECKIN_ORDER" <>
+        ": " <>
+        inspect(Enum.map(rejected.errors, &Map.take(&1, [:rule, :run, :twin])), pretty: true)
+    )
 
     witnessed? =
       Enum.any?(rejected.errors, &(&1.rule == :allocation_happens_before)) and
@@ -638,7 +664,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert database.statements.payload.table in relations
       assert {:database_relation, :payload_child} in relations
 
-      IO.puts("U4_NATIVE_CLOCK_COPY_COVERAGE" <> ": " <> inspect(%{side: side.resource, copies: Enum.frequencies(tokens), relations: Enum.uniq(relations)}, pretty: true))
+      IO.puts(
+        "U4_NATIVE_CLOCK_COPY_COVERAGE" <>
+          ": " <>
+          inspect(
+            %{
+              side: side.resource,
+              copies: Enum.frequencies(tokens),
+              relations: Enum.uniq(relations)
+            }, pretty: true)
+      )
     end
 
     assert_green(pair)
@@ -662,7 +697,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       for token <- [:joined_payload_date_column, :joined_payload_date_result],
           do: assert(token in tokens, "missing native replay clock-copy witness: #{token}")
 
-      IO.puts("U4_NATIVE_REPLAY_CLOCK_COPY_COVERAGE" <> ": " <> inspect(%{side: side.resource, copies: Enum.frequencies(tokens)}, pretty: true))
+      IO.puts(
+        "U4_NATIVE_REPLAY_CLOCK_COPY_COVERAGE" <>
+          ": " <> inspect(%{side: side.resource, copies: Enum.frequencies(tokens)}, pretty: true)
+      )
     end
 
     assert_green(replay)
@@ -799,7 +837,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert exit_observation(captured.pattern_probe) == exit_observation(captured.events)
       assert length(captured.pattern_probe) > length(captured.events)
 
-      IO.puts("U10_SAME_INVOCATION_EXIT_EQUALITY" <> ": " <> inspect(%{side: name, full: length(captured.pattern_probe), reduced: length(captured.events)}, pretty: true))
+      IO.puts(
+        "U10_SAME_INVOCATION_EXIT_EQUALITY" <>
+          ": " <>
+          inspect(
+            %{side: name, full: length(captured.pattern_probe), reduced: length(captured.events)},
+            pretty: true
+          )
+      )
     end
 
     assert_green(pair)
@@ -826,24 +871,29 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         pair = Scenarios.observe(row, Values.set()[:va], context)
         assert_green(pair)
 
-        IO.puts("U14_ANCHORS" <> ": " <> inspect(%{
-            action: row.action,
-            branch: row.branch,
-            run:
-              Enum.map(
-                Enum.uniq(Completeness.stacks(pair.run.run.events)),
-                &Enum.map(&1, fn {m, f, a, location} ->
-                  {m, f, if(is_list(a), do: length(a), else: a), location}
-                end)
-              ),
-            twin:
-              Enum.map(
-                Enum.uniq(Completeness.stacks(pair.twin.run.events)),
-                &Enum.map(&1, fn {m, f, a, location} ->
-                  {m, f, if(is_list(a), do: length(a), else: a), location}
-                end)
-              )
-          }, pretty: true , limit: :infinity))
+        IO.puts(
+          "U14_ANCHORS" <>
+            ": " <>
+            inspect(
+              %{
+                action: row.action,
+                branch: row.branch,
+                run:
+                  Enum.map(
+                    Enum.uniq(Completeness.stacks(pair.run.run.events)),
+                    &Enum.map(&1, fn {m, f, a, location} ->
+                      {m, f, if(is_list(a), do: length(a), else: a), location}
+                    end)
+                  ),
+                twin:
+                  Enum.map(
+                    Enum.uniq(Completeness.stacks(pair.twin.run.events)),
+                    &Enum.map(&1, fn {m, f, a, location} ->
+                      {m, f, if(is_list(a), do: length(a), else: a), location}
+                    end)
+                  )
+              }, pretty: true, limit: :infinity)
+        )
 
         pair
       end
@@ -956,7 +1006,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :u_store_acl_observation
   test "U observation: native ACL arrays retain every element and change exactly", context do
-
     table = "snapshot_acl_observation"
     relation = ~s["#{context.prefix}"."#{table}"]
     row = row!(:issue, :execute)
@@ -1180,7 +1229,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       {:pending, child} ->
         send(child, {:release, self()})
         receive do: ({:checked_in, ^child} -> :allocation_order)
-      :joined -> :allocation_order
+
+      :joined ->
+        :allocation_order
     end
   end
 
@@ -1199,10 +1250,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp borrow_child(repo, parent) do
     Repo.put_dynamic_repo(repo)
+
     Repo.checkout(fn ->
       send(parent, {:borrowed, self()})
       receive do: ({:release, ^parent} -> :ok)
     end)
+
     send(parent, {:checked_in, self()})
   end
 
@@ -1225,10 +1278,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     result = Comparator.compare(pair)
 
     if first = List.first(result.errors) do
-      IO.puts("C_NATIVE_FIRST_DIVERGENCE" <> ": " <> inspect(%{
-          path: {pair.row.action, pair.row.branch, pair.row.fault},
-          first: Diagnostics.safe(first)
-        }, pretty: true , limit: :infinity))
+      IO.puts(
+        "C_NATIVE_FIRST_DIVERGENCE" <>
+          ": " <>
+          inspect(
+            %{
+              path: {pair.row.action, pair.row.branch, pair.row.fault},
+              first: Diagnostics.safe(first)
+            }, pretty: true, limit: :infinity)
+      )
     end
 
     locations = Enum.map(result.errors, &{&1.at, &1.rule, &1.path})
@@ -1240,7 +1298,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     if reads == [], do: raise("C-tick did not capture a TTL read")
     target = (DateTime.to_unix(List.last(reads)) + 1) * 1_000
     now = System.system_time(:millisecond)
-    IO.puts("C_TICK_BOUNDARY" <> ": " <> inspect(%{target: target, after_side: now}, pretty: true))
+
+    IO.puts(
+      "C_TICK_BOUNDARY" <> ": " <> inspect(%{target: target, after_side: now}, pretty: true)
+    )
+
     Process.sleep(max(target - now, 0))
   end
 
@@ -1333,12 +1395,17 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         }
       end)
 
-    IO.puts("U2_CANONICAL_COMMAND_OWNERSHIP" <> ": " <> inspect(%{
-        side: side.resource,
-        scheduling_errors: scheduled.errors,
-        checkouts: checkouts,
-        commands: commands
-      }, pretty: true , limit: :infinity))
+    IO.puts(
+      "U2_CANONICAL_COMMAND_OWNERSHIP" <>
+        ": " <>
+        inspect(
+          %{
+            side: side.resource,
+            scheduling_errors: scheduled.errors,
+            checkouts: checkouts,
+            commands: commands
+          }, pretty: true, limit: :infinity)
+    )
   end
 
   defp u2_leases(indexed, open_claimed) do
@@ -1413,8 +1480,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   defp u2_lease_owns?(lease, caller, index),
-    do: lease.caller == caller and lease.start < index and
-      (lease.stop == nil or index < lease.stop)
+    do:
+      lease.caller == caller and lease.start < index and
+        (lease.stop == nil or index < lease.stop)
 
   defp wire_terms(value, tag) when is_tuple(value) do
     own = if tuple_size(value) > 0 and elem(value, 0) == tag, do: [value], else: []

@@ -225,8 +225,11 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     received = Enum.frequencies(receipts)
 
     {_, _, result} =
-      Enum.reduce(Enum.sort_by(events, & &1.index), {%{}, %{}, %{}},
-        &causal_event(&1, &2, targets, unique, received))
+      Enum.reduce(
+        Enum.sort_by(events, & &1.index),
+        {%{}, %{}, %{}},
+        &causal_event(&1, &2, targets, unique, received)
+      )
 
     result
   end

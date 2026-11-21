@@ -98,13 +98,39 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         do: %{claimed: MapSet.new(), errors: []},
         else: Refusals.check(run, ri)
 
-    %{run: run, twin: twin, declarations: declarations, ri: ri, ti: ti, rs: rs, ts: ts,
-      permitted: permitted, rf: rf, tf: tf, readback: readback, checkpoint: checkpoint, refusal: refusal}
+    %{
+      run: run,
+      twin: twin,
+      declarations: declarations,
+      ri: ri,
+      ti: ti,
+      rs: rs,
+      ts: ts,
+      permitted: permitted,
+      rf: rf,
+      tf: tf,
+      readback: readback,
+      checkpoint: checkpoint,
+      refusal: refusal
+    }
   end
 
   defp compare_matched(matches, row, reference?, prior) do
-    %{run: run, twin: twin, declarations: declarations, ri: ri, ti: ti, rs: rs, ts: ts,
-      permitted: permitted, rf: rf, tf: tf, readback: readback, checkpoint: checkpoint, refusal: refusal} = matches
+    %{
+      run: run,
+      twin: twin,
+      declarations: declarations,
+      ri: ri,
+      ti: ti,
+      rs: rs,
+      ts: ts,
+      permitted: permitted,
+      rf: rf,
+      tf: tf,
+      readback: readback,
+      checkpoint: checkpoint,
+      refusal: refusal
+    } = matches
 
     claimed =
       permitted.claimed
@@ -331,8 +357,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       clock_count: map_size(ri.reads),
       events: {length(ri.events), length(ti.events)},
       pairing: state.pairing,
-      readback_sources:
-        Readback.whole_sources(readback, state.pairing, ti),
+      readback_sources: Readback.whole_sources(readback, state.pairing, ti),
       databases: state.databases,
       derivations: state.derivations,
       clocks: state.clocks
@@ -341,13 +366,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
   defp readback_backend_copies(state, ri, readback, checkpoint, reference?) do
     if not reference? and Map.get(checkpoint, :lease) do
-        backend = checkpoint.lease.protocol.connection_id
+      backend = checkpoint.lease.protocol.connection_id
 
-        Enum.reduce(ri.events, state, &readback_backend_event(&1, &2, readback, backend))
-      else
-        state
-      end
-
+      Enum.reduce(ri.events, state, &readback_backend_event(&1, &2, readback, backend))
+    else
+      state
+    end
   end
 
   defp readback_backend_event(e, state, readback, backend) do
@@ -452,6 +476,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
   defp twin_entry(state, events) do
     root = state.twin.run.snapshot.root
+
     case Enum.find_value(events, &twin_entry_event(&1, root)) do
       {:found, input} -> input
       nil -> :missing_twin_entry
@@ -652,7 +677,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       operation_event?(a) and operation_event?(b) ->
         operation_event(a, b, state)
 
-      true -> event_copies(a, b, state)
+      true ->
+        event_copies(a, b, state)
     end
   end
 
@@ -806,9 +832,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     {twin_args, state} =
       if state.row.branch == :producer_failure and state.row.type != :action do
         expected_callback =
-          FailureTwins.failure_callback(
-            FailureTwins.error(:producer_failure)
-          )
+          FailureTwins.failure_callback(FailureTwins.error(:producer_failure))
 
         state =
           if Enum.at(twin_args, 1) === expected_callback,
@@ -1134,8 +1158,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp term(%Postgrex.Query{} = a, %Postgrex.Query{} = b, state, path) do
     {rq, tq} = state.queries
 
-    case {QueryOrigins.expected_name(rq, a),
-          QueryOrigins.expected_name(tq, b)} do
+    case {QueryOrigins.expected_name(rq, a), QueryOrigins.expected_name(tq, b)} do
       {{:ok, an}, {:ok, bn}} ->
         state =
           if a.name === b.name or (a.name === an and b.name === bn),
@@ -1555,7 +1578,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       response_slot(state, path) != nil ->
         response_value(a, b, response_slot(state, path), state, path)
 
-      true -> scalar_exact(a, b, state, path)
+      true ->
+        scalar_exact(a, b, state, path)
     end
   end
 
@@ -1595,6 +1619,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
   defp function_environment_value({{a, b}, n}, state, slots, path) do
     at = path ++ [:function, :env, n]
+
     case slots[n] do
       :parameters -> parameters(a, b, state, at)
       :cache_arguments -> cache_arguments(a, b, state, at)
@@ -1630,8 +1655,11 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   end
 
   defp decoded_claim_row?(state, path) do
-    match?(%{mfa: {AshOnetime.Store.Postgres, f, _}}
-      when f in [:decode_claim, :decode_selected_claim], state.at) and
+    match?(
+      %{mfa: {AshOnetime.Store.Postgres, f, _}}
+      when f in [:decode_claim, :decode_selected_claim],
+      state.at
+    ) and
       path == [:event, 2, 2, 1] and
       match?({_, :call, {_, _, [:idempotency, _]}}, state.current.run.event)
   end
@@ -1658,8 +1686,11 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
   defp parameter_assignment({name, expression}, assignments) do
     case Regex.run(~r/^\s*\$(\d+)/, expression) do
-      [_, n] -> Map.put(assignments, String.to_integer(n), name |> String.trim() |> String.trim("\""))
-      _ -> assignments
+      [_, n] ->
+        Map.put(assignments, String.to_integer(n), name |> String.trim() |> String.trim("\""))
+
+      _ ->
+        assignments
     end
   end
 
@@ -1703,10 +1734,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp wire_state_column(_column), do: nil
 
   defp bind_parameter_id({:bind_column, 1, 2950, _, {:uuid, id}}, _encoded?), do: id
+
   defp bind_parameter_id(first, true) do
     {:ok, id} = encoded_parameter(first, 2950)
     id
   end
+
   defp bind_parameter_id(<<_::128>> = id, _encoded?), do: Ecto.UUID.load!(id)
   defp bind_parameter_id(id, _encoded?), do: id
 
@@ -1716,6 +1749,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp claim_clock_field({key, expected}, {copy, state}, side, path) do
     token = {:database_expression, {:claim_column, key}}
     actual = Map.fetch!(copy, key)
+
     if actual === expected or actual === token,
       do: {Map.put(copy, key, token), state},
       else: {copy, error(state, :o4_claim_copy, path ++ [side, key], actual, expected)}
@@ -1725,8 +1759,11 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     fields = Registry.typed_fields(Map.get(a, :__struct__))
 
     {state, paired} =
-      Enum.reduce(Enum.sort(Map.keys(a)), {state, MapSet.new()},
-        &map_entry(&1, &2, a, b, fields, path))
+      Enum.reduce(
+        Enum.sort(Map.keys(a)),
+        {state, MapSet.new()},
+        &map_entry(&1, &2, a, b, fields, path)
+      )
 
     Enum.reduce(Enum.sort(Map.keys(b)), state, fn key, s ->
       if MapSet.member?(paired, key),
@@ -1737,11 +1774,13 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
   defp map_entry(key, {state, paired}, a, b, fields, path) do
     twin_key = map_key(key, state)
+
     case Map.fetch(b, twin_key) do
       {:ok, bv} ->
         state = term(key, twin_key, state, path ++ [{:key, key}])
         state = typed_map_value(Map.fetch!(a, key), bv, fields[key], state, path ++ [key])
         {state, MapSet.put(paired, twin_key)}
+
       :error ->
         {error(state, :o5_map_key, path ++ [key], {:ok, Map.fetch!(a, key)}, :error), paired}
     end
@@ -1778,6 +1817,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     index = Registry.subject_hook_index(state.row, slot)
     ah = a |> Map.get(list) |> Enum.at(index)
     bh = b |> Map.get(list) |> Enum.at(index)
+
     if ah == nil and bh == nil,
       do: state,
       else: state |> hook(ah, slot, :run, path) |> hook(bh, slot, :twin, path)
@@ -1819,7 +1859,9 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         if key in typed,
           do: uuid_identity(av, bv, state, path ++ [key]),
           else: term(av, bv, state, path ++ [key])
-      {av, bv} -> error(state, :o5_map_key, path ++ [key], av, bv)
+
+      {av, bv} ->
+        error(state, :o5_map_key, path ++ [key], av, bv)
     end
   end
 
@@ -1859,6 +1901,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       case {Map.fetch(private, key), Map.fetch(twin_private, key)} do
         {{:ok, av}, {:ok, bv}} ->
           {Map.put(private, key, bv), uuid_identity(av, bv, state, path ++ [:private, key])}
+
         {av, bv} ->
           {private, error(state, :o5_map_key, path ++ [:private, key], av, bv)}
       end
@@ -1912,7 +1955,11 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   end
 
   defp replace_hook_at(hooks, index, slot),
-    do: if(length(hooks) > index, do: List.replace_at(hooks, index, {:declared_hook, slot}), else: hooks)
+    do:
+      if(length(hooks) > index,
+        do: List.replace_at(hooks, index, {:declared_hook, slot}),
+        else: hooks
+      )
 
   defp historical_protocol(state, protocol, field, side, path) do
     connection =
@@ -2349,7 +2396,6 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp nullable_response?(_), do: false
 
   defp response_value(a, b, key, state, path) do
-
     {rd, td} = state.derivations
     ea = response_source(:run, rd, state, key)
     eb = response_source(:twin, td, state, key)
@@ -2488,7 +2534,9 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     case {Map.fetch(a, table), Map.fetch(b, table)} do
       {{:ok, ar}, {:ok, br}} ->
         Enum.reduce([:added, :removed], state, &store_direction(&1, &2, ar, br, table))
-      {av, bv} -> error(state, :store_table, [:store, table], av, bv)
+
+      {av, bv} ->
+        error(state, :store_table, [:store, table], av, bv)
     end
   end
 
@@ -2500,8 +2548,13 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         store_row(x, y, table, s, [:store, table, direction, n])
       end)
     else
-      error(state, :store_row_count, [:store, table, direction],
-        length(a[direction]), length(b[direction]))
+      error(
+        state,
+        :store_row_count,
+        [:store, table, direction],
+        length(a[direction]),
+        length(b[direction])
+      )
     end
   end
 
@@ -2521,6 +2574,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     case DatabaseOrigins.payload_snapshot(table, row, database) do
       {:ok, relation, projected} ->
         {append_store_row(tables, relation, direction, projected), state}
+
       {:error, actual, expected} ->
         path = [:store, table, direction, n, :database_copy, side]
         state = error(state, :o4_payload_snapshot, path, actual, expected)
@@ -2530,6 +2584,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
   defp append_store_row(tables, table, direction, row) do
     empty = %{added: [], removed: []}
+
     Map.update(tables, table, Map.put(empty, direction, [row]), fn old ->
       Map.update!(old, direction, &(&1 ++ [row]))
     end)
@@ -2538,7 +2593,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp store_row(a, b, table, state, path) do
     statements = Registry.database_statements()
     previous = state.current
-    state = if table == statements.claim.table, do: row_state(state, a["state"], b["state"]), else: state
+
+    state =
+      if table == statements.claim.table,
+        do: row_state(state, a["state"], b["state"]),
+        else: state
+
     columns = (Map.keys(a) ++ Map.keys(b)) |> Enum.uniq() |> Enum.sort()
     state = Enum.reduce(columns, state, &store_column(&1, &2, a, b, table, path))
     %{state | current: previous}
@@ -2548,7 +2608,9 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     case {Map.fetch(a, column), Map.fetch(b, column)} do
       {{:ok, av}, {:ok, bv}} ->
         store_column_value(av, bv, a, b, table, column, state, path)
-      {av, bv} -> error(state, :o5_map_key, path ++ [column], av, bv)
+
+      {av, bv} ->
+        error(state, :o5_map_key, path ++ [column], av, bv)
     end
   end
 
@@ -2558,21 +2620,31 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         if av === ea and bv === eb,
           do: state,
           else: error(state, rule, path ++ [column], av, bv)
-      nil -> column_value(av, bv, column, state, path ++ [column])
+
+      nil ->
+        column_value(av, bv, column, state, path ++ [column])
     end
   end
 
   defp store_column_origin(a, b, table, column, state) do
     {rdb, tdb} = state.databases
     statements = Registry.database_statements()
+
     cond do
-      table == statements.claim.table and column in (statements.claim.clocks ++ ["response_partition"]) ->
+      table == statements.claim.table and
+          column in (statements.claim.clocks ++ ["response_partition"]) ->
         {:o4_snapshot_copy, snapshot_origin(a, column, rdb), snapshot_origin(b, column, tdb)}
+
       table == statements.outcome.table and column in statements.outcome.clocks ->
-        {:o4_outcome_snapshot, DatabaseOrigins.outcome_snapshot(a, rdb), DatabaseOrigins.outcome_snapshot(b, tdb)}
+        {:o4_outcome_snapshot, DatabaseOrigins.outcome_snapshot(a, rdb),
+         DatabaseOrigins.outcome_snapshot(b, tdb)}
+
       table in statements.peer.tables and column in statements.peer.clocks ->
-        {:o4_peer_snapshot, peer_snapshot_origin(a, table, rdb), peer_snapshot_origin(b, table, tdb)}
-      true -> nil
+        {:o4_peer_snapshot, peer_snapshot_origin(a, table, rdb),
+         peer_snapshot_origin(b, table, tdb)}
+
+      true ->
+        nil
     end
   end
 

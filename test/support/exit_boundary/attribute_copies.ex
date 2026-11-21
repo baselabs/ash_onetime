@@ -16,7 +16,11 @@ defmodule AshOnetime.Test.ExitBoundary.AttributeCopies do
     |> Map.fetch!(:slots)
   end
 
-  defp event(%{event: {pid, :call, {AshOnetime.Admission, :reject_reserved, [subject]}}}, s, typed) do
+  defp event(
+         %{event: {pid, :call, {AshOnetime.Admission, :reject_reserved, [subject]}}},
+         s,
+         typed
+       ) do
     fields =
       if is_struct(subject, Ash.Changeset),
         do: [:attributes, :params, :arguments],
@@ -35,7 +39,9 @@ defmodule AshOnetime.Test.ExitBoundary.AttributeCopies do
 
   defp event(%{event: {pid, :call, {AshOnetime.Admission, :reserved_surface?, [_]}}} = e, s, _) do
     case Map.get(s.active, pid) do
-      nil -> s
+      nil ->
+        s
+
       frame ->
         source = Enum.at(frame.sources, frame.ordinal)
         s = put_in(s.slots[{e.index, 0}], source)
@@ -43,7 +49,12 @@ defmodule AshOnetime.Test.ExitBoundary.AttributeCopies do
     end
   end
 
-  defp event(%{event: {pid, :call, {AshOnetime.Admission, :"-reserved_surface?/1-fun-0-", [_, _]}}} = e, s, _) do
+  defp event(
+         %{event: {pid, :call, {AshOnetime.Admission, :"-reserved_surface?/1-fun-0-", [_, _]}}} =
+           e,
+         s,
+         _
+       ) do
     case Map.get(s.active, pid) do
       %{current: source} -> put_in(s.slots[{e.index, 1}], source)
       nil -> s

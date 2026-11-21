@@ -10,7 +10,9 @@ defmodule AshOnetime.Test.ExitBoundary.Derivations do
 
   defp prior_sources(side) do
     case Map.get(side, :prior_derivations) do
-      nil -> %{}
+      nil ->
+        %{}
+
       prior ->
         prior.sources
         |> Enum.group_by(fn {{root, _}, _} -> root end)
@@ -51,8 +53,11 @@ defmodule AshOnetime.Test.ExitBoundary.Derivations do
             sources: Map.put(state.sources, {root, frame.index}, elem(e.event, 3))
         }
 
-      nil -> state
-      _ -> interior(e, state)
+      nil ->
+        state
+
+      _ ->
+        interior(e, state)
     end
   end
 

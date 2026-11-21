@@ -37,22 +37,43 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
   defp schedule(%{event: {caller, :receive, {:inet_async, port, id, result}}} = e, s, events),
     do: async(e, caller, port, id, result, events, s)
 
-  defp schedule(%{event: {caller, :call, {:prim_inet, :send, [port, data, _options, ref]}}} = e, s, events)
+  defp schedule(
+         %{event: {caller, :call, {:prim_inet, :send, [port, data, _options, ref]}}} = e,
+         s,
+         events
+       )
        when is_port(port) and is_reference(ref),
        do: inet(e, caller, port, data, ref, events, s)
 
-  defp schedule(%{event: {parent, :send, {parent, ref, ref, [parent], {:erlang, :apply, [fun, []]}} = message, child}} = e, s, events)
+  defp schedule(
+         %{
+           event:
+             {parent, :send, {parent, ref, ref, [parent], {:erlang, :apply, [fun, []]}} = message,
+              child}
+         } = e,
+         s,
+         events
+       )
        when is_function(fun),
        do: task(e, parent, child, message, events, s)
 
   defp schedule(%{event: {parent, :getting_unlinked, child}} = e, s, events),
     do: unlinked(e, parent, child, events, s)
 
-  defp schedule(%{event: {caller, :call, {:erts_internal, :flush_monitor_messages, [ref, false, true]}}} = e, s, events),
-    do: flush(e, caller, ref, events, s)
+  defp schedule(
+         %{event: {caller, :call, {:erts_internal, :flush_monitor_messages, [ref, false, true]}}} =
+           e,
+         s,
+         events
+       ),
+       do: flush(e, caller, ref, events, s)
 
-  defp schedule(%{event: {caller, :receive, {:DOWN, ref, :process, child, reason}}} = e, s, events),
-    do: down(e, caller, ref, child, reason, events, s)
+  defp schedule(
+         %{event: {caller, :receive, {:DOWN, ref, :process, child, reason}}} = e,
+         s,
+         events
+       ),
+       do: down(e, caller, ref, child, reason, events, s)
 
   defp schedule(_e, s, _events), do: s
 

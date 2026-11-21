@@ -13,7 +13,6 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
   alias AshOnetime.Test.ExitBoundary.Withheld
   use AshOnetime.Test.ExitBoundary.ComparatorCase, async: false
 
-
   for control <- AshOnetime.DeliveryComparatorControls.rows() do
     @tag control.id
     @tag :comparator_positive_control
@@ -52,7 +51,14 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
       end
 
       if errors != [] do
-        IO.puts("QUALIFIED_ORIGIN_CONTROL" <> ": " <> inspect(%{control: control.id, errors: Diagnostics.safe(errors)}, pretty: true , limit: :infinity))
+        IO.puts(
+          "QUALIFIED_ORIGIN_CONTROL" <>
+            ": " <>
+            inspect(%{control: control.id, errors: Diagnostics.safe(errors)},
+              pretty: true,
+              limit: :infinity
+            )
+        )
 
         owned? =
           if control.kind in [:declarations, :completeness],

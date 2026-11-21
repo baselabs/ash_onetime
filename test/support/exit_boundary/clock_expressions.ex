@@ -737,12 +737,25 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
 
   defp cache_list(t, path, e, s, n), do: cache_copies(t, path ++ [n], e, s)
 
-  defp closure_copies(%{module: AshOnetime.Cache, name: :"-invoke/3-fun-0-", env: env}, path, e, s) do
+  defp closure_copies(
+         %{module: AshOnetime.Cache, name: :"-invoke/3-fun-0-", env: env},
+         path,
+         e,
+         s
+       ) do
     case env do
       [:put, [key, _entry, ttl], _module] ->
-        check(s, e, path ++ [:function, :env, 1, 2], ttl,
-          Map.fetch(s.cache_ttls, key), :cache_ttl_closure)
-      _ -> s
+        check(
+          s,
+          e,
+          path ++ [:function, :env, 1, 2],
+          ttl,
+          Map.fetch(s.cache_ttls, key),
+          :cache_ttl_closure
+        )
+
+      _ ->
+        s
     end
   end
 
@@ -754,9 +767,17 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
   defp outcome_closure_copy(%{module: AshOnetime.Store.Postgres} = info, path, e, s) do
     case outcome_capture(info.name) do
       {:ok, n} ->
-        check(s, e, path ++ [:function, :env, n], Enum.at(info.env, n),
-          outcome_start(s, e.pid), :outcome_start_closure)
-      :not_called -> s
+        check(
+          s,
+          e,
+          path ++ [:function, :env, n],
+          Enum.at(info.env, n),
+          outcome_start(s, e.pid),
+          :outcome_start_closure
+        )
+
+      :not_called ->
+        s
     end
   end
 
@@ -853,7 +874,10 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
     end
   end
 
-  defp outcome_frame_start(%{mfa: {AshOnetime.Store.Postgres, :record_outcome_committed, 4}, started: start})
+  defp outcome_frame_start(%{
+         mfa: {AshOnetime.Store.Postgres, :record_outcome_committed, 4},
+         started: start
+       })
        when start != nil, do: {:ok, start}
 
   defp outcome_frame_start(_frame), do: nil

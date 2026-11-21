@@ -1,4 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.Collector do
+  alias AshOnetime.Test.ExitBoundary.Capture
   @moduledoc false
 
   # §2.7.8, the observation and the drain. One collector process per run sits outside
@@ -31,7 +32,6 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   @port_flags [:send, :receive, :strict_monotonic_timestamp]
 
   defmodule Snapshot do
-    alias AshOnetime.Test.ExitBoundary.Capture
     @moduledoc false
     # `events` are the trace messages in timestamp order, without the trace tag and the
     # timestamp;

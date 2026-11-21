@@ -73,7 +73,6 @@ defmodule AshOnetime.Test.ExitBoundary.External do
   @moduledoc false
   @behaviour AshOnetime.ExternalEffect
 
-
   # The external effect of the withheld resource: the peer records the effect once and
   # `execute/3` returns both canaries with the peer's result. `:execute_unknown` runs the
   # effect at the peer and reports the outcome unknown; recovery then finds it.
@@ -122,7 +121,6 @@ defmodule AshOnetime.Test.ExitBoundary.ReturnedExternal do
   alias AshOnetime.Test.ExternalPeer
   @moduledoc false
   @behaviour AshOnetime.ExternalEffect
-
 
   # The twin's external effect: the same peer call with no executing-only values.
   @impl true

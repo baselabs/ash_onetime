@@ -38,7 +38,12 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
 
     failures = for {key, false, _} <- outcomes, do: key
     locations = outcomes |> Enum.flat_map(&elem(&1, 2)) |> Enum.uniq() |> Enum.sort()
-    IO.puts("U3_FINALIZE_REPLAY" <> ": " <> inspect(%{pairs: length(rows) * 6, failures: failures}, pretty: true))
+
+    IO.puts(
+      "U3_FINALIZE_REPLAY" <>
+        ": " <> inspect(%{pairs: length(rows) * 6, failures: failures}, pretty: true)
+    )
+
     assert failures == []
     assert locations == [], "U3 comparison diverged at #{inspect(locations)}"
   end
@@ -103,7 +108,9 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
 
       {residuals, counts} =
         Enum.reduce(rows, {%{}, %{pairs: 0, events: 0}}, fn row, acc ->
-          IO.puts("C_POS_ROW" <> ": " <> inspect({row.action, row.branch, row.fault}, pretty: true))
+          IO.puts(
+            "C_POS_ROW" <> ": " <> inspect({row.action, row.branch, row.fault}, pretty: true)
+          )
 
           Enum.reduce(values, acc, fn {label, tuple}, {all, counts} ->
             result =
@@ -185,7 +192,11 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
 
       for {key, sample} <- Enum.sort(residuals),
           do:
-            IO.puts("C_POS_RESIDUAL" <> ": " <> inspect({key, sample}, pretty: true , limit: :infinity, printable_limit: :infinity))
+            IO.puts(
+              "C_POS_RESIDUAL" <>
+                ": " <>
+                inspect({key, sample}, pretty: true, limit: :infinity, printable_limit: :infinity)
+            )
 
       assert residuals == %{},
              "C-pos residuals: #{map_size(residuals)} qualified locations (the whole matrix ran)"

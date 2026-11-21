@@ -164,7 +164,8 @@ defmodule AshOnetime.Test.ExitBoundary.Refusals do
       {_, expected} ->
         expected
 
-      nil -> descend(value, replacements)
+      nil ->
+        descend(value, replacements)
     end
   end
 
