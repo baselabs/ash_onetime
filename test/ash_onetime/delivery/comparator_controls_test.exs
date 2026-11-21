@@ -157,6 +157,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert read.source.index in read.indexes
       assert read.returned.index in read.indexes
       assert read.provenance in read.indexes
+      assert read.control_request.index in read.indexes
+      assert read.control_reply.index in read.indexes
+      assert read.control_request.index < read.delivered.index
       assert is_integer(read.id)
     end
 

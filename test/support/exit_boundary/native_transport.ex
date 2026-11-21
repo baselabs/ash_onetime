@@ -223,6 +223,8 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
         id: chain.id,
         delivered: signals.sent,
         received: signals.received,
+        control_request: chain.requested,
+        control_reply: chain.replied,
         indexes: Enum.uniq(chain.indexes ++ signals.indexes),
         provenance: chain.origin
       }
@@ -264,6 +266,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
          {:ok, {:ok, [^hi, ^lo]}} <- return_value(ctl),
          {:ok, {:ok, id}} <- return_value(async),
          true <- id == hi * 256 + lo,
+         {:ok, controls} <- read_controls(state.events, outer, internal, driver_args, id),
          {:ok, ^result} <- return_value(recv0),
          {:ok, ^result} <- return_value(recv) do
       pairs = [outer, socket, recv, recv0, async, time, ctl, erlang, internal]
@@ -274,7 +277,11 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
            id: id,
            started: internal.source.index,
            origin: internal.returned.index,
-           indexes: deferred ++ Enum.flat_map(pairs, &[&1.source.index, &1.returned.index])
+           requested: controls.requested,
+           replied: controls.replied,
+           indexes:
+             controls.indexes ++
+               deferred ++ Enum.flat_map(pairs, &[&1.source.index, &1.returned.index])
          }}
       else
         {:error, :native_program_order}
@@ -311,14 +318,10 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     with [received] <- in_interval(state.events, outer, &(&1.event == {pid, :receive, message})),
          [sent] <- in_interval(state.events, outer, &(&1.event == {port, :send, message, pid})),
          true <- sent.index < received.index,
-         true <- chain.started < sent.index,
-         true <- outer.returned.index > received.index,
-         {:ok, controls} <- control_signals(state.events, outer, port, id, pid) do
-      {:ok, %{sent: sent, received: received, indexes: [received.index, sent.index | controls]}}
+         true <- chain.requested.index < sent.index,
+         true <- outer.returned.index > received.index do
+      {:ok, %{sent: sent, received: received, indexes: [received.index, sent.index]}}
     else
-      {:error, reason} ->
-        {:error, reason}
-
       _ ->
         diagnostic = receive_diagnostic(state.events, outer, chain, port, result)
         {:error, {:native_receive_copy, diagnostic}}
@@ -351,6 +354,16 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   defp receive_signal(%{event: {pid, :receive, message}, index: index}, pid, port, id, result),
     do: signal_metadata(index, :received, message, port, id, result)
 
+  defp receive_signal(
+         %{event: {port, :receive, {pid, {:control, {command, bytes}}}}, index: index},
+         pid,
+         port,
+         _id,
+         _result
+       )
+       when is_integer(command) and is_binary(bytes),
+       do: %{index: index, kind: :control_request, command: command, bytes: byte_size(bytes)}
+
   defp receive_signal(%{event: event, index: index}, _pid, _port, _id, _result),
     do: %{index: index, kind: elem(event, 1), own_endpoint?: false}
 
@@ -365,7 +378,8 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       result: receive_result(value)
     }
 
-  defp signal_metadata(index, kind, {port, {:control, bytes}}, port, _id, _result),
+  defp signal_metadata(index, kind, {port, {:control, bytes}}, port, _id, _result)
+       when is_binary(bytes),
     do: %{index: index, kind: kind, message: :control, bytes: byte_size(bytes)}
 
   defp signal_metadata(index, kind, message, _port, _id, _result)
@@ -380,8 +394,19 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   defp receive_result({:error, reason}) when is_atom(reason), do: {:error, reason}
   defp receive_result(_result), do: :other
 
-  defp control_signals(events, outer, port, id, pid) do
-    controls =
+  defp read_controls(events, outer, internal, [port, command, data], id) do
+    pid = outer.source.pid
+
+    requests =
+      in_interval(events, outer, fn
+        %{event: {^port, :receive, {^pid, {:control, _}}}} ->
+          true
+
+        _ ->
+          false
+      end)
+
+    replies =
       in_interval(events, outer, fn
         %{event: {^port, :send, {^port, {:control, _}}, ^pid}} ->
           true
@@ -390,19 +415,28 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
           false
       end)
 
-    case controls do
-      [] ->
-        {:ok, []}
-
-      [%{event: {_, :send, {_, {:control, <<1, hi, lo>>}}, _}} = control]
-      when id == hi * 256 + lo ->
-        {:ok, [control.index]}
-
-      [_] ->
-        {:error, :native_control_copy}
-
+    with [%{event: {_, :receive, {_, {:control, {^command, bytes}}}}} = requested] <- requests,
+         true <- bytes === IO.iodata_to_binary(data),
+         [%{event: {_, :send, {_, {:control, <<1, hi, lo>>}}, _}} = replied] <- replies,
+         true <- id == hi * 256 + lo,
+         true <- internal.source.index < requested.index,
+         true <- requested.index < replied.index,
+         true <- replied.index < outer.returned.index do
+      {:ok,
+       %{
+         requested: requested,
+         replied: replied,
+         indexes: [requested.index, replied.index]
+       }}
+    else
       _ ->
-        {:error, :duplicate_native_control}
+        signals =
+          (requests ++ replies)
+          |> Enum.sort_by(& &1.index)
+          |> Enum.map(&receive_signal(&1, pid, port, id, :control))
+
+        diagnostic = %{id: id, started: internal.source.index, signals: signals}
+        {:error, {:native_control_copy, diagnostic}}
     end
   end
 

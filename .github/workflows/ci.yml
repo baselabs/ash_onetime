@@ -169,7 +169,9 @@ jobs:
     name: "Native connection prerequisites"
     needs: toolchain
     runs-on: ubuntu-24.04
-    timeout-minutes: 90 # no green run yet
+    # Cached 81s on Work 44909461651, job 136862122497, 83ea75c1c227cbdc29fdbc386bddf95c7d112ece.
+    # Add 57s cold setup from Work 44852145428, job 136685902792; remeasure on first cold green.
+    timeout-minutes: 5
     env:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-native"
     steps:

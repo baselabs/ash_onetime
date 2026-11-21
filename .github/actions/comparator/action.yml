@@ -17,10 +17,10 @@ inputs:
     description: Restore qualified caches, or none for upstream drift
     default: restore
   lane:
-    description: matrix, scheduling or controls
+    description: matrix, scheduling, native or controls
     required: true
   selector:
-    description: Route or scheduling shard name; empty for controls
+    description: Route or scheduling shard name; empty for native or controls
     default: ''
 runs:
   using: composite
