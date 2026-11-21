@@ -69,6 +69,9 @@ def main(arguments):
         ], check=False)
         if proof.returncode:
             return proof.returncode
+        print("::notice title=Native connection prerequisites::"
+              "All connection_streams tests passed before the remaining comparator controls.",
+              flush=True)
         command += [directory + name for name in [
             "comparator_controls_test.exs", "comparator_matrix_test.exs",
             "comparator_mutations_test.exs", "comparator_positive_controls_test.exs",
