@@ -77,6 +77,11 @@ defmodule AshOnetime.Test.CatalogInventory do
       "SELECT oid FROM pg_class WHERE relnamespace=to_regnamespace($1) AND relname<>'schema_migrations' AND relkind IN ('r','p','S')"
 
     queries = %{
+      column_nullability: """
+      SELECT r.relname,a.attname,a.attnotnull
+      FROM pg_attribute a JOIN pg_class r ON r.oid=a.attrelid
+      WHERE a.attrelid IN (#{relations}) AND a.attnum>0 AND NOT a.attisdropped
+      """,
       constraints: """
       SELECT r.relname,k.conname,k.contype::text,k.condeferrable,k.condeferred,k.convalidated,
         coalesce((to_jsonb(k)->>'conenforced')::boolean,true),
@@ -145,6 +150,9 @@ defmodule AshOnetime.Test.CatalogInventory do
       Repo.put_dynamic_repo(previous)
     end
   end
+
+  defp drift(c, :column_nullability),
+    do: "ALTER TABLE #{rel(c, "ash_onetime_nonce_claims")} ALTER COLUMN verifier_id DROP NOT NULL"
 
   defp drift(c, :constraints) do
     name =

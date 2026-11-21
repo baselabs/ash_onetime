@@ -156,7 +156,15 @@ for partitioning <- [nil, 2] do
       actual = CatalogInventory.read(c)
       assert :ok = AshOnetime.MutationInventory.assert_catalog!(expected, actual)
 
-      for kind <- [:constraints, :triggers, :policies, :routines, :table_acls, :column_acls] do
+      for kind <- [
+            :column_nullability,
+            :constraints,
+            :triggers,
+            :policies,
+            :routines,
+            :table_acls,
+            :column_acls
+          ] do
         CatalogInventory.with_drift(c, kind, fn ->
           assert_raise RuntimeError, ~r/live #{kind} differs/, fn ->
             AshOnetime.MutationInventory.assert_catalog!(expected, CatalogInventory.read(c))

@@ -38,6 +38,7 @@ BEGIN
       -- rule:maintenance-shape-collation
       'name',a.attname,'type',a.atttypid,'typmod',a.atttypmod,'collation',a.attcollation,
       -- end-rule:maintenance-shape-type
+      -- rule:maintenance-shape-not-null
       'not_null',a.attnotnull,'identity',a.attidentity,'generated',a.attgenerated,
       -- rule:maintenance-shape-default
       'default',@routines@.ash_onetime_maintenance_normalize(d.adbin::text,relation_oid::oid)

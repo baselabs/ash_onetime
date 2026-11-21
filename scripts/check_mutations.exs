@@ -2582,6 +2582,28 @@ defmodule AshOnetime.MutationCheck do
       test_name: "Table 1 row 15: base_type refuses before owner code runs",
       assertion: "compared_field(before, @kind)"
     },
+    "maintenance-shape-not-null" => %{
+      path: "priv/templates/migrations/maintenance/shape.sql",
+      original: "'not_null',a.attnotnull,",
+      mutated: "",
+      test: "test/ash_onetime/store/column_nullability_test.exs",
+      tag: "maintenance_shape_not_null_mutation",
+      test_name: "maintenance refuses DROP NOT NULL drift and recovers after restoration",
+      assertion: "refute changed_columns == original_columns",
+      assertion_line: 36,
+      required_failures: [
+        %{
+          test_name: "maintenance refuses DROP NOT NULL drift and recovers after restoration",
+          assertion: "refute changed_columns == original_columns",
+          assertion_line: 36
+        },
+        %{
+          test_name: "maintenance refuses SET NOT NULL drift and recovers after restoration",
+          assertion: "refute changed_columns == original_columns",
+          assertion_line: 36
+        }
+      ]
+    },
     "maintenance-shape-typmod" => %{
       path: "priv/templates/migrations/maintenance/shape.sql",
       original: "'typmod',a.atttypmod",
