@@ -108,8 +108,8 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
                 reraise error, __STACKTRACE__
             end
 
-          case captured do
-            {:environment, index} ->
+          case Enum.uniq(captured) do
+            [{:environment, index}] ->
               {:ok, index}
 
             other ->
@@ -125,30 +125,59 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
   defp capture_path([instruction | rest], regs, labels, {_, _, arity} = target, argument, seen) do
     case instruction do
       {tag, ^arity, ^target} when tag in [:call, :call_only] ->
-        Map.fetch!(regs, {:x, argument})
+        [Map.fetch!(regs, {:x, argument})]
 
       {:call_last, ^arity, ^target, _} ->
-        Map.fetch!(regs, {:x, argument})
+        [Map.fetch!(regs, {:x, argument})]
 
       {:jump, {:f, label}} ->
-        if MapSet.member?(seen, label), do: raise("cyclic captured-origin control flow")
+        capture_branch(label, regs, labels, target, argument, seen)
 
-        capture_path(
-          Map.fetch!(labels, label),
-          regs,
-          labels,
-          target,
-          argument,
-          MapSet.put(seen, label)
-        )
+      {:test, _, {:f, label}, _} ->
+        capture_path(rest, regs, labels, target, argument, seen) ++
+          capture_branch(label, regs, labels, target, argument, seen)
+
+      {:test, :has_map_fields, {:f, label}, _, _} ->
+        capture_path(rest, regs, labels, target, argument, seen) ++
+          capture_branch(label, regs, labels, target, argument, seen)
+
+      {:get_map_elements, {:f, label}, _, _} ->
+        capture_path(rest, capture_step(instruction, regs), labels, target, argument, seen) ++
+          capture_branch(label, regs, labels, target, argument, seen)
+
+      :return ->
+        []
+
+      {tag, _} when tag in [:case_end, :badmatch, :badrecord] ->
+        []
+
+      {tag, _, _} when tag in [:call_only, :call_ext_only] ->
+        []
+
+      {tag, _, _, _} when tag in [:call_last, :call_ext_last] ->
+        []
 
       _ ->
         capture_path(rest, capture_step(instruction, regs), labels, target, argument, seen)
     end
   end
 
-  defp capture_path([], _, _, target, _, _),
-    do: raise("captured-origin callee not reached: #{inspect(target)}")
+  defp capture_path([], _, _, _, _, _), do: []
+
+  defp capture_branch(0, _, _, _, _, _), do: []
+
+  defp capture_branch(label, regs, labels, target, argument, seen) do
+    if MapSet.member?(seen, label), do: raise("cyclic captured-origin control flow")
+
+    capture_path(
+      Map.fetch!(labels, label),
+      regs,
+      labels,
+      target,
+      argument,
+      MapSet.put(seen, label)
+    )
+  end
 
   defp capture_step({:move, from, to}, regs),
     do: Map.put(regs, register(to), Map.get(regs, register(from), :not_environment))
@@ -173,6 +202,24 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
 
   defp capture_step({:get_tuple_element, _, _, to}, regs),
     do: Map.put(regs, register(to), :not_environment)
+
+  defp capture_step({:put_tuple2, to, _}, regs),
+    do: Map.put(regs, register(to), :not_environment)
+
+  defp capture_step({:trim, count, remaining}, regs) do
+    regs
+    |> Enum.flat_map(fn
+      {{:y, index}, value} when index >= count and index < count + remaining ->
+        [{{:y, index - count}, value}]
+
+      {{:y, _}, _} ->
+        []
+
+      entry ->
+        [entry]
+    end)
+    |> Map.new()
+  end
 
   defp capture_step({:init, to}, regs),
     do: Map.put(regs, register(to), :not_environment)

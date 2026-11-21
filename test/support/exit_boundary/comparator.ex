@@ -2202,7 +2202,9 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         _ -> :undeclared_column
       end)
 
-    if names == Registry.database_statements().claim.columns do
+    claim_columns = Registry.database_statements().claim.columns
+
+    if names in [claim_columns, claim_columns ++ ["encoded_response", "outcome"]] do
       Enum.find_value(columns, fn
         {:data_column, _, _, _, "state", _, _, _, _, value} -> value
         _ -> nil
@@ -2536,6 +2538,9 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
        do: path in [[:event, 2, 2, 0], [:event, 3]]
 
   defp scalar_uuid?(%{mfa: {AshOnetime.Store.Postgres, :insert_payload, 4}}, [:event, 2, 2, 2]),
+    do: true
+
+  defp scalar_uuid?(%{mfa: {AshOnetime.Store.Postgres, :caller_lock_mode, 1}}, [:event, 2, 2, 0]),
     do: true
 
   defp scalar_uuid?(%{mfa: {AshOnetime.Admission, :valid_uuid?, 1}}, [:event, 2, 2, 0]), do: true
