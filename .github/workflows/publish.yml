@@ -31,7 +31,6 @@ jobs:
       published_commit: ${{ steps.read-back.outputs.published_commit }}
       elixir: ${{ steps.toolchain.outputs.elixir }}
       otp: ${{ steps.toolchain.outputs.otp }}
-      postgres_image: ${{ steps.toolchain.outputs.postgres_image }}
       postgres_client: ${{ steps.toolchain.outputs.postgres_client }}
       pgdg_key: ${{ steps.toolchain.outputs.pgdg_key }}
     env:
@@ -145,21 +144,6 @@ jobs:
     timeout-minutes: 90 # no green run yet
     permissions:
       contents: read
-    services:
-      postgres:
-        image: ${{ needs.publish.outputs.postgres_image }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ash_onetime_test
-        ports:
-          - 18841:5432
-        options: >-
-          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-published
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     env:
       DATABASE_URL: "ecto://postgres:postgres@127.0.0.1:18841/ash_onetime_test"
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-published"
@@ -171,6 +155,8 @@ jobs:
         if: needs.publish.outputs.ready == 'true'
         with:
           persist-credentials: false
+      - uses: ./.github/actions/postgres
+        if: needs.publish.outputs.ready == 'true'
       - uses: ./.github/actions/postgres-client
         if: needs.publish.outputs.ready == 'true'
         with:
@@ -208,3 +194,7 @@ jobs:
       - name: Execute published Livebook source cells
         if: needs.publish.outputs.ready == 'true'
         run: elixir scripts/check_livebooks.exs --published
+      - uses: ./.github/actions/postgres
+        if: always() && needs.publish.outputs.ready == 'true'
+        with:
+          mode: stop

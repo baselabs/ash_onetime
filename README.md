@@ -173,15 +173,11 @@ Optional integrations remain excluded from this package's runtime applications.
 
 ## Development
 
-Point `.env` at a PostgreSQL 18 you run (the repository ships no database container)
-as documented in [CONTRIBUTING.md](CONTRIBUTING.md), then:
-
-```sh
-cp .env.example .env   # set PGPORT and DATABASE_URL's port to your server's port
-set -a && . ./.env && set +a
-mix deps.get
-mix test
-```
+Push a work branch to run `Work` on GitHub's hosted Ubuntu runners. Every database job
+starts the checked platform PostgreSQL engine through the shared action, including its
+dedicated logical server when needed. Compile, tests, format, docs and type checks run
+there; agents never run them on a workstation. The engine startup and environment contract
+are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete gate battery and
 [usage-rules.md](usage-rules.md) for non-negotiable integration boundaries.

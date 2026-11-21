@@ -23,7 +23,9 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: ./.github/actions/logical-postgres
+    - uses: ./.github/actions/postgres
+      with:
+        logical: true
 
     - name: Refuse an unknown cache input
       shell: bash
@@ -87,7 +89,8 @@ runs:
       shell: bash
       run: MIX_ENV='test' mix run scripts/check_optional_matrix.exs
 
-    - uses: ./.github/actions/logical-postgres
+    - uses: ./.github/actions/postgres
       if: always()
       with:
         mode: stop
+        logical: true

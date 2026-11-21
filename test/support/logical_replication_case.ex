@@ -273,7 +273,11 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
     uri = URI.parse(c.pub.url)
 
     connection =
-      "host=127.0.0.1 port=#{scalar(c.pub.admin, "SHOW port")} user=postgres password=postgres dbname=#{String.trim_leading(uri.path, "/")}"
+      URI.to_string(%{
+        uri
+        | scheme: "postgresql",
+          port: String.to_integer(scalar(c.pub.admin, "SHOW port"))
+      })
 
     repo = Map.fetch!(c.subscription_repos, role)
     run_as_owner = Keyword.get(options, :run_as_owner, false)
@@ -281,7 +285,8 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
     SQL.query!(
       repo,
       "CREATE SUBSCRIPTION #{q(c.subscription)} CONNECTION #{literal(connection)} PUBLICATION ao_publication WITH (create_slot=false,slot_name=#{literal(c.slot)},copy_data=false,run_as_owner=#{run_as_owner},disable_on_error=true)",
-      []
+      [],
+      log: false
     )
 
     eventually!(fn ->

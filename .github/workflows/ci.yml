@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 # Tests require the dedicated loopback ash_onetime_test database as postgres.
-# Use non-default port 18841 for the PostgreSQL service.
+# The shared postgres action publishes the platform engine on loopback port 18841.
 # Observer connections use the Repo URL. Each job's PostgreSQL is its own superuser
 # container, so the privileged operation-hold tests run against it rather than skipping.
 env:
@@ -28,7 +28,7 @@ env:
 jobs:
   # .tool-versions lists defaults first, followed by the compatibility pairs.
   # mix.exs owns the Ash security floor used by the compatibility matrix.
-  # .github/service-pins owns the PostgreSQL server image digest and client version.
+  # .github/postgres.ref owns the platform engine; .github/service-pins owns client pins.
   toolchain:
     name: Read suite toolchains
     runs-on: ubuntu-24.04
@@ -39,7 +39,6 @@ jobs:
       otp: ${{ steps.versions.outputs.otp }}
       beam_lanes: ${{ steps.versions.outputs.beam_lanes }}
       ash_floor: ${{ steps.versions.outputs.ash_floor }}
-      postgres_image: ${{ steps.versions.outputs.postgres_image }}
       postgres_client: ${{ steps.versions.outputs.postgres_client }}
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
       mutation_shards: ${{ steps.versions.outputs.mutation_shards }}
@@ -65,22 +64,6 @@ jobs:
         # Latest: the floating requirement, locked in mix.lock; the release gates' currency
         # check keeps that lock at the newest Ash 3.x.
         ash: ${{ fromJSON(format('["{0}","latest"]', needs.toolchain.outputs.ash_floor)) }}
-
-    services:
-      postgres:
-        image: ${{ needs.toolchain.outputs.postgres_image }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ash_onetime_test
-        ports:
-          - 18841:5432
-        options: >-
-          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-compat-${{ strategy.job-index }}
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     env:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-compat-${{ strategy.job-index }}"
@@ -108,22 +91,6 @@ jobs:
     # about as long. The docs build these gates now add has no run of its own here; allow
     # about 2 min. About twice 19 1/2 min; measured again on its first cold green run.
     timeout-minutes: 40
-
-    services:
-      postgres:
-        image: ${{ needs.toolchain.outputs.postgres_image }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ash_onetime_test
-        ports:
-          - 18841:5432
-        options: >-
-          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-release
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     env:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-release"
@@ -155,22 +122,6 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.toolchain.outputs.mutation_shards) }}
 
-    services:
-      postgres:
-        image: ${{ needs.toolchain.outputs.postgres_image }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ash_onetime_test
-        ports:
-          - 18841:5432
-        options: >-
-          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-mutations-${{ strategy.job-index }}
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     env:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-mutations-${{ strategy.job-index }}"
 
@@ -199,22 +150,6 @@ jobs:
         # With no second toolchain in .tool-versions the job still runs, as one cell that
         # checks nothing and succeeds, so every result its verdict reads is a success.
         include: ${{ fromJSON(needs.toolchain.outputs.beam_lanes != '[]' && needs.toolchain.outputs.beam_lanes || '[{"elixir":"","otp":""}]') }}
-
-    services:
-      postgres:
-        image: ${{ needs.toolchain.outputs.postgres_image }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ash_onetime_test
-        ports:
-          - 18841:5432
-        options: >-
-          --hostname ao-${{ github.run_id }}-${{ github.run_attempt }}-lane-${{ strategy.job-index }}
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     env:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-lane-${{ strategy.job-index }}"

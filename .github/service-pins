@@ -1,9 +1,5 @@
-# The PostgreSQL the CI jobs run against: server image, client tools and the key that
-# signs the client's apt repository. The toolchain action reads this file; workflows and
-# actions take each value from its outputs. Move the image and client together.
-#
-# PostgreSQL 18.7 server: the postgres:18.7-trixie tag, kept for the reader, pinned by its multi-arch index digest.
-postgres_image=postgres:18.7-trixie@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
+# Runner client tools and PGDG signing key. The platform server is in .github/postgres.ref.
+# The client major must match the engine; client patch releases may advance independently.
 # PostgreSQL 18.7 client tools (psql, pg_dump, pg_restore): PGDG package for Ubuntu 24.04.
 postgres_client=18.7-1.pgdg24.04+2
 # PGDG apt repository signing key, https://www.postgresql.org/media/keys/ACCC4CF8.asc
