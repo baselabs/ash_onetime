@@ -172,7 +172,6 @@ for partitioning <- [nil, 2] do
                  "SELECT count(*) FROM #{rel(c, "ash_onetime_effect_outcomes")}",
                  []
                )
-
     end
   end
 end

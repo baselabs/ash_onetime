@@ -3618,7 +3618,8 @@ defmodule AshOnetime.MutationCheck do
       path: "lib/ash_onetime/telemetry.ex",
       original:
         "cleanup: [\n      :responses_expired,\n      :claims_deleted,\n      :partitions_dropped,\n      :partitions_created,\n      :partitions_kept\n    ]",
-      mutated: "cleanup: [\n      :responses_expired,\n      :claims_deleted,\n      :partitions_dropped,\n      :partitions_kept\n    ]",
+      mutated:
+        "cleanup: [\n      :responses_expired,\n      :claims_deleted,\n      :partitions_dropped,\n      :partitions_kept\n    ]",
       test: "test/ash_onetime/store/partition_test.exs",
       tag: "partitions_created_telemetry_mutation",
       test_name:
@@ -9324,7 +9325,8 @@ defmodule AshOnetime.MutationCheck do
                  mutated: "",
                  test: "test/ash_onetime/telemetry_test.exs",
                  tag: "review_telemetry_classes",
-                 test_name: "external_recovery emits the outcome_unrecorded class to attached handlers",
+                 test_name:
+                   "external_recovery emits the outcome_unrecorded class to attached handlers",
                  assertion: "assert :ok = result",
                  assertion_line: 124
                }
@@ -9408,7 +9410,8 @@ defmodule AshOnetime.MutationCheck do
                "external-journal-restore-grants" => %{
                  path: "priv/templates/migrations/external_state.exs",
                  original: "SELECT g AS value FROM jsonb_array_elements(item->'acl') g",
-                 mutated: "SELECT g AS value FROM jsonb_array_elements(item->'acl') g WHERE false",
+                 mutated:
+                   "SELECT g AS value FROM jsonb_array_elements(item->'acl') g WHERE false",
                  test: "test/ash_onetime/external_state/review_upgrade_test.exs",
                  tag: "external_state_review_upgrade",
                  test_name: "plain: rollback restores every prior routine definition and grant",
@@ -9942,7 +9945,8 @@ defmodule AshOnetime.MutationCheck do
                  mutated: "owner_only := owner_only;",
                  test: "test/ash_onetime/external_state/review_acl_test.exs",
                  tag: "external_state_review_journal_acl",
-                 test_name: "plain: reset ACL keeps the rollback journal owner-only in every mode",
+                 test_name:
+                   "plain: reset ACL keeps the rollback journal owner-only in every mode",
                  assertion: "refute scalar",
                  assertion_line: 34,
                  required_failures: [
@@ -9953,7 +9957,8 @@ defmodule AshOnetime.MutationCheck do
                      assertion_line: 34
                    },
                    %{
-                     test_name: "2: reset ACL keeps the rollback journal owner-only in every mode",
+                     test_name:
+                       "2: reset ACL keeps the rollback journal owner-only in every mode",
                      assertion: "refute scalar",
                      assertion_line: 34
                    }

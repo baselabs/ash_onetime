@@ -489,7 +489,7 @@ defmodule Mix.Tasks.AshOnetime.Doctor do
       {Map.get(facts, :operation_hold, false),
        "operation-hold column, validated check, indexes, and functions current"},
       {Map.get(facts, :external_state, false),
-       "external-state columns, checks and outcome relation current"},
+       "external-state columns, checks, outcome relation and rollback journal current"},
       {facts.payload_table, "ash_onetime_response_payloads table present"},
       {facts.default_partition, "ash_onetime_response_payloads_default partition present"},
       {MapSet.new(facts.functions) == MapSet.new(@expected_functions),

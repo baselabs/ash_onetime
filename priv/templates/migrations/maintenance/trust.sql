@@ -259,7 +259,7 @@ BEGIN
   -- login: holder-owned views and routines with definer authority can expose it.
   -- Predefined roles count when any subject has membership, including ADMIN
   -- without INHERIT or SET (an administrator can grant itself SET).
-  -- Root DML is allowed; children and the maintenance ledger are owner-only,
+  -- Root DML is allowed; ordinary children and other package relations are owner-only,
   -- matching reset_acl. Replica mode bypasses ORIGIN and RI triggers; package
   -- ALWAYS guards still enforce their owner-SET admission and origin rules.
   WITH RECURSIVE scheduled(oid) AS (
