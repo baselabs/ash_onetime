@@ -2028,24 +2028,6 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       else: derived_operation(a, b, state, path)
   end
 
-  # The observation query exposes optional physical outcome-key columns through
-  # to_jsonb. Ground their absence in the independently captured complete rows,
-  # not in the NULL value being checked. Hash-layout rows retain O2a binding.
-  defp plain_outcome_projection?(state) do
-    Enum.all?([:run, :twin], fn side ->
-      database = elem(state.databases, if(side == :run, do: 0, else: 1))
-      table = database.statements.outcome.table
-      before = Map.get(state[side], :before, %{})
-
-      rows =
-        Map.get(before, table, []) ++
-          Map.get(state[side].delta, table, %{added: []}).added
-
-      current_sql(state, side) == database.outcome_probe_sql and rows != [] and
-        Enum.all?(rows, &(not Map.has_key?(&1, "operation_hash")))
-    end)
-  end
-
   defp column_value({:uuid, a}, {:uuid, b}, _name, state, path),
     do: uuid_identity(a, b, state, path)
 
@@ -2068,6 +2050,24 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          )
 
   defp column_value(a, b, _name, state, path), do: term(a, b, state, path)
+
+  # The observation query exposes optional physical outcome-key columns through
+  # to_jsonb. Ground their absence in the independently captured complete rows,
+  # not in the NULL value being checked. Hash-layout rows retain O2a binding.
+  defp plain_outcome_projection?(state) do
+    Enum.all?([:run, :twin], fn side ->
+      database = elem(state.databases, if(side == :run, do: 0, else: 1))
+      table = database.statements.outcome.table
+      before = Map.get(state[side], :before, %{})
+
+      rows =
+        Map.get(before, table, []) ++
+          Map.get(state[side].delta, table, %{added: []}).added
+
+      current_sql(state, side) == database.outcome_probe_sql and rows != [] and
+        Enum.all?(rows, &(not Map.has_key?(&1, "operation_hash")))
+    end)
+  end
 
   defp database_date_copy(value, side, state, path) do
     list_path =

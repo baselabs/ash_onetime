@@ -439,7 +439,8 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
         } ->
           true
 
-        _ -> false
+        _ ->
+          false
       end)
 
     unless is_integer(insert) and is_integer(failure) and insert < failure,
