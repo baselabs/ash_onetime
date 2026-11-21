@@ -132,9 +132,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
             end
 
           send(observer, {tag, binding})
-          {protocol, checked, other}
+          {protocol, checked, other, binding}
         end,
-        fn {protocol, binding, other} ->
+        fn {protocol, binding, other, _family} ->
           try do
             errors = ConnectionTls.validate(binding)
             execute(protocol, :single, if(corruption == :byte, do: :byte))
@@ -143,7 +143,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
             if other, do: :ok = :ssl.close(elem(other.sock, 1))
           end
         end,
-        %{host: [], callbacks: []}
+        %{
+          host: [],
+          callbacks: [],
+          preexisting: fn {_protocol, _binding, _other, family} -> [family.owner, family.sender] end
+        }
       )
 
     receive do

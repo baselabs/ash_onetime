@@ -19,7 +19,16 @@ defmodule AshOnetime.Test.ExitBoundary do
     # `result` is what the boundary function returned to the root; `residue` the count of
     # delivery entries left in the root's dictionary; `events` the annotated snapshot;
     # `snapshot` the raw drained snapshot (its ledger and its process set).
-    defstruct [:result, :residue, :events, :snapshot, :fixture, :backtrace_depth, :pattern_probe]
+    defstruct [
+      :result,
+      :residue,
+      :events,
+      :snapshot,
+      :fixture,
+      :backtrace_depth,
+      :pattern_probe,
+      :initial_state
+    ]
   end
 
   @doc """
@@ -35,8 +44,9 @@ defmodule AshOnetime.Test.ExitBoundary do
     {root, monitor} = spawn_monitor(fn -> Root.start(test) end)
 
     try do
-      send(root, {:setup, test, setup, invoke, control})
-      await_ready(root, monitor)
+      preexisting = Map.get(spec, :preexisting, fn _state -> [] end)
+      send(root, {:setup, test, setup, invoke, control, preexisting})
+      {initial_state, preexisting} = await_ready(root, monitor)
 
       frames = Capture.frames(spec.host, spec.callbacks) ++ Map.get(spec, :frames, [])
 
@@ -46,14 +56,14 @@ defmodule AshOnetime.Test.ExitBoundary do
       probe =
         if Map.get(spec, :compare_pure?, false) do
           probe = Collector.start(frames, @deadline, include_pure?: true, passive?: true)
-          :ok = Collector.arm(probe, root)
+          :ok = Collector.arm(probe, root, preexisting)
           probe
         end
 
       collector =
         Collector.start(frames, @deadline, include_pure?: Map.get(spec, :include_pure?, false))
 
-      :ok = Collector.arm(collector, root)
+      :ok = Collector.arm(collector, root, preexisting)
       {result, :post_drain} = await_result(root, monitor)
 
       case Collector.snapshot(collector, @deadline) do
@@ -76,6 +86,7 @@ defmodule AshOnetime.Test.ExitBoundary do
             events: Capture.annotate(snapshot, spec),
             snapshot: snapshot,
             pattern_probe: pattern_probe,
+            initial_state: initial_state,
             fixture: %{control: control, observer: test, collector: collector}
           }
 
@@ -92,8 +103,8 @@ defmodule AshOnetime.Test.ExitBoundary do
 
   defp await_ready(root, monitor) do
     receive do
-      {:root_ready, ^root} ->
-        :ok
+      {:root_ready, ^root, state, preexisting} ->
+        {state, preexisting}
 
       {:DOWN, ^monitor, :process, ^root, reason} ->
         IO.puts("ROOT_SETUP_EXIT: " <> Diagnostics.render(Diagnostics.exit_summary(reason)))

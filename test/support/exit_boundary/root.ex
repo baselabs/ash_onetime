@@ -14,9 +14,9 @@ defmodule AshOnetime.Test.ExitBoundary.Root do
 
   def start(test) do
     receive do
-      {:setup, ^test, setup, invoke, control} ->
+      {:setup, ^test, setup, invoke, control, preexisting} ->
         state = setup.()
-        send(test, {:root_ready, self()})
+        send(test, {:root_ready, self(), state, preexisting.(state)})
 
         receive do
           {:go, collector} ->

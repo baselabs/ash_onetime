@@ -11,6 +11,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias AshOnetime.Test.ExitBoundary.ConnectionNative
   alias AshOnetime.Test.ExitBoundary.ConnectionProtocol
   alias AshOnetime.Test.ExitBoundary.ConnectionReads
+  alias AshOnetime.Test.ExitBoundary.ConnectionStates
   alias AshOnetime.Test.ExitBoundary.ConnectionTls
   alias AshOnetime.Test.ExitBoundary.ContextCopies
   alias AshOnetime.Test.ExitBoundary.DatabaseOrigins
@@ -404,11 +405,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert decoders.errors == []
 
       states =
-        AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+        ConnectionStates.build(
           %{events: events},
           captured.native,
           decoders,
-          captured.historical
+          captured.historical,
+          {:initial, captured.initial}
         )
 
       assert states.errors == []
@@ -517,11 +519,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     captured = cached_decoders(:state_copy)
 
     rejected =
-      AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+      ConnectionStates.build(
         %{events: captured.events},
         captured.native,
         captured.decoders,
-        captured.historical
+        captured.historical,
+        {:initial, captured.initial}
       )
 
     assert Enum.map(rejected.errors, & &1.rule) == [:state_input_copy]
@@ -533,11 +536,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     for mutant <- [:stream_length, :stream_timeout, :stream_required, :stream_state_copy] do
       checked =
         ComparatorMutants.with_mutant(mutant, fn ->
-          AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+          ConnectionStates.build(
             %{events: captured.events},
             captured.native,
             captured.decoders,
-            captured.historical
+            captured.historical,
+            {:initial, captured.initial}
           )
         end)
 
@@ -546,11 +550,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
 
     assert Enum.map(
-             AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+             ConnectionStates.build(
                %{events: captured.events},
                captured.native,
                captured.decoders,
-               captured.historical
+               captured.historical,
+               {:initial, captured.initial}
              ).errors,
              & &1.rule
            ) == [:state_input_copy]
@@ -558,11 +563,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     restored = cached_decoders(nil)
 
     accepted =
-      AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+      ConnectionStates.build(
         %{events: restored.events},
         restored.native,
         restored.decoders,
-        restored.historical
+        restored.historical,
+        {:initial, restored.initial}
       )
 
     assert accepted.errors == []
@@ -579,11 +585,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     for mutant <- [:stream_state_copy, :stream_state_holder_update] do
       checked =
         ComparatorMutants.with_mutant(mutant, fn ->
-          AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+          ConnectionStates.build(
             %{events: captured.events},
             captured.native,
             captured.decoders,
-            captured.historical
+            captured.historical,
+            {:initial, captured.initial}
           )
         end)
 
@@ -617,15 +624,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert decoders.errors == []
 
     states =
-      AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+      ConnectionStates.build(
         %{events: events},
         native,
         decoders,
         run.native_history
       )
 
-    {%{events: events, native: native, decoders: decoders, historical: run.native_history},
-     states}
+    {%{
+       events: events,
+       native: native,
+       decoders: decoders,
+       historical: run.native_history,
+       initial: run.initial_state
+     }, states}
   end
 
   @tag :connection_streams
@@ -717,7 +729,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       events: indexed,
       native: native,
       streams: streams,
-      historical: historical
+      historical: historical,
+      initial: run.initial_state
     }
   end
 

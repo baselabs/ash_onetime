@@ -272,8 +272,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         )
       end)
 
-    rconnections = connection_streams(raw_ri, run.historical, readback.claimed)
-    tconnections = connection_streams(raw_ti, twin.historical, MapSet.new())
+    rconnections = connection_streams(raw_ri, run.historical, readback.claimed, run.run.initial_state)
+    tconnections = connection_streams(raw_ti, twin.historical, MapSet.new(), twin.run.initial_state)
 
     state =
       Enum.reduce(
@@ -395,7 +395,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     }
   end
 
-  defp connection_streams(indexed, historical, readback) do
+  defp connection_streams(indexed, historical, readback, initial_state) do
     native = NativeTransport.build(indexed, historical.connections)
     reads = ConnectionReads.build(native, readback, historical.prepared_catalogs)
 
@@ -408,7 +408,14 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         historical.query_origins
       )
 
-    states = ConnectionStates.build(indexed, native, decoders, historical.connections)
+    states =
+      ConnectionStates.build(
+        indexed,
+        native,
+        decoders,
+        historical.connections,
+        {:initial, initial_state}
+      )
 
     errors =
       Enum.map(native.errors ++ reads.errors ++ decoders.errors ++ states.errors, fn

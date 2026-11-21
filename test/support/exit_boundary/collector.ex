@@ -57,8 +57,8 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   end
 
   @doc "Arms the root (traced before release) and releases it."
-  def arm(collector, root) do
-    send(collector, {:arm, self(), root})
+  def arm(collector, root, preexisting \\ []) do
+    send(collector, {:arm, self(), root, preexisting})
 
     receive do
       {:armed, ^collector} -> :ok
@@ -84,11 +84,16 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       send(test, {:collector_ready, self()})
 
       receive do
-        {:arm, ^test, root} ->
-          1 = :trace.process(session, root, true, @flags)
+        {:arm, ^test, root, preexisting} ->
+          pids = MapSet.new([root | preexisting])
+
+          for pid <- pids do
+            1 = :trace.process(session, pid, true, @flags)
+            Process.monitor(pid)
+          end
+
           :trace.port(session, :new, true, [:ports | @port_flags])
           :trace.port(session, :existing, true, @port_flags)
-          Process.monitor(root)
           send(test, {:armed, self()})
           unless Keyword.get(options, :passive?, false), do: send(root, {:go, self()})
 
@@ -97,7 +102,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
             test: test,
             root: root,
             events: [],
-            pids: MapSet.new([root]),
+            pids: pids,
             down: MapSet.new(),
             opened: MapSet.new(),
             closed: MapSet.new(),

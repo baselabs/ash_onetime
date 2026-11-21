@@ -1,5 +1,6 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   @moduledoc false
+  alias AshOnetime.Test.ExitBoundary.Root
   import Postgrex.Messages,
     only: [msg_ready: 1, msg_parameter: 1, msg_notice: 1, msg_notify: 1]
 
@@ -45,7 +46,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   # An owner version is a native return, or the pre-observation holder state.
   # Copies must bind to that version before a buffer can leave exact comparison.
   # This ledger grants no event allowance or projection.
-  def build(indexed, native, decoders, historical) do
+  def build(indexed, native, decoders, historical, fixture \\ :unavailable) do
     holders =
       for {holder, %{protocol: protocol}} <- historical, into: %{} do
         {holder, %{origin: {:historical, holder}, protocol: protocol, holder: holder}}
@@ -67,10 +68,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       pairs: native.pairs,
       returns: Map.new(native.pairs, fn {_index, pair} -> {pair.returned.index, pair} end),
       decoders: decoders,
-      native: native
+      native: native,
+      fixture: fixture
     }
 
     state = Enum.reduce(indexed.events, initial, &event/2)
+    state = unbound_copies(state, indexed)
 
     %{
       versions: Enum.reverse(state.versions),
@@ -79,11 +82,45 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     }
   end
 
+  defp unbound_copies(state, indexed) do
+    covered = MapSet.new(state.copies, &{&1.index, &1.path})
+    sources = Map.new(indexed.events, &{&1.index, &1})
+
+    Enum.reduce(state.decoders.protocol_copies, state, fn copy, state ->
+      if MapSet.member?(covered, {copy.index, copy.path}) do
+        state
+      else
+        source = Map.fetch!(sources, copy.index)
+        state = failure(state, source, :state_copy_origin)
+        [error | errors] = state.errors
+        %{state | errors: [Map.put(error, :path, copy.path) | errors]}
+      end
+    end)
+  end
+
   defp event(source, state) do
     state = commit(source, state)
     state = holder_event(source, state)
+    state = fixture_event(source, state)
     callback_event(source, state)
   end
+
+  defp fixture_event(
+         %{event: {_, :call, {Root, :invoke, [_invoke, initial]}}} = source,
+         %{fixture: {:initial, expected}} = state
+       ) do
+    state = exact(state, source, :state_fixture_copy, initial, expected)
+
+    Enum.reduce(state.decoders.protocol_copies, state, fn
+      %{index: index, path: [2, 2, 1 | path] = coordinate}, state when index == source.index ->
+        copy(state, source, coordinate, %{origin: {:fixture_initial, path}})
+
+      _, state ->
+        state
+    end)
+  end
+
+  defp fixture_event(_source, state), do: state
 
   defp holder_event(
          %{event: {pid, :return_from, {:ets, :lookup, 2}, [row]}} = source,
@@ -127,27 +164,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          state
        ) do
     if Map.has_key?(state.holders, holder) do
-      listed? = is_list(updates)
-      updates = if listed?, do: updates, else: [updates]
-
-      Enum.reduce(Enum.with_index(updates), state, fn
-        {{4, %Postgrex.Protocol{} = protocol}, ordinal}, state ->
-          path =
-            if listed?,
-              do: [2, 2, 2, ordinal, 1],
-              else: [2, 2, 2, 1]
-
-          store(state, source, pid, holder, protocol, path)
-
-        _, state ->
-          state
-      end)
+      state_updates(state, source, pid, holder, updates)
     else
       state
     end
   end
 
   defp holder_event(_source, state), do: state
+
+  defp state_updates(state, source, pid, holder, updates) do
+    listed? = is_list(updates)
+    updates = if listed?, do: updates, else: [updates]
+
+    Enum.reduce(Enum.with_index(updates), state, fn
+      {{4, %Postgrex.Protocol{} = protocol}, ordinal}, state ->
+        path =
+          if listed?,
+            do: [2, 2, 2, ordinal, 1],
+            else: [2, 2, 2, 1]
+
+        store(state, source, pid, holder, protocol, path)
+
+      _, state ->
+        state
+    end)
+  end
 
   defp store(state, source, pid, holder, protocol, path) do
     case {Map.get(state.completed, pid), Map.get(state.pairs, source.index)} do
@@ -245,32 +286,33 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         state = %{state | versions: [version | state.versions]}
         state = copy(state, source, path, version)
 
-        case rest do
-          [] ->
-            state
-            |> put_in([:ports, protocol.sock], version)
-            |> put_in([:completed, source.pid], version)
-
-          [parent | outer] ->
-            if function in @copies do
-              state
-            else
-              parsed? = function in [:parse_describe_flush, :close_parse_describe_flush]
-
-              parent = %{
-                parent
-                | current: protocol,
-                  owner: version,
-                  parsed?: parent.parsed? or parsed?
-              }
-
-              put_in(state.frames[source.pid], [parent | outer])
-            end
-        end
+        advance_owner(state, source.pid, function, version, rest)
 
       nil ->
         state
     end
+  end
+
+  defp advance_owner(state, pid, _function, version, []) do
+    state
+    |> put_in([:ports, version.protocol.sock], version)
+    |> put_in([:completed, pid], version)
+  end
+
+  defp advance_owner(state, _pid, function, _version, _rest) when function in @copies,
+    do: state
+
+  defp advance_owner(state, pid, function, version, [parent | outer]) do
+    parsed? = function in [:parse_describe_flush, :close_parse_describe_flush]
+
+    parent = %{
+      parent
+      | current: version.protocol,
+        owner: version,
+        parsed?: parent.parsed? or parsed?
+    }
+
+    put_in(state.frames[pid], [parent | outer])
   end
 
   defp returned_protocol(:handle_msg, %Postgrex.Protocol{} = protocol),
