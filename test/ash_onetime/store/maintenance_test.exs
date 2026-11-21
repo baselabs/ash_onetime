@@ -4187,6 +4187,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
     try do
       assert :ok =
                Ecto.Migrator.up(Repo, 20_261_114_000_002, module, prefix: c.schema, log: false)
+
       callback.()
     after
       Repo.put_dynamic_repo(previous)

@@ -493,6 +493,37 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: callback inputs bind to their actual owner state" do
+    captured = cached_decoders(:state_copy)
+
+    rejected =
+      AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+        %{events: captured.events},
+        captured.native,
+        captured.decoders,
+        captured.historical
+      )
+
+    assert Enum.map(rejected.errors, & &1.rule) == [:state_input_copy]
+    [failure] = rejected.errors
+    source = Enum.fetch!(captured.events, failure.index)
+    assert source.mfa == {Postgrex.Protocol, :handle_execute, 4}
+    assert elem(source.event, 1) == :call
+
+    restored = cached_decoders(nil)
+
+    accepted =
+      AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+        %{events: restored.events},
+        restored.native,
+        restored.decoders,
+        restored.historical
+      )
+
+    assert accepted.errors == []
+  end
+
+  @tag :connection_streams
   test "Connection streams: cached query copies are independently bound" do
     captured = cached_decoders(:query_copy)
     assert Enum.map(captured.decoders.errors, & &1.rule) == [:decoder_query_copy]
