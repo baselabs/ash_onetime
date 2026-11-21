@@ -14,6 +14,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       cursors: historical_cursors(historical),
       pending_cursors: %{},
       versions: [],
+      timeline: [],
       descriptors: Map.merge(historical_descriptors(historical), owner_descriptors(origins)),
       executing: %{},
       instances: [],
@@ -31,6 +32,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     %{
       instances: Enum.reverse(state.instances),
       versions: Enum.reverse(state.versions),
+      timeline: Enum.reverse(state.timeline),
       protocol_copies: protocol_copies(indexed, historical),
       replays: Enum.reverse(state.replays),
       errors: Enum.reverse(state.errors)
@@ -185,6 +187,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
         |> Map.put(:pending_cursors, pending)
         |> put_in([:cursors, port], cursor)
         |> Map.update!(:versions, &[version | &1])
+        |> Map.update!(:timeline, &[Map.put(version, :kind, :decoder_return) | &1])
     end
   end
 
@@ -200,7 +203,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
         }
 
         cursor = %{cursor | buffer: cursor.buffer <> bytes, spans: cursor.spans ++ [span]}
-        put_in(state.cursors[port], cursor)
+        version = %{index: source.index, port: port, cursor: cursor, kind: :native_delivery}
+
+        state
+        |> put_in([:cursors, port], cursor)
+        |> Map.update!(:timeline, &[version | &1])
 
       :error ->
         failure(state, source, :decoder_history, false)

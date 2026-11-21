@@ -20,27 +20,20 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
       # The first real path prepares Ecto/Postgrex's query cache. U11 measures
       # repeated execution on that prepared substrate; each observation still
       # captures its actual historical cache and compares every generated origin.
+      IO.puts("U9_OBSERVATION: warmup")
       warm = Scenarios.observe(row, values, context)
       warm_result = Comparator.compare(warm)
-
-      if first = List.first(warm_result.errors) do
-        IO.puts(
-          "U9_NATIVE_WARM_FIRST_DIVERGENCE" <>
-            ": " <>
-            Diagnostics.render(%{path: unquote(name), first: Diagnostics.safe(first)},
-              pretty: true,
-              limit: :infinity
-            )
-        )
-      end
+      log_divergences(warm_result.errors, row)
 
       assert warm_result.errors == [], "U9 path preparation must compare green"
       started = System.monotonic_time(:millisecond)
 
       profiles =
         for repetition <- 1..20 do
+          IO.puts("U9_OBSERVATION: repetition #{repetition}")
           pair = Scenarios.observe(row, values, context)
           result = Comparator.compare(pair)
+          log_divergences(result.errors, row)
           locations = Enum.map(result.errors, &{&1.at, &1.rule, &1.path})
           assert locations == [], "U9 repetition #{repetition}: #{Diagnostics.render(locations)}"
 
@@ -91,6 +84,25 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
               seconds: (System.monotonic_time(:millisecond) - started) / 1000
             },
             pretty: true
+          )
+      )
+    end
+  end
+
+  defp log_divergences(errors, row) do
+    for difference <- errors do
+      IO.puts(
+        "U9_NATIVE_RESIDUAL_OCCURRENCE: " <>
+          Diagnostics.render(
+            %{
+              row: row,
+              tuple: :va,
+              source: Diagnostics.location(difference),
+              difference: Diagnostics.safe(difference)
+            },
+            pretty: true,
+            limit: :infinity,
+            printable_limit: :infinity
           )
       )
     end

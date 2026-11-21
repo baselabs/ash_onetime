@@ -72,7 +72,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp connection_workers?(binding) do
     children = :supervisor.which_children(binding.supervisor)
 
-    match?({:receiver, owner, :worker, _} when owner == binding.owner,
+    match?(
+      {:receiver, owner, :worker, _} when owner == binding.owner,
       List.keyfind(children, :receiver, 0)
     ) and List.keyfind(children, :sender, 0) == {:sender, binding.sender, :worker, [:tls_sender]}
   catch
