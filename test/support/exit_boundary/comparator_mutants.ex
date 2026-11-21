@@ -215,8 +215,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/clock_expressions.ex",
         original:
-          "        with {:ok, start} <- started(s, e.pid, AshOnetime.ExternalRecovery) do\n          {stop, _} = read(s, e.role, {:monotonic_time, :native})\n          {:ok, stop - start}\n        end\n",
-        mutated: "        {:ok, duration}\n"
+          "          with {:ok, start} <- started(s, e.pid, AshOnetime.ExternalRecovery) do\n            {stop, _} = read(s, e.role, {:monotonic_time, :native})\n            {:ok, stop - start}\n          end\n",
+        mutated: "          {:ok, duration}\n"
       }
     ]
   end

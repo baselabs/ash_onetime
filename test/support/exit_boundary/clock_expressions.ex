@@ -6,13 +6,15 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
     {AshOnetime.Admission, :reserve_committed, 3},
     {AshOnetime.Admission, :complete, 2},
     {AshOnetime.Admission, :key_component, 6},
-    {AshOnetime.ExternalRecovery, :reserve, 4}
+    {AshOnetime.ExternalRecovery, :reserve, 4},
+    {AshOnetime.Store.Postgres, :record_outcome_committed, 4}
   ]
 
   def build(indexed, side) do
     initial = %{
       pending: %{},
       active: %{},
+      outcome_workers: %{},
       reads: %{},
       slots: %{},
       errors: [],
@@ -101,6 +103,16 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
     check(s, e, [2, 3, 2], checkin, expected, :pool_checkin)
   end
 
+  defp event(%{event: {parent, :spawn, child, _}} = e, s) do
+    s =
+      case outcome_start(s, parent) do
+        {:ok, start} -> put_in(s.outcome_workers[child], start)
+        :error -> s
+      end
+
+    exits(e, s)
+  end
+
   defp event(e, s), do: exits(e, s)
 
   defp call(e, {DBConnection, :checkout, 3}, [_pool, meter, _opts], s) do
@@ -178,13 +190,19 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
   defp call(e, {AshOnetime.Telemetry, function, _}, [duration | _], s)
        when function in [:admission, :verification, :encoding, :replay, :external_recovery] do
     expected =
-      if function == :external_recovery do
-        with {:ok, start} <- started(s, e.pid, AshOnetime.ExternalRecovery) do
+      cond do
+        function == :external_recovery and Map.has_key?(s.outcome_workers, e.pid) ->
           {stop, _} = read(s, e.role, {:monotonic_time, :native})
-          {:ok, stop - start}
-        end
-      else
-        Map.fetch(s.durations, e.role)
+          {:ok, stop - Map.fetch!(s.outcome_workers, e.pid)}
+
+        function == :external_recovery ->
+          with {:ok, start} <- started(s, e.pid, AshOnetime.ExternalRecovery) do
+            {stop, _} = read(s, e.role, {:monotonic_time, :native})
+            {:ok, stop - start}
+          end
+
+        true ->
+          Map.fetch(s.durations, e.role)
       end
 
     s = check(s, e, [2, 2, 0], duration, expected, {:package_duration, function})
@@ -251,7 +269,8 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
         recover_processing: 5,
         execute_then_settle: 5,
         settle_unknown_execute: 5,
-        ambiguous_recovery: 1,
+        ambiguous_recovery: 2,
+        publish_outcome: 4,
         finalize: 4,
         lock_replay: 2,
         resolve_finalization_claim: 2
@@ -328,6 +347,23 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
        ) do
     s = check(s, e, [2, 2, 0, 3], ttl, Map.fetch(s.cache_ttls, key), :cache_ttl_copy)
     put_in(s.cache_calls[e.role], key)
+  end
+
+  defp call(e, {AshOnetime.Store.Postgres, function, _}, args, s) do
+    index =
+      case function do
+        :report_abandoned_outcome -> {:ok, 2}
+        :report_outcome_failure -> {:ok, 1}
+        _ -> outcome_capture(function)
+      end
+
+    case index do
+      {:ok, n} ->
+        check(s, e, [2, 2, n], Enum.at(args, n), outcome_start(s, e.pid), :outcome_start_copy)
+
+      :not_called ->
+        s
+    end
   end
 
   defp call(_e, _mfa, _args, s), do: s
@@ -678,6 +714,17 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
           s
       end
     else
+      s =
+        if info.module == AshOnetime.Store.Postgres do
+          case outcome_capture(info.name) do
+            {:ok, n} ->
+              check(s, e, path ++ [:function, :env, n], Enum.at(info.env, n), outcome_start(s, e.pid), :outcome_start_closure)
+            :not_called -> s
+          end
+        else
+          s
+        end
+
       cache_copies(info.env, path ++ [:function, :env], e, s)
     end
   end
@@ -769,6 +816,25 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
     Enum.reduce(expected, s, fn {field, value}, acc ->
       check(acc, e, path ++ [field], Map.get(actual, field), {:ok, value}, {token, field})
     end)
+  end
+
+  defp outcome_capture(function) do
+    if String.starts_with?(Atom.to_string(function), "-record_outcome_committed/4-fun-") do
+      AshOnetime.Test.ExitBoundary.Compiled.captured_argument(AshOnetime.Store.Postgres, function, :report_abandoned_outcome, 4, 2)
+    else
+      :not_called
+    end
+  end
+
+  defp outcome_start(s, pid) do
+    case Map.fetch(s.outcome_workers, pid) do
+      {:ok, _} = source -> source
+      :error ->
+        Enum.find_value(Map.get(s.active, pid, []), :error, fn frame ->
+          if frame.mfa == {AshOnetime.Store.Postgres, :record_outcome_committed, 4} and frame.started != nil,
+            do: {:ok, frame.started}
+        end)
+    end
   end
 
   defp started(s, pid, module \\ nil) do

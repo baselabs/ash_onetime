@@ -690,6 +690,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       tokens = for {_, {:database_expression, token}} <- prior.slots, do: token
       assert :outcome_clock in tokens
       assert :outcome_clock_copy in tokens
+      indexed = Origins.build(side.prior)
+      clocks = AshOnetime.Test.ExitBoundary.ClockExpressions.build(indexed, side.prior)
+      assert clocks.errors == []
+      clock_tokens = for {_, {_, token}} <- clocks.slots, do: token
+      assert :outcome_start_copy in clock_tokens
+      assert :outcome_start_closure in clock_tokens
 
       for row <- side.prior.delta["ash_onetime_effect_outcomes"].added do
         assert AshOnetime.Test.ExitBoundary.DatabaseOrigins.outcome_snapshot(row, prior) == row["recorded_at"]
