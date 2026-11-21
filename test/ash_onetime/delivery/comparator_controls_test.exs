@@ -301,6 +301,67 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            end)
   end
 
+  @tag :connection_streams
+  test "Connection streams: native active delivery changes back to passive mode" do
+    run = ConnectionNative.observe(:active)
+    assert run.result == :ok
+    streams = native_stream_chunks(%{run: run})
+    assert map_size(streams) == 1
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    native = NativeTransport.build(%{events: events})
+    assert native.errors == []
+    assert length(native.writes) == 1
+
+    delivered =
+      for %{event: {port, :send, {:tcp, port, bytes}, recipient}} <- events,
+          is_port(port),
+          do: {recipient, port, bytes}
+
+    assert [{recipient, port, bytes}] = delivered
+    assert byte_size(bytes) > 0
+    assert Enum.count(events, &(&1.event == {recipient, :receive, {:tcp, port, bytes}})) == 1
+
+    programs =
+      for %{event: {pid, :call, {:prim_inet, :setopts, [^port, [active: mode]]}}} = source <-
+            events do
+        assert mode in [:once, false]
+        %{returned: returned} = Map.fetch!(native.pairs, source.index)
+        own = Enum.filter(events, &(&1.index >= source.index and &1.index <= returned.index))
+        command = 0x03F1A300 + 7
+        code = if mode == :once, do: 2, else: 0
+        expected = <<22, code::32>>
+
+        controls =
+          for %{event: {^pid, :call, {:erts_internal, :port_control, [^port, ^command, data]}}} <-
+                own,
+              do: IO.iodata_to_binary(data)
+
+        assert controls == [expected]
+        calls = for event <- own, event.pid == pid, do: {elem(event.event, 1), event.mfa}
+        %{mode: mode, calls: calls}
+      end
+
+    assert Enum.map(programs, & &1.mode) == [:once, false]
+    IO.puts("CONNECTION_STREAM_ACTIVE_PROGRAMS: " <> inspect(programs, limit: :infinity))
+
+    for {_port, chunks} <- streams do
+      framing = Wire.frames(chunks)
+      assert framing.errors == []
+      protocol = ConnectionProtocol.build(framing.messages)
+      assert protocol.errors == []
+
+      assert Enum.any?(protocol.messages, fn
+               %{decoded: {:data_row, [{:data_column, _, _, 0, _, _, _, 23, 0, "17"}]}} -> true
+               _ -> false
+             end)
+    end
+  end
+
   defp assert_native_copies(copies, events, expected) do
     for copy <- copies do
       source = Enum.fetch!(events, copy.index)

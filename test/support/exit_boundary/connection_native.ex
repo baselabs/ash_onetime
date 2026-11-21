@@ -61,6 +61,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     :ok = module.close(socket)
   end
 
+  defp execute(%{sock: {module, socket}}, :active, nil) do
+    :ok = :inet.setopts(socket, active: :once)
+    :ok = module.send(socket, query(17))
+
+    receive do
+      {:tcp, ^socket, bytes} ->
+        :ok = :inet.setopts(socket, active: false)
+        drain(module, socket, 1, bytes, true, nil)
+    after
+      15_000 -> raise "native active query did not return"
+    end
+  after
+    :ok = module.close(socket)
+  end
+
   defp execute(%{sock: {module, socket}}, mode, corruption) do
     values = values(mode, corruption)
     messages = Enum.map(values, &query/1)
