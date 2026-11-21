@@ -86,49 +86,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       |> Keyword.put(:ssl,
         verify: :verify_peer,
         cacertfile: System.fetch_env!("ASH_ONETIME_NATIVE_TLS_CA_FILE") |> String.to_charlist(),
-        server_name_indication: ~c"localhost"
+        server_name_indication: ~c"localhost",
+        verify_fun: {&tls_verify/3, nil}
       )
 
-    connected = Postgrex.Protocol.connect(options)
-    diagnose_tls_connect(connected, options)
-    {:ok, protocol} = connected
+    {:ok, protocol} = Postgrex.Protocol.connect(options)
     {:ok, protocol} = Postgrex.Protocol.checkout(protocol)
     protocol
   end
 
-  defp diagnose_tls_connect({:ok, _protocol}, _options), do: :ok
-
-  defp diagnose_tls_connect({:error, error}, options) do
-    alerts = [
-      unknown_ca: "unknown_ca",
-      bad_certificate: "bad_certificate",
-      certificate_expired: "certificate_expired",
-      hostname_check_failed: "hostname_check_failed",
-      handshake_failure: "handshake_failure",
-      protocol_version: "protocol_version",
-      missing_certificate: "enoent",
-      certificate_permission: "eacces",
-      ssl_not_started: "not_started",
-      options: "options",
-      closed: "closed",
-      refused: "econnrefused"
-    ]
-
-    message =
-      case error do
-        %{message: message} when is_binary(message) -> message
-        _ -> ""
-      end
-    matched = for {label, text} <- alerts, String.contains?(message, text), do: label
-
-    summary = %{
-      class: error.__struct__,
-      alerts: matched,
-      unix_socket?: Keyword.has_key?(options, :socket) or Keyword.has_key?(options, :socket_dir)
-    }
-
-    IO.puts("TLS_CONNECT_FAILURE: " <> inspect(summary))
+  # Preserve OTP's verify_peer decisions. Only the native error atom is printed;
+  # neither a certificate nor any part of the SSL socket is inspected.
+  defp tls_verify(_certificate, {:bad_cert, reason} = failure, _state) do
+    label = if is_atom(reason), do: reason, else: :compound
+    IO.puts("TLS_CERTIFICATE_FAILURE: " <> Atom.to_string(label))
+    {:fail, failure}
   end
+
+  defp tls_verify(_certificate, {:extension, _extension}, state), do: {:unknown, state}
+  defp tls_verify(_certificate, event, state) when event in [:valid, :valid_peer],
+    do: {:valid, state}
 
   defp native_spec(:buffered) do
     %{
@@ -202,7 +179,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           chunks = [%{index: 0, direction: :frontend, bytes: bytes}]
           chunks = history_replies(module, socket, 1, <<>>, chunks)
           descriptor = %{query: query, port: socket, index: {:historical, self()}, path: [:query]}
-          history = %{protocol: protocol, descriptors: [Map.put(descriptor, :sock, protocol.sock)]}
+
+          history = %{
+            protocol: protocol,
+            descriptors: [Map.put(descriptor, :sock, protocol.sock)]
+          }
 
           history =
             if shape == :cross_connection do

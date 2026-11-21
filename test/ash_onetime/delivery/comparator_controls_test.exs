@@ -398,9 +398,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @tag :connection_streams
   test "Connection streams: cached decoder descriptors retain their native owner origin" do
     for shape <- [:rows, :none, :cross_connection] do
-      %{decoders: decoders, origin: origin, events: events} = cached_decoders(nil, shape)
+      %{decoders: decoders, origin: origin, events: events, streams: streams} =
+        cached_decoders(nil, shape)
+
       assert decoders.errors == []
-      rows = Enum.filter(decoders.instances, &(&1.source.mfa == {Postgrex.Types, :decode_rows, 4}))
+
+      rows =
+        Enum.filter(decoders.instances, &(&1.source.mfa == {Postgrex.Types, :decode_rows, 4}))
+
       assert rows != []
       assert length(decoders.versions) == length(decoders.instances)
 
@@ -414,14 +419,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                  end)
              end)
 
+      assert Enum.all?(rows, &(&1.descriptor == Map.take(origin, [:index, :path])))
+
       if shape == :cross_connection do
-        assert Enum.all?(rows, fn row ->
-                 source = Enum.fetch!(events, row.descriptor.index)
-                 source.mfa == {Postgrex.Protocol, :redescribe, 6} and
-                   row.descriptor.index < row.source.index
+        [{port, connection}] = Map.to_list(streams.connections)
+        assert port != origin.port
+
+        assert Enum.any?(connection.protocol.messages, fn message ->
+                 message.direction == :frontend and message.tag == ?P
                end)
-      else
-        assert Enum.all?(rows, &(&1.descriptor == Map.take(origin, [:index, :path])))
       end
     end
   end
@@ -2454,7 +2460,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     pattern =
       try do
-        (fn value -> :ok = value end).(state)
+        raise MatchError, term: state
       rescue
         error in MatchError -> error
       end

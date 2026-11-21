@@ -364,7 +364,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   # and passed back to their owner. The independent wire catalog checks the
   # descriptor's statement, OIDs, column names and execution formats.
   defp query_metadata(state, source, query, context, types) do
-    names = if context.description == :none, do: nil, else: Enum.map(context.columns, &elem(&1, 0))
+    names =
+      if context.description == :none, do: nil, else: Enum.map(context.columns, &elem(&1, 0))
+
     oids = if context.description == :none, do: nil, else: Enum.map(context.columns, &elem(&1, 3))
     formats = for {_, _, _, _, _, _, format} <- context.columns, do: format
     encodings = Enum.map(formats, &if(&1 == 1, do: :binary, else: :text))
