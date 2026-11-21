@@ -193,9 +193,12 @@ jobs:
     name: "Comparator scheduling (${{ matrix.name }})"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Rebalanced from all 175 successful twenty-repeat/stable-profile paths in Work
-    # 44852145428, 587776c0ae416a598b7882826ef7e976ca6e775a. These bins have no green run yet.
-    timeout-minutes: 90 # no green run yet
+    # Slowest first green: 29 min 4 s cached, Work 44856687648, job 136700491478,
+    # 72851b17c3a0cfec7079383b97fd95f89b499f0b. Add 57 s for cold setup: 147.09 s in
+    # Work 44852145428, job 136685903247, 587776c0ae416a598b7882826ef7e976ca6e775a,
+    # versus 90.85 s cached in Work 44856687648, job 136700491597 (same comparator action).
+    # About twice that estimated cold duration; remeasure on the first cold green.
+    timeout-minutes: 61
     strategy:
       fail-fast: false
       matrix:
@@ -268,7 +271,11 @@ jobs:
     name: Format check
     needs: toolchain
     runs-on: ubuntu-24.04
-    timeout-minutes: 90 # no green run yet
+    # First green: 81 s cached, Work 44856687648, job 136700490695,
+    # 72851b17c3a0cfec7079383b97fd95f89b499f0b. Allow 44 s cold formatter overhead
+    # measured in Work 44852145428, job 136685902792, 587776c0ae416a598b7882826ef7e976ca6e775a.
+    # Twice the estimated cold duration is below the five-minute floor; remeasure on the first cold green.
+    timeout-minutes: 5
     services:
       postgres:
         image: ${{ needs.toolchain.outputs.postgres_image }}
