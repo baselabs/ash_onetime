@@ -477,9 +477,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
       previous = :erlang.port_get_data(port)
       assert is_atom(previous), "the socket's native data must name its inet module"
 
-      on_exit(fn ->
-        if :erlang.port_info(port) != :undefined, do: :erlang.port_set_data(port, previous)
-      end)
+      on_exit(fn -> restore_port_data(port, previous) end)
 
       # inet_db.lookup_socket reads this module from the port's data. Restore it
       # immediately after the leak, before SQL uses the same live socket again.
@@ -500,6 +498,10 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
   end
 
   defp with_runtime(_, _, callback), do: callback.()
+
+  defp restore_port_data(port, previous) do
+    if :erlang.port_info(port) != :undefined, do: :erlang.port_set_data(port, previous)
+  end
 
   defp concurrent_backends(repo) do
     Repo.checkout(fn ->

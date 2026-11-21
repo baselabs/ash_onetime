@@ -42,14 +42,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     Code.ensure_loaded!(Wire)
     assert function_exported?(Wire, :frames, 1), "CONNECTION_STREAM_REASSEMBLY_WITNESS"
 
-    for {_port, chunks} <- native_stream_chunks(pair.run) do
-      baseline = apply(Wire, :frames, [chunks])
+    streams = native_stream_chunks(pair.run)
+    assert map_size(streams) > 0
+
+    for {_port, chunks} <- streams do
+      assert Enum.any?(chunks, &(&1.direction == :frontend))
+      assert Enum.any?(chunks, &(&1.direction == :backend))
+      baseline = Wire.frames(chunks)
       assert baseline.errors == []
       assert baseline.messages != []
 
       for width <- [1, 2, 3, 4, 5, 7, 31, 4096] do
         split = Enum.flat_map(chunks, &split_stream_chunk(&1, width))
-        result = apply(Wire, :frames, [split])
+        result = Wire.frames(split)
         assert result.errors == []
         assert stream_contents(result) == stream_contents(baseline)
 
@@ -74,7 +79,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert map_size(streams) == 1
 
     for {_port, chunks} <- streams do
-      result = apply(Wire, :frames, [chunks])
+      result = Wire.frames(chunks)
       assert [%{rule: :incomplete_frame, direction: :backend}] = result.errors
     end
   end
@@ -125,11 +130,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
        context do
     run =
       ExitBoundary.observe(
-        fn -> Repo.put_dynamic_repo(context.repo) end,
-        fn _ -> SQL.query!(Repo, "SELECT 17::int4 AS connection_stream_probe", []) end,
+        fn ->
+          Repo.put_dynamic_repo(context.repo)
+          context.repo
+        end,
+        fn repo -> SQL.query!(repo, "SELECT 17::int4 AS connection_stream_probe", []) end,
         %{host: [], callbacks: []}
       )
 
+    assert native_result(run) == {:ok, [[17]]}
     streams = native_stream_chunks(%{run: run})
     assert map_size(streams) == 1
 
@@ -184,6 +193,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              end)
     end
   end
+
+  defp native_result(%{result: %Postgrex.Result{rows: rows}}), do: {:ok, rows}
+
+  defp native_result(%{result: {:caught, kind, %{__struct__: module}}}),
+    do: {:caught, kind, module}
+
+  defp native_result(%{result: {:caught, kind, _reason}}), do: {:caught, kind, :term}
+  defp native_result(_run), do: :unexpected_result
 
   @tag :connection_streams
   test "Connection streams: native pipelining preserves each query and response" do

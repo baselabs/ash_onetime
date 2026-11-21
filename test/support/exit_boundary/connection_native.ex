@@ -22,30 +22,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   end
 
   defp execute(%{sock: {:gen_tcp, socket}}, :incomplete, nil) do
-    try do
-      :ok = :inet.setopts(socket, buffer: 4096, recbuf: 8192)
-      :ok = :gen_tcp.send(socket, query_sql("SELECT repeat('x', 1048576)"))
-      receive_partial(socket)
-    after
-      :ok = :gen_tcp.close(socket)
-    end
+    :ok = :inet.setopts(socket, buffer: 4096, recbuf: 8192)
+    :ok = :gen_tcp.send(socket, query_sql("SELECT repeat('x', 1048576)"))
+    receive_partial(socket)
+  after
+    :ok = :gen_tcp.close(socket)
   end
 
   defp execute(%{sock: {module, socket}}, mode, corruption) do
-    try do
-      values = values(mode, corruption)
-      messages = Enum.map(values, &query/1)
-      :ok = apply(module, :send, [socket, messages])
-      :ok = drain(module, socket, length(values), <<>>, true, corruption)
+    values = values(mode, corruption)
+    messages = Enum.map(values, &query/1)
+    :ok = module.send(socket, messages)
+    :ok = drain(module, socket, length(values), <<>>, true, corruption)
 
-      if corruption == :extra_read do
-        {:error, :timeout} = apply(module, :recv, [socket, 0, 0])
-      end
-
-      :ok
-    after
-      :ok = apply(module, :close, [socket])
+    if corruption == :extra_read do
+      {:error, :timeout} = module.recv(socket, 0, 0)
     end
+
+    :ok
+  after
+    :ok = module.close(socket)
   end
 
   defp values(:single, nil), do: [17]
@@ -84,7 +80,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     else
       requested = if first? and corruption == :length, do: 1, else: required(buffer)
       timeout = if first? and corruption == :timeout, do: 60_000, else: :infinity
-      {:ok, data} = apply(module, :recv, [socket, requested, timeout])
+      {:ok, data} = module.recv(socket, requested, timeout)
       drain(module, socket, ready, buffer <> data, false, corruption)
     end
   end

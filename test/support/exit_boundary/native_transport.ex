@@ -316,9 +316,65 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       {:ok, %{sent: sent, received: received, indexes: [received.index, sent.index | controls]}}
     else
       {:error, reason} -> {:error, reason}
-      _ -> {:error, :native_receive_copy}
+      _ ->
+        diagnostic = receive_diagnostic(state.events, outer, chain, port, result)
+        {:error, {:native_receive_copy, diagnostic}}
     end
   end
+
+  defp receive_diagnostic(events, outer, chain, port, result) do
+    pid = outer.source.pid
+
+    signals =
+      in_interval(events, outer, fn e ->
+        e.pid in [pid, port] and elem(e.event, 1) in [:send, :receive]
+      end)
+      |> Enum.map(&receive_signal(&1, pid, port, chain.id, result))
+
+    %{
+      source: outer.source.index,
+      returned: outer.returned.index,
+      control_origin: chain.origin,
+      id: chain.id,
+      result: receive_result(result),
+      signals: signals
+    }
+  end
+
+  defp receive_signal(%{event: {port, :send, message, pid}, index: index}, pid, port, id, result),
+    do: signal_metadata(index, :sent, message, port, id, result)
+
+  defp receive_signal(%{event: {pid, :receive, message}, index: index}, pid, port, id, result),
+    do: signal_metadata(index, :received, message, port, id, result)
+
+  defp receive_signal(%{event: event, index: index}, _pid, _port, _id, _result),
+    do: %{index: index, kind: elem(event, 1), own_endpoint?: false}
+
+  defp signal_metadata(index, kind, {:inet_async, port, id, value}, port, expected_id, result),
+    do: %{
+      index: index,
+      kind: kind,
+      message: :inet_async,
+      id: id,
+      own_id?: id == expected_id,
+      exact_copy?: value === result,
+      result: receive_result(value)
+    }
+
+  defp signal_metadata(index, kind, {port, {:control, bytes}}, port, _id, _result),
+    do: %{index: index, kind: kind, message: :control, bytes: byte_size(bytes)}
+
+  defp signal_metadata(index, kind, message, _port, _id, _result)
+       when is_tuple(message) and tuple_size(message) > 0,
+       do: %{index: index, kind: kind, tuple_size: tuple_size(message)}
+
+  defp signal_metadata(index, kind, _message, _port, _id, _result),
+    do: %{index: index, kind: kind, message: :other}
+
+  defp receive_result({:ok, bytes}) when is_binary(bytes), do: {:ok, :binary, byte_size(bytes)}
+  defp receive_result({:ok, bytes}) when is_list(bytes), do: {:ok, :list, length(bytes)}
+  defp receive_result({:error, reason}) when is_atom(reason), do: {:error, reason}
+  defp receive_result(_result), do: :other
 
   defp control_signals(events, outer, port, id, pid) do
     controls =
@@ -383,18 +439,18 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
     case candidates do
       [%{event: {_, :call, {_, _, ^expected_args}}, index: index}] ->
-        case Map.fetch(state.pairs, index) do
-          {:ok, pair} ->
-            if pair.returned.index <= outer.returned.index,
-              do: {:ok, pair},
-              else: {:error, {:native_return_order, mfa}}
-
-          :error ->
-            {:error, {:native_missing_return, mfa}}
-        end
+        returned_pair(state.pairs, index, outer.returned.index, mfa)
 
       _ ->
         {:error, {:native_call, mfa}}
+    end
+  end
+
+  defp returned_pair(pairs, index, stop, mfa) do
+    case Map.fetch(pairs, index) do
+      {:ok, %{returned: %{index: returned}} = pair} when returned <= stop -> {:ok, pair}
+      {:ok, _pair} -> {:error, {:native_return_order, mfa}}
+      :error -> {:error, {:native_missing_return, mfa}}
     end
   end
 

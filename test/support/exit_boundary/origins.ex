@@ -208,12 +208,7 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
       Enum.reduce(Registry.rename(), initial, fn {a, b}, acc -> bind(acc, a, b, :resource) end)
 
     initial =
-      Enum.reduce(run.relations, initial, fn {id, name}, acc ->
-        case Enum.find(twin.relations, fn {_other, other_name} -> other_name == name end) do
-          {other, ^name} -> bind(acc, id, other, {:table_oid, name})
-          nil -> error(acc, {:table_oid, :missing, name})
-        end
-      end)
+      Enum.reduce(run.relations, initial, &pair_relation(&1, &2, twin.relations))
 
     initial =
       Enum.reduce(run.query_cache.rows, initial, fn
@@ -236,6 +231,13 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
 
     initial = pair_sources(run.origins, twin.origins, initial, permitted, :o1)
     pair_sources(run.reads, twin.reads, initial, permitted, :o3)
+  end
+
+  defp pair_relation({id, name}, state, relations) do
+    case Enum.find(relations, fn {_other, other_name} -> other_name == name end) do
+      {other, ^name} -> bind(state, id, other, {:table_oid, name})
+      nil -> error(state, {:table_oid, :missing, name})
+    end
   end
 
   defp bind_query_reference(state, %Postgrex.Query{} = a, %Postgrex.Query{} = b, key),

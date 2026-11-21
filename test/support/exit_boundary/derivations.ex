@@ -16,11 +16,13 @@ defmodule AshOnetime.Test.ExitBoundary.Derivations do
       prior ->
         prior.sources
         |> Enum.group_by(fn {{root, _}, _} -> root end)
-        |> Map.new(fn {root, sources} ->
-          {_, value} = Enum.max_by(sources, fn {{_, n}, _} -> n end)
-          {{root, -1}, value}
-        end)
+        |> Map.new(&last_source/1)
     end
+  end
+
+  defp last_source({root, sources}) do
+    {_, value} = Enum.max_by(sources, fn {{_, n}, _} -> n end)
+    {{root, -1}, value}
   end
 
   defp event(%{event: {pid, :call, {m, f, args}}} = e, state, side) do

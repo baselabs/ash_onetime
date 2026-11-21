@@ -693,14 +693,19 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       hook_event?(a, state.run) and hook_event?(b, state.twin) ->
         hook_event(a, b, state)
 
-      origin_event?(a) and origin_event?(b) ->
-        origin_event(a, b, state)
-
       true ->
-        left = canonical_event(a.event, state.run)
-        right = canonical_event(b.event, state.twin)
-        {left, state} = claim_argument(left, right, a.mfa, state)
-        term(left, right, state, [:event])
+        event_origins(a, b, state)
+    end
+  end
+
+  defp event_origins(a, b, state) do
+    if origin_event?(a) and origin_event?(b) do
+      origin_event(a, b, state)
+    else
+      left = canonical_event(a.event, state.run)
+      right = canonical_event(b.event, state.twin)
+      {left, state} = claim_argument(left, right, a.mfa, state)
+      term(left, right, state, [:event])
     end
   end
 
