@@ -402,10 +402,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_tls.ex",
-        original:
-          "    |> mismatch(:tls_local_endpoint, local_matches?)\n",
-        mutated:
-          "    |> mismatch(:tls_local_endpoint, is_boolean(local_matches?))\n"
+        original: "    |> mismatch(:tls_local_endpoint, local_matches?)\n",
+        mutated: "    |> mismatch(:tls_local_endpoint, is_boolean(local_matches?))\n"
       }
     ]
   end

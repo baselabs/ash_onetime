@@ -31,10 +31,12 @@ runs:
         trap 'rm -rf "$tls_directory"' EXIT
         openssl req -newkey rsa:2048 -nodes -x509 -days 1 \
           -subj /CN=localhost -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
-          -keyout "$tls_directory/server.key" -out "$tls_directory/server.crt" > /dev/null 2>&1
-        docker cp "$tls_directory/server.crt" "$server:/tmp/ao-native-server.crt"
-        docker cp "$tls_directory/server.key" "$server:/tmp/ao-native-server.key"
-        docker exec --user root "$server" chown postgres:postgres /tmp/ao-native-server.key
+          -keyout "$tls_directory/ao-native-server.key" \
+          -out "$tls_directory/ao-native-server.crt" > /dev/null 2>&1
+        # Extract inside the running mount namespace, including its /tmp tmpfs.
+        # The archive goes only to the container's stdin, never to job output.
+        tar -C "$tls_directory" -cf - ao-native-server.crt ao-native-server.key | \
+          docker exec -i --user postgres "$server" tar -xf - -C /tmp
         docker exec --user postgres "$server" chmod 0600 /tmp/ao-native-server.key
         docker exec -i --user postgres --env PGHOST=/tmp --env PGUSER=postgres \
           --env PGDATABASE=ash_onetime_test "$server" psql --no-psqlrc --set ON_ERROR_STOP=1 <<'SQL'
@@ -54,7 +56,7 @@ runs:
           echo '::error::The disposable native server did not enable TLS'; exit 1
         fi
         certificate="$RUNNER_TEMP/ao-native-ca-$server.crt"
-        cp "$tls_directory/server.crt" "$certificate"
+        cp "$tls_directory/ao-native-server.crt" "$certificate"
         echo "ASH_ONETIME_NATIVE_TLS_CA_FILE=$certificate" >> "$GITHUB_ENV"
     - name: Remove this job's TLS client certificate
       if: always() && inputs.mode == 'stop'

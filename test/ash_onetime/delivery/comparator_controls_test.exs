@@ -2587,10 +2587,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert messages != []
 
         program =
-          for event <- events, event.mfa != nil,
+          for event <- events,
+              event.mfa != nil,
               do: %{index: event.index, mfa: event.mfa, tag: elem(event.event, 1)}
 
-        IO.puts("CONNECTION_TLS_NATIVE_PROGRAM: " <> Diagnostics.render(program, limit: :infinity))
+        IO.puts(
+          "CONNECTION_TLS_NATIVE_PROGRAM: " <> Diagnostics.render(program, limit: :infinity)
+        )
+
         {corruption, messages}
       end)
 
