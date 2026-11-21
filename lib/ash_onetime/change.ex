@@ -59,8 +59,10 @@ defmodule AshOnetime.Change do
   end
 
   defp produce(changeset, handle, protection, context) do
+    # rule:delivery-replay-produce-crud
     case AshOnetime.Admission.state(changeset) do
       {:ok, %{class: :execute}} ->
+        # -- end-rule:delivery-replay-produce-crud
         AshOnetime.Delivery.produce(
           handle,
           protection.produce,
@@ -99,12 +101,24 @@ defmodule AshOnetime.Change do
     # rule:atomic-error-form
     do: {:not_atomic, "keyed effects require transactional stream execution"}
 
+  # rule:r_iso_context
   defp reserve(changeset, protection, context, delivery) do
     trusted = AshOnetime.Admission.trusted_context(context)
+    # -- end-rule:r_iso_context
 
+    # rule:pc_o2b_protection_run
+    # rule:pc_o2b_protection_twin
+    # rule:pc_o2c_code
+    # rule:pc_o2c_environment
+    # rule:r10
     reservation =
       AshOnetime.Admission.dispatch_reservation(changeset, protection, trusted, delivery)
 
+    # -- end-rule:pc_o2b_protection_run
+    # -- end-rule:pc_o2b_protection_twin
+    # -- end-rule:pc_o2c_code
+    # -- end-rule:pc_o2c_environment
+    # -- end-rule:r10
     case reservation do
       {:execute, state} ->
         AshOnetime.Admission.put_state(changeset, state)
@@ -134,8 +148,10 @@ defmodule AshOnetime.Change do
     end
   end
 
+  # rule:r8
   defp complete(changeset, callback) do
     case callback.(changeset) do
+      # -- end-rule:r8
       {:ok, result, final_changeset, instructions} ->
         complete_state(final_changeset, result, instructions)
 

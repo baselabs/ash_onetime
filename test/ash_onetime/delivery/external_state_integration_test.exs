@@ -95,7 +95,7 @@ for partitioning <- [nil, 2] do
         assert {:error, %Postgrex.Error{postgres: %{pg_code: "42501"}}} =
                  SQL.query(
                    c.runtime_repo,
-                   "SELECT * FROM #{rel(c, "ash_onetime_external_state_restore")}",
+                   "SELECT to_jsonb(j) FROM #{rel(c, "ash_onetime_external_state_restore")} AS j",
                    []
                  )
 

@@ -61,26 +61,34 @@ defmodule AshOnetime.Delivery do
 
     try do
       Process.put(key, {:armed, self(), subject.resource, subject.action.name, cell, public})
+      # rule:r16
+      # rule:r18
       armed(subject, protection, {key, ref, secret, public}, opts)
     after
       Process.delete(key)
     end
+  # -- end-rule:r16
+  # -- end-rule:r18
   end
 
   defp armed(subject, protection, {key, ref, secret, public}, opts) do
     resource = subject.resource
     action = subject.action.name
 
+    # rule:pc_return_raw
     subject
     |> put_reference(ref)
     |> dispatch(opts)
     |> normalize(subject.action.type, opts)
     |> finish(fn -> open(key, ref, secret, public, protection, resource, action) end)
   end
+  # -- end-rule:pc_return_raw
 
+  # rule:pc_o5a_extra_frame
   defp dispatch(%Ash.Changeset{action: %{type: :create}} = changeset, opts),
     do: Ash.create(changeset, opts)
 
+  # -- end-rule:pc_o5a_extra_frame
   defp dispatch(%Ash.Changeset{action: %{type: :update}} = changeset, opts),
     do: Ash.update(changeset, Keyword.put(opts, :atomic_upgrade?, false))
 
@@ -95,9 +103,11 @@ defmodule AshOnetime.Delivery do
 
   defp normalize({:ok, value}, :destroy, opts) do
     if opts[:return_notifications?] && !opts[:return_destroyed?],
+      # rule:pc_return_destroy
       do: {:ok, nil, value},
       else: {:ok, value}
   end
+  # -- end-rule:pc_return_destroy
 
   defp normalize({:ok, result}, _type, _opts), do: {:ok, result}
 
@@ -114,13 +124,23 @@ defmodule AshOnetime.Delivery do
   # An executed value opens only when the store holds the committed completion of the
   # exact claim that produced it, read here, after Ash returned and outside any
   # transaction. A rollback that a later hook turned into success leaves no completion.
+  # rule:r14
   defp open(key, ref, secret, public, protection, resource, action) do
     case Process.get(key) do
+      # rule:delivery-committed-readback
+      # rule:external-rollback-readback
+      # rule:r24
+      # rule:r_iso_order
+      # -- end-rule:r14
       {:done, inv, :executed, envelope, {target, claim}} when is_binary(envelope) ->
         with :complete <- Store.committed_completion(target, claim),
              names = protection.executing_only,
              context = Envelope.context(ref, inv, resource, action),
              {:ok, values} <- Envelope.open(envelope, secret, public, length(names), context) do
+          # -- end-rule:delivery-committed-readback
+          # -- end-rule:external-rollback-readback
+          # -- end-rule:r24
+          # -- end-rule:r_iso_order
           {:ok, %__MODULE__{outcome: :executed, values: Map.new(Enum.zip(names, values))}}
         else
           _other -> lost_class()
@@ -161,7 +181,9 @@ defmodule AshOnetime.Delivery do
   # would not run, or would run in another process.
   defp route(subject, opts) do
     cond do
+      # rule:delivery-route-in-transaction
       Ash.DataLayer.in_transaction?(subject.resource) -> {:error, in_transaction()}
+      # -- end-rule:delivery-route-in-transaction
       bulk?(subject) -> {:error, refused()}
       not built_for_action?(subject) -> {:error, refused()}
       task_route?(subject, opts) -> {:error, refused()}
@@ -190,13 +212,23 @@ defmodule AshOnetime.Delivery do
     resource = changeset.resource
     timeout = opts[:timeout] || changeset.timeout
 
+    # rule:delivery-task-transaction
     not (changeset.action.transaction? and Ash.DataLayer.data_layer_can?(resource, :transact)) and
+      # rule:delivery-task-timeout
+      # -- end-rule:delivery-task-transaction
       not is_nil(timeout) and timeout != :infinity and
+      # rule:delivery-task-async
+      # -- end-rule:delivery-task-timeout
       !Application.get_env(:ash, :disable_async?) and
+      # -- end-rule:delivery-task-async
+      # rule:delivery-task-engine
       Ash.DataLayer.data_layer_can?(resource, :async_engine)
+  # -- end-rule:delivery-task-engine
   end
 
+  # rule:delivery-task-generic
   defp task_route?(_subject, _opts), do: false
+  # -- end-rule:delivery-task-generic
 
   defp cell(%{context: %{private: %{@cell => cell}}}) when is_reference(cell), do: {:ok, cell}
   defp cell(_subject), do: {:error, refused()}
@@ -223,8 +255,12 @@ defmodule AshOnetime.Delivery do
 
   @doc false
   @spec key(binary()) :: {module(), binary()}
+  # rule:delivery-entry-hashed-key
+  # rule:r_iso_k
   def key(ref), do: {__MODULE__, :crypto.hash(:sha256, ref)}
 
+  # -- end-rule:delivery-entry-hashed-key
+  # -- end-rule:r_iso_k
   defp reference(%{context: %{private: %{@reference => %{ref: ref}}}}) when is_binary(ref),
     do: {:ok, ref}
 
@@ -253,17 +289,27 @@ defmodule AshOnetime.Delivery do
          cell,
          names
        ) do
+    # rule:delivery-entry-pid
     if pid == self() and resource == subject.resource and action == subject.action.name and
+         # rule:delivery-entry-cell
+         # -- end-rule:delivery-entry-pid
          entry_cell == cell do
+      # -- end-rule:delivery-entry-cell
+      # rule:delivery-entry-rule-one
+      # rule:r_iso_inv
       inv = :crypto.strong_rand_bytes(16)
       Process.put(key, {:claimed, inv, public})
+      # -- end-rule:delivery-entry-rule-one
+      # -- end-rule:r_iso_inv
       {:ok, %{key: key, ref: ref, inv: inv, resource: resource, action: action, names: names}}
     else
       {:error, refused()}
     end
   end
 
+  # rule:delivery-entry-spent-as-armed
   defp claim_entry(_spent, _key, _ref, _subject, _cell, _names), do: {:error, lost()}
+  # -- end-rule:delivery-entry-spent-as-armed
 
   @doc false
   # Produce and seal in one function and one containment boundary (§2.7.3, step 3).
@@ -277,9 +323,17 @@ defmodule AshOnetime.Delivery do
       |> Map.reject(fn {_name, value} -> is_nil(value) end)
       |> Map.merge(%{resource: handle.resource, action: handle.action})
 
+    # rule:pc_host_arguments
+    # rule:r20
+    # rule:r21
+    # rule:r9
     case module.produce(subject, context) do
       {:ok, values} -> seal(handle, values)
       _other -> {:error, invalid()}
+    # -- end-rule:pc_host_arguments
+    # -- end-rule:r20
+    # -- end-rule:r21
+    # -- end-rule:r9
     end
   rescue
     _exception -> {:error, invalid()}
@@ -306,10 +360,84 @@ defmodule AshOnetime.Delivery do
 
   defp seal_to_entry(%{key: key, ref: ref, inv: inv} = handle, ordered) do
     with {:claimed, ^inv, public} <- Process.get(key),
+         # rule:pc_o2a_binding
          context = Envelope.context(ref, inv, handle.resource, handle.action),
          {:ok, envelope} <- Envelope.seal(public, ordered, context) do
+      # rule:exit-boundary-e1
+      # rule:exit-boundary-e10
+      # rule:exit-boundary-e11
+      # rule:exit-boundary-e12
+      # rule:exit-boundary-e13
+      # rule:exit-boundary-e14
+      # rule:exit-boundary-e15
+      # rule:exit-boundary-e16
+      # rule:exit-boundary-e17
+      # rule:exit-boundary-e18
+      # rule:exit-boundary-e19
+      # rule:exit-boundary-e2
+      # rule:exit-boundary-e20
+      # rule:exit-boundary-e21
+      # rule:exit-boundary-e22
+      # rule:exit-boundary-e23
+      # rule:exit-boundary-e24
+      # rule:exit-boundary-e3
+      # rule:exit-boundary-e4
+      # rule:exit-boundary-e5
+      # rule:exit-boundary-e6
+      # rule:exit-boundary-e7
+      # rule:exit-boundary-e8
+      # rule:exit-boundary-e9
+      # rule:r1
+      # rule:r2
+      # rule:r27
+      # rule:r28
+      # rule:r29
+      # rule:r3
+      # rule:r_set_bit
+      # rule:r_set_bit-c-set
+      # rule:r_set_len
+      # rule:r_set_len-c-set
+      # rule:r_set_par
+      # rule:r_set_par-c-set
+      # -- end-rule:pc_o2a_binding
       Process.put(key, {:sealed, inv, envelope})
       :ok
+    # -- end-rule:exit-boundary-e1
+    # -- end-rule:exit-boundary-e10
+    # -- end-rule:exit-boundary-e11
+    # -- end-rule:exit-boundary-e12
+    # -- end-rule:exit-boundary-e13
+    # -- end-rule:exit-boundary-e14
+    # -- end-rule:exit-boundary-e15
+    # -- end-rule:exit-boundary-e16
+    # -- end-rule:exit-boundary-e17
+    # -- end-rule:exit-boundary-e18
+    # -- end-rule:exit-boundary-e19
+    # -- end-rule:exit-boundary-e2
+    # -- end-rule:exit-boundary-e20
+    # -- end-rule:exit-boundary-e21
+    # -- end-rule:exit-boundary-e22
+    # -- end-rule:exit-boundary-e23
+    # -- end-rule:exit-boundary-e24
+    # -- end-rule:exit-boundary-e3
+    # -- end-rule:exit-boundary-e4
+    # -- end-rule:exit-boundary-e5
+    # -- end-rule:exit-boundary-e6
+    # -- end-rule:exit-boundary-e7
+    # -- end-rule:exit-boundary-e8
+    # -- end-rule:exit-boundary-e9
+    # -- end-rule:r1
+    # -- end-rule:r2
+    # -- end-rule:r27
+    # -- end-rule:r28
+    # -- end-rule:r29
+    # -- end-rule:r3
+    # -- end-rule:r_set_bit
+    # -- end-rule:r_set_bit-c-set
+    # -- end-rule:r_set_len
+    # -- end-rule:r_set_len-c-set
+    # -- end-rule:r_set_par
+    # -- end-rule:r_set_par-c-set
     else
       _other -> {:error, lost()}
     end
@@ -359,8 +487,14 @@ defmodule AshOnetime.Delivery do
     case {Process.get(key), outcome, state} do
       {{:sealed, ^inv, envelope}, :executed, %{target: target, claim: %{id: id} = claim}}
       when not is_nil(target) and is_binary(id) ->
+        # rule:r19
+        # rule:r4
+        # rule:r_iso_completion
         Process.put(key, {:done, inv, :executed, envelope, {target, claim}})
         :ok
+# -- end-rule:r19
+# -- end-rule:r4
+      # -- end-rule:r_iso_completion
 
       # Only an executing admission produces, so a replay or a recovery completes an entry
       # that was claimed and never sealed.
@@ -373,9 +507,13 @@ defmodule AshOnetime.Delivery do
       # so this call is a replay: the envelope is dropped and `:done` carries nil. Any other
       # outcome on a sealed entry is lost.
       # mutation sentinel: finalize-replay-drop
+      # rule:delivery-finalize-replay-drop
+      # rule:r23
       {{:sealed, ^inv, _envelope}, :replayed, _state} ->
         Process.put(key, {:done, inv, :replayed, nil, nil})
         :ok
+# -- end-rule:delivery-finalize-replay-drop
+      # -- end-rule:r23
 
       _other ->
         {:error, lost()}

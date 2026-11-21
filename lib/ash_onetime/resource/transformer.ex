@@ -794,9 +794,13 @@ defmodule AshOnetime.Resource.Transformer do
       candidate == Transformer.get_persisted(dsl_state, :module) ->
         {:ok, dsl_state}
 
+      # rule:returned-record-verifier-embedded
+      # rule:returned-record-verifier-resource
       compiled(candidate) == :ok and ResourceInfo.resource?(candidate) and
           not ResourceInfo.embedded?(candidate) ->
         {:ok, candidate}
+# -- end-rule:returned-record-verifier-embedded
+      # -- end-rule:returned-record-verifier-resource
 
       true ->
         :error
@@ -813,7 +817,9 @@ defmodule AshOnetime.Resource.Transformer do
   defp returned_value_source(context) do
     case record_source(context) do
       {:ok, source} -> {:ok, source}
+      # rule:executing-only-embedded-return
       :error -> embedded_return(context.action)
+    # -- end-rule:executing-only-embedded-return
     end
   end
 
@@ -855,8 +861,10 @@ defmodule AshOnetime.Resource.Transformer do
 
     cond do
       # V3
+      # rule:executing-only-strategy
       protection.strategy != :idempotency ->
         error(
+          # -- end-rule:executing-only-strategy
           context.dsl_state,
           protection,
           :executing_only,
@@ -900,7 +908,9 @@ defmodule AshOnetime.Resource.Transformer do
 
       # V7
       context.action.type in [:update, :destroy] and
+          # rule:executing-only-require-atomic
           Map.get(context.action, :require_atomic?) == true ->
+        # -- end-rule:executing-only-require-atomic
         error(
           context.dsl_state,
           protection,

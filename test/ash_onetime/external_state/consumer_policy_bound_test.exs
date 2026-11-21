@@ -16,7 +16,7 @@ for partitions <- [nil, 2], force <- [false, true] do
 
       SQL.query!(
         Repo,
-        "GRANT INSERT ON #{rel(c, "external_local_effects")} TO #{q(c.runtime)}",
+        "GRANT INSERT, SELECT ON #{rel(c, "external_local_effects")} TO #{q(c.runtime)}",
         []
       )
 

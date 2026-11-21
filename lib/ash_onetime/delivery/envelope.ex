@@ -65,8 +65,10 @@ defmodule AshOnetime.Delivery.Envelope do
   @spec seal(binary(), [binary()], binary()) :: {:ok, binary()} | {:error, reason()}
   def seal(recipient, values, context) when is_list(values) and is_binary(context) do
     if Enum.all?(values, &(is_binary(&1) and byte_size(&1) <= @max_value_bytes)) do
+      # rule:r7
       encrypt(recipient, Enum.map_join(values, &<<byte_size(&1)::32, &1::binary>>), context)
     else
+      # -- end-rule:r7
       {:error, :size}
     end
   end
@@ -75,8 +77,10 @@ defmodule AshOnetime.Delivery.Envelope do
   @spec encrypt(binary(), binary(), binary()) :: {:ok, binary()} | {:error, reason()}
   def encrypt(recipient, plaintext, context) when is_binary(plaintext) and is_binary(context) do
     with :ok <- public_key(recipient) do
+      # rule:r5
       {ephemeral_public, ephemeral_secret} = :crypto.generate_key(:ecdh, :x25519)
 
+      # -- end-rule:r5
       with {:ok, shared} <- agree(recipient, ephemeral_secret) do
         {key, nonce} = derive(shared, ephemeral_public, recipient, context)
 
@@ -85,9 +89,11 @@ defmodule AshOnetime.Delivery.Envelope do
             :aes_256_gcm,
             key,
             nonce,
+            # rule:r6
             plaintext,
             additional_data(context),
             @tag_bytes,
+            # -- end-rule:r6
             true
           )
 
@@ -118,7 +124,9 @@ defmodule AshOnetime.Delivery.Envelope do
   defp split(envelope, _bound) when byte_size(envelope) < @header_bytes,
     do: {:error, :truncated}
 
+  # rule:envelope-bound
   defp split(envelope, bound) when byte_size(envelope) - @header_bytes > bound,
+    # -- end-rule:envelope-bound
     do: {:error, :bound}
 
   defp split(
@@ -129,7 +137,9 @@ defmodule AshOnetime.Delivery.Envelope do
        do: {:ok, ephemeral_public, tag, ciphertext}
 
   defp public_key(<<head::binary-size(31), last>>) do
+    # rule:envelope-small-order
     if <<head::binary, Bitwise.band(last, 0x7F)>> in @small_order,
+      # -- end-rule:envelope-small-order
       do: {:error, :low_order},
       else: :ok
   end
@@ -184,7 +194,9 @@ defmodule AshOnetime.Delivery.Envelope do
   defp additional_data(context), do: <<@version, context::binary>>
 
   defp decode(<<>>, 0, values), do: {:ok, Enum.reverse(values)}
+  # rule:envelope-trailing
   defp decode(_rest, 0, _values), do: {:error, :trailing}
+  # -- end-rule:envelope-trailing
 
   defp decode(<<size::32, _rest::binary>>, _count, _values) when size > @max_value_bytes,
     do: {:error, :size}

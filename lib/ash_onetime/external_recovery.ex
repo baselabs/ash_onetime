@@ -199,8 +199,10 @@ defmodule AshOnetime.ExternalRecovery do
            delivery
          ) do
       {:ok, peer_result} ->
+        # rule:r11
         emit(state, started, :execute_succeeded)
         finalize(state, subject, protection, peer_result, started, :executed)
+      # -- end-rule:r11
 
       :unknown ->
         settle_unknown_execute(
@@ -388,10 +390,12 @@ defmodule AshOnetime.ExternalRecovery do
     do: {:error, Error.new(:store_invariant, "store result violated an invariant")}
 
   defp emit(state, started, result_class) do
+    # rule:r_iso_o3
     _result =
       Telemetry.external_recovery(
         System.monotonic_time() - started,
         state.strategy,
+        # -- end-rule:r_iso_o3
         state.resource,
         state.action,
         result_class

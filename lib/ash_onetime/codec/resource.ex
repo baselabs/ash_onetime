@@ -319,7 +319,9 @@ defmodule AshOnetime.Codec.Resource do
 
   # Ecto accepts `:built`, `:loaded` and `:deleted` only. A generic action returned a
   # persisted record, so `:returned` is `:loaded`.
+  # rule:returned-record-state
   defp resource_state({:resource, :returned}), do: :loaded
+  # -- end-rule:returned-record-state
   defp resource_state({:resource, state}), do: state
 
   defp value_invalid,

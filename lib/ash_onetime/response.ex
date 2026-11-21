@@ -318,9 +318,11 @@ defmodule AshOnetime.Response do
   # A generic action that returns a resource record stores the projection its `fields`
   # allow, validated against the returned resource (§2.7.6). The record was persisted by
   # the action, so the replayed struct is `:loaded`.
+  # rule:returned-record-contract-resource
   defp shape(_resource, %{type: :action} = action, fields, _trusted) do
     with {:ok, record_resource} <- returned_resource(action),
          :ok <- validate_fields(record_resource, fields),
+         # -- end-rule:returned-record-contract-resource
          {:ok, field_specs} <- field_specs(record_resource, fields) do
       {:ok,
        %{
@@ -349,8 +351,10 @@ defmodule AshOnetime.Response do
   def returned_resource(%{type: :action, returns: Ash.Type.Struct} = action) do
     candidate = Keyword.get(action.constraints || [], :instance_of)
 
+    # rule:returned-record-contract-embedded
     if is_atom(candidate) and not is_nil(candidate) and ResourceInfo.resource?(candidate) and
          not ResourceInfo.embedded?(candidate),
+       # -- end-rule:returned-record-contract-embedded
        do: {:ok, candidate},
        else: :error
   end

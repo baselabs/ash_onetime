@@ -574,6 +574,7 @@ defmodule AshOnetime.Store.Postgres do
   defp select_committed_state(target, claim) do
     {logical_partition, operation_hash, scope_hash, key_hash} = logical_key(claim)
 
+    # rule:delivery-committed-generation
     sql = """
     SELECT state
     FROM #{relation(target, "ash_onetime_idempotency_claims")}
@@ -581,6 +582,7 @@ defmodule AshOnetime.Store.Postgres do
       -- rule:delivery-completion-attempt
       AND effect_attempt = $6::bigint
     """
+    # -- end-rule:delivery-committed-generation
 
     case dispatched_query(
            target,
@@ -940,8 +942,14 @@ defmodule AshOnetime.Store.Postgres do
                hold_reference
              )
            end) do
+      # rule:pc_complete_codec_nil
+      # rule:pc_complete_digest_nil
+      # rule:pc_complete_payload_nil
       Result.success(:complete, claim: completed, payload: encoded_response)
     else
+      # -- end-rule:pc_complete_codec_nil
+      # -- end-rule:pc_complete_digest_nil
+      # -- end-rule:pc_complete_payload_nil
       {:error, %Result{reason: :lock_timeout}} when is_tuple(mode) ->
         target.repo_module.rollback(
           AshOnetime.Error.new(
@@ -1074,10 +1082,12 @@ defmodule AshOnetime.Store.Postgres do
         request.operation_hash,
         request.scope_hash,
         request.key_hash,
+        # rule:r_iso_o4
         request.fingerprint,
         request.retention_seconds,
         request.effect_local,
         if(request.effect_local, do: 0, else: 1),
+        # -- end-rule:r_iso_o4
         request.response_retention_seconds || request.retention_seconds
       ],
       :idempotency
@@ -1230,9 +1240,11 @@ defmodule AshOnetime.Store.Postgres do
            target.logical_partition,
            partition_date,
            dump_uuid(id),
+           # rule:r26
            encoded_response
          ]) do
       {:ok, %{num_rows: 1}} -> :ok
+      # -- end-rule:r26
       {:ok, _result} -> {:error, Result.failure(:store_invariant, :sent, :open)}
       {:error, %Result{} = result} -> {:error, result}
     end
@@ -1245,8 +1257,10 @@ defmodule AshOnetime.Store.Postgres do
           ""
 
         :external ->
+          # rule:pc_o4_completion_deadline_expression
           # rule:M-dst-complete
           ", retain_until = statement_timestamp() + COALESCE($10::bigint, extract(epoch FROM (retain_until - admitted_at))) * interval '1 second', response_retain_until = statement_timestamp() + COALESCE($11::bigint, $10::bigint, extract(epoch FROM (response_retain_until - admitted_at))) * interval '1 second'"
+      # -- end-rule:pc_o4_completion_deadline_expression
       end
 
     retention_update =
@@ -1278,18 +1292,24 @@ defmodule AshOnetime.Store.Postgres do
     """
 
     parameters =
+      # rule:pc_o4_date_copy
       [partition_date, codec, digest] ++
         Tuple.to_list(logical_key(claim)) ++
+        # -- end-rule:pc_o4_date_copy
         [
           dump_uuid(claim.id),
+          # rule:r25
           hold_reference,
           claim.retention_seconds,
           claim.response_retention_seconds,
+          # rule:r13
+          # -- end-rule:r25
           claim.effect_attempt
         ]
 
     case dispatched_query(target, sql, parameters) do
       {:ok, %{num_rows: 1, rows: [row]}} -> {:ok, decode_claim(:idempotency, row)}
+      # -- end-rule:r13
       {:ok, _result} -> {:error, Result.failure(:store_invariant, :sent, :open)}
       {:error, %Result{} = result} -> {:error, result}
     end
@@ -1860,9 +1880,11 @@ defmodule AshOnetime.Store.Postgres do
   defp dispatched_query(target, sql, parameters) do
     Process.put(@phase_key, :sent)
 
+    # rule:r_iso_backend_copy
     case SQL.query(target.dynamic_repo, sql, parameters) do
       {:ok, result} -> {:ok, result}
       {:error, error} -> {:error, classify_query_error(error)}
+    # -- end-rule:r_iso_backend_copy
     end
   rescue
     _exception -> {:error, Result.failure(:dispatched_unknown, :unknown, :unknown)}
@@ -1984,7 +2006,9 @@ defmodule AshOnetime.Store.Postgres do
       inserted_at: inserted_at,
       effect_local: effect_local,
       effect_attempt: effect_attempt,
+      # rule:pc_o4_response_deadline_copy
       response_retain_until: response_retain_until,
+      # -- end-rule:pc_o4_response_deadline_copy
       response_expired_at: response_expired_at
     }
 

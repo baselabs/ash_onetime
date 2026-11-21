@@ -120,8 +120,10 @@ defmodule AshOnetime.Cache do
 
       case ttl_seconds(claim) do
         ttl when is_integer(ttl) and ttl > 0 ->
+          # rule:r12
           persist(config, key(claim), entry, ttl)
 
+        # -- end-rule:r12
         _other ->
           :expired
       end

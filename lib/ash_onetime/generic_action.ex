@@ -63,8 +63,10 @@ defmodule AshOnetime.GenericAction do
   end
 
   defp produce(input, handle, protection, context) do
+    # rule:delivery-replay-produce-generic
     case AshOnetime.Admission.state(input) do
       {:ok, %{class: :execute}} ->
+        # -- end-rule:delivery-replay-produce-generic
         AshOnetime.Delivery.produce(
           handle,
           protection.produce,
@@ -98,8 +100,14 @@ defmodule AshOnetime.GenericAction do
       # rule:action-replay
       # rule:replay-execution
       {:ok, %{class: class}} when class in [:execute, :external_execute, :nonce, :untracked] ->
+        # rule:pc_context_copy_admitted
+        # rule:pc_context_copy_cell
+        # rule:pc_context_copy_ref
         run_original(input, Keyword.get(opts, :original), context)
 
+      # -- end-rule:pc_context_copy_admitted
+      # -- end-rule:pc_context_copy_cell
+      # -- end-rule:pc_context_copy_ref
       {:ok, %{class: :replay, replayed: replayed}} ->
         if is_nil(input.action.returns), do: :ok, else: {:ok, replayed}
 

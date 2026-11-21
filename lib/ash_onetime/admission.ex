@@ -265,8 +265,12 @@ defmodule AshOnetime.Admission do
   defp hold_reference(%State{hold: nil}, _result), do: {:ok, nil}
 
   defp hold_reference(state, result) do
+    # rule:r15
+    # rule:r22
     case state.hold.reference(result, %{resource: state.resource, action: state.action}) do
       :none ->
+        # -- end-rule:r15
+        # -- end-rule:r22
         {:ok, nil}
 
       {:hold, reference} ->
@@ -401,10 +405,12 @@ defmodule AshOnetime.Admission do
          {:ok, contract} <- response_contract(subject, protection),
          {:ok, request} <-
            claim_request(protection, operation_hash, scope_hash, key_hash, fingerprint, verified),
+         # rule:r_iso_o2
          {:ok, target} <- target(subject) do
       {:ok,
        %State{
          class: :pending,
+         # -- end-rule:r_iso_o2
          strategy: protection.strategy,
          resource: subject.resource,
          action: subject.action.name,
@@ -423,8 +429,12 @@ defmodule AshOnetime.Admission do
 
     surfaces =
       case subject do
+        # rule:pc_attribute_copy_run
+        # rule:pc_attribute_copy_twin
         %Ash.Changeset{} -> [subject.attributes | surfaces]
         _other -> surfaces
+      # -- end-rule:pc_attribute_copy_run
+      # -- end-rule:pc_attribute_copy_twin
       end
 
     if Enum.any?(surfaces, &reserved_surface?/1) do
@@ -453,9 +463,17 @@ defmodule AshOnetime.Admission do
   defp operation_hash(subject) do
     Fingerprint.compute(%{
       domain: :operation,
+      # rule:pc_o2a_action_run
+      # rule:pc_o2a_action_twin
+      # rule:pc_o2a_resource_run
+      # rule:pc_o2a_resource_twin
       resource: inspect(subject.resource),
       action: subject.action.name
     })
+  # -- end-rule:pc_o2a_action_run
+  # -- end-rule:pc_o2a_action_twin
+  # -- end-rule:pc_o2a_resource_run
+  # -- end-rule:pc_o2a_resource_twin
   end
 
   defp scope_hash(subject, scope) when is_list(scope) do
@@ -654,8 +672,12 @@ defmodule AshOnetime.Admission do
   defp typed_value(subject, name, :argument) do
     with {:ok, value} <- fetch_argument(subject, name),
          %{type: type, constraints: constraints} <-
+           # rule:pc_o2b_argument_run
+           # rule:pc_o2b_argument_twin
            Enum.find(subject.action.arguments, &(&1.name == name)) do
       {:ok, value, type, constraints}
+    # -- end-rule:pc_o2b_argument_run
+    # -- end-rule:pc_o2b_argument_twin
     else
       _other -> {:error, :missing}
     end
@@ -681,8 +703,12 @@ defmodule AshOnetime.Admission do
       |> put_result_tenant(subject)
       |> Map.put(:limits, protection.limits)
 
+    # rule:pc_o2b_response_run
+    # rule:pc_o2b_response_twin
     Response.contract(subject.resource, subject.action.name, response, trusted)
   end
+# -- end-rule:pc_o2b_response_run
+  # -- end-rule:pc_o2b_response_twin
 
   defp put_result_tenant(trusted, subject) do
     case Map.get(subject, :to_tenant) do
@@ -804,8 +830,10 @@ defmodule AshOnetime.Admission do
           delivery_source: :replayed
       }
 
+      # rule:delivery-replay-admission
       # rule:admission-classify-complete
       {:replay, replayed, replay_state}
+    # -- end-rule:delivery-replay-admission
     else
       # rule:admission-classify-complete-mismatch
       # complete fingerprint classification
