@@ -18,7 +18,9 @@ by digest. It never pulls the moving tag or reads private infra or runner config
 The engine's `baselabs-test-postgres` command runs as the image's PostgreSQL user. The action
 passes `TEST_PG_USER=postgres`, `TEST_PG_PASSWORD` and `TEST_PG_DATABASE=ash_onetime_test` by
 environment name; these are isolated fixture values, never external-service credentials.
-The command refuses existing data, initializes disposable `/var/lib/pg/data`, and executes
+The action mounts `/var/lib/pg` as tmpfs owned by the image's PostgreSQL user (UID/GID 26),
+and `/tmp` as disposable tmpfs. The command refuses existing data, initializes
+`/var/lib/pg/data`, and executes
 readable `/init/*.sql` in lexical order. Socket connections trust locally at `/tmp`; all TCP
 rules use `scram-sha-256`. It listens on `0.0.0.0` inside the container, published only on
 `127.0.0.1:18841`. Readiness uses `pg_isready -h 127.0.0.1`, which answers only after init.

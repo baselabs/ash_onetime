@@ -39,13 +39,31 @@ runs:
           echo 'checked PostgreSQL digest differs from ghcr.io/baselabs/postgres:current' >&2; exit 1
         fi
         docker pull "$engine"
+    - name: Log PostgreSQL servers after a failure
+      if: inputs.mode == 'stop' && failure()
+      shell: bash
+      env:
+        LOGICAL: ${{ inputs.logical }}
+      run: |
+        set -euo pipefail
+        server="${ASH_ONETIME_TEST_SERVER:?}"
+        case "$server" in
+          "ao-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}-"*) ;;
+          *) echo "::error::PostgreSQL requires this run's server hostname"; exit 1 ;;
+        esac
+        servers=("$server")
+        if [ "$LOGICAL" = true ]; then servers+=("$server-logical"); fi
+        for container in "${servers[@]}"; do
+          if docker container inspect "$container" > /dev/null 2>&1; then
+            docker logs "$container"
+          fi
+        done
     - name: Manage the disposable PostgreSQL servers
       if: always() && (inputs.mode == 'stop' || success())
       shell: bash
       env:
         MODE: ${{ inputs.mode }}
         LOGICAL: ${{ inputs.logical }}
-        JOB_STATUS: ${{ job.status }}
         # Throwaway fixture values, never credentials for an external service.
         TEST_PG_USER: postgres
         TEST_PG_PASSWORD: postgres
@@ -71,9 +89,6 @@ runs:
         for container in "${servers[@]}"; do
           if [ "$MODE" = stop ]; then
             if docker container inspect "$container" > /dev/null 2>&1; then
-              if [ "$JOB_STATUS" != success ]; then
-                if ! docker logs "$container"; then cleanup_status=1; fi
-              fi
               if ! docker rm -f -v "$container"; then cleanup_status=1; fi
             fi
             continue
@@ -88,6 +103,7 @@ runs:
           engine="$(cat .github/postgres.ref)"
           docker run --detach --pull=never --name "$container" --hostname "$container" \
             --env TEST_PG_USER --env TEST_PG_PASSWORD --env TEST_PG_DATABASE \
+            --tmpfs /var/lib/pg:uid=26,gid=26,mode=0750 --tmpfs /tmp \
             --publish "127.0.0.1:$port:5432" "$engine" \
             baselabs-test-postgres "${settings[@]}"
           ready=false
