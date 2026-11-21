@@ -1,7 +1,7 @@
 defmodule AshOnetime.Test.Migration do
   @moduledoc false
 
-  alias AshOnetime.Test.{RealConnection, Repo}
+  alias AshOnetime.Test.{Postgres, RealConnection, Repo}
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: GenerateMigrations
@@ -15,7 +15,7 @@ defmodule AshOnetime.Test.Migration do
       )
 
     # The connected server listens either on the URL's own port (a native
-    # install) or on 5432 behind the platform engine's loopback host port
+    # install) or on 5432 behind the declared engine's loopback host port
     # mapping. Anything else means the Repo is not talking
     # to the dedicated instance.
     url_port =
@@ -24,7 +24,7 @@ defmodule AshOnetime.Test.Migration do
       |> Map.fetch!(:port)
 
     unless database == "ash_onetime_test" and port in [Integer.to_string(url_port), "5432"] and
-             String.starts_with?(server_version, "18.") do
+             String.starts_with?(server_version, "#{Postgres.contract().major}.") do
       raise "database isolation check failed"
     end
 

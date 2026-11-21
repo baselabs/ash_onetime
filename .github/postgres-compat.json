@@ -1,0 +1,7 @@
+[
+  {
+    "major": "17",
+    "image": "postgres:17.12@sha256:b60e90042aa6b8dbecd58e224b3e36114dbf8ad754465264c2476ad58a86e45c",
+    "client": "17.12-1.pgdg24.04+1"
+  }
+]

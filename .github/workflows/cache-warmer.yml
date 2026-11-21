@@ -10,7 +10,7 @@ name: Cache warmer
 #
 # Caches it writes, each restored only:
 # - ash<floor> and ashlatest: ci.yml's Ash cells (deps, both builds and the dialyzer PLTs);
-# - release: the release gates, every mutation battery shard and work runs;
+# - release: the release gates, every mutation battery shard, PostgreSQL compatibility and work runs;
 # - compatibility: the second toolchain from .tool-versions, when one is declared.
 #
 # It starts only from a push to the default branch, the schedule or a dispatch. Each job
@@ -157,7 +157,7 @@ jobs:
           cell: release
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
-      - name: Build what the release gates, mutation shards and work runs build
+      - name: Build what the release gates, mutation shards, PostgreSQL compatibility and work runs build
         if: steps.cache.outputs.hit != 'true'
         run: |
           mix deps.get --check-locked

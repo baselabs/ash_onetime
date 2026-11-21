@@ -255,7 +255,8 @@ migration, no upgrade action for existing consumers.
   database restore rewinds per strategy (nonce windows, idempotent re-execution), how to
   scope reconciliation, and the post-restore partition roll-forward.
 - **PostgreSQL floor statement** (README, operations.md) — the SQL surface requires
-  PostgreSQL 17+ (the maintenance SQL uses `MAINTAIN`); the project's CI exercises 18, and versions below it are unverified.
+  PostgreSQL 17 and 18 (the maintenance SQL uses `MAINTAIN`). Work and qualification run
+  the whole suite on the PostgreSQL 18 platform engine and the declared upstream PostgreSQL 17 lane.
 - **Store digest comparisons unified to constant-time** — the last two plain-`==` digest
   comparisons in the store (the stored-payload digest check and the caller-digest
   completion check) now use a size-guarded `:crypto.hash_equals` helper, so every digest
@@ -450,7 +451,7 @@ claim and payload data, including rows backfilled by ADD COLUMN, and makes the u
 schema equal to a fresh install. Column order and generated constraint/index names are
 not schema semantics. Other changes, missing constraints, duplicate replacement CHECKs,
 and altered children refuse rather than being adopted. No trust field is relaxed by this
-conversion. Upgraded databases support stock PostgreSQL 18 dump/restore followed by prune,
+conversion. Upgraded databases support stock PostgreSQL 17 and 18 dump/restore followed by prune,
 reap and roll, with the same exact reference comparison.
 
 The conversion holds an ACCESS EXCLUSIVE lock on each converted table and all its

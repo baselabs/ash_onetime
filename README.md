@@ -160,9 +160,9 @@ Every protected action declares `:idempotency` or `:one_time_nonce` and a nonemp
 - Ash `>= 3.37.2` and `< 4.0.0`
 - AshPostgres `~> 2.15 and >= 2.15.2`, AshSql `~> 0.8 and >= 0.8.6`
 - Optional Mint `~> 1.10 and >= 1.10.2` when the host carries the installer HTTP closure
-- PostgreSQL 18 for the project test harness. The generated maintenance SQL requires PostgreSQL 17+
-  (`MAINTAIN` privilege checks and revocations). Versions below 18 are not exercised
-  by this project's CI; treat PostgreSQL 17 as unverified.
+- PostgreSQL 17 and 18. Work and qualification run the whole suite on the checked
+  PostgreSQL 18 platform engine and the pinned upstream PostgreSQL 17 compatibility image.
+  The generated maintenance SQL uses PostgreSQL 17's `MAINTAIN` privilege checks and revocations.
 
 The security floors follow
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md).

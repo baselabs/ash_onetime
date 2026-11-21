@@ -13,7 +13,7 @@ inputs:
     description: >-
       The build this cache holds: ash<version> for an Ash compatibility cell (ash3.37.2,
       ashlatest), compatibility for the second-toolchain lane, release for the release gates,
-      mutation battery and work runs
+      mutation battery, PostgreSQL compatibility and work runs
     required: true
   elixir:
     description: Exact Elixir build from the toolchain job

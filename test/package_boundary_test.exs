@@ -2,6 +2,7 @@ defmodule AshOnetime.PackageBoundaryTest do
   use AshOnetime.Test.DataCase, async: false
 
   alias AshOnetime.Test.Migration
+  alias AshOnetime.Test.Postgres
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
 
@@ -58,7 +59,7 @@ defmodule AshOnetime.PackageBoundaryTest do
     assert [{:provider_signature_module, "lib/stripe_signature.ex"}] = violations(entries, [])
   end
 
-  test "the database harness is pinned to its dedicated PostgreSQL 18 database" do
+  test "the database harness is pinned to its dedicated PostgreSQL database" do
     # test_helper already failed closed unless DATABASE_URL targets the
     # dedicated shape (postgres user, loopback host, ash_onetime_test name,
     # non-default port); this pins the Repo to that SAME guarded URL — no
@@ -71,16 +72,22 @@ defmodule AshOnetime.PackageBoundaryTest do
     assert :ok = Migration.assert_isolated_database!()
   end
 
-  test "the live harness uses the checked platform engine and its disposable auth contract" do
-    engine = File.read!(Path.expand("../.github/postgres.ref", __DIR__))
-    [_, version] = Regex.run(~r/:([0-9]+\.[0-9]+)-inputs-/, engine)
+  test "the live harness uses its declared engine and disposable auth contract" do
+    %{major: major, version: version, data: data, sockets: sockets} = Postgres.contract()
 
-    assert [[^version, "/var/lib/pg/data", "/tmp", "scram-sha-256"]] =
+    assert [[^version, ^data, ^sockets, "scram-sha-256"]] =
              SQL.query!(
                Repo,
                "SELECT split_part(current_setting('server_version'),' ',1), current_setting('data_directory'), current_setting('unix_socket_directories'), current_setting('password_encryption')",
                []
              ).rows
+
+    assert Repo.min_pg_version().major == major
+
+    for tool <- ["psql", "pg_dump", "pg_restore"] do
+      {client, 0} = System.cmd(tool, ["--version"])
+      assert client =~ "(PostgreSQL) #{major}."
+    end
 
     rules = SQL.query!(Repo, "SELECT type, auth_method, error FROM pg_hba_file_rules", []).rows
     assert Enum.any?(rules, &match?(["local", "trust", nil], &1))

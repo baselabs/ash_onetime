@@ -692,11 +692,12 @@ fall back silently to a different key.
 
 The supported runtime is Elixir `~> 1.20` (verified on 1.20.5; this admits later 1.x releases
 and excludes 2.0 or newer) and Erlang/OTP 28 or 29 with Ash `>= 3.37.2 and < 4.0.0`,
-AshPostgres `~> 2.15 and >= 2.15.2`, and PostgreSQL 18 (the version the project's test harness and release
-checks run on). The optional installer HTTP closure is constrained to Mint
-`~> 1.10 and >= 1.10.2`. The generated maintenance SQL needs PostgreSQL 17 or newer
-for its `MAINTAIN` privilege checks and revocations. Nothing below 18 is exercised by
-this project's CI; treat PostgreSQL 17 as unverified. Release checks include the full suite, mutation matrix, executable
+AshPostgres `~> 2.15 and >= 2.15.2`, and PostgreSQL 17 and 18. Work and qualification run the
+whole suite on the checked PostgreSQL 18 platform engine and the pinned upstream PostgreSQL
+17 compatibility image, with matching client tools for dump/restore. Release checks use the
+platform engine. The optional installer HTTP closure is constrained to Mint
+`~> 1.10 and >= 1.10.2`. The generated maintenance SQL uses PostgreSQL 17's `MAINTAIN`
+privilege checks and revocations. Release checks include the full suite, mutation matrix, executable
 Livebooks against PostgreSQL, warnings-as-errors documentation, exact Hex archive inspection,
 and an unpacked zero-configuration consumer, all run on the runtime pinned in `.tool-versions`;
 see [CONTRIBUTING](../CONTRIBUTING.md).

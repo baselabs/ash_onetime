@@ -1,6 +1,6 @@
 # Contributing
 
-The tests require the dedicated PostgreSQL 18 platform engine: `DATABASE_URL` must name
+The tests require a dedicated PostgreSQL server: `DATABASE_URL` must name
 `ash_onetime_test` on `127.0.0.1`, as `postgres`, on a non-default port.
 The URL guard cannot detect unrelated databases: never use a shared server.
 Maintenance tests make cluster-wide grants and require a proven throwaway server: start it
@@ -10,7 +10,8 @@ hostname must also carry the run and attempt (`ao-<run_id>-<run_attempt>-`), whi
 per-job containers do.
 
 Every database job uses [the shared PostgreSQL action](.github/actions/postgres/action.yml).
-The single checked-in [engine reference](.github/postgres.ref) currently selects PostgreSQL
+Qualification and all other database lanes use the single checked-in
+[engine reference](.github/postgres.ref), which currently selects PostgreSQL
 18.6. Before pulling or starting it, the action anonymously resolves the public
 `ghcr.io/baselabs/postgres:current` digest, refuses a mismatch, and pulls the checked reference
 by digest. It never pulls the moving tag or reads private infra or runner configuration.
@@ -32,8 +33,29 @@ Lanes that exercise replication start a second engine on loopback port `18842`, 
 the run-bound `ASH_ONETIME_TEST_SERVER`. Tests derive their connections from those values.
 The ordinary and logical containers have separate data and hostnames. An `if: always()`
 stop removes both with `docker rm -f -v`, including on failed jobs, and prints failure logs.
-The PGDG client tools remain pinned in `.github/service-pins`; their major must match the
-engine, while client patch releases may advance independently.
+The PGDG platform client tools remain pinned in `.github/service-pins`; their major must
+match the engine, while client patch releases may advance independently.
+
+Work and qualification also run the whole suite in the PostgreSQL compatibility job.
+[`.github/postgres-compat.json`](.github/postgres-compat.json) declares each supported
+non-platform major once, with its upstream patch tag, image digest and exact PGDG client
+package. The shared toolchain reader validates and emits the matrix; the platform major is
+excluded. This lane restores the existing release Mix cache, so it needs no additional
+cache-warmer job. It installs client executables matching its server major, with the pinned
+platform `libpq5` package, which supports both client majors.
+
+The same PostgreSQL action starts these upstream images with their native entrypoint and
+`POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` derived from `TEST_PG_*`.
+`POSTGRES_INITDB_ARGS=--auth-local=trust --auth-host=scram-sha-256` and
+`POSTGRES_HOST_AUTH_METHOD=scram-sha-256` require SCRAM on every TCP rule. The data directory
+is set with native `PGDATA=/var/lib/pg/data` on a `/var/lib/pg` tmpfs; upstream's entrypoint
+creates and owns the data directory as its PostgreSQL user. Server arguments set
+`password_encryption=scram-sha-256` and `unix_socket_directories=/var/run/postgresql,/tmp`:
+upstream initialization requires its default socket, and probes can also use `/tmp`.
+Ordinary and logical servers use the same loopback ports, readiness and unconditional
+cleanup as the platform engine. `ASH_ONETIME_POSTGRES_COMPAT_MAJOR` selects the declared
+contract for live version, data directory, auth and dump/restore assertions; an undeclared
+major refuses. Without it, tests require the exact checked platform version.
 
 Compile, tests, format checks, type checks and docs run in this repository's GitHub Actions
 jobs on hosted Ubuntu runners, never on an agent's workstation or a shared build machine.
@@ -129,7 +151,8 @@ for each directly-consumed package in the affected family.
 
 `test/ash_onetime/store/operation_hold_privileged_test.exs` carries the
 `:operation_hold_superuser` tag. It skips unless `ASH_ONETIME_SUPERUSER_URL` supplies a separate,
-throwaway PostgreSQL 18 superuser connection supplied by the shared action's fixture. The ordinary `DATABASE_URL` stays on the
+throwaway superuser connection matching the lane's declared PostgreSQL major, supplied by
+the shared action's fixture. The ordinary `DATABASE_URL` stays on the
 project's dedicated test database. CI runs:
 
 ```sh

@@ -3767,7 +3767,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
     @tag restore_fixpoint: true
     @tag hash_partitions: if(variant == :hash, do: 2, else: nil)
     @tag quoted_schema: variant == :prefix
-    test "every package expression is a PostgreSQL 18 dump restore fixpoint, #{@variant}", c do
+    test "every package expression is a PostgreSQL dump restore fixpoint, #{@variant}", c do
       if @variant == :facts do
         source = Generator.render_fact_tables(Repo, fact_tables: ["maintenance_facts"])
         module = Module.concat(__MODULE__, "Facts#{System.unique_integer([:positive])}")
@@ -3915,6 +3915,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
   @tag maintenance_shape_mutation: true
   test "noinherit is omitted only for index backed constraints on leaf partitions", c do
     leaf = rel(c, "ash_onetime_response_payloads_default")
+    server_version = scalar(Repo, "SELECT current_setting('server_version_num')::integer")
 
     constraints =
       scalar(
@@ -3929,6 +3930,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     # Trusted fixture provisioning changes exactly one real catalog field, as
     # the executable-metadata Table 1 fixtures do; every subject is runtime.
+    # PostgreSQL 18+ must supply NOT NULL rows; missing rows must fail the probe.
     for {table, type} <- [
           {"ash_onetime_nonce_claims", "p"},
           {"ash_onetime_nonce_claims", "u"},
@@ -3939,7 +3941,8 @@ defmodule AshOnetime.Store.MaintenanceTest do
           {"ash_onetime_response_payloads", "c"},
           {"ash_onetime_response_payloads_default", "n"},
           {"ash_onetime_response_payloads_default", "c"}
-        ] do
+        ],
+        type != "n" or server_version >= 180_000 do
       [oid, original] =
         SQL.query!(
           Repo,
@@ -4115,10 +4118,10 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   defp postgres_tool!(tool) do
-    path = System.find_executable(tool) || "/usr/lib/postgresql/18/bin/#{tool}"
+    major = AshOnetime.Test.Postgres.contract().major
+    path = System.find_executable(tool) || "/usr/lib/postgresql/#{major}/bin/#{tool}"
     {version, 0} = System.cmd(path, ["--version"])
-    assert version =~ ~r/\(PostgreSQL\) 18\./
-    IO.puts("PG_CLIENT #{String.trim(version)}")
+    assert version =~ "(PostgreSQL) #{major}."
     path
   end
 
@@ -5184,7 +5187,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     sql!(
       Repo,
-      "CREATE FUNCTION #{rel(c, "index_handler")}(internal) RETURNS index_am_handler LANGUAGE internal AS 'bthandler'"
+      "CREATE FUNCTION #{rel(c, "index_handler")}(internal) RETURNS index_am_handler LANGUAGE internal AS 'hashhandler'"
     )
 
     sql!(Repo, "ALTER FUNCTION #{rel(c, "index_handler")}(internal) OWNER TO #{q(c.runtime)}")
@@ -5193,7 +5196,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     sql!(
       Repo,
-      "CREATE OPERATOR CLASS #{rel(c, "am_ops")} DEFAULT FOR TYPE timestamptz USING #{q(am)} AS OPERATOR 1 < (timestamptz,timestamptz), OPERATOR 2 <= (timestamptz,timestamptz), OPERATOR 3 = (timestamptz,timestamptz), OPERATOR 4 >= (timestamptz,timestamptz), OPERATOR 5 > (timestamptz,timestamptz), FUNCTION 1 timestamptz_cmp(timestamptz,timestamptz)"
+      "CREATE OPERATOR CLASS #{rel(c, "am_ops")} DEFAULT FOR TYPE timestamptz USING #{q(am)} AS OPERATOR 1 = (timestamptz,timestamptz), FUNCTION 1 timestamp_hash(timestamp)"
     )
 
     sql!(c.owner_repo, "DROP INDEX #{rel(c, "ash_onetime_nonce_claims_retain_until_index")}")
