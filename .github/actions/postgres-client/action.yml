@@ -2,7 +2,7 @@ name: PostgreSQL client
 description: Install the pinned PostgreSQL client tools from PGDG and put them first on PATH
 inputs:
   version:
-    description: Exact PGDG client package version from .github/service-pins
+    description: Exact PGDG client package version from the toolchain reader
     required: true
   pgdg-key:
     description: PGDG apt signing key fingerprint from .github/service-pins

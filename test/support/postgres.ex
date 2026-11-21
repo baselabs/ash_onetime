@@ -25,7 +25,7 @@ defmodule AshOnetime.Test.Postgres do
         %{
           major: String.to_integer(lane["major"]),
           version: version,
-          data: "/var/lib/postgresql/data",
+          data: "/var/lib/pg/data",
           sockets: "/var/run/postgresql,/tmp"
         }
     end

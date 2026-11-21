@@ -214,7 +214,9 @@ jobs:
     name: "PostgreSQL ${{ matrix.postgres.major }} compatibility"
     needs: toolchain
     runs-on: ubuntu-24.04
-    timeout-minutes: 90 # no green run yet
+    # Warm green: 31 min 12 s, Work 44895344941; add three minutes for a cold build
+    # (deps/build took 2 min 32 s in cold Work 44838423147). About twice that total.
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
