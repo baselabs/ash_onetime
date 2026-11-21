@@ -125,6 +125,7 @@ jobs:
           name: release-assets
           path: ${{ runner.temp }}/ash-onetime-release-assets/
           if-no-files-found: error
+          retention-days: 7
       - name: Remove this job's temporary release files
         if: always()
         run: rm -rf -- "$RUNNER_TEMP/ash-onetime-release-assets" "$RUNNER_TEMP/ash-onetime-hex-upload"

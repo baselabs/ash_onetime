@@ -78,7 +78,7 @@ runs:
         from pathlib import Path
 
         patterns = {
-            'postgres_image': r'postgres@sha256:[0-9a-f]{64}',
+            'postgres_image': r'postgres:[0-9]+\.[0-9]+-[a-z]+@sha256:[0-9a-f]{64}',
             'postgres_client': r'[0-9]+\.[0-9]+-[0-9]+\.pgdg24\.04\+[0-9]+',
             'pgdg_key': r'[0-9A-F]{40}',
         }
