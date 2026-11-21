@@ -196,13 +196,7 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
       errors: []
     }
 
-    initial =
-      Enum.reduce(run.roles, initial, fn {id, role}, acc ->
-        case Enum.find(twin.roles, fn {_id, r} -> r == role end) do
-          {other, ^role} -> bind(acc, id, other, {:role, role})
-          nil -> acc
-        end
-      end)
+    initial = Enum.reduce(run.roles, initial, &pair_role(&1, &2, twin.roles))
 
     initial =
       Enum.reduce(Registry.rename(), initial, fn {a, b}, acc -> bind(acc, a, b, :resource) end)
@@ -231,6 +225,13 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
 
     initial = pair_sources(run.origins, twin.origins, initial, permitted, :o1)
     pair_sources(run.reads, twin.reads, initial, permitted, :o3)
+  end
+
+  defp pair_role({id, role}, state, roles) do
+    case Enum.find(roles, fn {_id, other_role} -> other_role == role end) do
+      {other, ^role} -> bind(state, id, other, {:role, role})
+      nil -> state
+    end
   end
 
   defp pair_relation({id, name}, state, relations) do
