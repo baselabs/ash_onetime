@@ -104,8 +104,8 @@ runs:
           docker run --detach --pull=never --name "$container" --hostname "$container" \
             --env TEST_PG_USER --env TEST_PG_PASSWORD --env TEST_PG_DATABASE \
             --tmpfs /var/lib/pg:uid=26,gid=26,mode=0750 --tmpfs /tmp \
-            --publish "127.0.0.1:$port:5432" "$engine" \
-            baselabs-test-postgres "${settings[@]}"
+            --publish "127.0.0.1:$port:5432" \
+            --entrypoint baselabs-test-postgres "$engine" "${settings[@]}"
           ready=false
           for ((attempt=0; attempt<60; attempt++)); do
             if docker exec "$container" pg_isready -h 127.0.0.1 -U "$TEST_PG_USER" -d "$TEST_PG_DATABASE"; then

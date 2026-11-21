@@ -15,7 +15,8 @@ The single checked-in [engine reference](.github/postgres.ref) currently selects
 `ghcr.io/baselabs/postgres:current` digest, refuses a mismatch, and pulls the checked reference
 by digest. It never pulls the moving tag or reads private infra or runner configuration.
 
-The engine's `baselabs-test-postgres` command runs as the image's PostgreSQL user. The action
+The action starts the engine with `--entrypoint baselabs-test-postgres`, the shape infra
+qualifies; that command runs as the image's PostgreSQL user. The action
 passes `TEST_PG_USER=postgres`, `TEST_PG_PASSWORD` and `TEST_PG_DATABASE=ash_onetime_test` by
 environment name; these are isolated fixture values, never external-service credentials.
 The action mounts `/var/lib/pg` as tmpfs owned by the image's PostgreSQL user (UID/GID 26),
