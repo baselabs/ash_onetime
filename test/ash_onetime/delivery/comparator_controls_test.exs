@@ -220,6 +220,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert_native_copies([copy], indexed, expected)
     end
 
+    for instance <- decoders.instances do
+      assert Enum.sum(Enum.map(instance.provenance, & &1.length)) == byte_size(instance.input)
+
+      for span <- instance.provenance do
+        expected = binary_part(instance.input, span.offset - instance.start, span.length)
+        assert_native_copies(span.copies, indexed, expected)
+      end
+    end
+
     for {_port, chunks} <- streams do
       framing = Wire.frames(chunks)
       assert framing.errors == []

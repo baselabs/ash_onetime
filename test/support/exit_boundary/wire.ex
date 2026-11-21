@@ -85,7 +85,7 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
       payload: payload,
       start: stream.offset,
       stop: stop,
-      provenance: frame_spans(stream.provenance, stream.offset, stop)
+      provenance: spans(stream.provenance, stream.offset, stop)
     }
 
     stream = %{
@@ -106,7 +106,7 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
 
   defp extract_frames(stream, _direction, state), do: {stream, state}
 
-  defp frame_spans(spans, first, last) do
+  def spans(spans, first, last) do
     for span <- spans,
         start = max(span.offset, first),
         stop = min(span.offset + span.length, last),

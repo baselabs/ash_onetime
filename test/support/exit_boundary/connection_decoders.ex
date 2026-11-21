@@ -23,18 +23,30 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp historical_cursors(historical) do
-    for {_holder, %{protocol: %{sock: {:gen_tcp, port}} = protocol}} <- historical,
+    for {holder, %{protocol: %{sock: {:gen_tcp, port}} = protocol}} <- historical,
         into: %{} do
       buffer = if is_binary(protocol.buffer), do: protocol.buffer, else: <<>>
-      {port, %{buffer: buffer, offset: 0, rows: [], types: protocol.types}}
+      source = %{index: {:historical, holder}, path: [:protocol, :buffer], offset: 0}
+      copies = [Map.put(source, :length, byte_size(buffer))]
+
+      span = %{
+        index: source.index,
+        offset: 0,
+        source_offset: 0,
+        copies: copies,
+        length: byte_size(buffer)
+      }
+
+      spans = if buffer == <<>>, do: [], else: [span]
+      {port, %{buffer: buffer, offset: 0, rows: [], types: protocol.types, spans: spans}}
     end
   end
 
   defp event(e, state, replies) do
     state =
       case Map.fetch(replies, e.index) do
-        {:ok, %{bytes: bytes, port: port}} when is_binary(bytes) ->
-          receive_bytes(state, e, port, bytes)
+        {:ok, %{bytes: bytes, port: port, copies: copies}} when is_binary(bytes) ->
+          receive_bytes(state, e, port, bytes, copies)
 
         _ ->
           state
@@ -43,10 +55,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     decoder_event(e, state)
   end
 
-  defp receive_bytes(state, source, port, bytes) do
+  defp receive_bytes(state, source, port, bytes, copies) do
     case Map.fetch(state.cursors, port) do
-      {:ok, cursor} -> put_in(state.cursors[port], %{cursor | buffer: cursor.buffer <> bytes})
-      :error -> failure(state, source, :decoder_history, false)
+      {:ok, cursor} ->
+        span = %{
+          index: source.index,
+          offset: cursor.offset + byte_size(cursor.buffer),
+          source_offset: 0,
+          copies: copies,
+          length: byte_size(bytes)
+        }
+
+        cursor = %{cursor | buffer: cursor.buffer <> bytes, spans: cursor.spans ++ [span]}
+        put_in(state.cursors[port], cursor)
+
+      :error ->
+        failure(state, source, :decoder_history, false)
     end
   end
 
@@ -166,6 +190,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   defp retain(state, pair, port, cursor, consumed, rows, expected) do
     remaining = byte_size(cursor.buffer) - consumed
     rest = binary_part(cursor.buffer, consumed, remaining)
+    provenance = Wire.spans(cursor.spans, cursor.offset, cursor.offset + byte_size(cursor.buffer))
 
     instance = %{
       port: port,
@@ -175,11 +200,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       stop: cursor.offset + consumed,
       input: cursor.buffer,
       tail: rest,
+      provenance: provenance,
       expected: expected,
       copies: buffer_copies(pair, consumed, remaining, expected)
     }
 
-    cursor = %{cursor | offset: cursor.offset + consumed, buffer: rest, rows: rows}
+    offset = cursor.offset + consumed
+    spans = Enum.filter(cursor.spans, &(&1.offset + &1.length > offset))
+    cursor = %{cursor | offset: offset, buffer: rest, rows: rows, spans: spans}
     state = put_in(state.cursors[port], cursor)
     %{state | instances: [instance | state.instances]}
   end
