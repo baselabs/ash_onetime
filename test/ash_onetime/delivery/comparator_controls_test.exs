@@ -568,6 +568,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             spawn(fn ->
               true = Process.register(self(), :ash_onetime_native_timer_recipient)
               send(root, :native_timer_registered)
+
               receive do
                 :finish -> :ok
               end
@@ -578,8 +579,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           end
 
           monitor = Process.monitor(recipient)
+
           timer =
             :erlang.send_after(60_000, :ash_onetime_native_timer_recipient, :native_named_timer)
+
           send(recipient, :finish)
 
           receive do
@@ -683,6 +686,46 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert Enum.map(states.errors, & &1.rule) == [:state_buffer_copy]
     assert hd(states.errors).index == corrupted.index
+
+    for mutant <- [:stream_state_copy, :stream_length, :stream_timeout, :stream_buffer_copy] do
+      checked =
+        ComparatorMutants.with_mutant(mutant, fn ->
+          ConnectionStates.build(
+            %{events: captured.events},
+            captured.native,
+            captured.decoders,
+            captured.historical,
+            {:initial, captured.initial}
+          )
+        end)
+
+      expected = if mutant == :stream_buffer_copy, do: [], else: [:state_buffer_copy]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    restored =
+      ConnectionStates.build(
+        %{events: captured.events},
+        captured.native,
+        captured.decoders,
+        captured.historical,
+        {:initial, captured.initial}
+      )
+
+    assert Enum.map(restored.errors, & &1.rule) == [:state_buffer_copy]
+    fresh = cached_decoders(nil)
+
+    positive =
+      ConnectionStates.build(
+        %{events: fresh.events},
+        fresh.native,
+        fresh.decoders,
+        fresh.historical,
+        {:initial, fresh.initial}
+      )
+
+    assert positive.errors == []
+    IO.puts("CONNECTION_PRIVATE_BUFFER_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
   @tag :connection_streams

@@ -65,6 +65,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       described: %{},
       versions: Map.values(holders),
       copies: [],
+      buffers: [],
       errors: [],
       pairs: native.pairs,
       returns: Map.new(native.pairs, fn {_index, pair} -> {pair.returned.index, pair} end),
@@ -79,6 +80,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     %{
       versions: Enum.reverse(state.versions),
       copies: Enum.reverse(state.copies),
+      buffers: Enum.reverse(state.buffers),
       errors: Enum.reverse(state.errors)
     }
   end
@@ -226,6 +228,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     case input_version(protocol, frames, Map.get(state.lookups, pid), state.ports) do
       {:ok, expected} ->
+        state = buffer_input(state, source, function, arguments, expected)
+
         {state, protocol_input} =
           input_protocol(state, source, expected.protocol, function, arguments)
 
@@ -274,6 +278,43 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp input_version(%Postgrex.Protocol{sock: sock}, [], nil, ports), do: Map.fetch(ports, sock)
   defp input_version(_protocol, _frames, _lookup, _ports), do: :error
+
+  defp buffer_input(state, source, :msg_send, [_protocol, _messages, buffer], version) do
+    cursor? =
+      Enum.any?(source.stack, fn
+        {Postgrex.Protocol, function, _} ->
+          function in [:error_flushed, :rollback_flushed, :reload_flushed]
+
+        _ ->
+          false
+      end)
+
+    {state, expected, origin} = send_buffer_origin(state, source, version, cursor?)
+    state = exact(state, source, :state_buffer_copy, buffer, expected)
+
+    copy = %{
+      index: source.index,
+      path: [2, 2, 2],
+      origin: origin,
+      sock: version.protocol.sock
+    }
+    %{state | buffers: [copy | state.buffers]}
+  end
+
+  defp buffer_input(state, _source, _function, _arguments, _version), do: state
+
+  defp send_buffer_origin(state, _source, version, false),
+    do: {state, version.protocol.buffer, {:state_buffer, version.origin}}
+
+  defp send_buffer_origin(state, source, version, true) do
+    case cursor_version(state, source, version.protocol) do
+      %{index: index, port: port, cursor: cursor} ->
+        {state, cursor.buffer, {:decoder_cursor, port, index}}
+
+      nil ->
+        {failure(state, source, :state_buffer_origin), version.protocol.buffer, :unbound}
+    end
+  end
 
   defp returned(state, source, frame, result, rest) do
     function = elem(source.mfa, 1)
@@ -524,17 +565,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
-  defp cursor_buffer(state, source, %{input: %{sock: {:gen_tcp, port}}} = frame) do
+  defp cursor_version(state, source, %{sock: {:gen_tcp, port}}) do
     state.decoders.timeline
     |> Enum.filter(&(&1.port == port and &1.index < source.index))
     |> List.last()
-    |> case do
+  end
+
+  defp cursor_version(_state, _source, _protocol), do: nil
+
+  defp cursor_buffer(state, source, frame) do
+    case cursor_version(state, source, frame.input) do
       %{cursor: cursor} -> cursor.buffer
       nil -> frame.input.buffer
     end
   end
-
-  defp cursor_buffer(_state, _source, frame), do: frame.input.buffer
 
   defp pair_returned(state, source), do: Map.get(state.returns, source.index)
 

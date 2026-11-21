@@ -114,6 +114,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
             events: [],
             pids: pids,
             monitors: monitors,
+            origins: Map.new(pids, fn pid -> {pid, :proc_lib.translate_initial_call(pid)} end),
             down: MapSet.new(),
             opened: MapSet.new(),
             closed: MapSet.new(),
@@ -253,14 +254,46 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
           }
         end,
       timer_instances:
-        for {ref, timer} <- open_timers(state) do
-          %{
-            kind: timer.kind,
-            recipient_alive?: is_pid(timer.dest) and Process.alive?(timer.dest),
-            active?: is_integer(:erlang.read_timer(ref))
-          }
-        end
+        for {ref, timer} <- open_timers(state), do: timer_diagnostic(ref, timer, state)
     }
+  end
+
+  defp timer_diagnostic(ref, timer, state) do
+    %{
+      kind: timer.kind,
+      creator: %{caller?: timer.creator == state.root, mfa: Map.get(state.origins, timer.creator)},
+      recipient: timer_recipient(timer.dest, state),
+      active?: is_integer(:erlang.read_timer(ref))
+    }
+  end
+
+  defp timer_recipient(pid, state) when is_pid(pid) do
+    %{
+      kind: :pid,
+      alive?: Process.alive?(pid),
+      monitored?: Map.has_key?(state.monitors, pid),
+      death_seen?: MapSet.member?(state.down, pid),
+      current: current_origin(pid)
+    }
+  end
+
+  defp timer_recipient(name, _state) when is_atom(name) do
+    %{
+      kind: :registered_name,
+      name: name,
+      current: current_origin(Process.whereis(name))
+    }
+  end
+
+  defp timer_recipient(_other, _state), do: %{kind: :other}
+
+  defp current_origin(nil), do: :not_registered
+
+  defp current_origin(pid) do
+    case Process.info(pid, :current_function) do
+      {:current_function, mfa} -> %{mfa: mfa}
+      nil -> :exited
+    end
   end
 
   defp record({:DOWN, ref, :process, pid, _reason}, state) do
@@ -321,7 +354,12 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       state
     else
       ref = Process.monitor(pid)
-      %{state | pids: MapSet.put(state.pids, pid), monitors: Map.put(state.monitors, pid, ref)}
+      %{
+        state
+        | pids: MapSet.put(state.pids, pid),
+          monitors: Map.put(state.monitors, pid, ref),
+          origins: Map.put(state.origins, pid, :proc_lib.translate_initial_call(pid))
+      }
     end
   end
 
@@ -354,7 +392,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
         :start_timer -> {:timeout, ref, message}
       end
 
-    timer = %{kind: kind, dest: dest, expected: expected, state: :pending}
+    timer = %{kind: kind, creator: pid, dest: dest, expected: expected, state: :pending}
     state = %{state | pending_start: pending, timers: Map.put(state.timers, ref, timer)}
 
     if is_pid(dest) and MapSet.member?(state.down, dest),

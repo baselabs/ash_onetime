@@ -451,6 +451,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_buffer_copy) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: "    state = exact(state, source, :state_buffer_copy, buffer, expected)\n",
+        mutated: "    state = exact(state, source, :state_buffer_copy, expected, expected)\n"
+      }
+    ]
+  end
+
   def compare(pair, rule), do: with_mutant(rule, fn -> Comparator.compare(pair) end)
 
   # Run the actual Postgrex owner with one private copy changed. Socket calls,

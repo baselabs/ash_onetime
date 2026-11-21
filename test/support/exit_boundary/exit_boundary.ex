@@ -102,9 +102,7 @@ defmodule AshOnetime.Test.ExitBoundary do
 
   defp collector_failure(reason) do
     for {kind, value} <- reason do
-      IO.puts(
-        "NATIVE_COLLECTOR_FAILURE: " <> Diagnostics.render(%{kind: kind, length: value})
-      )
+      IO.puts("NATIVE_COLLECTOR_FAILURE: " <> Diagnostics.render(%{kind: kind, length: value}))
     end
 
     raise ExUnit.AssertionError,
