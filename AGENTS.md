@@ -28,7 +28,7 @@ The lock and `.tool-versions` pin development releases; published ranges preserv
   longer job is split into jobs, never given a looser limit.
 - **Caches.** Every job restores Mix caches through `.github/actions/mix-cache`; only the `Cache warmer`
   workflow on the default branch saves them.
-- **Landing.** CI runs the full suite on a candidate branch before `main` moves.
+- **Landing.** CI runs the full suite on a candidate branch before `main` moves. A work branch lands whole: merge `origin/main` into it, push it so `Work` runs on that head, then run `kimosabe-land --sha <head>`, so that `main` moves to the branch's own commit. `--pick` copies commits and leaves the branch unmerged, so it is only for a commit that is not on a branch.
 
 ## CI/CD and releases
 
