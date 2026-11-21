@@ -60,18 +60,9 @@ def main(arguments):
         command += [directory + "comparator_scheduling_test.exs"]
         for group in shard["groups"]:
             command += ["--only", f"u9_group:{group}"]
+    elif lane == "native" and selector == "":
+        command += [directory + "comparator_controls_test.exs", "--only", "connection_streams"]
     elif lane == "controls" and selector == "":
-        # Establish the native transport proofs before any comparator row uses
-        # them. Exclude the same group from the following battery so it runs once.
-        proof = subprocess.run([
-            "mix", "test", directory + "comparator_controls_test.exs",
-            "--only", "connection_streams",
-        ], check=False)
-        if proof.returncode:
-            return proof.returncode
-        print("::notice title=Native connection prerequisites::"
-              "All connection_streams tests passed before the remaining comparator controls.",
-              flush=True)
         command += [directory + name for name in [
             "comparator_controls_test.exs", "comparator_matrix_test.exs",
             "comparator_mutations_test.exs", "comparator_positive_controls_test.exs",
