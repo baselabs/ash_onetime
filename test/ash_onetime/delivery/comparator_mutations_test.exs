@@ -49,7 +49,8 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
 
     test "#{AshOnetime.DeliveryComparatorMutations.label(mutation)}: named first divergence",
          context do
-      mutation = unquote(Macro.escape(mutation))
+      mutation =
+        Enum.find(AshOnetime.DeliveryComparatorMutations.rows(), &(&1.id == unquote(mutation.id)))
 
       with_runtime(mutation, context, fn ->
         row = row!(mutation.action, mutation.branch, mutation.fault)
@@ -115,7 +116,8 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
     @tag :c_set
     @tag String.to_atom(Atom.to_string(mutation.id) <> "_c_set")
     test "#{AshOnetime.DeliveryComparatorMutations.label(mutation)}: C-set input pair", context do
-      mutation = unquote(Macro.escape(mutation))
+      mutation =
+        Enum.find(AshOnetime.DeliveryComparatorMutations.rows(), &(&1.id == unquote(mutation.id)))
       row = row!(mutation.action, mutation.branch, mutation.fault)
       values = Values.set()
 
@@ -183,9 +185,16 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
           assert disabled.errors == [],
                  "R-iso-inv must pass with only inv's source binding disabled"
 
-        {:completion, :r4} ->
+        {:completion, :r_iso_completion} ->
           assert disabled.errors == [],
-                 "R4 must pass with only completion's source binding disabled"
+                 "R-iso-completion must pass with only completion's source binding disabled"
+
+        {:completion, :r4} ->
+          assert match?(%{at: %{mfa: {:erlang, :put, 2}}, rule: :o4,
+                          path: [{{:claim_column, :retain_until}, [2, 2, 1, 4, 1, :retain_until]}]}, next),
+                 "R4's shifted retention must still fail its own O4 copy at the done put"
+          assert next.at.run_index == active_first.at.run_index
+          assert MutationWitness.named?(mutation, next, pair, disabled)
 
         {:crypto, :r5} ->
           assert disabled.errors == [], "R5 must pass with only the crypto transfer disabled"

@@ -201,22 +201,79 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       database = AshOnetime.Test.ExitBoundary.DatabaseOrigins.build(wire, side)
       assert database.errors == []
       tokens = for {_, {:database_expression, token}} <- database.slots, do: token
-      required = [:payload_date_argument, :completion_date_argument, :database_date_return,
-        :database_date_bind_copy, :completion_date_frame, :completion_date_environment]
-      required = if side.resource == Withheld,
-        do: required ++ [:payload_date_column, :payload_date_result], else: required
-      for token <- required, do: assert(token in tokens, "missing native clock-copy witness: #{token}")
 
-      relations = for {table, changes} <- side.delta,
-                      row <- changes.added ++ changes.removed,
-                      table == database.statements.payload.table or table in database.payload_children do
-        assert {:ok, relation, _row} = AshOnetime.Test.ExitBoundary.DatabaseOrigins.payload_snapshot(table, row, database)
-        relation
-      end
+      required = [
+        :payload_date_argument,
+        :completion_date_argument,
+        :database_date_return,
+        :database_date_bind_copy,
+        :completion_date_frame,
+        :completion_date_environment
+      ]
+
+      required =
+        if side.resource == Withheld,
+          do: required ++ [:payload_date_column, :payload_date_result],
+          else: required
+
+      for token <- required,
+          do: assert(token in tokens, "missing native clock-copy witness: #{token}")
+
+      relations =
+        for {table, changes} <- side.delta,
+            row <- changes.added ++ changes.removed,
+            table == database.statements.payload.table or table in database.payload_children do
+          assert {:ok, relation, _row} =
+                   AshOnetime.Test.ExitBoundary.DatabaseOrigins.payload_snapshot(
+                     table,
+                     row,
+                     database
+                   )
+
+          relation
+        end
+
       assert database.statements.payload.table in relations
       assert {:database_relation, :payload_child} in relations
-      IO.inspect(%{side: side.resource, copies: Enum.frequencies(tokens), relations: Enum.uniq(relations)},
-        label: "U4_NATIVE_CLOCK_COPY_COVERAGE")
+
+      IO.inspect(
+        %{side: side.resource, copies: Enum.frequencies(tokens), relations: Enum.uniq(relations)},
+        label: "U4_NATIVE_CLOCK_COPY_COVERAGE"
+      )
+    end
+
+    assert_green(pair)
+  end
+
+  @tag :u6
+  test "U6: prepared query logging parameters belong to their actual statement", context do
+    pair = observe(context, row!(:rotate, :execute), Values.set()[:va])
+
+    for side <- [pair.run, pair.twin] do
+      events = Origins.build(side).events
+      contexts = AshOnetime.Test.ExitBoundary.DatabaseOrigins.sql_contexts(events)
+      assert Enum.any?(events, &(&1.mfa in [{Postgrex, :prepare_execute, 5}, {Postgrex, :execute, 4}]))
+
+      witnesses =
+        for %{event: {_, :call, {DBConnection, :meter, [opts]}}, index: index} <- events,
+            logger = Keyword.get(opts, :log),
+            is_function(logger) do
+          # The same native callback is later handed its own LogEntry. Its SQL
+          # independently identifies the earlier closure's parameter types.
+          entry =
+            Enum.find_value(events, fn
+              %{event: {_, :call, {DBConnection, :log, [^logger, %DBConnection.LogEntry{} = entry]}},
+                index: later} when later > index -> entry
+              _ -> nil
+            end)
+
+          assert entry != nil, "each native query logger needs its actual LogEntry"
+          statement = to_string(entry.query)
+          assert contexts[index] === statement
+          index
+        end
+
+      assert witnesses != [], "the native prepared-query logger path must execute"
     end
 
     assert_green(pair)

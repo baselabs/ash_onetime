@@ -75,10 +75,12 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
   end
 
   defp event(e, s) do
-    s = case wire_port(e.event) do
-      port when is_port(port) -> put_in(s.wire_ports[e.role], port)
-      _ -> s
-    end
+    s =
+      case wire_port(e.event) do
+        port when is_port(port) -> put_in(s.wire_ports[e.role], port)
+        _ -> s
+      end
+
     s = release(e, s)
     s = date_flow(e, s)
     s = put_in(s.date_checkpoints[e.index], Map.get(s.dates, e.role))
@@ -98,23 +100,43 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   # First bind the date flowing through the completion to its native SELECT.
   # Every downstream SQL copy is then keyed by that statement and claim id.
-  defp date_flow(%{event: {_, :call, {AshOnetime.Store.Postgres, :insert_payload, [_, date, id, _]}}} = e, s) do
+  defp date_flow(
+         %{event: {_, :call, {AshOnetime.Store.Postgres, :insert_payload, [_, date, id, _]}}} = e,
+         s
+       ) do
     expected = Map.get(s.dates, e.role)
     s = checked(s, e, [2, 2, 1], date, expected, :payload_date_argument)
     %{s | payload_dates: Map.put_new(s.payload_dates, uuid(id), expected)}
   end
 
-  defp date_flow(%{event: {_, :call, {AshOnetime.Store.Postgres, :update_complete, [_, claim, date | _]}}} = e, s),
-    do: checked(s, e, [2, 2, 2], date, payload_date(s, claim.id), :completion_date_argument)
+  defp date_flow(
+         %{event: {_, :call, {AshOnetime.Store.Postgres, :update_complete, [_, claim, date | _]}}} =
+           e,
+         s
+       ),
+       do: checked(s, e, [2, 2, 2], date, payload_date(s, claim.id), :completion_date_argument)
 
-  defp date_flow(%{event: {_, :return_from, {AshOnetime.Store.Postgres, :database_date, 2}, {:ok, date}}} = e, s),
-    do: checked(s, e, [3, 1], date, Map.get(s.dates, e.role), :database_date_return)
+  defp date_flow(
+         %{event: {_, :return_from, {AshOnetime.Store.Postgres, :database_date, 2}, {:ok, date}}} =
+           e,
+         s
+       ),
+       do: checked(s, e, [3, 1], date, Map.get(s.dates, e.role), :database_date_return)
 
   defp date_flow(%{event: {_, :call, {module, function, args}}} = e, s) do
     case completion_date_slot(module, function) do
       {:ok, index} ->
-        checked(s, e, [2, 2, index], Enum.fetch!(args, index), s.dates[e.role], :completion_date_frame)
-      :not_called -> s
+        checked(
+          s,
+          e,
+          [2, 2, index],
+          Enum.fetch!(args, index),
+          s.dates[e.role],
+          :completion_date_frame
+        )
+
+      :not_called ->
+        s
     end
   end
 
@@ -122,9 +144,19 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   defp completion_date_slot(AshOnetime.Store.Postgres = module, function) do
     if String.starts_with?(Atom.to_string(function), "-complete_transaction/7-fun-") do
-      slots = for {callee, arity, argument} <- [{:insert_payload, 4, 1}, {:update_complete, 7, 2}],
-                  {:ok, index} <- [AshOnetime.Test.ExitBoundary.Compiled.captured_argument(module, function, callee, arity, argument)],
-                  do: index
+      slots =
+        for {callee, arity, argument} <- [{:insert_payload, 4, 1}, {:update_complete, 7, 2}],
+            {:ok, index} <- [
+              AshOnetime.Test.ExitBoundary.Compiled.captured_argument(
+                module,
+                function,
+                callee,
+                arity,
+                argument
+              )
+            ],
+            do: index
+
       case slots do
         [index] -> {:ok, index}
         [] -> :not_called
@@ -134,11 +166,14 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
       :not_called
     end
   end
+
   defp completion_date_slot(_, _), do: :not_called
 
   def payload_date(s, id) do
     case Map.fetch(s.payload_dates, uuid(id)) do
-      {:ok, date} -> date
+      {:ok, date} ->
+        date
+
       :error ->
         case Map.fetch(s.rows, {uuid(id), "complete"}) do
           {:ok, row} -> row["response_partition"]
@@ -149,15 +184,20 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   def payload_snapshot(table, row, s) do
     parent = s.statements.payload.table
+
     if table == parent or table in s.payload_children do
       expected = payload_date(s, row["claim_id"])
+
       if is_struct(expected, Date) do
         monthly = Registry.payload_partition(expected)
         child = if monthly in s.payload_children, do: monthly, else: parent <> "_default"
         expected_table = if table == parent, do: parent, else: child
+
         if table == expected_table and row["partition_date"] === expected do
           relation = if table == parent, do: parent, else: {:database_relation, :payload_child}
-          {:ok, relation, Map.put(row, "partition_date", {:database_expression, :payload_date_snapshot})}
+
+          {:ok, relation,
+           Map.put(row, "partition_date", {:database_expression, :payload_date_snapshot})}
         else
           {:error, {table, row["partition_date"]}, {expected_table, expected}}
         end
@@ -171,10 +211,18 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   defp date_statement(sql) when is_binary(sql) do
     cond do
-      String.starts_with?(sql, "INSERT INTO ") and String.contains?(sql, "ash_onetime_response_payloads") -> {1, 2}
-      String.starts_with?(sql, "UPDATE ") and String.contains?(sql, "SET state = 'complete'") -> {0, 7}
-      String.starts_with?(sql, "SELECT partition_date, encoded_response") -> {2, 1}
-      true -> nil
+      String.starts_with?(sql, "INSERT INTO ") and
+          String.contains?(sql, "ash_onetime_response_payloads") ->
+        {1, 2}
+
+      String.starts_with?(sql, "UPDATE ") and String.contains?(sql, "SET state = 'complete'") ->
+        {0, 7}
+
+      String.starts_with?(sql, "SELECT partition_date, encoded_response") ->
+        {2, 1}
+
+      true ->
+        nil
     end
   end
 
@@ -186,13 +234,21 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
         id = binds |> Enum.at(identity) |> parameter_uuid()
         expected = payload_date(s, id)
         actual = binds |> Enum.at(position) |> elem(4) |> value()
-        s = if actual === expected, do: s, else: failure(s, e, :database_date_bind, actual, expected)
+
+        s =
+          if actual === expected,
+            do: s,
+            else: failure(s, e, :database_date_bind, actual, expected)
+
         put_in(s.date_binds[{sql, id}], expected)
-      nil -> s
+
+      nil ->
+        s
     end
   end
 
   defp parameter_uuid({:bind_column, _, _, _, raw}), do: raw |> value() |> uuid()
+
   defp parameter_uuid(value) do
     case encoded_bytes(value) do
       <<_::128>> = binary -> uuid(binary)
@@ -202,6 +258,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   defp encoded_bytes(%Date{} = date), do: date
   defp encoded_bytes(value) when is_binary(value) and byte_size(value) in [16, 36], do: value
+
   defp encoded_bytes(value) do
     case IO.iodata_to_binary(value) do
       <<n::signed-32, bytes::binary-size(n)>> -> bytes
@@ -213,6 +270,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   defp parameter_date({:bind_column, _, _, _, raw}), do: value(raw)
   defp parameter_date(%Date{} = date), do: date
+
   defp parameter_date(raw) do
     case encoded_bytes(raw) do
       <<days::signed-32>> -> Date.add(~D[2000-01-01], days)
@@ -222,8 +280,14 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   def sql({_, :call, {AshOnetime.Store.Postgres, f, [_target, sql | _]}})
       when f in [:query_claim, :dispatched_query] and is_binary(sql), do: sql
+
   def sql({_, :call, {m, f, [_repo, sql, _params, _opts]}})
-      when m in [Ecto.Adapters.SQL, Postgrex] and f in [:query, :query!], do: IO.iodata_to_binary(sql)
+      when m in [Ecto.Adapters.SQL, Postgrex] and f in [:query, :query!],
+      do: IO.iodata_to_binary(sql)
+
+  def sql({_, :call, {Postgrex, :prepare_execute, [_conn, _name, statement, _params, _opts]}}),
+    do: IO.iodata_to_binary(statement)
+
   def sql(value), do: find_query(value)
   defp find_query(%Postgrex.Query{statement: sql}), do: IO.iodata_to_binary(sql)
   defp find_query(%DBConnection.LogEntry{query: query}), do: find_query(query)
@@ -233,22 +297,75 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
   defp find_query([h | t]), do: find_query(h) || find_query(t)
   defp find_query(_), do: nil
 
-  defp parameter_copies(events, s) do
-    {s, _} = Enum.reduce(events, {s, %{}}, fn e, {s, contexts} ->
-      sql = sql(e.event) || Map.get(contexts, e.role)
-      contexts = Map.put(contexts, e.role, sql)
-      s = Enum.reduce(parameter_paths(e.mfa), s, fn path, acc ->
-        copied_parameters(at(e.event, path), path, sql, e, acc)
+  # SQL qualification has call lifetime. A logging closure has parameters but
+  # no statement, so it belongs to its enclosing actual driver query instance.
+  # Never carry the last statement into the next call on a reused connection.
+  def sql_contexts(events) do
+    {contexts, _open} =
+      Enum.reduce(events, {%{}, %{}}, fn e, {contexts, open} ->
+        scope = Map.get(open, e.pid, [])
+
+        scope =
+          case e.event do
+            {_, :call, _} ->
+              if query_frame?(e.mfa), do: [{e.mfa, sql(e.event)} | scope], else: scope
+
+            _ ->
+              scope
+          end
+
+        statement = sql(e.event) || case scope do
+          [{_, statement} | _] -> statement
+          [] -> nil
+        end
+
+        scope =
+          case {e.event, scope} do
+            {{_, tag, mfa, _}, [{mfa, _} | rest]}
+            when tag in [:return_from, :exception_from] -> rest
+            _ -> scope
+          end
+
+        {Map.put(contexts, e.index, statement), Map.put(open, e.pid, scope)}
       end)
-      {nested_copies(e.event, [], sql, e, s), contexts}
+
+    contexts
+  end
+
+  defp query_frame?({m, f, 4})
+       when m in [Ecto.Adapters.SQL, Postgrex] and f in [:query, :query!], do: true
+
+  defp query_frame?({Postgrex, :prepare_execute, 5}), do: true
+  defp query_frame?({Postgrex, :execute, 4}), do: true
+  defp query_frame?({DBConnection, f, 4}) when f in [:prepare_execute, :execute], do: true
+
+  defp query_frame?({AshOnetime.Store.Postgres, f, _})
+       when f in [:query_claim, :dispatched_query], do: true
+
+  defp query_frame?(_), do: false
+
+  defp parameter_copies(events, s) do
+    contexts = sql_contexts(events)
+
+    Enum.reduce(events, s, fn e, s ->
+      statement = Map.fetch!(contexts, e.index)
+
+      s =
+        Enum.reduce(parameter_paths(e.mfa), s, fn path, acc ->
+          copied_parameters(at(e.event, path), path, statement, e, acc)
+        end)
+
+      nested_copies(e.event, [], statement, e, s)
     end)
-    s
   end
 
   def parameter_paths(mfa) do
     case mfa do
       {AshOnetime.Store.Postgres, f, _} when f in [:query_claim, :dispatched_query] -> [[2, 2, 2]]
       {m, f, 4} when m in [Ecto.Adapters.SQL, Postgrex] and f in [:query, :query!] -> [[2, 2, 2]]
+      {Postgrex, :prepare_execute, 5} -> [[2, 2, 3]]
+      {Postgrex, :execute, 4} -> [[2, 2, 2]]
+      {DBConnection, f, 4} when f in [:prepare_execute, :execute] -> [[2, 2, 2]]
       {DBConnection, :log, a} when a in [4, 5] -> [[2, 2, 3]]
       {DBConnection.LogEntry, :new, 5} -> [[2, 2, 2]]
       {Ecto.Adapters.SQL, :log, 5} -> [[2, 2, 2]]
@@ -263,64 +380,121 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     case date_statement(sql) do
       {position, identity} when length(parameters) > position and length(parameters) > identity ->
         id = parameters |> Enum.at(identity) |> parameter_uuid()
-        expected = Map.get(s.date_binds, {sql, id}, :missing_date_bind)
+        expected = payload_date(s, id)
         raw = Enum.at(parameters, position)
-        at = if match?({:bind_column, _, _, _, _}, raw), do: path ++ [position, 4], else: path ++ [position]
-        actual = parameter_date(raw)
-        if e.mfa == {Postgrex.Protocol, :handle_execute, 4} and path == [2, 2, 1] do
-          if actual === expected, do: s, else: failure(s, e, :encoded_database_date_copy, actual, expected)
+
+        at =
+          if match?({:bind_column, _, _, _, _}, raw),
+            do: path ++ [position, 4],
+            else: path ++ [position]
+
+        encoded? = e.mfa == {Postgrex.Protocol, :handle_execute, 4} and path == [2, 2, 1]
+        actual =
+          if encoded? or match?({:bind_column, _, _, _, _}, raw),
+            do: parameter_date(raw),
+            else: raw
+
+        if encoded? do
+          if actual === expected,
+            do: s,
+            else: failure(s, e, :encoded_database_date_copy, actual, expected)
         else
           checked(s, e, at, actual, expected, :database_date_bind_copy)
         end
-      _ -> s
+
+      _ ->
+        s
     end
   end
+
   defp copied_parameters(_, _, _, _, s), do: s
 
   defp nested_copies(%DBConnection.LogEntry{params: params} = value, path, sql, e, s) do
     s = copied_parameters(params, path ++ [:params], sql, e, s)
     nested_copies(Map.delete(Map.from_struct(value), :params), path, sql, e, s)
   end
+
   defp nested_copies({:cast_params, params}, path, sql, e, s),
     do: copied_parameters(params, path ++ [1], sql, e, s)
-  defp nested_copies({:data_column, statement, {_, binds}, _, _, _, _, _, _, _}, path, _sql, e, s),
-    do: if(wire_event?(e.event), do: copied_parameters(binds, path ++ [2, 1], statement, e, s), else: s)
+
+  defp nested_copies(
+         {:data_column, statement, {_, binds}, _, _, _, _, _, _, _},
+         path,
+         _sql,
+         e,
+         s
+       ),
+       do:
+         if(wire_event?(e.event),
+           do: copied_parameters(binds, path ++ [2, 1], statement, e, s),
+           else: s
+         )
+
   defp nested_copies({:bind, _, _, _, binds, _}, path, sql, e, s),
     do: if(wire_event?(e.event), do: copied_parameters(binds, path ++ [4], sql, e, s), else: s)
+
   defp nested_copies(fun, path, sql, e, s) when is_function(fun) do
     info = Map.new(Function.info(fun))
     base = path ++ [:function, :env]
-    s = Enum.reduce(Registry.function_slots(info.module, info.name), s, fn
-      {index, :parameters}, acc -> copied_parameters(Enum.fetch!(info.env, index), base ++ [index], sql, e, acc)
-      _, acc -> acc
-    end)
-    s = case completion_date_slot(info.module, info.name) do
-      {:ok, index} ->
-        checked(s, e, base ++ [index], Enum.fetch!(info.env, index), s.date_checkpoints[e.index], :completion_date_environment)
-      :not_called -> s
-    end
+
+    s =
+      Enum.reduce(Registry.function_slots(info.module, info.name), s, fn
+        {index, :parameters}, acc ->
+          copied_parameters(Enum.fetch!(info.env, index), base ++ [index], sql, e, acc)
+
+        _, acc ->
+          acc
+      end)
+
+    s =
+      case completion_date_slot(info.module, info.name) do
+        {:ok, index} ->
+          checked(
+            s,
+            e,
+            base ++ [index],
+            Enum.fetch!(info.env, index),
+            s.date_checkpoints[e.index],
+            :completion_date_environment
+          )
+
+        :not_called ->
+          s
+      end
+
     nested_copies(info.env, base, sql, e, s)
   end
+
   defp nested_copies(value, path, sql, e, s) when is_map(value),
-    do: Enum.reduce(Map.to_list(value), s, fn {key, item}, acc -> nested_copies(item, path ++ [key], sql, e, acc) end)
+    do:
+      Enum.reduce(Map.to_list(value), s, fn {key, item}, acc ->
+        nested_copies(item, path ++ [key], sql, e, acc)
+      end)
+
   defp nested_copies(value, path, sql, e, s) when is_tuple(value),
     do: value |> Tuple.to_list() |> nested_copies(path, sql, e, s)
+
   defp nested_copies(value, path, sql, e, s) when is_list(value) do
     nested_list(value, path, sql, e, s, 0)
   end
+
   defp nested_copies(_, _, _, _, s), do: s
   defp nested_list([], _, _, _, s, _), do: s
+
   defp nested_list([h | t], path, sql, e, s, n),
     do: nested_list(t, path, sql, e, nested_copies(h, path ++ [n], sql, e, s), n + 1)
+
   defp nested_list(tail, path, sql, e, s, n), do: nested_copies(tail, path ++ [n], sql, e, s)
 
   def date_copy(value, parameters, sql, s) do
     case date_statement(sql) do
       {_position, identity} ->
         id = parameters |> Enum.at(identity) |> parameter_uuid()
-        expected = Map.get(s.date_binds, {sql, id}, :missing_date_bind)
+        expected = payload_date(s, id)
         {parameter_date(value), expected}
-      nil -> {value, :not_a_database_date_copy}
+
+      nil ->
+        {value, :not_a_database_date_copy}
     end
   end
 
@@ -577,8 +751,20 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     end
   end
 
-  defp typed_copies(%Postgrex.Result{columns: ["partition_date", "encoded_response"], rows: [[date, _]]}, path, e, s) do
-    checked(s, e, path ++ [:rows, 0, 0], date, Map.get(s.payload_results, e.role), :payload_date_result)
+  defp typed_copies(
+         %Postgrex.Result{columns: ["partition_date", "encoded_response"], rows: [[date, _]]},
+         path,
+         e,
+         s
+       ) do
+    checked(
+      s,
+      e,
+      path ++ [:rows, 0, 0],
+      date,
+      Map.get(s.payload_results, e.role),
+      :payload_date_result
+    )
   end
 
   defp typed_copies(%Postgrex.Result{columns: columns, rows: rows}, path, e, s)
@@ -740,9 +926,12 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
   defp wire_port({port, :send, _, _}) when is_port(port), do: port
   defp wire_port({_, :receive, {:tcp, port, _}}), do: port
   defp wire_port({_, :receive, {:inet_async, port, _, _}}), do: port
+
   defp wire_port({_, :call, {module, function, [port | _]}})
        when module in [:erlang, :erts_internal, :prim_inet, :gen_tcp] and
-              function in [:port_command, :send, :recv, :recv0] and is_port(port), do: port
+              function in [:port_command, :send, :recv, :recv0] and is_port(port),
+       do: port
+
   defp wire_port(_), do: :caller_receive
   defp value({:timestamptz, micros}), do: DateTime.add(@epoch, micros, :microsecond)
   defp value({:date, days}), do: Date.add(~D[2000-01-01], days)

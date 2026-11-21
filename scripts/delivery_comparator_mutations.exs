@@ -611,6 +611,20 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       extra: nil
     },
     %{
+      id: :r_iso_completion,
+      label: "R-iso-completion",
+      path: "lib/ash_onetime/delivery.ex",
+      original: "        Process.put(key, {:done, inv, :executed, envelope, {target, claim}})\n",
+      mutated:
+        "        <<mutation_byte, mutation_rest::binary>> = claim.fingerprint\n        mutation_fingerprint = <<Bitwise.bxor(mutation_byte, 1 + rem(byte_size(envelope), 2)), mutation_rest::binary>>\n        mutation_claim = %{claim | fingerprint: mutation_fingerprint}\n        Process.put(key, {:done, inv, :executed, envelope, {target, mutation_claim}})\n",
+      action: :issue,
+      branch: :execute,
+      fault: nil,
+      value: :va,
+      first: {:erlang, :put, 2},
+      extra: nil
+    },
+    %{
       id: :r_iso_context,
       label: "R-iso-context",
       path: "lib/ash_onetime/change.ex",

@@ -19,30 +19,35 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
     @tag control.id
     @tag :comparator_positive_control
     test "#{control.id}: qualified origin positive control", context do
-      control = unquote(Macro.escape(control))
+      control = Enum.find(AshOnetime.DeliveryComparatorControls.rows(), &(&1.id == unquote(control.id)))
 
-      errors = with_runtime(control, fn ->
-        case control.kind do
-          :declarations ->
-            Declarations.pair(Withheld, Returned).errors
+      errors =
+        with_runtime(control, fn ->
+          case control.kind do
+            :declarations ->
+              Declarations.pair(Withheld, Returned).errors
 
-          :completeness ->
-            completeness_errors(control, context)
+            :completeness ->
+              completeness_errors(control, context)
 
-          :comparison ->
-            row =
-              row!(control.action, control.branch, control.fault) |> Map.put(:opts, control.opts)
+            :comparison ->
+              row =
+                row!(control.action, control.branch, control.fault)
+                |> Map.put(:opts, control.opts)
 
-            pair = observe(context, row, Values.set()[:va])
-            hits = Search.hits(pair.run)
-            quiet? = hits == []
-            assert quiet?, "a positive control crossed a raw-canary exit: #{inspect(hits)}"
-            Comparator.compare(pair).errors
-        end
-      end)
+              pair = observe(context, row, Values.set()[:va])
+              hits = Search.hits(pair.run)
+              quiet? = hits == []
+              assert quiet?, "a positive control crossed a raw-canary exit: #{inspect(hits)}"
+              Comparator.compare(pair).errors
+          end
+        end)
 
       if control.id == :pc_o4_date_copy and errors != [] do
-        assert match?(%{at: %{mfa: {AshOnetime.Store.Postgres, :dispatched_query, 3}}, rule: :o4}, hd(errors)),
+        assert match?(
+                 %{at: %{mfa: {AshOnetime.Store.Postgres, :dispatched_query, 3}}, rule: :o4},
+                 hd(errors)
+               ),
                "the altered date copy must be the first native divergence"
       end
 
@@ -68,14 +73,19 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
 
   defp with_runtime(%{id: :pc_o4_date_copy, path: path, action: action}, callback) do
     source = File.read!(path)
+
     if String.contains?(source, "COMPARATOR_DATE_OPERATION") do
       {:ok, operation} = AshOnetime.Test.ExitBoundary.Registry.operation(Withheld, action)
-      source = String.replace(source, "COMPARATOR_DATE_OPERATION", inspect(operation, limit: :infinity))
+
+      source =
+        String.replace(source, "COMPARATOR_DATE_OPERATION", inspect(operation, limit: :infinity))
+
       AshOnetime.Test.ExitBoundary.Compiled.with_source(source, path, callback)
     else
       callback.()
     end
   end
+
   defp with_runtime(_, callback), do: callback.()
 
   defp qualified?(%{id: :pc_return_raw}, error),

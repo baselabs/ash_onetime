@@ -334,7 +334,9 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
   # The migration generator's declared monthly naming expression, evaluated
   # forward from the captured server date, never from the checked relation.
   def payload_partition(%Date{year: year, month: month}),
-    do: "ash_onetime_response_payloads_#{year}_#{String.pad_leading(Integer.to_string(month), 2, "0")}"
+    do:
+      "ash_onetime_response_payloads_#{year}_#{String.pad_leading(Integer.to_string(month), 2, "0")}"
+
   def derivations, do: rule!(:o2a_computations).sources
 
   def function_slots(module, function),
@@ -440,6 +442,10 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
       [
         {Postgrex, :query, 4},
         {Postgrex, :query!, 4},
+        {Postgrex, :prepare_execute, 5},
+        {Postgrex, :execute, 4},
+        {DBConnection, :prepare_execute, 4},
+        {DBConnection, :execute, 4},
         {Ecto.Adapters.SQL, :query, 4},
         {Ecto.Adapters.SQL, :query!, 4},
         {Ecto.Adapters.SQL, :log, :_},

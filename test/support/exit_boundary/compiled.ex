@@ -65,33 +65,55 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
       {:captured_argument, module, module.module_info(:md5), function, callee, arity, argument},
       fn ->
         {:beam_file, _, _, _, _, functions} = :beam_disasm.file(:code.which(module))
+
         {:function, ^function, count, _, instructions} =
           Enum.find(functions, &match?({:function, ^function, _, _, _}, &1))
 
         target = {module, callee, arity}
 
-        calls? = Enum.any?(instructions, fn
-          {tag, ^arity, ^target} when tag in [:call, :call_only] -> true
-          {:call_last, ^arity, ^target, _} -> true
-          _ -> false
-        end)
+        calls? =
+          Enum.any?(instructions, fn
+            {tag, ^arity, ^target} when tag in [:call, :call_only] -> true
+            {:call_last, ^arity, ^target, _} -> true
+            _ -> false
+          end)
 
         if calls? do
           registers = Map.new(0..(count - 1), &{{:x, &1}, {:environment, &1}})
 
-          Enum.reduce_while(instructions, registers, fn
-            {tag, ^arity, ^target}, regs when tag in [:call, :call_only] ->
-              {:halt, Map.fetch!(regs, {:x, argument})}
+          labels =
+            instructions
+            |> Enum.with_index()
+            |> Enum.flat_map(fn
+              {{:label, label}, index} -> [{label, Enum.drop(instructions, index + 1)}]
+              _ -> []
+            end)
+            |> Map.new()
 
-            {:call_last, ^arity, ^target, _}, regs ->
-              {:halt, Map.fetch!(regs, {:x, argument})}
+          captured =
+            try do
+              capture_path(instructions, registers, labels, target, argument, MapSet.new())
+            rescue
+              error ->
+                IO.inspect(
+                  %{
+                    function: {module, function, count},
+                    callee: target,
+                    code: Enum.map(instructions, &AshOnetime.Test.ExitBoundary.Diagnostics.safe/1)
+                  },
+                  label: "COMPILED_CAPTURE_FAILURE",
+                  limit: :infinity
+                )
 
-            instruction, regs ->
-              {:cont, capture_step(instruction, regs)}
-          end)
-          |> case do
-            {:environment, index} -> {:ok, index}
-            other -> raise "callee argument is not a captured origin: #{inspect({target, argument, other})}"
+                reraise error, __STACKTRACE__
+            end
+
+          case captured do
+            {:environment, index} ->
+              {:ok, index}
+
+            other ->
+              raise "callee argument is not a captured origin: #{inspect({target, argument, other})}"
           end
         else
           :not_called
@@ -99,6 +121,33 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
       end
     )
   end
+
+  defp capture_path([instruction | rest], regs, labels, {_, _, arity} = target, argument, seen) do
+    case instruction do
+      {tag, ^arity, ^target} when tag in [:call, :call_only] ->
+        Map.fetch!(regs, {:x, argument})
+
+      {:call_last, ^arity, ^target, _} ->
+        Map.fetch!(regs, {:x, argument})
+
+      {:jump, {:f, label}} ->
+        if MapSet.member?(seen, label), do: raise("cyclic captured-origin control flow")
+        capture_path(
+          Map.fetch!(labels, label),
+          regs,
+          labels,
+          target,
+          argument,
+          MapSet.put(seen, label)
+        )
+
+      _ ->
+        capture_path(rest, capture_step(instruction, regs), labels, target, argument, seen)
+    end
+  end
+
+  defp capture_path([], _, _, target, _, _),
+    do: raise("captured-origin callee not reached: #{inspect(target)}")
 
   defp capture_step({:move, from, to}, regs),
     do: Map.put(regs, register(to), Map.get(regs, register(from), :not_environment))
@@ -117,24 +166,37 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
 
   defp capture_step({:bif, _, _, _, to}, regs),
     do: Map.put(regs, register(to), :not_environment)
+
   defp capture_step({:gc_bif, _, _, _, _, to}, regs),
     do: Map.put(regs, register(to), :not_environment)
+
   defp capture_step({:get_tuple_element, _, _, to}, regs),
     do: Map.put(regs, register(to), :not_environment)
+
   defp capture_step({:init, to}, regs),
     do: Map.put(regs, register(to), :not_environment)
+
   defp capture_step({:init_yregs, {:list, destinations}}, regs),
     do: Enum.reduce(destinations, regs, &Map.put(&2, register(&1), :not_environment))
 
   # A native call clobbers X registers; only saved Y registers survive it.
   defp capture_step({tag, _, _}, regs) when tag in [:call, :call_ext],
-    do: regs |> Map.reject(fn {{kind, _}, _} -> kind == :x end) |> Map.put({:x, 0}, :not_environment)
+    do:
+      regs
+      |> Map.reject(fn {{kind, _}, _} -> kind == :x end)
+      |> Map.put({:x, 0}, :not_environment)
+
   defp capture_step({tag, _}, regs) when tag in [:line, :label, :deallocate], do: regs
   defp capture_step({:func_info, _, _, _}, regs), do: regs
   defp capture_step({:test, _, _, _}, regs), do: regs
   defp capture_step({:test, :has_map_fields, _, _, _}, regs), do: regs
-  defp capture_step({tag, _, _}, regs) when tag in [:allocate, :allocate_zero, :test_heap], do: regs
-  defp capture_step({tag, _, _, _}, regs) when tag in [:allocate_heap, :allocate_heap_zero], do: regs
+
+  defp capture_step({tag, _, _}, regs) when tag in [:allocate, :allocate_zero, :test_heap],
+    do: regs
+
+  defp capture_step({tag, _, _, _}, regs) when tag in [:allocate_heap, :allocate_heap_zero],
+    do: regs
+
   defp capture_step(instruction, _),
     do: raise("undeclared captured-origin instruction: #{inspect(instruction)}")
 

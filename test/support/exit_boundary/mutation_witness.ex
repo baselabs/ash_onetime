@@ -118,6 +118,24 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
        do: {key, inv, envelope} === {b.key, b.inv, b.envelope} and completion !== b.completion
 
   defp location(
+         :r_iso_completion,
+         %{
+           event:
+             {_, :call, {:erlang, :put, [key, {:done, inv, :executed, envelope, {target, claim}}]}}
+         },
+         _,
+         b,
+         %{rule: :dictionary_binding}
+       ) do
+    {expected_target, expected_claim} = b.completion
+    <<byte, rest::binary>> = expected_claim.fingerprint
+    fingerprint = <<Bitwise.bxor(byte, 1 + rem(byte_size(b.envelope), 2)), rest::binary>>
+
+    {key, inv, envelope, target, claim} ===
+      {b.key, b.inv, b.envelope, expected_target, %{expected_claim | fingerprint: fingerprint}}
+  end
+
+  defp location(
          :r5,
          %{event: {_, :call, {:crypto, :generate_key, [:ecdh, :x25519, _]}}},
          _,
