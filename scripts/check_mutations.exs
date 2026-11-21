@@ -2420,12 +2420,12 @@ defmodule AshOnetime.MutationCheck do
       original:
         ":unknown ->\n        ambiguous_recovery(state, started)\n    end\n  end\n\n  # mutation sentinel: ambiguous-retry",
       mutated:
-        ":unknown ->\n        execute_then_settle(state, subject, protection, callback_context, operation_key, started, nil)\n    end\n  end\n\n  # mutation sentinel: ambiguous-retry",
+        ":unknown ->\n        _ = safe_execute(protection.external_effect, operation_key, subject, callback_context, nil)\n        ambiguous_recovery(state, started)\n    end\n  end\n\n  # mutation sentinel: ambiguous-retry",
       test: "test/ash_onetime/external_recovery_test.exs",
       tag: "ambiguous_retry_mutation",
       test_name:
         "ambiguous outcome from an unknown execute and recover never executes or finalizes",
-      assertion: "assert Exception.message(error) =~ \"external effect outcome is unknown\""
+      assertion: "assert [[\"execute\", operation_key], [\"recover\", operation_key]] ="
     },
     "replay-fence-dispatch" => %{
       path: "lib/ash_onetime/admission.ex",
@@ -3326,8 +3326,7 @@ defmodule AshOnetime.MutationCheck do
     "all" => Map.keys(@mutations),
     "r-table" => Enum.map(AshOnetime.DeliveryComparatorMutations.rows(), &Atom.to_string(&1.id)),
     "c-set" => Map.keys(AshOnetime.DeliveryComparatorMutations.set_checks()),
-    "comparator-positive-controls" =>
-      Map.keys(AshOnetime.DeliveryComparatorControls.checks()),
+    "comparator-positive-controls" => Map.keys(AshOnetime.DeliveryComparatorControls.checks()),
     "external-rollback" => ["external-rollback-readback"],
     "defects-batch" => [
       "M-doctor-fact-schema",

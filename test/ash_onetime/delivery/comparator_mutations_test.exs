@@ -17,7 +17,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
   @tag :mutation_hash
   test "mutation hashes equal SHA-256 without a preceding crypto call" do
     source = AshOnetime.DeliveryComparatorHash.inline("input", "digest")
-    {hash, _} = Code.eval_string("fn input ->\n" <> source <> "end")
+    {hash, _} = Code.eval_string("fn input ->\n" <> source <> "digest\nend")
 
     inputs =
       [<<>>, "abc", :binary.copy(<<0>>, 55)] ++
@@ -252,7 +252,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
 
       assert protection.retention <= 2_147_483_647 - 2
 
-      operation =
+      {:ok, operation} =
         AshOnetime.Test.ExitBoundary.Registry.operation(
           AshOnetime.Test.ExitBoundary.Withheld,
           :issue

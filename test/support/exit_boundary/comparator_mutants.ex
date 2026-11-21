@@ -161,7 +161,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/comparator.ex",
         original:
-          "  defp exact_return(value, state) do\n    expected = state.run.bound.delivered_return\n\n    if value === expected,\n      do: state,\n      else: error(state, :return, [:return, :delivered], value, expected)\n  end\n\n",
+          "  defp exact_return(_projected, state) do\n    # Per-side return equality uses the untouched native term. The sequence\n    # comparison separately checks its statement-grounded database projections.\n    source = Enum.fetch!(state.run.run.events, state.at.run_index).event\n\n    value =\n      case source do\n        {_, :return_from, {:erlang, :send, 2}, {:result, _, value, _}} -> value\n        {_, :return_from, _, value} -> value\n        {_, :send, {:result, _, value, _}, _} -> value\n        {_, :call, {:erlang, :send, [_, {:result, _, value, _}]}} -> value\n      end\n\n    expected = state.run.bound.delivered_return\n\n    if value === expected,\n      do: state,\n      else: error(state, :return, [:return, :delivered], value, expected)\n  end\n\n",
         mutated: "  defp exact_return(_value, state), do: state\n\n"
       },
       %{
@@ -271,7 +271,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         original:
           "  defp uuid_identity(a, b, state, path) do\n    normalize = fn\n      <<_::128>> = uuid -> Ecto.UUID.load!(uuid)\n      uuid -> uuid\n    end\n\n    a = normalize.(a)\n    b = normalize.(b)\n\n    exact? =\n      a === b and\n        Map.get(state.pairing.uuid_forward, a, a) === b and\n        Map.get(state.pairing.uuid_reverse, b, b) === a\n\n    if exact? or\n         (Map.fetch(state.pairing.uuid_forward, a) === {:ok, b} and\n            Map.fetch(state.pairing.uuid_reverse, b) === {:ok, a}),\n       do: state,\n       else: error(state, :o2_uuid, path, a, b)\n  end\n\n",
         mutated:
-          "  defp uuid_identity(a, b, state, path) do\n    normalize = fn\n      <<_::128>> = uuid -> Ecto.UUID.load!(uuid)\n      uuid -> uuid\n    end\n\n    a = normalize.(a)\n    b = normalize.(b)\n\n    case {Ecto.UUID.dump(a), Ecto.UUID.dump(b)} do\n      {{:ok, _}, {:ok, _}} -> state\n      _ -> error(state, :o2_uuid, path, a, b)\n    end\n  end\n\n"
+          "  defp uuid_identity(a, b, state, path) do\n    normalize = fn\n      <<_::128>> = uuid -> Ecto.UUID.load!(uuid)\n      uuid -> uuid\n    end\n\n    a = normalize.(a)\n    b = normalize.(b)\n\n    case {a, b} do\n      {nil, nil} -> state\n      _ ->\n        case {Ecto.UUID.dump(a), Ecto.UUID.dump(b)} do\n          {{:ok, _}, {:ok, _}} -> state\n                _ -> error(state, :o2_uuid, path, a, b)\n        end\n    end\n  end\n\n"
       }
     ]
   end

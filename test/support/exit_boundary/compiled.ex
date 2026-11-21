@@ -57,6 +57,90 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
     end)
   end
 
+  # Read which free register supplies a callee argument. This identifies a
+  # closure slot by its compiled call, without guessing a fun number or reading
+  # the checked environment to decide where its date belongs.
+  def captured_argument(module, function, callee, arity, argument) do
+    References.memo(
+      {:captured_argument, module, module.module_info(:md5), function, callee, arity, argument},
+      fn ->
+        {:beam_file, _, _, _, _, functions} = :beam_disasm.file(:code.which(module))
+        {:function, ^function, count, _, instructions} =
+          Enum.find(functions, &match?({:function, ^function, _, _, _}, &1))
+
+        target = {module, callee, arity}
+
+        calls? = Enum.any?(instructions, fn
+          {tag, ^arity, ^target} when tag in [:call, :call_only] -> true
+          {:call_last, ^arity, ^target, _} -> true
+          _ -> false
+        end)
+
+        if calls? do
+          registers = Map.new(0..(count - 1), &{{:x, &1}, {:environment, &1}})
+
+          Enum.reduce_while(instructions, registers, fn
+            {tag, ^arity, ^target}, regs when tag in [:call, :call_only] ->
+              {:halt, Map.fetch!(regs, {:x, argument})}
+
+            {:call_last, ^arity, ^target, _}, regs ->
+              {:halt, Map.fetch!(regs, {:x, argument})}
+
+            instruction, regs ->
+              {:cont, capture_step(instruction, regs)}
+          end)
+          |> case do
+            {:environment, index} -> {:ok, index}
+            other -> raise "callee argument is not a captured origin: #{inspect({target, argument, other})}"
+          end
+        else
+          :not_called
+        end
+      end
+    )
+  end
+
+  defp capture_step({:move, from, to}, regs),
+    do: Map.put(regs, register(to), Map.get(regs, register(from), :not_environment))
+
+  defp capture_step({:swap, a, b}, regs) do
+    a = register(a)
+    b = register(b)
+    regs |> Map.put(a, Map.fetch!(regs, b)) |> Map.put(b, Map.fetch!(regs, a))
+  end
+
+  defp capture_step({:get_map_elements, _, _, {:list, destinations}}, regs) do
+    for [_key, to] <- Enum.chunk_every(destinations, 2), reduce: regs do
+      acc -> Map.put(acc, register(to), :not_environment)
+    end
+  end
+
+  defp capture_step({:bif, _, _, _, to}, regs),
+    do: Map.put(regs, register(to), :not_environment)
+  defp capture_step({:gc_bif, _, _, _, _, to}, regs),
+    do: Map.put(regs, register(to), :not_environment)
+  defp capture_step({:get_tuple_element, _, _, to}, regs),
+    do: Map.put(regs, register(to), :not_environment)
+  defp capture_step({:init, to}, regs),
+    do: Map.put(regs, register(to), :not_environment)
+  defp capture_step({:init_yregs, {:list, destinations}}, regs),
+    do: Enum.reduce(destinations, regs, &Map.put(&2, register(&1), :not_environment))
+
+  # A native call clobbers X registers; only saved Y registers survive it.
+  defp capture_step({tag, _, _}, regs) when tag in [:call, :call_ext],
+    do: regs |> Map.reject(fn {{kind, _}, _} -> kind == :x end) |> Map.put({:x, 0}, :not_environment)
+  defp capture_step({tag, _}, regs) when tag in [:line, :label, :deallocate], do: regs
+  defp capture_step({:func_info, _, _, _}, regs), do: regs
+  defp capture_step({:test, _, _, _}, regs), do: regs
+  defp capture_step({:test, :has_map_fields, _, _, _}, regs), do: regs
+  defp capture_step({tag, _, _}, regs) when tag in [:allocate, :allocate_zero, :test_heap], do: regs
+  defp capture_step({tag, _, _, _}, regs) when tag in [:allocate_heap, :allocate_heap_zero], do: regs
+  defp capture_step(instruction, _),
+    do: raise("undeclared captured-origin instruction: #{inspect(instruction)}")
+
+  defp register({:tr, register, _type}), do: register(register)
+  defp register(register), do: register
+
   # Symbolically execute the compiled closure's register permutation. The source
   # values are the declared callee arguments, never the checked fun's environment.
   def closure_environment(module, function, arity, callee, inputs) do

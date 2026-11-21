@@ -296,6 +296,19 @@ defmodule AshOnetime.DeliveryComparatorControls do
       opts: []
     },
     %{
+      id: :pc_o4_date_copy,
+      path: "lib/ash_onetime/store/postgres.ex",
+      original: "      [partition_date, codec, digest] ++\n",
+      mutated:
+        "      [if(claim.operation_hash == COMPARATOR_DATE_OPERATION, do: Date.add(partition_date, 1), else: partition_date), codec, digest] ++\n",
+      action: :external_issue,
+      branch: :execute,
+      fault: nil,
+      kind: :comparison,
+      rules: [:o4, :o4_date_copy],
+      opts: []
+    },
+    %{
       id: :pc_o5a_extra_frame,
       path: "lib/ash_onetime/delivery.ex",
       original:
@@ -455,7 +468,8 @@ defmodule AshOnetime.DeliveryComparatorControls do
       "u_consumer_observation" => %{
         path: "test/support/exit_boundary/comparator.ex",
         original: "  defp canonical_event({pid, :call, {m, f, args}}, side) do\n",
-        mutated: "  defp canonical_event(\n         {pid, :call, {AshOnetime.Test.ExitBoundary.Consumer, :after_action, [subject, result]}},\n         _side\n       ) do\n    private = Map.drop(subject.context.private, [:ash_onetime_delivery, :ash_onetime_delivery_cell])\n    subject = %{subject | context: %{subject.context | private: private}}\n    {pid, :call, {AshOnetime.Test.ExitBoundary.Consumer, :after_action, [subject, result]}}\n  end\n\n  defp canonical_event({pid, :call, {m, f, args}}, side) do\n",
+        mutated:
+          "  defp canonical_event(\n         {pid, :call, {AshOnetime.Test.ExitBoundary.Consumer, :after_action, [subject, result]}},\n         _side\n       ) do\n    private = Map.drop(subject.context.private, [:ash_onetime_delivery, :ash_onetime_delivery_cell])\n    subject = %{subject | context: %{subject.context | private: private}}\n    {pid, :call, {AshOnetime.Test.ExitBoundary.Consumer, :after_action, [subject, result]}}\n  end\n\n  defp canonical_event({pid, :call, {m, f, args}}, side) do\n",
         test: "test/ash_onetime/delivery/comparator_controls_test.exs",
         tag: "u_consumer_observation",
         test_name: "U observation: Consumer arguments remain unprojected",
@@ -463,8 +477,10 @@ defmodule AshOnetime.DeliveryComparatorControls do
       },
       "u_error_observation" => %{
         path: "test/support/exit_boundary/comparator.ex",
-        original: "  defp term(%AshOnetime.Resource.Response{} = a, %AshOnetime.Resource.Response{} = b, state, path) do\n",
-        mutated: "  defp term(%AshOnetime.Error{} = a, %AshOnetime.Error{} = b, state, path) do\n    term(Map.delete(Map.from_struct(a), :details), Map.delete(Map.from_struct(b), :details), state, path)\n  end\n\n  defp term(%AshOnetime.Resource.Response{} = a, %AshOnetime.Resource.Response{} = b, state, path) do\n",
+        original:
+          "  defp term(%AshOnetime.Resource.Response{} = a, %AshOnetime.Resource.Response{} = b, state, path) do\n",
+        mutated:
+          "  defp term(%AshOnetime.Error{} = a, %AshOnetime.Error{} = b, state, path) do\n    term(Map.delete(Map.from_struct(a), :details), Map.delete(Map.from_struct(b), :details), state, path)\n  end\n\n  defp term(%AshOnetime.Resource.Response{} = a, %AshOnetime.Resource.Response{} = b, state, path) do\n",
         test: "test/ash_onetime/delivery/comparator_controls_test.exs",
         tag: "u_error_observation",
         test_name: "U observation: captured error details remain exact",

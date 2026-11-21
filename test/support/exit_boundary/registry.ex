@@ -73,6 +73,12 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         ~w(external_peer_calls external_peer_operations external_peer_effects external_local_effects),
       clocks: ["inserted_at"]
     },
+    payload: %{
+      table: "ash_onetime_response_payloads",
+      date_column: "partition_date",
+      identity: "claim_id",
+      partition_derivation: {__MODULE__, :payload_partition, 1}
+    },
     date: %{
       statements: ["SELECT transaction_timestamp()::date", "SELECT statement_timestamp()::date"],
       columns: ["date"],
@@ -265,7 +271,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
     %{
       id: :o4,
       source: :statement,
-      locations: [:column, :column_copy],
+      locations: [:column, :column_copy, :bind_copy, :relation_copy],
       expression: :statement,
       statements: @database_statements,
       compute: {AshOnetime.Test.ExitBoundary.DatabaseOrigins, :build, 2}
@@ -324,6 +330,11 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
   def clocks, do: rule!(:o3).sources
   def readers, do: rule!(:o2b).readers
   def database_statements, do: rule!(:o4).statements
+
+  # The migration generator's declared monthly naming expression, evaluated
+  # forward from the captured server date, never from the checked relation.
+  def payload_partition(%Date{year: year, month: month}),
+    do: "ash_onetime_response_payloads_#{year}_#{String.pad_leading(Integer.to_string(month), 2, "0")}"
   def derivations, do: rule!(:o2a_computations).sources
 
   def function_slots(module, function),

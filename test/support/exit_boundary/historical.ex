@@ -10,6 +10,13 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
         [prefix]
       )
 
+    %{rows: payload_children} =
+      Ecto.Adapters.SQL.query!(
+        Repo.get_dynamic_repo(),
+        "SELECT child.relname FROM pg_catalog.pg_inherits i JOIN pg_catalog.pg_class child ON child.oid = i.inhrelid JOIN pg_catalog.pg_class parent ON parent.oid = i.inhparent JOIN pg_catalog.pg_namespace n ON n.oid = parent.relnamespace WHERE n.nspname = $1 AND parent.relname = $2",
+        [prefix, AshOnetime.Test.ExitBoundary.Registry.database_statements().payload.table]
+      )
+
     %{pid: pool} = Ecto.Repo.Registry.lookup(Repo.get_dynamic_repo())
     DBConnection.get_connection_metrics(pool)
 
@@ -48,6 +55,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
 
     %{
       query_cache: query_cache,
+      payload_children: Enum.map(payload_children, &hd/1),
       cache_expiries: cache_expiries,
       repo: Repo.get_dynamic_repo(),
       repo_metadata: Ecto.Repo.Registry.lookup(Repo.get_dynamic_repo()),

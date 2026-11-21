@@ -856,7 +856,19 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     end
   end
 
-  defp exact_return(value, state) do
+  defp exact_return(_projected, state) do
+    # Per-side return equality uses the untouched native term. The sequence
+    # comparison separately checks its statement-grounded database projections.
+    source = Enum.fetch!(state.run.run.events, state.at.run_index).event
+
+    value =
+      case source do
+        {_, :return_from, {:erlang, :send, 2}, {:result, _, value, _}} -> value
+        {_, :return_from, _, value} -> value
+        {_, :send, {:result, _, value, _}, _} -> value
+        {_, :call, {:erlang, :send, [_, {:result, _, value, _}]}} -> value
+      end
+
     expected = state.run.bound.delivered_return
 
     if value === expected,
@@ -1748,22 +1760,9 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
   defp current_sql(%{current: nil}, _), do: nil
   defp current_sql(state, :run), do: state.current.run_sql
+  defp current_sql(state, :twin), do: state.current.twin_sql
 
-  defp event_sql({_, :call, {AshOnetime.Store.Postgres, f, [_target, sql | _]}})
-       when f in [:query_claim, :dispatched_query] and is_binary(sql), do: sql
-
-  defp event_sql({_, :call, {m, f, [_repo, sql, _params, _opts]}})
-       when m in [Ecto.Adapters.SQL, Postgrex] and f in [:query, :query!],
-       do: IO.iodata_to_binary(sql)
-
-  defp event_sql(value), do: find_query(value)
-  defp find_query(%Postgrex.Query{statement: sql}), do: IO.iodata_to_binary(sql)
-  defp find_query(%DBConnection.LogEntry{query: query}), do: find_query(query)
-  defp find_query(%{type: :ecto_sql_query, query: sql}), do: sql
-  defp find_query({:parse, _name, sql, _count, _types}), do: sql
-  defp find_query(value) when is_tuple(value), do: value |> Tuple.to_list() |> find_query()
-  defp find_query([h | t]), do: find_query(h) || find_query(t)
-  defp find_query(_), do: nil
+  defp event_sql(event), do: DatabaseOrigins.sql(event)
 
   defp parameter_columns(sql) when is_binary(sql) do
     assignments =
@@ -1797,36 +1796,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
   defp parameter_columns(_), do: %{}
 
-  defp parameter_list?(%{at: %{mfa: mfa}}, path) do
-    path in case mfa do
-      {AshOnetime.Store.Postgres, f, _} when f in [:query_claim, :dispatched_query] ->
-        [[:event, 2, 2, 2]]
-
-      {m, f, 4} when m in [Ecto.Adapters.SQL, Postgrex] and f in [:query, :query!] ->
-        [[:event, 2, 2, 2]]
-
-      {DBConnection, :log, 4} ->
-        [[:event, 2, 2, 3]]
-
-      {DBConnection, :log, 5} ->
-        [[:event, 2, 2, 3]]
-
-      {DBConnection.LogEntry, :new, 5} ->
-        [[:event, 2, 2, 2]]
-
-      {Ecto.Adapters.SQL, :log, 5} ->
-        [[:event, 2, 2, 2]]
-
-      {:telemetry, :execute, 3} ->
-        [[:event, 2, 2, 2, :params]]
-
-      {:telemetry, :do_execute, 4} ->
-        [[:event, 2, 2, 3, :params]]
-
-      _ ->
-        []
-    end
-  end
+  defp parameter_list?(%{at: %{mfa: mfa}}, [:event | path]),
+    do: path in DatabaseOrigins.parameter_paths(mfa)
 
   defp parameter_list?(_, _), do: false
 
@@ -1907,6 +1878,18 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     term(a, b, state, path)
   end
 
+  defp column_value({:database_expression, _} = a, {:database_expression, _} = b, name, state, path)
+       when name in ["partition_date", "response_partition"], do: term(a, b, state, path)
+
+  defp column_value(a, b, name, state, path) when name in ["partition_date", "response_partition"] do
+    if match?(%{mfa: {Postgrex.Protocol, :handle_execute, 4}}, state.at) and List.last(path) == :value do
+      state = database_date_copy(a, :run, state, path)
+      database_date_copy(b, :twin, state, path)
+    else
+      term(a, b, state, path)
+    end
+  end
+
   defp column_value(a, b, "operation_hash", state, path), do: derived_operation(a, b, state, path)
 
   defp column_value({:uuid, a}, {:uuid, b}, _name, state, path),
@@ -1931,6 +1914,20 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          )
 
   defp column_value(a, b, _name, state, path), do: term(a, b, state, path)
+
+  defp database_date_copy(value, side, state, path) do
+    list_path = case List.last(path) do
+      :value -> Enum.drop(path, -2)
+      4 -> Enum.drop(path, -2)
+      _ -> Enum.drop(path, -1)
+    end
+    source = state.current[side].event
+    parameters = event_value(source, tl(list_path))
+    database = elem(state.databases, if(side == :run, do: 0, else: 1))
+    sql = current_sql(state, side)
+    {actual, expected} = DatabaseOrigins.date_copy(value, parameters, sql, database)
+    if actual === expected, do: state, else: error(state, :o4_date_copy, path ++ [side], actual, expected)
+  end
 
   defp response_slot(%{at: %{mfa: {AshOnetime.Admission, f, _}}}, [
          :event,
@@ -2250,6 +2247,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   end
 
   defp store(a, b, state) do
+    {a, state} = store_date_copies(a, :run, state)
+    {b, state} = store_date_copies(b, :twin, state)
     tables = (Map.keys(a) ++ Map.keys(b)) |> Enum.uniq() |> Enum.sort()
 
     Enum.reduce(tables, state, fn table, s ->
@@ -2276,6 +2275,32 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         {av, bv} ->
           error(s, :store_table, [:store, table], av, bv)
       end
+    end)
+  end
+
+  defp store_date_copies(delta, side, state) do
+    database = elem(state.databases, if(side == :run, do: 0, else: 1))
+    delta |> Enum.sort() |> Enum.reduce({%{}, state}, fn {table, changes}, {tables, state} ->
+      Enum.reduce([:added, :removed], {tables, state}, fn direction, {tables, state} ->
+        Enum.with_index(changes[direction]) |> Enum.reduce({tables, state}, fn {row, n}, {tables, state} ->
+          case DatabaseOrigins.payload_snapshot(table, row, database) do
+            {:ok, relation, row} ->
+              empty = %{added: [], removed: []}
+              tables = Map.update(tables, relation, Map.put(empty, direction, [row]), fn old ->
+                Map.update!(old, direction, &(&1 ++ [row]))
+              end)
+              {tables, state}
+            {:error, actual, expected} ->
+              path = [:store, table, direction, n, :database_copy, side]
+              state = error(state, :o4_payload_snapshot, path, actual, expected)
+              empty = %{added: [], removed: []}
+              tables = Map.update(tables, table, Map.put(empty, direction, [row]), fn old ->
+                Map.update!(old, direction, &(&1 ++ [row]))
+              end)
+              {tables, state}
+          end
+        end)
+      end)
     end)
   end
 

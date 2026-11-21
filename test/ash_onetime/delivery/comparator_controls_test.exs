@@ -197,6 +197,26 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             do: type
 
       assert clocks != [] and Enum.all?(clocks, &(&1 == 1184))
+
+      database = AshOnetime.Test.ExitBoundary.DatabaseOrigins.build(wire, side)
+      assert database.errors == []
+      tokens = for {_, {:database_expression, token}} <- database.slots, do: token
+      required = [:payload_date_argument, :completion_date_argument, :database_date_return,
+        :database_date_bind_copy, :completion_date_frame, :completion_date_environment]
+      required = if side.resource == Withheld,
+        do: required ++ [:payload_date_column, :payload_date_result], else: required
+      for token <- required, do: assert(token in tokens, "missing native clock-copy witness: #{token}")
+
+      relations = for {table, changes} <- side.delta,
+                      row <- changes.added ++ changes.removed,
+                      table == database.statements.payload.table or table in database.payload_children do
+        assert {:ok, relation, _row} = AshOnetime.Test.ExitBoundary.DatabaseOrigins.payload_snapshot(table, row, database)
+        relation
+      end
+      assert database.statements.payload.table in relations
+      assert {:database_relation, :payload_child} in relations
+      IO.inspect(%{side: side.resource, copies: Enum.frequencies(tokens), relations: Enum.uniq(relations)},
+        label: "U4_NATIVE_CLOCK_COPY_COVERAGE")
     end
 
     assert_green(pair)
@@ -338,6 +358,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     try do
       before = AshOnetime.Test.ExitBoundary.Persisted.snapshot(context.prefix, context.repo)
+
       Ecto.Adapters.SQL.query!(
         context.repo,
         ~s[INSERT INTO "#{context.prefix}".ash_onetime_boundary_records (id, amount) VALUES ($1::uuid, 1)],
@@ -436,6 +457,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp consumer_capture(n) do
     consumer = AshOnetime.Test.ExitBoundary.Consumer
     subject = %{context: %{private: %{ash_onetime_delivery: %{ref: "callback-ref", n: n}}}}
+
     run =
       AshOnetime.Test.ExitBoundary.observe(
         fn -> subject end,
@@ -474,6 +496,18 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp assert_green(pair) do
     result = Comparator.compare(pair)
+
+    if first = List.first(result.errors) do
+      IO.inspect(
+        %{
+          path: {pair.row.action, pair.row.branch, pair.row.fault},
+          first: AshOnetime.Test.ExitBoundary.Diagnostics.safe(first)
+        },
+        label: "C_NATIVE_FIRST_DIVERGENCE",
+        limit: :infinity
+      )
+    end
+
     locations = Enum.map(result.errors, &{&1.at, &1.rule, &1.path})
     assert locations == [], "comparator differences: #{inspect(locations)}"
   end

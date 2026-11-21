@@ -17,7 +17,8 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
          indexed <- Origins.build(pair.run),
          %{role: role} = event <- Enum.find(indexed.events, &(&1.index == index)),
          true <- role == :caller or mutation.id in [:r25, :r26],
-         true <- mutation.id != :r21 or task_witness?(indexed.events, pair.run, comparison.bindings),
+         true <-
+           mutation.id != :r21 or task_witness?(indexed.events, pair.run, comparison.bindings),
          true <-
            location(
              mutation.id,
