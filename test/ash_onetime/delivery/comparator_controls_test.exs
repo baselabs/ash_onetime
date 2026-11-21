@@ -6,11 +6,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias AshOnetime.Test.ExitBoundary.ComparatorMutants
   alias AshOnetime.Test.ExitBoundary.Compiled
   alias AshOnetime.Test.ExitBoundary.Completeness
+  alias AshOnetime.Test.ExitBoundary.ConnectionNative
+  alias AshOnetime.Test.ExitBoundary.ConnectionProtocol
+  alias AshOnetime.Test.ExitBoundary.ConnectionReads
   alias AshOnetime.Test.ExitBoundary.ContextCopies
   alias AshOnetime.Test.ExitBoundary.DatabaseOrigins
   alias AshOnetime.Test.ExitBoundary.Declarations
   alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.Historical
+  alias AshOnetime.Test.ExitBoundary.NativeTransport
   alias AshOnetime.Test.ExitBoundary.Origins
   alias AshOnetime.Test.ExitBoundary.PathFrameWitnesses
   alias AshOnetime.Test.ExitBoundary.PermittedTrace
@@ -60,19 +64,18 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
-  test "Connection streams: a native incomplete final frame is refused", context do
-    pair = observe(context, row!(:issue, :execute), Values.set()[:va])
+  test "Connection streams: a native incomplete final frame is refused" do
+    run = ConnectionNative.observe(:incomplete)
+    assert run.result == :ok
     Code.ensure_loaded!(Wire)
     assert function_exported?(Wire, :frames, 1), "CONNECTION_STREAM_FINAL_FRAME_WITNESS"
 
-    for {_port, chunks} <- native_stream_chunks(pair.run) do
-      baseline = apply(Wire, :frames, [chunks])
-      assert baseline.errors == []
-      last = List.last(chunks)
-      truncated = %{last | bytes: binary_part(last.bytes, 0, byte_size(last.bytes) - 1)}
-      result = apply(Wire, :frames, [List.replace_at(chunks, -1, truncated)])
-      assert [%{rule: :incomplete_frame, direction: direction}] = result.errors
-      assert direction == last.direction
+    streams = native_stream_chunks(%{run: run})
+    assert map_size(streams) == 1
+
+    for {_port, chunks} <- streams do
+      result = apply(Wire, :frames, [chunks])
+      assert [%{rule: :incomplete_frame, direction: :backend}] = result.errors
     end
   end
 
@@ -105,12 +108,148 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       |> Enum.take_while(&(&1 < byte_size(chunk.bytes)))
 
     for offset <- offsets do
-      %{chunk | bytes: binary_part(chunk.bytes, offset, min(width, byte_size(chunk.bytes) - offset))}
+      chunk
+      |> Map.put(:source_offset, offset)
+      |> Map.put(:bytes, binary_part(chunk.bytes, offset, min(width, byte_size(chunk.bytes) - offset)))
     end
   end
 
   defp stream_contents(result),
     do: Enum.map(result.messages, &Map.take(&1, [:direction, :tag, :payload, :start, :stop]))
+
+  @tag :connection_streams
+  test "Connection streams: native Parse Describe Flush and Bind Execute Sync associate", context do
+    run =
+      ExitBoundary.observe(
+        fn -> Repo.put_dynamic_repo(context.repo) end,
+        fn _ -> SQL.query!(Repo, "SELECT 17::int4 AS connection_stream_probe", []) end,
+        %{host: [], callbacks: []}
+      )
+
+    streams = native_stream_chunks(%{run: run})
+    assert map_size(streams) == 1
+
+    indexed =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    native = NativeTransport.build(%{events: indexed})
+    assert native.errors == []
+    assert native.reads != []
+    assert native.writes != []
+
+    for read <- native.reads do
+      assert read.indexes != []
+      assert read.source.index in read.indexes
+      assert read.returned.index in read.indexes
+      assert read.provenance in read.indexes
+      assert is_integer(read.id)
+    end
+
+    for write <- native.writes do
+      assert write.command.index in write.indexes
+      assert write.source.index in write.indexes
+      assert write.returned.index in write.indexes
+      assert is_reference(write.reference)
+    end
+
+    demand = ConnectionReads.build(native)
+    assert demand.errors == []
+    assert length(demand.demands) == length(native.reads)
+
+    for {_port, chunks} <- streams do
+      framing = Wire.frames(chunks)
+      assert framing.errors == []
+      protocol = ConnectionProtocol.build(framing.messages)
+      assert protocol.errors == []
+      assert protocol.pending == []
+      assert length(protocol.messages) == length(framing.messages)
+
+      tags = Enum.map(protocol.messages, &{&1.direction, &1.tag})
+      assert {:frontend, ?P} in tags
+      assert {:frontend, ?D} in tags
+      assert {:frontend, ?H} in tags
+      assert {:frontend, ?B} in tags
+      assert {:frontend, ?E} in tags
+      assert {:frontend, ?S} in tags
+
+      assert Enum.any?(protocol.messages, fn
+               %{decoded: {:data_row, [{:data_column, _, _, 0, _, _, _, 23, 1, 17}]}} -> true
+               _ -> false
+             end)
+    end
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native pipelining preserves each query and response" do
+    cases = [
+      {:single, nil, ["17"]},
+      {:pipeline, nil, ["17", "29"]},
+      {:pipeline, :byte, ["18", "29"]},
+      {:pipeline, :swap, ["29", "17"]},
+      {:pipeline, :drop, ["17"]},
+      {:pipeline, :add, ["17", "29", "41"]}
+    ]
+
+    for {mode, corruption, expected} <- cases do
+      {native, result} = native_connection(mode, corruption)
+      assert native.errors == []
+      assert result.errors == []
+
+      rows =
+        for {_port, connection} <- result.connections,
+            %{decoded: {:data_row, columns}} <- connection.protocol.messages,
+            {:data_column, _, _, 0, "connection_stream_probe", _, _, 23, 0, value} <- columns,
+            do: value
+
+      assert rows == expected
+    end
+  end
+
+  @tag :connection_streams
+  test "Connection streams: real receive corruptions reach their own validation" do
+    obligations = [
+      {:length, :receive_length, :stream_length},
+      {:timeout, :receive_timeout, :stream_timeout},
+      {:extra_read, :receive_required, :stream_required}
+    ]
+
+    for {corruption, rule, mutant} <- obligations do
+      {native, result} = native_connection(:single, corruption)
+      assert native.errors == []
+      assert Enum.map(result.errors, & &1.rule) == [rule]
+
+      for {_, other_rule, disabled} <- obligations do
+        checked =
+          ComparatorMutants.with_mutant(disabled, fn ->
+            ConnectionReads.build(native)
+          end)
+
+        expected = if other_rule == rule, do: [], else: [rule]
+        assert Enum.map(checked.errors, & &1.rule) == expected
+      end
+
+      assert Enum.map(ConnectionReads.build(native).errors, & &1.rule) == [rule]
+      {restored_native, restored} = native_connection(:single, nil)
+      assert restored_native.errors == []
+      assert restored.errors == []
+      IO.puts("CONNECTION_STREAM_NATIVE_ISOLATION: #{mutant} RED #{rule}; exact restore GREEN")
+    end
+  end
+
+  defp native_connection(mode, corruption) do
+    run = ConnectionNative.observe(mode, corruption)
+    assert run.result == :ok
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    native = NativeTransport.build(%{events: events})
+    {native, ConnectionReads.build(native)}
+  end
 
   @tag :comparator_control
   test "C-tick: the twin TTL read falls in the next second", context do

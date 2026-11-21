@@ -321,6 +321,37 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_length) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_reads.ex",
+        original: "        state = exact(state, read, :receive_length, read.length, expected.length)\n",
+        mutated: ""
+      }
+    ]
+  end
+
+  def edits(:stream_timeout) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_reads.ex",
+        original: "        state = exact(state, read, :receive_timeout, read.timeout, expected.timeout)\n",
+        mutated: ""
+      }
+    ]
+  end
+
+  def edits(:stream_required) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_reads.ex",
+        original:
+          "      {:error, reason} ->\n        failure(state, read, :receive_required, reason, :framing_requires_a_read)\n",
+        mutated: "      {:error, _reason} ->\n        state\n"
+      }
+    ]
+  end
+
   def compare(pair, rule), do: with_mutant(rule, fn -> Comparator.compare(pair) end)
 
   def with_mutant(rule, callback) do

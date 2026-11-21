@@ -1,6 +1,119 @@
 defmodule AshOnetime.Test.ExitBoundary.Wire do
   @moduledoc false
 
+  # Input is one physical connection's actual writes and native deliveries, never
+  # their mirrored copies. Offsets are independent in the two directions. A frame
+  # retains the source span of every byte, including a header split over receives.
+  def frames(chunks) do
+    chunks |> Enum.reduce(frame_state(), &frame_chunk/2) |> finish_frames()
+  end
+
+  def frame_state, do: %{directions: %{}, messages: [], errors: []}
+  def push_frame(state, chunk), do: frame_chunk(chunk, state)
+
+  def finish_frames(state) do
+    incomplete =
+      for {direction, stream} <- state.directions,
+          stream.buffer != <<>>,
+          do: %{
+            rule: :incomplete_frame,
+            direction: direction,
+            offset: stream.offset,
+            received: byte_size(stream.buffer),
+            required: frame_remaining(stream.buffer)
+          }
+
+    %{
+      messages: Enum.reverse(state.messages),
+      errors: Enum.reverse(state.errors) ++ Enum.sort_by(incomplete, & &1.direction),
+      directions: state.directions
+    }
+  end
+
+  # Postgrex requests all currently available bytes until the five-byte header is
+  # present; after that it requests exactly the missing body, capped at 64 MiB.
+  def frame_remaining(bytes) when byte_size(bytes) < 5, do: 0
+
+  def frame_remaining(<<_tag, size::signed-32, tail::binary>>) when size >= 4,
+    do: max(size - 4 - byte_size(tail), 0)
+
+  def frame_remaining(_bytes), do: :invalid_length
+
+  defp frame_chunk(%{direction: direction, bytes: bytes} = chunk, state)
+       when direction in [:frontend, :backend] and is_binary(bytes) do
+    stream =
+      Map.get(state.directions, direction, %{
+        buffer: <<>>,
+        offset: 0,
+        received: 0,
+        provenance: []
+      })
+
+    span = %{
+      index: chunk.index,
+      offset: stream.received,
+      source_offset: Map.get(chunk, :source_offset, 0),
+      phase: Map.get(chunk, :phase, :shared),
+      length: byte_size(bytes)
+    }
+
+    stream = %{
+      stream
+      | buffer: stream.buffer <> bytes,
+        received: stream.received + byte_size(bytes),
+        provenance: stream.provenance ++ [span]
+    }
+
+    {stream, state} = extract_frames(stream, direction, state)
+    put_in(state.directions[direction], stream)
+  end
+
+  defp extract_frames(%{buffer: <<tag, size::signed-32, tail::binary>>} = stream, direction, state)
+       when size >= 4 and byte_size(tail) >= size - 4 do
+    <<payload::binary-size(size - 4), rest::binary>> = tail
+    stop = stream.offset + size + 1
+
+    message = %{
+      direction: direction,
+      tag: tag,
+      payload: payload,
+      start: stream.offset,
+      stop: stop,
+      provenance: frame_spans(stream.provenance, stream.offset, stop)
+    }
+
+    stream = %{
+      stream
+      | buffer: rest,
+        offset: stop,
+        provenance: Enum.filter(stream.provenance, &(&1.offset + &1.length > stop))
+    }
+
+    extract_frames(stream, direction, %{state | messages: [message | state.messages]})
+  end
+
+  defp extract_frames(%{buffer: <<_tag, size::signed-32, _::binary>>} = stream, direction, state)
+       when size < 4 do
+    error = %{rule: :frame_length, direction: direction, offset: stream.offset, actual: size}
+    {stream, %{state | errors: [error | state.errors]}}
+  end
+
+  defp extract_frames(stream, _direction, state), do: {stream, state}
+
+  defp frame_spans(spans, first, last) do
+    for span <- spans,
+        start = max(span.offset, first),
+        stop = min(span.offset + span.length, last),
+        stop > start do
+      %{
+        span
+        | offset: start,
+          source_offset: span.source_offset + start - span.offset,
+          length: stop - start
+      }
+    end
+  end
+
   # Decode only the TCP driver's documented command and PostgreSQL messages at
   # transport positions. Arbitrary binaries are never inspected for ETF or packets.
   def build(indexed, readback \\ MapSet.new()) do
@@ -288,4 +401,6 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
     <<string::binary-size(^size), 0, rest::binary>> = bytes
     {string, rest}
   end
+
+  def decode_message(tag, payload, state), do: message(tag, payload, state)
 end
