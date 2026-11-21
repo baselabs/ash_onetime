@@ -7,6 +7,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias AshOnetime.Test.ExitBoundary.Compiled
   alias AshOnetime.Test.ExitBoundary.Completeness
   alias AshOnetime.Test.ExitBoundary.ConnectionDecoders
+  alias AshOnetime.Test.ExitBoundary.ConnectionHistory
   alias AshOnetime.Test.ExitBoundary.ConnectionNative
   alias AshOnetime.Test.ExitBoundary.ConnectionProtocol
   alias AshOnetime.Test.ExitBoundary.ConnectionReads
@@ -317,6 +318,35 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              %{decoded: {:data_row, [{:data_column, _, _, 0, _, _, _, 23, 1, 17}]}} -> true
              _ -> false
            end)
+  end
+
+  @tag :connection_streams
+  test "Connection streams: history failures keep native terms out of logger diagnostics" do
+    marker = "native-history-diagnostic-marker"
+    unguarded = ComparatorMutants.with_mutant(:history_status, &history_failure_log/0)
+    assert String.contains?(unguarded, marker)
+    restored = history_failure_log()
+    refute String.contains?(restored, marker)
+    IO.puts("CONNECTION_HISTORY_STATUS: native logger RED; exact restore GREEN")
+  end
+
+  defp history_failure_log do
+    ExUnit.CaptureLog.capture_log(fn ->
+      history =
+        start_supervised!({ConnectionHistory, self()},
+          id: make_ref(),
+          restart: :temporary
+        )
+
+      monitor = Process.monitor(history)
+      GenServer.cast(history, {:unexpected, "native-history-diagnostic-marker"})
+
+      receive do
+        {:DOWN, ^monitor, :process, ^history, _reason} -> :ok
+      after
+        5_000 -> flunk("the real history logger probe did not stop")
+      end
+    end)
   end
 
   @tag :connection_streams

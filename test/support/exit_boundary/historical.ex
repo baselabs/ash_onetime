@@ -1,4 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.Historical do
+  alias AshOnetime.Test.ExitBoundary.ConnectionHistory
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
   @moduledoc false
@@ -53,8 +54,29 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
 
     metadata = Ecto.Repo.Registry.lookup(Repo.get_dynamic_repo())
     query_cache = %{table: metadata.cache, rows: readable(metadata.cache)}
+    origins = ConnectionHistory.snapshot()
+    connections = Map.new(connections, fn {holder, c} -> {holder, descriptors(c, origins)} end)
+
+    catalogs =
+      for {_, %{protocol: %{sock: {:gen_tcp, port}}, descriptors: descriptors}} <- connections,
+          into: %{} do
+        statements =
+          Map.new(descriptors, fn origin ->
+            {origin.query.name,
+             %{
+               sql: IO.iodata_to_binary(origin.query.statement),
+               statement: {:historical_statement, origin.query.name},
+               parameter_types: origin.parameters,
+               columns: origin.columns,
+               binds: []
+             }}
+          end)
+
+        {port, statements}
+      end
 
     %{
+      prepared_catalogs: catalogs,
       query_cache: query_cache,
       payload_children: Enum.map(payload_children, &hd/1),
       cache_expiries: cache_expiries,
@@ -71,6 +93,22 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
         )
         |> Map.new()
     }
+  end
+
+  defp descriptors(%{protocol: protocol} = connection, origins) do
+    queries = if protocol.queries, do: readable(protocol.queries), else: []
+
+    descriptors =
+      for origin <- origins,
+          origin.sock === protocol.sock and origin.query.types === protocol.types,
+          origin.parameters === origin.query.param_oids,
+          Enum.any?(queries, fn row ->
+            elem(row, 0) === origin.query.name and elem(row, 1) === origin.query.ref
+          end),
+          {:gen_tcp, port} <- [origin.sock],
+          do: Map.put(origin, :port, port)
+
+    Map.put(connection, :descriptors, descriptors)
   end
 
   defp readable(table) do

@@ -387,6 +387,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:history_status) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_history.ex",
+        original:
+          "  @impl true\n  def format_status(status) do\n    Map.new(status, fn\n      {:log, _value} -> {:log, []}\n      {key, _value} when key in [:state, :message, :reason] -> {key, :native_connection_history}\n      entry -> entry\n    end)\n  end\n\n",
+        mutated: ""
+      }
+    ]
+  end
+
   def compare(pair, rule), do: with_mutant(rule, fn -> Comparator.compare(pair) end)
 
   def with_mutant(rule, callback) do

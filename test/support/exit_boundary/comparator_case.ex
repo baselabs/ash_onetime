@@ -2,6 +2,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorCase do
   @moduledoc false
   use ExUnit.CaseTemplate
 
+  alias AshOnetime.Test.ExitBoundary.ConnectionHistory
   alias AshOnetime.Test.ExitBoundary.References
   alias AshOnetime.Test.ExitBoundary.Returned
   alias AshOnetime.Test.ExitBoundary.Scenarios
@@ -37,6 +38,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorCase do
   end
 
   setup context do
+    history = start_supervised!({ConnectionHistory, self()})
+    Process.put({ConnectionHistory, :pid}, history)
     size = Map.get(context, :pool_size, 2)
     prepare = Map.get(context, :prepare, :unnamed)
     repo = start_unboxed_repo!(prepare: prepare, idle_interval: 3_600_000, pool_size: size)
