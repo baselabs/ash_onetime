@@ -700,7 +700,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     end
   end
 
-  defp outcome_bind(sql, binds, e, s) when is_binary(sql) do
+  defp outcome_bind(sql, binds, _e, s) when is_binary(sql) do
     if String.starts_with?(sql, "INSERT INTO ") and
          String.contains?(sql, "ash_onetime_effect_outcomes") do
       # These are the two declared physical INSERT layouts, not a lookup by a
