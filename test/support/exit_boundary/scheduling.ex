@@ -9,38 +9,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
     events = indexed.events
     state = %{claimed: MapSet.new(), moves: %{}, rewrites: %{}, errors: []}
 
-    state =
-      Enum.reduce(events, state, fn e, s ->
-        case e.event do
-          {caller, :return_from, {:erts_internal, f, 3}, ref}
-          when f in [:port_command, :port_control] and is_reference(ref) ->
-            deferred(e, caller, f, ref, events, s)
-
-          {caller, :receive, {:inet_async, port, id, result}} ->
-            async(e, caller, port, id, result, events, s)
-
-          {caller, :call, {:prim_inet, :send, [port, data, _options, ref]}}
-          when is_port(port) and is_reference(ref) ->
-            inet(e, caller, port, data, ref, events, s)
-
-          {parent, :send, {parent, ref, ref, [parent], {:erlang, :apply, [fun, []]}} = message,
-           child}
-          when is_function(fun) ->
-            task(e, parent, child, message, events, s)
-
-          {parent, :getting_unlinked, child} ->
-            unlinked(e, parent, child, events, s)
-
-          {caller, :call, {:erts_internal, :flush_monitor_messages, [ref, false, true]}} ->
-            flush(e, caller, ref, events, s)
-
-          {caller, :receive, {:DOWN, ref, :process, child, reason}} ->
-            down(e, caller, ref, child, reason, events, s)
-
-          _ ->
-            s
-        end
-      end)
+    state = Enum.reduce(events, state, &schedule(&1, &2, events))
 
     # Move only validated scheduling signals. Their complete payloads continue to
     # compare at the fixed anchor; all other event order is untouched.
@@ -60,6 +29,32 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
 
     %{events: result, errors: Enum.reverse(state.errors)}
   end
+
+  defp schedule(%{event: {caller, :return_from, {:erts_internal, f, 3}, ref}} = e, s, events)
+       when f in [:port_command, :port_control] and is_reference(ref),
+       do: deferred(e, caller, f, ref, events, s)
+
+  defp schedule(%{event: {caller, :receive, {:inet_async, port, id, result}}} = e, s, events),
+    do: async(e, caller, port, id, result, events, s)
+
+  defp schedule(%{event: {caller, :call, {:prim_inet, :send, [port, data, _options, ref]}}} = e, s, events)
+       when is_port(port) and is_reference(ref),
+       do: inet(e, caller, port, data, ref, events, s)
+
+  defp schedule(%{event: {parent, :send, {parent, ref, ref, [parent], {:erlang, :apply, [fun, []]}} = message, child}} = e, s, events)
+       when is_function(fun),
+       do: task(e, parent, child, message, events, s)
+
+  defp schedule(%{event: {parent, :getting_unlinked, child}} = e, s, events),
+    do: unlinked(e, parent, child, events, s)
+
+  defp schedule(%{event: {caller, :call, {:erts_internal, :flush_monitor_messages, [ref, false, true]}}} = e, s, events),
+    do: flush(e, caller, ref, events, s)
+
+  defp schedule(%{event: {caller, :receive, {:DOWN, ref, :process, child, reason}}} = e, s, events),
+    do: down(e, caller, ref, child, reason, events, s)
+
+  defp schedule(_e, s, _events), do: s
 
   defp deferred(source, caller, f, ref, events, s) do
     [:immediate_result, :reference_then_same_result] =
@@ -307,13 +302,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
 
       %{event: {^parent, :return_from, {:erlang, :monitor, arity}, ^ref}} = e
       when arity in [2, 3] ->
-        case previous(events, e, fn
-               %{event: {^parent, :call, {:erlang, :monitor, arguments}}} ->
-                 length(arguments) == arity
-
-               _ ->
-                 false
-             end) do
+        case previous(events, e, &monitor_call?(&1, parent, arity)) do
           %{event: {_, :call, {_, _, [:process, child | _]}}} ->
             %{ref: ref, child: child, source: e}
 
@@ -325,6 +314,11 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
         nil
     end)
   end
+
+  defp monitor_call?(%{event: {parent, :call, {:erlang, :monitor, arguments}}}, parent, arity),
+    do: length(arguments) == arity
+
+  defp monitor_call?(_event, _parent, _arity), do: false
 
   defp select(events, predicate), do: Enum.filter(events, predicate)
 

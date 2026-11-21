@@ -164,20 +164,18 @@ defmodule AshOnetime.Test.ExitBoundary.Refusals do
       {_, expected} ->
         expected
 
-      nil ->
-        cond do
-          is_map(value) ->
-            Map.new(Map.to_list(value), fn {key, item} -> {key, replace(item, replacements)} end)
-
-          is_list(value) ->
-            Enum.map(value, &replace(&1, replacements))
-
-          is_tuple(value) ->
-            value |> Tuple.to_list() |> Enum.map(&replace(&1, replacements)) |> List.to_tuple()
-
-          true ->
-            value
-        end
+      nil -> descend(value, replacements)
     end
   end
+
+  defp descend(value, replacements) when is_map(value),
+    do: Map.new(Map.to_list(value), fn {key, item} -> {key, replace(item, replacements)} end)
+
+  defp descend(value, replacements) when is_list(value),
+    do: Enum.map(value, &replace(&1, replacements))
+
+  defp descend(value, replacements) when is_tuple(value),
+    do: value |> Tuple.to_list() |> Enum.map(&replace(&1, replacements)) |> List.to_tuple()
+
+  defp descend(value, _replacements), do: value
 end

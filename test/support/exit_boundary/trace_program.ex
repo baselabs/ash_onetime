@@ -1,8 +1,11 @@
 defmodule AshOnetime.Test.ExitBoundary.TraceProgram do
-  @moduledoc false
   alias AshOnetime.Delivery
   alias AshOnetime.Delivery.Envelope
-  alias AshOnetime.Test.ExitBoundary.{PermittedTrace, Returns}
+  alias AshOnetime.Test.ExitBoundary.FailureTwins
+  alias AshOnetime.Test.ExitBoundary.FrameBindings
+  alias AshOnetime.Test.ExitBoundary.PermittedTrace
+  alias AshOnetime.Test.ExitBoundary.Returns
+  @moduledoc false
 
   # A frame is a program node, rather than a region exemption. Its direct calls
   # have a closed order. Ordinary calls beneath these nodes still compare with
@@ -303,7 +306,7 @@ defmodule AshOnetime.Test.ExitBoundary.TraceProgram do
 
   defp expected_return({Delivery, f, _}, _, %{row: %{branch: :producer_failure}}, _)
        when f in [:produce, :seal],
-       do: {:value, {:error, AshOnetime.Test.ExitBoundary.FailureTwins.error(:producer_failure)}}
+       do: {:value, {:error, FailureTwins.error(:producer_failure)}}
 
   defp expected_return({Delivery, f, _}, _, _, _)
        when f in [:produce, :seal, :seal_to_entry, :complete, :complete_entry, :complete_current],
@@ -406,7 +409,7 @@ defmodule AshOnetime.Test.ExitBoundary.TraceProgram do
     do: {:value, {:ok, <<1, b.epk::binary, b.tag::binary, b.ct::binary>>}}
 
   defp expected_return({Envelope, :derive, 4}, _, _, b),
-    do: {:value, AshOnetime.Test.ExitBoundary.FrameBindings.derived_key(b)}
+    do: {:value, FrameBindings.derived_key(b)}
 
   defp expected_return({Envelope, :hmac, 2}, [key, data], _, _),
     do: {:value, :crypto.mac(:hmac, :sha256, key, data)}

@@ -1,6 +1,9 @@
 defmodule AshOnetime.Test.ExitBoundary.Capture do
+  alias AshOnetime.Test.ExitBoundary.Classifier
+  alias AshOnetime.Test.ExitBoundary.FailureTwins
+  alias AshOnetime.Test.ExitBoundary.Registry
+  alias AshOnetime.Test.ExitBoundary.Root
   @moduledoc false
-  alias AshOnetime.Test.ExitBoundary.{Classifier, Registry, Root}
 
   def frames(host, callbacks) do
     package =
@@ -14,7 +17,7 @@ defmodule AshOnetime.Test.ExitBoundary.Capture do
       package ++
         Enum.map(host ++ callbacks, &{&1, :_, :_}) ++
         Registry.frames() ++
-        AshOnetime.Test.ExitBoundary.FailureTwins.frames() ++
+        FailureTwins.frames() ++
         [
           {Root, :invoke, 2},
           {Ash, :create, 2},

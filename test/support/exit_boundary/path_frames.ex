@@ -1,16 +1,11 @@
 defmodule AshOnetime.Test.ExitBoundary.PathFrames do
-  @moduledoc false
   alias AshOnetime.Delivery
   alias AshOnetime.Test.ExitBoundary.Hooks
+  alias AshOnetime.Test.ExitBoundary.References
+  @moduledoc false
 
   def declarations(row, hooks) do
-    entry =
-      case row.type do
-        :create -> {Ash.Actions.Create, :run, 4}
-        :update -> {Ash, :update, 3}
-        :destroy -> {Ash, :destroy, 2}
-        :action -> {Ash, :run_action, 2}
-      end
+    entry = action_entry(row.type)
 
     outer = [
       %{mfa: {Delivery, :armed, 4}, anchor: entry, source: {:armed, 4, :dispatch, 2}},
@@ -27,44 +22,44 @@ defmodule AshOnetime.Test.ExitBoundary.PathFrames do
     stage = Map.get(row, :frame_stage, suspension(row))
     module = if row.type == :action, do: AshOnetime.GenericAction, else: AshOnetime.Change
 
-    {slot, callee} =
-      case {row.type, stage} do
-        {:action, :reserve} -> {{:before_action, 0}, {:reserve, 4}}
-        {:action, :producer} -> {{:before_action, 0}, {:produce, 4}}
-        {:action, :complete} -> {{:after_action, 1}, {:complete, 2}}
-        {:action, _} -> {nil, nil}
-        {_, :reserve} -> {{:around_action, 0}, {:reserve, 4}}
-        {_, :producer} -> {{:around_action, 0}, {:produce, 4}}
-        {_, _} -> {{:around_action, 0}, {:complete, 2}}
-      end
-
-    inner =
-      if slot do
-        hook = Map.fetch!(hooks, slot)
-        {function, arity} = callee
-
-        declaration = %{
-          mfa: Hooks.trace_mfa(hook),
-          anchor: {module, function, arity},
-          source: {:install_delivery, 4, function, arity}
-        }
-
-        # CRUD's ordinary hook retains a non-tail reserve call. Generic's
-        # ordinary before/after hooks and CRUD's completion are tail calls.
-        if row.type != :action and stage == :reserve do
-          [Map.merge(declaration, %{replace_hook: slot, installer: {module, :install, 3}})]
-        else
-          [declaration]
-        end
-      else
-        []
-      end
+    {slot, callee} = hook_callee(row.type, stage)
+    inner = inner_declarations(slot, callee, row, hooks, module, stage)
 
     case row.branch do
       :transaction -> []
       :direct -> []
       _ -> inner ++ outer
     end
+  end
+
+  defp action_entry(:create), do: {Ash.Actions.Create, :run, 4}
+  defp action_entry(:update), do: {Ash, :update, 3}
+  defp action_entry(:destroy), do: {Ash, :destroy, 2}
+  defp action_entry(:action), do: {Ash, :run_action, 2}
+
+  defp hook_callee(:action, :reserve), do: {{:before_action, 0}, {:reserve, 4}}
+  defp hook_callee(:action, :producer), do: {{:before_action, 0}, {:produce, 4}}
+  defp hook_callee(:action, :complete), do: {{:after_action, 1}, {:complete, 2}}
+  defp hook_callee(:action, _), do: {nil, nil}
+  defp hook_callee(_, :reserve), do: {{:around_action, 0}, {:reserve, 4}}
+  defp hook_callee(_, :producer), do: {{:around_action, 0}, {:produce, 4}}
+  defp hook_callee(_, _), do: {{:around_action, 0}, {:complete, 2}}
+
+  defp inner_declarations(nil, _, _, _, _, _), do: []
+
+  defp inner_declarations(slot, {function, arity}, row, hooks, module, stage) do
+    hook = Map.fetch!(hooks, slot)
+
+    declaration = %{
+      mfa: Hooks.trace_mfa(hook),
+      anchor: {module, function, arity},
+      source: {:install_delivery, 4, function, arity}
+    }
+
+    # Only CRUD's ordinary reserve hook is a non-tail call.
+    if row.type != :action and stage == :reserve,
+      do: [Map.merge(declaration, %{replace_hook: slot, installer: {module, :install, 3}})],
+      else: [declaration]
   end
 
   def path(row),
@@ -90,18 +85,20 @@ defmodule AshOnetime.Test.ExitBoundary.PathFrames do
 
   def expected(twin, frames, depth, filters \\ nil) do
     inserted =
-      Enum.reduce(frames, twin, fn
-        %{twin_mfa: twin_mfa, frame: frame}, stack ->
-          Enum.map(stack, fn item -> if mfa(item) == twin_mfa, do: frame, else: item end)
-
-        %{anchor: anchor, frame: frame}, stack ->
-          Enum.flat_map(stack, fn item ->
-            if mfa(item) == anchor, do: [item, frame], else: [item]
-          end)
-      end)
+      Enum.reduce(frames, twin, &insert_frame/2)
       |> Enum.take(depth)
 
     if filters == nil, do: inserted, else: Splode.filter_stacktrace(inserted, filters)
+  end
+
+  defp insert_frame(%{twin_mfa: twin_mfa, frame: frame}, stack) do
+    Enum.map(stack, fn item -> if mfa(item) == twin_mfa, do: frame, else: item end)
+  end
+
+  defp insert_frame(%{anchor: anchor, frame: frame}, stack) do
+    Enum.flat_map(stack, fn item ->
+      if mfa(item) == anchor, do: [item, frame], else: [item]
+    end)
   end
 
   def mfa({m, f, a, _}), do: {m, f, if(is_list(a), do: length(a), else: a)}
@@ -123,7 +120,7 @@ defmodule AshOnetime.Test.ExitBoundary.PathFrames do
   end
 
   def location(module, {function, arity, callee, callee_arity}) do
-    AshOnetime.Test.ExitBoundary.References.memo(
+    References.memo(
       {:location, module, module.module_info(:md5), function, arity, callee, callee_arity},
       fn ->
         compiled_location(module, {function, arity, callee, callee_arity})

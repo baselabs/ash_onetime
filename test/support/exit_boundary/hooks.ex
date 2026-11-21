@@ -1,12 +1,14 @@
 defmodule AshOnetime.Test.ExitBoundary.Hooks do
-  @moduledoc false
+  alias AshOnetime.Test.ExitBoundary.FailureTwins
+  alias AshOnetime.Test.ExitBoundary.References
   alias AshOnetime.Test.ExitBoundary.Registry
+  @moduledoc false
 
   def reference(resource, action, type) do
     {installer, _, _} = Registry.installer(type)
     key = {:hooks, resource, action, type, installer.module_info(:md5)}
 
-    AshOnetime.Test.ExitBoundary.References.memo(key, fn ->
+    References.memo(key, fn ->
       build_reference(resource, action, type)
     end)
   end
@@ -30,27 +32,29 @@ defmodule AshOnetime.Test.ExitBoundary.Hooks do
     installed = apply(module, function, [fresh, [protection: protection], context])
     cell = get_in(installed.context, [:private, :ash_onetime_delivery_cell])
 
-    Map.new(Registry.hook_slots(type), fn {list, index} = slot ->
-      hook =
-        installed
-        |> Map.fetch!(list)
-        |> Enum.at(if(type == :action and list == :after_action, do: 0, else: index))
+    values = %{protection: protection, context: context, cell: cell}
+    Map.new(Registry.hook_slots(type), &reference_slot(&1, installed, type, values))
+  end
 
-      info = Map.new(Function.info(hook))
+  defp reference_slot({list, index} = slot, installed, type, values) do
+    hook =
+      installed
+      |> Map.fetch!(list)
+      |> Enum.at(if(type == :action and list == :after_action, do: 0, else: index))
 
-      sources =
-        Enum.map(info.env, fn value ->
-          cond do
-            value === protection -> :protection
-            value === context -> :context
-            not is_nil(cell) and value === cell -> :cell
-            value === protection.executing_only -> :names
-            true -> raise "installer captured an undeclared environment source"
-          end
-        end)
+    info = Map.new(Function.info(hook))
+    sources = Enum.map(info.env, &environment_source(&1, values))
+    {slot, %{identity: identity(info), sources: sources}}
+  end
 
-      {slot, %{identity: identity(info), sources: sources}}
-    end)
+  defp environment_source(value, %{protection: protection, context: context, cell: cell}) do
+    cond do
+      value === protection -> :protection
+      value === context -> :context
+      not is_nil(cell) and value === cell -> :cell
+      value === protection.executing_only -> :names
+      true -> raise "installer captured an undeclared environment source"
+    end
   end
 
   def frames(reference, canonical) do
@@ -76,10 +80,10 @@ defmodule AshOnetime.Test.ExitBoundary.Hooks do
   end
 
   def validate(hook, slot, side) do
-    if AshOnetime.Test.ExitBoundary.FailureTwins.selected?(side) and
+    if FailureTwins.selected?(side) and
          not Map.get(side, :pre_fault?, false) and
-         slot == AshOnetime.Test.ExitBoundary.FailureTwins.slot(side.row),
-       do: AshOnetime.Test.ExitBoundary.FailureTwins.validate(hook, side),
+         slot == FailureTwins.slot(side.row),
+       do: FailureTwins.validate(hook, side),
        else: validate_library(hook, slot, side)
   end
 

@@ -1,6 +1,10 @@
 defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
+  alias AshOnetime.Test.ExitBoundary.Comparator
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
+  alias AshOnetime.Test.ExitBoundary.Origins
+  alias AshOnetime.Test.ExitBoundary.Scenarios
+  alias AshOnetime.Test.ExitBoundary.Values
   use AshOnetime.Test.ExitBoundary.ComparatorCase, async: false
-  alias AshOnetime.Test.ExitBoundary.{Comparator, Origins, Scenarios, Values}
 
   for {row, ordinal} <- Enum.with_index(Scenarios.rows()) do
     name = "#{row.action}/#{row.branch}/#{row.fault || :none}"
@@ -20,11 +24,7 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
       warm_result = Comparator.compare(warm)
 
       if first = List.first(warm_result.errors) do
-        IO.inspect(
-          %{path: unquote(name), first: AshOnetime.Test.ExitBoundary.Diagnostics.safe(first)},
-          label: "U9_NATIVE_WARM_FIRST_DIVERGENCE",
-          limit: :infinity
-        )
+        IO.puts("U9_NATIVE_WARM_FIRST_DIVERGENCE" <> ": " <> inspect(%{path: unquote(name), first: Diagnostics.safe(first)}, pretty: true , limit: :infinity))
       end
 
       assert warm_result.errors == [], "U9 path preparation must compare green"
@@ -44,38 +44,33 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
 
       expected = hd(profiles)
 
-      if index = Enum.find_index(profiles, &(&1 != expected)) do
+      index = Enum.find_index(profiles, &(&1 != expected))
+
+      if index do
         actual = Enum.at(profiles, index)
 
         for side <- [:run, :twin] do
           before = MapSet.new(expected[side])
           after_keys = MapSet.new(actual[side])
 
-          IO.inspect(
-            %{
+          IO.puts("U11_ORIGIN_KEY_DIFF" <> ": " <> inspect(%{
               path: unquote(name),
               repetition: index + 1,
               side: side,
               missing: MapSet.difference(before, after_keys) |> Enum.sort(),
               added: MapSet.difference(after_keys, before) |> Enum.sort()
-            },
-            label: "U11_ORIGIN_KEY_DIFF",
-            limit: :infinity
-          )
+            }, pretty: true , limit: :infinity))
         end
       end
 
       assert length(Enum.uniq(profiles)) == 1,
              "U11: producer origin keys changed across repetitions"
 
-      IO.inspect(
-        %{
+      IO.puts("U9_PATH_SECONDS" <> ": " <> inspect(%{
           group: unquote(Integer.to_string(div(ordinal, 5))),
           path: unquote(name),
           seconds: (System.monotonic_time(:millisecond) - started) / 1000
-        },
-        label: "U9_PATH_SECONDS"
-      )
+        }, pretty: true))
     end
   end
 end

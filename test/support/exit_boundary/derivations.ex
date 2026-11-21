@@ -4,66 +4,59 @@ defmodule AshOnetime.Test.ExitBoundary.Derivations do
 
   @contract {AshOnetime.Response, :contract, 4}
   def build(indexed, side) do
-    prior_sources =
-      case Map.get(side, :prior_derivations) do
-        nil ->
-          %{}
-
-        prior ->
-          prior.sources
-          |> Enum.group_by(fn {{root, _}, _} -> root end)
-          |> Map.new(fn {root, sources} ->
-            {_, value} = Enum.max_by(sources, fn {{_, n}, _} -> n end)
-            {{root, -1}, value}
-          end)
-      end
-
-    initial = %{active: %{}, slots: %{}, sources: prior_sources, errors: []}
-
-    Enum.reduce(indexed.events, initial, fn e, state ->
-      case e.event do
-        {pid, :call, {m, f, args}} ->
-          root = {m, f, length(args)}
-
-          if root in Registry.derivations() and not Map.has_key?(state.active, pid) do
-            reference = reference(root, args, side)
-            frame = %{root: root, reference: reference, position: 0, input: args, index: e.index}
-            state = put_in(state.active[pid], frame)
-            # Inputs remain in the paired comparison; the source computation can
-            # accept only a function of those already compared inputs.
-            advance(e, state, false)
-          else
-            interior(e, state)
-          end
-
-        {pid, :return_from, root, _value} ->
-          case Map.get(state.active, pid) do
-            %{root: ^root, reference: reference, position: position} = frame ->
-              state = advance(e, state, true)
-
-              state =
-                if position + 1 == length(reference),
-                  do: state,
-                  else: fail(state, e, :derived_sequence_length, position + 1, length(reference))
-
-              %{
-                state
-                | active: Map.delete(state.active, pid),
-                  sources: Map.put(state.sources, {root, frame.index}, elem(e.event, 3))
-              }
-
-            nil ->
-              state
-
-            _ ->
-              interior(e, state)
-          end
-
-        _ ->
-          interior(e, state)
-      end
-    end)
+    initial = %{active: %{}, slots: %{}, sources: prior_sources(side), errors: []}
+    Enum.reduce(indexed.events, initial, &event(&1, &2, side))
   end
+
+  defp prior_sources(side) do
+    case Map.get(side, :prior_derivations) do
+      nil -> %{}
+      prior ->
+        prior.sources
+        |> Enum.group_by(fn {{root, _}, _} -> root end)
+        |> Map.new(fn {root, sources} ->
+          {_, value} = Enum.max_by(sources, fn {{_, n}, _} -> n end)
+          {{root, -1}, value}
+        end)
+    end
+  end
+
+  defp event(%{event: {pid, :call, {m, f, args}}} = e, state, side) do
+    root = {m, f, length(args)}
+
+    if root in Registry.derivations() and not Map.has_key?(state.active, pid) do
+      reference = reference(root, args, side)
+      frame = %{root: root, reference: reference, position: 0, input: args, index: e.index}
+      state = put_in(state.active[pid], frame)
+      # Source inputs remain in the paired comparison.
+      advance(e, state, false)
+    else
+      interior(e, state)
+    end
+  end
+
+  defp event(%{event: {pid, :return_from, root, _value}} = e, state, _) do
+    case Map.get(state.active, pid) do
+      %{root: ^root, reference: reference, position: position} = frame ->
+        state = advance(e, state, true)
+
+        state =
+          if position + 1 == length(reference),
+            do: state,
+            else: fail(state, e, :derived_sequence_length, position + 1, length(reference))
+
+        %{
+          state
+          | active: Map.delete(state.active, pid),
+            sources: Map.put(state.sources, {root, frame.index}, elem(e.event, 3))
+        }
+
+      nil -> state
+      _ -> interior(e, state)
+    end
+  end
+
+  defp event(e, state, _), do: interior(e, state)
 
   defp reference(@contract, _args, side), do: side.contract_reference.events
 

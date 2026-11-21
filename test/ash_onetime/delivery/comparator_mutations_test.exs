@@ -1,18 +1,20 @@
 Code.require_file("../../../scripts/delivery_comparator_mutations.exs", __DIR__)
 
 defmodule AshOnetime.Delivery.ComparatorMutationsTest do
+  alias AshOnetime.Resource.Info, as: OnetimeInfo
+  alias AshOnetime.Test.ExitBoundary.Analysis
+  alias AshOnetime.Test.ExitBoundary.Comparator
+  alias AshOnetime.Test.ExitBoundary.ComparatorMutants
+  alias AshOnetime.Test.ExitBoundary.Compiled
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
+  alias AshOnetime.Test.ExitBoundary.Historical
+  alias AshOnetime.Test.ExitBoundary.MutationWitness
+  alias AshOnetime.Test.ExitBoundary.Search
+  alias AshOnetime.Test.ExitBoundary.Values
+  alias AshOnetime.Test.Repo
+  alias Ecto.Adapters.SQL
   use AshOnetime.Test.ExitBoundary.ComparatorCase, async: false
 
-  alias AshOnetime.Test.ExitBoundary.{
-    Analysis,
-    Comparator,
-    ComparatorMutants,
-    Diagnostics,
-    Historical,
-    MutationWitness,
-    Search,
-    Values
-  }
 
   @tag :mutation_hash
   test "mutation hashes equal SHA-256 without a preceding crypto call" do
@@ -60,7 +62,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
           neutral_pair = observe(context, row, Keyword.fetch!(values, neutral))
           assert Search.hits(neutral_pair.run) == []
           assert Comparator.compare(neutral_pair).errors == [], "the neutral tuple must pass"
-          IO.inspect(%{mutation: mutation.id, tuple: neutral}, label: "R_NEUTRAL_TUPLE_GREEN")
+          IO.puts("R_NEUTRAL_TUPLE_GREEN" <> ": " <> inspect(%{mutation: mutation.id, tuple: neutral}, pretty: true))
         end
 
         label =
@@ -78,16 +80,12 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         first = List.first(comparison.errors)
 
         if first || hits != [] do
-          IO.inspect(
-            %{
+          IO.puts("R_FIRST_DIVERGENCE" <> ": " <> inspect(%{
               mutation: mutation.id,
               source: if(first, do: Diagnostics.location(first)),
               raw_canary_hits: hits,
               difference: Diagnostics.safe(first)
-            },
-            label: "R_FIRST_DIVERGENCE",
-            limit: :infinity
-          )
+            }, pretty: true , limit: :infinity))
         end
 
         quiet? = hits == []
@@ -99,9 +97,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
           comparator_mutants(mutation, pair, comparison)
 
           if mutation.extra == :u12 do
-            IO.inspect(%{mutation: mutation.id, at: first.at, path: first.path, rule: first.rule},
-              label: "U12_NATIVE_REACHABILITY"
-            )
+            IO.puts("U12_NATIVE_REACHABILITY" <> ": " <> inspect(%{mutation: mutation.id, at: first.at, path: first.path, rule: first.rule}, pretty: true))
           end
         end
 
@@ -138,10 +134,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
           comparison = Comparator.compare(pair)
           first = List.first(comparison.errors)
 
-          IO.inspect(%{mutation: mutation.id, tuple: label, first: Diagnostics.safe(first)},
-            label: "C_SET_NATIVE_COMPARISON",
-            limit: :infinity
-          )
+          IO.puts("C_SET_NATIVE_COMPARISON" <> ": " <> inspect(%{mutation: mutation.id, tuple: label, first: Diagnostics.safe(first)}, pretty: true , limit: :infinity))
 
           if first do
             assert MutationWitness.named?(mutation, first, pair, comparison),
@@ -168,102 +161,117 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
       disabled = ComparatorMutants.compare(pair, rule)
       next = List.first(disabled.errors)
 
-      IO.inspect(
-        %{
+      IO.puts("COMPARATOR_MUTANT" <> ": " <> inspect(%{
           rule: rule,
           mutation: mutation.id,
           active: Diagnostics.safe(active_first),
           next: Diagnostics.safe(next),
           remaining: length(disabled.errors)
-        },
-        label: "COMPARATOR_MUTANT",
-        limit: :infinity
-      )
+        }, pretty: true , limit: :infinity))
 
-      case {rule, mutation.id} do
-        {:k, :r_iso_k} ->
-          assert disabled.errors == [], "R-iso-K must pass with only K's expression disabled"
-
-        {:inv, :r_iso_inv} ->
-          assert disabled.errors == [],
-                 "R-iso-inv must pass with only inv's source binding disabled"
-
-        {:completion, :r_iso_completion} ->
-          assert disabled.errors == [],
-                 "R-iso-completion must pass with only completion's source binding disabled"
-
-        {:completion, :r4} ->
-          assert match?(
-                   %{
-                     at: %{mfa: {:erlang, :put, 2}},
-                     rule: :o4,
-                     path: [{{:claim_column, :retain_until}, [2, 2, 1, 4, 1, :retain_until]}]
-                   },
-                   next
-                 ),
-                 "R4's shifted retention must still fail its own O4 copy at the done put"
-
-          assert next.at.run_index == active_first.at.run_index
-          assert MutationWitness.named?(mutation, next, pair, comparison)
-
-        {:crypto, :r5} ->
-          assert disabled.errors == [], "R5 must pass with only the crypto transfer disabled"
-
-        {:crypto, id} when id in [:r6, :r7] ->
-          assert next != nil, "#{mutation.id}: a compound crypto mutation must still fail"
-
-        {:context, :r_iso_context} ->
-          assert disabled.errors == [], "R-iso-context must pass with only CONTEXT disabled"
-
-        {:context, :r8} ->
-          assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
-                 "R8's earlier dictionary-read divergence must remain under the CONTEXT mutant"
-
-        {:o3, :r_iso_o3} ->
-          assert disabled.errors == [],
-                 "R-iso-O3 must pass with only its duration formula disabled"
-
-        {:o2, :r_iso_o2} ->
-          assert disabled.errors == [], "R-iso-O2 must pass with only UUID pairing disabled"
-
-        {:backend_copy, :r_iso_backend_copy} ->
-          assert disabled.errors == [],
-                 "the backend copy must pass only with O2 backend binding disabled"
-
-        {:o4, :r_iso_o4} ->
-          assert disabled.errors == [], "R-iso-O4 must pass with only its bind equality disabled"
-
-        {:order, :r_iso_order} ->
-          assert disabled.errors == [],
-                 "R-iso-order must pass with only the OPEN call order disabled"
-
-        {:order, :r14} ->
-          assert next != nil, "R14's extra call must still fail with its order rule disabled"
-
-        {:o3, :r11} ->
-          assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
-                 "R11's earlier dictionary read must remain under the O3 duration mutant"
-
-        {:host_multiplicity, :r9} ->
-          assert disabled.errors == [], "R9 must pass with only host-call multiplicity disabled"
-
-        {:return, :r_iso_return} ->
-          assert disabled.errors == [],
-                 "R-iso-X3 must pass with only caller-return checks disabled"
-
-        {:k, :r2} ->
-          assert next != nil, "R2's independent multiplicity/order protection must remain"
-
-          refute match?(
-                   %{at: %{mfa: {AshOnetime.Delivery, :key, 1}}, rule: :permitted_return},
-                   next
-                 )
-
-        _ ->
-          assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
-                 "#{mutation.id}: disabling #{rule} changed another rule's named divergence"
-      end
+      assert_mutant({rule, mutation.id}, mutation, pair, comparison, active_first, disabled, next)
     end
+  end
+
+  defp assert_mutant({:k, :r_iso_k}, _mutation, _pair, _comparison, _active_first, disabled, _next) do
+  assert disabled.errors == [], "R-iso-K must pass with only K's expression disabled"
+  end
+
+  defp assert_mutant({:inv, :r_iso_inv}, _mutation, _pair, _comparison, _active_first, disabled, _next) do
+  assert disabled.errors == [],
+         "R-iso-inv must pass with only inv's source binding disabled"
+  end
+
+  defp assert_mutant({:completion, :r_iso_completion}, _mutation, _pair, _comparison, _active_first, disabled, _next) do
+  assert disabled.errors == [],
+         "R-iso-completion must pass with only completion's source binding disabled"
+  end
+
+  defp assert_mutant({:completion, :r4}, mutation, pair, comparison, active_first, _disabled, next) do
+  assert match?(
+           %{
+             at: %{mfa: {:erlang, :put, 2}},
+             rule: :o4,
+             path: [{{:claim_column, :retain_until}, [2, 2, 1, 4, 1, :retain_until]}]
+           },
+           next
+         ),
+         "R4's shifted retention must still fail its own O4 copy at the done put"
+
+  assert next.at.run_index == active_first.at.run_index
+  assert MutationWitness.named?(mutation, next, pair, comparison)
+  end
+
+  defp assert_mutant({:crypto, :r5}, _mutation, _pair, _comparison, _active_first, disabled, _next) do
+  assert disabled.errors == [], "R5 must pass with only the crypto transfer disabled"
+  end
+
+  defp assert_mutant({:crypto, id}, mutation, _pair, _comparison, _active_first, _disabled, next) when id in [:r6, :r7] do
+  assert next != nil, "#{mutation.id}: a compound crypto mutation must still fail"
+  end
+
+  defp assert_mutant({:context, :r_iso_context}, _mutation, _pair, _comparison, _active_first, disabled, _next) do
+  assert disabled.errors == [], "R-iso-context must pass with only CONTEXT disabled"
+  end
+
+  defp assert_mutant({:context, :r8}, mutation, pair, _comparison, _active_first, disabled, next) do
+  assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
+         "R8's earlier dictionary-read divergence must remain under the CONTEXT mutant"
+  end
+
+  defp assert_mutant({:o3, :r_iso_o3}, _mutation, _pair, _comparison, _active_first, disabled, _next) do
+  assert disabled.errors == [],
+         "R-iso-O3 must pass with only its duration formula disabled"
+  end
+
+  defp assert_mutant({:o2, :r_iso_o2}, _mutation, _pair, _comparison, _active_first, disabled, _next) do
+  assert disabled.errors == [], "R-iso-O2 must pass with only UUID pairing disabled"
+  end
+
+  defp assert_mutant({:backend_copy, :r_iso_backend_copy}, _mutation, _pair, _comparison, _active_first, disabled, _next) do
+  assert disabled.errors == [],
+         "the backend copy must pass only with O2 backend binding disabled"
+  end
+
+  defp assert_mutant({:o4, :r_iso_o4}, _mutation, _pair, _comparison, _active_first, disabled, _next) do
+  assert disabled.errors == [], "R-iso-O4 must pass with only its bind equality disabled"
+  end
+
+  defp assert_mutant({:order, :r_iso_order}, _mutation, _pair, _comparison, _active_first, disabled, _next) do
+  assert disabled.errors == [],
+         "R-iso-order must pass with only the OPEN call order disabled"
+  end
+
+  defp assert_mutant({:order, :r14}, _mutation, _pair, _comparison, _active_first, disabled, next) do
+  assert next != nil, "R14's extra call must still fail with its order rule disabled"
+  end
+
+  defp assert_mutant({:o3, :r11}, mutation, pair, _comparison, _active_first, disabled, next) do
+  assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
+         "R11's earlier dictionary read must remain under the O3 duration mutant"
+  end
+
+  defp assert_mutant({:host_multiplicity, :r9}, _mutation, _pair, _comparison, _active_first, disabled, _next) do
+  assert disabled.errors == [], "R9 must pass with only host-call multiplicity disabled"
+  end
+
+  defp assert_mutant({:return, :r_iso_return}, _mutation, _pair, _comparison, _active_first, disabled, _next) do
+  assert disabled.errors == [],
+         "R-iso-X3 must pass with only caller-return checks disabled"
+  end
+
+  defp assert_mutant({:k, :r2}, _mutation, _pair, _comparison, _active_first, _disabled, next) do
+  assert next != nil, "R2's independent multiplicity/order protection must remain"
+
+  refute match?(
+           %{at: %{mfa: {AshOnetime.Delivery, :key, 1}}, rule: :permitted_return},
+           next
+         )
+  end
+
+  defp assert_mutant({rule, _}, mutation, pair, _comparison, _active_first, disabled, next) do
+  assert next != nil and MutationWitness.named?(mutation, next, pair, disabled),
+         "#{mutation.id}: disabling #{rule} changed another rule's named divergence"
   end
 
   defp with_runtime(%{id: :r_iso_o4, path: path}, _, callback) do
@@ -271,7 +279,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
 
     if String.contains?(source, "COMPARATOR_OPERATION") do
       protection =
-        AshOnetime.Resource.Info.protection(AshOnetime.Test.ExitBoundary.Withheld, :issue)
+        OnetimeInfo.protection(AshOnetime.Test.ExitBoundary.Withheld, :issue)
 
       assert protection.retention <= 2_147_483_647 - 2
 
@@ -284,7 +292,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
       source =
         String.replace(source, "COMPARATOR_OPERATION", inspect(operation, limit: :infinity))
 
-      AshOnetime.Test.ExitBoundary.Compiled.with_source(source, path, callback)
+      Compiled.with_source(source, path, callback)
     else
       callback.()
     end
@@ -296,18 +304,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
     if String.contains?(source, "COMPARATOR_BACKEND_OPERATION") do
       repo = context.repo
 
-      {a, b} =
-        AshOnetime.Test.Repo.checkout(fn ->
-          %{rows: [[a]]} = Ecto.Adapters.SQL.query!(repo, "SELECT pg_backend_pid()", [])
-
-          worker =
-            Task.async(fn ->
-              %{rows: [[b]]} = Ecto.Adapters.SQL.query!(repo, "SELECT pg_backend_pid()", [])
-              b
-            end)
-
-          {a, Task.await(worker, 30_000)}
-        end)
+      {a, b} = concurrent_backends(repo)
 
       assert a != b
 
@@ -323,7 +320,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         |> String.replace("COMPARATOR_BACKEND_A", Integer.to_string(a))
         |> String.replace("COMPARATOR_BACKEND_B", Integer.to_string(b))
 
-      AshOnetime.Test.ExitBoundary.Compiled.with_source(source, path, callback)
+      Compiled.with_source(source, path, callback)
     else
       callback.()
     end
@@ -336,14 +333,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
       historical = Historical.capture(context.prefix)
 
       port =
-        Enum.find_value(historical.connections, fn {_holder, connection} ->
-          case connection.protocol.sock do
-            {:gen_tcp, port, _} when is_port(port) -> port
-            {:gen_tcp, port} when is_port(port) -> port
-            port when is_port(port) -> port
-            _ -> nil
-          end
-        end)
+        Enum.find_value(historical.connections, &connection_socket/1)
 
       assert is_port(port), "R28 requires the real PostgreSQL connection's socket port"
       previous = :erlang.port_get_data(port)
@@ -362,7 +352,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         |> String.replace("COMPARATOR_SOCKET", List.to_string(:erlang.port_to_list(port)))
 
       try do
-        AshOnetime.Test.ExitBoundary.Compiled.with_source(source, path, callback)
+        Compiled.with_source(source, path, callback)
       after
         assert :erlang.port_get_data(port) === previous
       end
@@ -372,4 +362,22 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
   end
 
   defp with_runtime(_, _, callback), do: callback.()
+  defp concurrent_backends(repo) do
+    Repo.checkout(fn ->
+      a = backend_pid(repo)
+      worker = Task.async(fn -> backend_pid(repo) end)
+      {a, Task.await(worker, 30_000)}
+    end)
+  end
+
+  defp backend_pid(repo) do
+    %{rows: [[pid]]} = SQL.query!(repo, "SELECT pg_backend_pid()", [])
+    pid
+  end
+
+  defp connection_socket({_holder, %{protocol: %{sock: {:gen_tcp, port, _}}}}) when is_port(port), do: port
+  defp connection_socket({_holder, %{protocol: %{sock: {:gen_tcp, port}}}}) when is_port(port), do: port
+  defp connection_socket({_holder, %{protocol: %{sock: port}}}) when is_port(port), do: port
+  defp connection_socket(_connection), do: nil
+
 end

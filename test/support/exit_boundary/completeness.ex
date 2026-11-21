@@ -31,15 +31,12 @@ defmodule AshOnetime.Test.ExitBoundary.Completeness do
           do: {PathFrames.path(pair.row), frame.mfa}
 
     frames =
-      Enum.reduce(pairs, MapSet.new(), fn pair, seen ->
-        stacks = stacks(pair.run.run.events)
-
-        Enum.reduce(declared_frames(pair), seen, fn frame, acc ->
-          if Enum.any?(stacks, &PathFrames.witness?(&1, frame)),
-            do: MapSet.put(acc, {PathFrames.path(pair.row), frame.mfa}),
-            else: acc
-        end)
-      end)
+      for pair <- pairs,
+          stacks = stacks(pair.run.run.events),
+          frame <- declared_frames(pair),
+          Enum.any?(stacks, &PathFrames.witness?(&1, frame)),
+          into: MapSet.new(),
+          do: {PathFrames.path(pair.row), frame.mfa}
 
     %{
       declarations: declarations.errors,
@@ -102,18 +99,15 @@ defmodule AshOnetime.Test.ExitBoundary.Completeness do
 
       sources = {ContextCopies.source(pair.run), ContextCopies.source(pair.twin)}
 
-      case sources do
-        {{:source, a}, {:source, b}} when a !== b ->
-          if Enum.any?(left, &ContextCopies.validate(&1, {:source, a})) and
-               Enum.any?(right, &ContextCopies.validate(&1, {:source, b})),
-             do: MapSet.put(acc, mfa),
-             else: acc
-
-        _ ->
-          acc
-      end
+      if copy_witnessed?(left, right, sources), do: MapSet.put(acc, mfa), else: acc
     end)
   end
+
+  defp copy_witnessed?(left, right, {{:source, a}, {:source, b}}) when a !== b,
+    do: Enum.any?(left, &ContextCopies.validate(&1, {:source, a})) and
+          Enum.any?(right, &ContextCopies.validate(&1, {:source, b}))
+
+  defp copy_witnessed?(_, _, _), do: false
 
   def stacks(events) do
     Enum.flat_map(events, fn

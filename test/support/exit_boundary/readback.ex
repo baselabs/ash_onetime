@@ -111,19 +111,7 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
             readback_reference?: true
           )
 
-        errors =
-          Enum.map(result.errors, fn error ->
-            at =
-              case error.at do
-                %{run_index: n} = at ->
-                  %{at | run_index: Enum.at(observed, n, hd(observed)).index}
-
-                other ->
-                  other
-              end
-
-            %{error | at: at}
-          end)
+        errors = Enum.map(result.errors, &reference_error(&1, observed))
 
         sources =
           for {key, origin} <- Origins.build(run_side).origins, into: %{} do
@@ -136,6 +124,16 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
 
         %{claimed: MapSet.new(observed, & &1.index), errors: errors, sources: sources}
     end
+  end
+
+  defp reference_error(error, observed) do
+    at =
+      case error.at do
+        %{run_index: n} = at -> %{at | run_index: Enum.at(observed, n, hd(observed)).index}
+        other -> other
+      end
+
+    %{error | at: at}
   end
 
   # The third execution is a read-only SQL/program witness. Its private origin
@@ -165,39 +163,42 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
       nil ->
         []
 
-      start ->
-        caller = Enum.at(events, start).pid
-        tail = Enum.drop(events, start)
-
-        stop =
-          Enum.find_index(tail, fn e ->
-            e.pid == caller and e.mfa == @root and elem(e.event, 1) == :return_from
-          end)
-
-        range = if stop == nil, do: tail, else: Enum.take(tail, stop + 1)
-        caller_events = Enum.filter(range, &(&1.pid == caller))
-        native = Enum.sort_by(events, & &1.index)
-        requests = driver_requests(native)
-
-        owned_requests =
-          for e <- caller_events, Map.has_key?(requests, e.index), do: requests[e.index]
-
-        replies = control_replies(native)
-        messages = received_messages(native)
-
-        control_replies =
-          for index <- owned_requests, Map.has_key?(replies, index), do: replies[index]
-
-        received =
-          for e <- caller_events, Map.has_key?(messages, e.index), do: messages[e.index]
-
-        roots = MapSet.new(caller_events, & &1.index)
-        selected = MapSet.new(owned_requests ++ control_replies ++ received)
-
-        Enum.filter(events, fn e ->
-          MapSet.member?(roots, e.index) or MapSet.member?(selected, e.index)
-        end)
+      start -> interval_from(events, start)
     end
+  end
+
+  defp interval_from(events, start) do
+    caller = Enum.at(events, start).pid
+    tail = Enum.drop(events, start)
+
+    stop =
+      Enum.find_index(tail, fn e ->
+        e.pid == caller and e.mfa == @root and elem(e.event, 1) == :return_from
+      end)
+
+    range = if stop == nil, do: tail, else: Enum.take(tail, stop + 1)
+    caller_events = Enum.filter(range, &(&1.pid == caller))
+    native = Enum.sort_by(events, & &1.index)
+    requests = driver_requests(native)
+
+    owned_requests =
+      for e <- caller_events, Map.has_key?(requests, e.index), do: requests[e.index]
+
+    replies = control_replies(native)
+    messages = received_messages(native)
+
+    control_replies =
+      for index <- owned_requests, Map.has_key?(replies, index), do: replies[index]
+
+    received =
+      for e <- caller_events, Map.has_key?(messages, e.index), do: messages[e.index]
+
+    roots = MapSet.new(caller_events, & &1.index)
+    selected = MapSet.new(owned_requests ++ control_replies ++ received)
+
+    Enum.filter(events, fn e ->
+      MapSet.member?(roots, e.index) or MapSet.member?(selected, e.index)
+    end)
   end
 
   # Match occurrences in native timestamp order before scheduling moves. Equal

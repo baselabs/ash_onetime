@@ -31,6 +31,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   @port_flags [:send, :receive, :strict_monotonic_timestamp]
 
   defmodule Snapshot do
+    alias AshOnetime.Test.ExitBoundary.Capture
     @moduledoc false
     # `events` are the trace messages in timestamp order, without the trace tag and the
     # timestamp;
@@ -79,7 +80,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     session = :trace.session_create(:ash_onetime_exit_boundary, self(), [])
 
     try do
-      AshOnetime.Test.ExitBoundary.Capture.patterns(session, frames, options)
+      Capture.patterns(session, frames, options)
       send(test, {:collector_ready, self()})
 
       receive do

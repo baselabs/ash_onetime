@@ -244,6 +244,13 @@ defmodule AshOnetime.Test.DeliveryFacts.Issuer do
     attribute :token, :string, public?: true
   end
 
+  # Ash 3.37.2 validates ActionInput loads against the action resource; later
+  # releases validate the return resource. The probe is legal on both, while
+  # its observed calculation still runs on the returned Receipt after the action.
+  calculations do
+    calculate :noted, :string, AshOnetime.Test.DeliveryFacts.Noted, public?: true
+  end
+
   actions do
     action :issue, :struct do
       constraints instance_of: AshOnetime.Test.DeliveryFacts.Receipt

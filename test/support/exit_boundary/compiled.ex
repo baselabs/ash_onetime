@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.Compiled do
-  @moduledoc false
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.References
+  @moduledoc false
 
   # Keep the installed BEAM and its debug readers on the same source revision
   # while a hosted test exercises a guarded production edit.
@@ -63,115 +64,114 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
   def captured_argument(module, function, callee, arity, argument) do
     References.memo(
       {:captured_argument, module, module.module_info(:md5), function, callee, arity, argument},
-      fn ->
-        {:beam_file, _, _, _, _, functions} = :beam_disasm.file(:code.which(module))
-
-        {:function, ^function, count, _, instructions} =
-          Enum.find(functions, &match?({:function, ^function, _, _, _}, &1))
-
-        target = {module, callee, arity}
-
-        calls? =
-          Enum.any?(instructions, fn
-            {tag, ^arity, ^target} when tag in [:call, :call_only] -> true
-            {:call_last, ^arity, ^target, _} -> true
-            _ -> false
-          end)
-
-        if calls? do
-          registers = Map.new(0..(count - 1), &{{:x, &1}, {:environment, &1}})
-
-          labels =
-            instructions
-            |> Enum.with_index()
-            |> Enum.flat_map(fn
-              {{:label, label}, index} -> [{label, Enum.drop(instructions, index + 1)}]
-              _ -> []
-            end)
-            |> Map.new()
-
-          captured =
-            try do
-              capture_path(instructions, registers, labels, target, argument, MapSet.new())
-            rescue
-              error ->
-                IO.inspect(
-                  %{
-                    function: {module, function, count},
-                    callee: target,
-                    code: Enum.map(instructions, &AshOnetime.Test.ExitBoundary.Diagnostics.safe/1)
-                  },
-                  label: "COMPILED_CAPTURE_FAILURE",
-                  limit: :infinity
-                )
-
-                reraise error, __STACKTRACE__
-            end
-
-          case Enum.uniq(captured) do
-            [{:environment, index}] ->
-              {:ok, index}
-
-            other ->
-              raise "callee argument is not a captured origin: #{inspect({target, argument, other})}"
-          end
-        else
-          :not_called
-        end
-      end
+      fn -> captured_argument_from_beam(module, function, callee, arity, argument) end
     )
   end
 
-  defp capture_path([instruction | rest], regs, labels, {_, _, arity} = target, argument, seen) do
-    case instruction do
-      {tag, ^arity, ^target} when tag in [:call, :call_only] ->
-        [Map.fetch!(regs, {:x, argument})]
+  defp captured_argument_from_beam(module, function, callee, arity, argument) do
+    {:beam_file, _, _, _, _, functions} = :beam_disasm.file(:code.which(module))
 
-      {:call_last, ^arity, ^target, _} ->
-        [Map.fetch!(regs, {:x, argument})]
+    {:function, ^function, count, _, instructions} =
+      Enum.find(functions, &match?({:function, ^function, _, _, _}, &1))
 
-      {:jump, {:f, label}} ->
-        capture_branch(label, regs, labels, target, argument, seen)
+    target = {module, callee, arity}
 
-      {:select_val, _, {:f, fallback}, {:list, choices}} ->
-        destinations =
-          [
-            fallback
-            | Enum.map(Enum.chunk_every(choices, 2), fn [_value, {:f, label}] -> label end)
-          ]
+    if Enum.any?(instructions, &target_call?(&1, target)) do
+      registers = Map.new(0..(count - 1), &{{:x, &1}, {:environment, &1}})
 
-        Enum.flat_map(Enum.uniq(destinations), fn label ->
-          capture_branch(label, regs, labels, target, argument, seen)
+      labels =
+        instructions
+        |> Enum.with_index()
+        |> Enum.flat_map(fn
+          {{:label, label}, index} -> [{label, Enum.drop(instructions, index + 1)}]
+          _ -> []
         end)
+        |> Map.new()
 
-      {:test, _, {:f, label}, _} ->
-        capture_path(rest, regs, labels, target, argument, seen) ++
-          capture_branch(label, regs, labels, target, argument, seen)
+      captured = capture_arguments(instructions, registers, labels, target, argument, {function, count})
 
-      {:test, :has_map_fields, {:f, label}, _, _} ->
-        capture_path(rest, regs, labels, target, argument, seen) ++
-          capture_branch(label, regs, labels, target, argument, seen)
-
-      {:get_map_elements, {:f, label}, _, _} ->
-        capture_path(rest, capture_step(instruction, regs), labels, target, argument, seen) ++
-          capture_branch(label, regs, labels, target, argument, seen)
-
-      :return ->
-        []
-
-      {tag, _} when tag in [:case_end, :badmatch, :badrecord] ->
-        []
-
-      {tag, _, _} when tag in [:call_only, :call_ext_only] ->
-        []
-
-      {tag, _, _, _} when tag in [:call_last, :call_ext_last] ->
-        []
-
-      _ ->
-        capture_path(rest, capture_step(instruction, regs), labels, target, argument, seen)
+      case Enum.uniq(captured) do
+        [{:environment, index}] -> {:ok, index}
+        other -> raise "callee argument is not a captured origin: #{inspect({target, argument, other})}"
+      end
+    else
+      :not_called
     end
   end
+
+  defp target_call?({tag, arity, actual}, target)
+       when tag in [:call, :call_only] and arity == elem(target, 2), do: actual == target
+
+  defp target_call?({:call_last, arity, actual, _}, target)
+       when arity == elem(target, 2), do: actual == target
+
+  defp target_call?(_, _), do: false
+
+  defp capture_arguments(instructions, registers, labels, target, argument, {function, count}) do
+    capture_path(instructions, registers, labels, target, argument, MapSet.new())
+  rescue
+    error ->
+      {module, _, _} = target
+
+      IO.puts(
+        "COMPILED_CAPTURE_FAILURE: " <>
+          inspect(%{
+            function: {module, function, count},
+            callee: target,
+            code: Enum.map(instructions, &Diagnostics.safe/1)
+          }, pretty: true, limit: :infinity)
+      )
+
+      reraise error, __STACKTRACE__
+  end
+
+  defp capture_path([{tag, arity, actual} | _], regs, _labels, target, argument, _seen)
+       when tag in [:call, :call_only] and actual == target and arity == elem(target, 2),
+       do: [Map.fetch!(regs, {:x, argument})]
+
+  defp capture_path([{:call_last, arity, actual, _} | _], regs, _labels, target, argument, _seen)
+       when actual == target and arity == elem(target, 2),
+       do: [Map.fetch!(regs, {:x, argument})]
+
+  defp capture_path([{:jump, {:f, label}} | _], regs, labels, target, argument, seen),
+    do: capture_branch(label, regs, labels, target, argument, seen)
+
+  defp capture_path(
+         [{:select_val, _, {:f, fallback}, {:list, choices}} | _],
+         regs, labels, target, argument, seen
+       ) do
+    destinations = [fallback | Enum.map(Enum.chunk_every(choices, 2), fn [_value, {:f, label}] -> label end)]
+
+    Enum.flat_map(Enum.uniq(destinations), fn label ->
+      capture_branch(label, regs, labels, target, argument, seen)
+    end)
+  end
+
+  defp capture_path([{:test, _, {:f, label}, _} | rest], regs, labels, target, argument, seen),
+    do: capture_path(rest, regs, labels, target, argument, seen) ++
+          capture_branch(label, regs, labels, target, argument, seen)
+
+  defp capture_path([{:test, :has_map_fields, {:f, label}, _, _} | rest], regs, labels, target, argument, seen),
+    do: capture_path(rest, regs, labels, target, argument, seen) ++
+          capture_branch(label, regs, labels, target, argument, seen)
+
+  defp capture_path([{:get_map_elements, {:f, label}, _, _} = instruction | rest], regs, labels, target, argument, seen),
+    do: capture_path(rest, capture_step(instruction, regs), labels, target, argument, seen) ++
+          capture_branch(label, regs, labels, target, argument, seen)
+
+  defp capture_path([:return | _], _, _, _, _, _), do: []
+
+  defp capture_path([{tag, _} | _], _, _, _, _, _)
+       when tag in [:case_end, :badmatch, :badrecord], do: []
+
+  defp capture_path([{tag, _, _} | _], _, _, _, _, _)
+       when tag in [:call_only, :call_ext_only], do: []
+
+  defp capture_path([{tag, _, _, _} | _], _, _, _, _, _)
+       when tag in [:call_last, :call_ext_last], do: []
+
+  defp capture_path([instruction | rest], regs, labels, target, argument, seen),
+    do: capture_path(rest, capture_step(instruction, regs), labels, target, argument, seen)
 
   defp capture_path([], _, _, _, _, _), do: []
 

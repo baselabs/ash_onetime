@@ -1,6 +1,9 @@
 defmodule AshOnetime.Test.ExitBoundary.Origins do
+  alias AshOnetime.Test.ExitBoundary.FailureTwins
+  alias AshOnetime.Test.ExitBoundary.HostCall
+  alias AshOnetime.Test.ExitBoundary.PermittedTrace
+  alias AshOnetime.Test.ExitBoundary.Registry
   @moduledoc false
-  alias AshOnetime.Test.ExitBoundary.{Registry, PermittedTrace}
 
   def build(side) do
     initial = %{
@@ -44,7 +47,7 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
     stack =
       Enum.reject(
         e.stack,
-        &(PermittedTrace.frame?(&1) or AshOnetime.Test.ExitBoundary.FailureTwins.fault_frame?(&1))
+        &(PermittedTrace.frame?(&1) or FailureTwins.fault_frame?(&1))
       )
       |> Enum.map(&rename_frame(&1, side))
 
@@ -123,18 +126,20 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
 
     state =
       Enum.reduce(state.events, state, fn e, acc ->
-        Enum.reduce(identities(e.event), acc, fn id, s ->
-          cond do
-            Map.has_key?(s.roles, id) -> s
-            MapSet.member?(generated, id) -> s
-            is_pid(id) or is_port(id) -> elem(role(id, s), 1)
-            historical_reference?(id, side) -> elem(role(id, s), 1)
-            true -> s
-          end
-        end)
+        Enum.reduce(identities(e.event), acc, &existing_identity(&1, &2, generated, side))
       end)
 
     state
+  end
+
+  defp existing_identity(id, state, generated, side) do
+    cond do
+      Map.has_key?(state.roles, id) -> state
+      MapSet.member?(generated, id) -> state
+      is_pid(id) or is_port(id) -> elem(role(id, state), 1)
+      historical_reference?(id, side) -> elem(role(id, state), 1)
+      true -> state
+    end
   end
 
   defp historical_reference?(ref, side) do
@@ -219,9 +224,7 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
             {_, ^status, _, {twin_id, twin_query}} ->
               acc = bind(acc, id, twin_id, {:query_cache, key})
 
-              if is_struct(query, Postgrex.Query) and is_struct(twin_query, Postgrex.Query),
-                do: bind(acc, query.ref, twin_query.ref, {:query_cache_reference, key}),
-                else: acc
+              bind_query_reference(acc, query, twin_query, key)
 
             _ ->
               acc
@@ -235,8 +238,13 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
     pair_sources(run.reads, twin.reads, initial, permitted, :o3)
   end
 
+  defp bind_query_reference(state, %Postgrex.Query{} = a, %Postgrex.Query{} = b, key),
+    do: bind(state, a.ref, b.ref, {:query_cache_reference, key})
+
+  defp bind_query_reference(state, _a, _b, _key), do: state
+
   def permitted_sources(indexed, other_claimed) do
-    owned = AshOnetime.Test.ExitBoundary.HostCall.indexes(indexed.events)
+    owned = HostCall.indexes(indexed.events)
 
     Enum.reduce(indexed.events, other_claimed, fn e, allowed ->
       if elem(e.event, 1) == :return_from and
@@ -279,28 +287,29 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
       MapSet.union(MapSet.new(Map.keys(left)), MapSet.new(Map.keys(right))),
       state,
       fn key, acc ->
-        case {Map.get(left, key), Map.get(right, key)} do
-          {%{value: a}, %{value: b}} when rule == :o1 ->
-            bind_generated(acc, a, b, key)
-
-          {%{value: a}, %{value: b}} ->
-            %{acc | clocks: Map.put(acc.clocks, key, {a, b})}
-
-          {%{index: n}, nil} ->
-            if MapSet.member?(allowed, n), do: acc, else: error(acc, {rule, :unpaired_run, key})
-
-          {nil, %{index: n}} ->
-            twin_allowed =
-              if is_map(permitted) and not is_struct(permitted, MapSet),
-                do: Map.get(permitted, {:twin, rule}, MapSet.new()),
-                else: MapSet.new()
-
-            if MapSet.member?(twin_allowed, n),
-              do: acc,
-              else: error(acc, {rule, :unpaired_twin, key, n})
-        end
+        pair_source({Map.get(left, key), Map.get(right, key)}, acc, key, rule, allowed, permitted)
       end
     )
+  end
+
+  defp pair_source({%{value: a}, %{value: b}}, state, key, :o1, _allowed, _permitted),
+    do: bind_generated(state, a, b, key)
+
+  defp pair_source({%{value: a}, %{value: b}}, state, key, _rule, _allowed, _permitted),
+    do: %{state | clocks: Map.put(state.clocks, key, {a, b})}
+
+  defp pair_source({%{index: n}, nil}, state, key, rule, allowed, _permitted),
+    do: if(MapSet.member?(allowed, n), do: state, else: error(state, {rule, :unpaired_run, key}))
+
+  defp pair_source({nil, %{index: n}}, state, key, rule, _allowed, permitted) do
+    allowed =
+      if is_map(permitted) and not is_struct(permitted, MapSet),
+        do: Map.get(permitted, {:twin, rule}, MapSet.new()),
+        else: MapSet.new()
+
+    if MapSet.member?(allowed, n),
+      do: state,
+      else: error(state, {rule, :unpaired_twin, key, n})
   end
 
   # Pairing happens before event comparison, but an origin failure still belongs
@@ -379,22 +388,25 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
     case key do
       {_, _, _, {module, function, 0}, _}
       when module in [Ecto.UUID, Ash.UUID] and function in [:generate, :bingenerate] ->
-        case {Ecto.UUID.dump(a), Ecto.UUID.dump(b)} do
-          {{:ok, _ab}, {:ok, _bb}} ->
-            bind_uuid(state, a, b, key)
-
-          _ when function == :bingenerate ->
-            case {Ecto.UUID.load(a), Ecto.UUID.load(b)} do
-              {{:ok, av}, {:ok, bv}} -> bind_uuid(state, av, bv, key)
-              _ -> error(state, {:invalid_generated_uuid, key})
-            end
-
-          _ ->
-            error(state, {:invalid_generated_uuid, key})
-        end
+        bind_generated_uuid(state, a, b, key, function)
 
       _ ->
         state
+    end
+  end
+
+  defp bind_generated_uuid(state, a, b, key, function) do
+    case {Ecto.UUID.dump(a), Ecto.UUID.dump(b)} do
+      {{:ok, _}, {:ok, _}} -> bind_uuid(state, a, b, key)
+      _ when function == :bingenerate -> bind_binary_uuid(state, a, b, key)
+      _ -> error(state, {:invalid_generated_uuid, key})
+    end
+  end
+
+  defp bind_binary_uuid(state, a, b, key) do
+    case {Ecto.UUID.load(a), Ecto.UUID.load(b)} do
+      {{:ok, av}, {:ok, bv}} -> bind_uuid(state, av, bv, key)
+      _ -> error(state, {:invalid_generated_uuid, key})
     end
   end
 

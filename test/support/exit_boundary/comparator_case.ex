@@ -2,8 +2,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorCase do
   @moduledoc false
   use ExUnit.CaseTemplate
 
-  alias AshOnetime.Test.{ExternalPeer, Repo}
-  alias AshOnetime.Test.ExitBoundary.{References, Returned, Scenarios, Withheld}
+  alias AshOnetime.Test.ExitBoundary.References
+  alias AshOnetime.Test.ExitBoundary.Returned
+  alias AshOnetime.Test.ExitBoundary.Scenarios
+  alias AshOnetime.Test.ExitBoundary.Withheld
+  alias AshOnetime.Test.ExternalPeer
+  alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
   import AshOnetime.Test.StoreCase
 
@@ -63,15 +67,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorCase do
 
     tasks =
       for _ <- 1..size do
-        Task.async(fn ->
-          Repo.put_dynamic_repo(repo)
-
-          Repo.checkout(fn ->
-            SQL.query!(repo, "SELECT 1", [])
-            send(parent, {tag, self()})
-            receive do: ({^tag, :release} -> :ok)
-          end)
-        end)
+        Task.async(fn -> warm_connection(repo, parent, tag) end)
       end
 
     for _ <- tasks do
@@ -85,6 +81,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorCase do
     for task <- tasks, do: send(task.pid, {tag, :release})
     for task <- tasks, do: Task.await(task)
     :ok
+  end
+
+  defp warm_connection(repo, parent, tag) do
+    Repo.put_dynamic_repo(repo)
+
+    Repo.checkout(fn ->
+      SQL.query!(repo, "SELECT 1", [])
+      send(parent, {tag, self()})
+      receive do: ({^tag, :release} -> :ok)
+    end)
   end
 
   def with_references(context, rows \\ Scenarios.rows()) do

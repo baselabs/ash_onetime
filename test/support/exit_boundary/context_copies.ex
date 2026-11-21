@@ -12,9 +12,9 @@ defmodule AshOnetime.Test.ExitBoundary.ContextCopies do
         trace_arity = arity + length(env)
 
         Enum.find_value(side.run.events, fn
-          %{event: {_, :call, {^module, ^function, [input | _]}} = event}
-          when tuple_size(event) == 3 ->
-            if length(elem(elem(event, 2), 2)) == trace_arity, do: {:source, input.context}
+          %{event: {_, :call, {^module, ^function, [input | _] = arguments}}}
+          when length(arguments) == trace_arity ->
+            {:source, input.context}
 
           _ ->
             nil

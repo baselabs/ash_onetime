@@ -225,46 +225,41 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     received = Enum.frequencies(receipts)
 
     {_, _, result} =
-      Enum.reduce(Enum.sort_by(events, & &1.index), {%{}, %{}, %{}}, fn e,
-                                                                        {actors, sent, result} ->
-        clock = Map.get(actors, e.pid, %{})
-
-        clock =
-          case e.event do
-            {pid, :receive, message} ->
-              if unique[{pid, message}] == 1 and received[{pid, message}] == 1,
-                do: merge_clock(clock, Map.get(sent, {pid, message}, %{})),
-                else: clock
-
-            _ ->
-              clock
-          end
-
-        clock = Map.put(clock, e.pid, e.index)
-        actors = Map.put(actors, e.pid, clock)
-
-        {actors, sent} =
-          case e.event do
-            {_, :send, message, to} when is_pid(to) ->
-              {actors, Map.put(sent, {to, message}, clock)}
-
-            {_, :spawn, child, _} ->
-              {Map.update(actors, child, clock, &merge_clock(&1, clock)), sent}
-
-            _ ->
-              {actors, sent}
-          end
-
-        result =
-          if MapSet.member?(targets, e.index),
-            do: Map.put(result, e.index, {e.pid, clock}),
-            else: result
-
-        {actors, sent, result}
-      end)
+      Enum.reduce(Enum.sort_by(events, & &1.index), {%{}, %{}, %{}},
+        &causal_event(&1, &2, targets, unique, received))
 
     result
   end
+
+  defp causal_event(e, {actors, sent, result}, targets, unique, received) do
+    clock = receive_clock(e.event, Map.get(actors, e.pid, %{}), sent, unique, received)
+    clock = Map.put(clock, e.pid, e.index)
+    actors = Map.put(actors, e.pid, clock)
+    {actors, sent} = send_clock(e.event, actors, sent, clock)
+
+    result =
+      if MapSet.member?(targets, e.index),
+        do: Map.put(result, e.index, {e.pid, clock}),
+        else: result
+
+    {actors, sent, result}
+  end
+
+  defp receive_clock({pid, :receive, message}, clock, sent, unique, received) do
+    if unique[{pid, message}] == 1 and received[{pid, message}] == 1,
+      do: merge_clock(clock, Map.get(sent, {pid, message}, %{})),
+      else: clock
+  end
+
+  defp receive_clock(_event, clock, _sent, _unique, _received), do: clock
+
+  defp send_clock({_, :send, message, to}, actors, sent, clock) when is_pid(to),
+    do: {actors, Map.put(sent, {to, message}, clock)}
+
+  defp send_clock({_, :spawn, child, _}, actors, sent, clock),
+    do: {Map.update(actors, child, clock, &merge_clock(&1, clock)), sent}
+
+  defp send_clock(_event, actors, sent, _clock), do: {actors, sent}
 
   defp merge_clock(a, b), do: Map.merge(a, b, fn _, x, y -> max(x, y) end)
   defp before?(_clocks, nil, _), do: false

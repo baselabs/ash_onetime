@@ -1,8 +1,15 @@
 defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
-  @moduledoc false
   alias AshOnetime.Delivery
   alias AshOnetime.Delivery.Envelope
-  alias AshOnetime.Test.ExitBoundary.{HostCall, Producer, Registry, Returns}
+  alias AshOnetime.Test.ExitBoundary.FrameBindings
+  alias AshOnetime.Test.ExitBoundary.Hooks
+  alias AshOnetime.Test.ExitBoundary.HostCall
+  alias AshOnetime.Test.ExitBoundary.Producer
+  alias AshOnetime.Test.ExitBoundary.References
+  alias AshOnetime.Test.ExitBoundary.Registry
+  alias AshOnetime.Test.ExitBoundary.Returns
+  alias AshOnetime.Test.ExitBoundary.TraceProgram
+  @moduledoc false
 
   @delivery_functions [
     deliver: 2,
@@ -108,8 +115,8 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     state = finish(state, side)
 
     program_errors =
-      AshOnetime.Test.ExitBoundary.TraceProgram.check(side, indexed.events, state.bound) ++
-        AshOnetime.Test.ExitBoundary.FrameBindings.check(side, indexed.events, state.bound)
+      TraceProgram.check(side, indexed.events, state.bound) ++
+        FrameBindings.check(side, indexed.events, state.bound)
 
     state = %{state | errors: Enum.reverse(program_errors) ++ state.errors}
     %{state | errors: Enum.reverse(state.errors)}
@@ -123,6 +130,27 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
         do: put_in(state.dictionary_sources[{pid, hd(args)}], Enum.at(args, 1)),
         else: state
 
+    path_call(e, state, side, pid, mfa, args)
+  end
+
+  defp step(%{event: {pid, tag, mfa, value}} = e, state, side)
+       when tag in [:return_from, :exception_from] do
+    {args, pending} =
+      case Map.get(state.pending, {pid, mfa}, []) do
+        [args | rest] -> {args, Map.put(state.pending, {pid, mfa}, rest)}
+        [] -> {nil, state.pending}
+      end
+
+    state = %{state | pending: pending, source_returns: Map.put(state.source_returns, mfa, value)}
+
+    path_return_event(e, state, side, pid, mfa, args, tag, value)
+  end
+
+  defp step(e, state, _side),
+    do: if(MapSet.member?(state.host_owned, e.index), do: claim(state, e), else: state)
+
+  defp path_call(e, state, side, pid, mfa, args) do
+    {m, f, _} = mfa
     cond do
       path_reference?(e, state) ->
         path_reference(e, state, side)
@@ -133,6 +161,14 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
       m in [AshOnetime.Change, AshOnetime.GenericAction] and f in [:produce, :complete_delivery] ->
         path_frame(state, e, mfa, args, side) |> claim(e) |> pending(pid, mfa, args)
 
+      true ->
+        store_call(e, state, side, pid, mfa, args)
+    end
+  end
+
+  defp store_call(e, state, side, pid, mfa, args) do
+    {m, f, _} = mfa
+    cond do
       m == AshOnetime.Store and f in [:claim, :claim_committed, :complete, :complete_external] ->
         pending(state, pid, mfa, args)
 
@@ -145,6 +181,14 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
       entry_route_read?(e) ->
         entry_route(state, e, side)
 
+      true ->
+        delivery_call(e, state, side, pid, mfa, args)
+    end
+  end
+
+  defp delivery_call(e, state, side, pid, mfa, args) do
+    {m, f, _} = mfa
+    cond do
       m == Producer and f == :produce ->
         state
         |> exact(e, :host_arguments, args, state.bound[:host_arguments])
@@ -162,6 +206,14 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
       m == Process and f == :get ->
         dictionary_get(e, state, args)
 
+      true ->
+        exit_call(e, state, side, pid, mfa, args)
+    end
+  end
+
+  defp exit_call(e, state, side, pid, mfa, args) do
+    {m, _f, _} = mfa
+    cond do
       m == :crypto and delivery_crypto?(e) ->
         crypto(e, state, mfa, args, side)
 
@@ -173,16 +225,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     end
   end
 
-  defp step(%{event: {pid, tag, mfa, value}} = e, state, side)
-       when tag in [:return_from, :exception_from] do
-    {args, pending} =
-      case Map.get(state.pending, {pid, mfa}, []) do
-        [args | rest] -> {args, Map.put(state.pending, {pid, mfa}, rest)}
-        [] -> {nil, state.pending}
-      end
-
-    state = %{state | pending: pending, source_returns: Map.put(state.source_returns, mfa, value)}
-
+  defp path_return_event(e, state, side, pid, mfa, args, tag, value) do
     cond do
       path_reference?(e, state) ->
         path_reference(e, state, side)
@@ -197,6 +240,13 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
       entry_protection?(e) ->
         reference(state, e, side.protection_reference, :entry_protection)
 
+      true ->
+        source_return_event(e, state, side, pid, mfa, args, tag, value)
+    end
+  end
+
+  defp source_return_event(e, state, side, _pid, mfa, args, tag, value) do
+    cond do
       entry_route_read?(e) ->
         entry_route(state, e, side)
 
@@ -215,9 +265,6 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     end
   end
 
-  defp step(e, state, _side),
-    do: if(MapSet.member?(state.host_owned, e.index), do: claim(state, e), else: state)
-
   defp path_reference?(e, state) do
     Map.has_key?(state.path_references, e.pid) or
       (e.mfa in [{AshOnetime.Admission, :state, 1}, {AshOnetime.Admission, :trusted_context, 1}] and
@@ -231,29 +278,12 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     if Map.has_key?(state.path_references, pid) do
       advance_path_reference(state, e)
     else
-      expected_args =
-        if f == :state,
-          do: [state.path_subject],
-          else: [
-            AshOnetime.Test.ExitBoundary.Hooks.environment(
-              if(side.row.type == :action, do: {:before_action, 0}, else: {:around_action, 0}),
-              Map.put(side, :bound, state.bound)
-            )
-            |> Enum.zip(
-              side.hooks[
-                if(side.row.type == :action, do: {:before_action, 0}, else: {:around_action, 0})
-              ].sources
-            )
-            |> Enum.find_value(fn {value, source} ->
-              if source == :context, do: {:found, value}
-            end)
-            |> elem(1)
-          ]
+      expected_args = path_arguments(f, state, side)
 
       state = exact(state, e, :path_source_arguments, args, expected_args)
 
       events =
-        AshOnetime.Test.ExitBoundary.References.capture(
+        References.capture(
           fn -> apply(m, f, expected_args) end,
           e.mfa
         )
@@ -264,6 +294,23 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
   end
 
   defp path_reference(e, state, _side), do: advance_path_reference(state, e)
+
+  defp path_arguments(:state, state, _side), do: [state.path_subject]
+
+  defp path_arguments(_function, state, side) do
+    slot = if side.row.type == :action, do: {:before_action, 0}, else: {:around_action, 0}
+
+    context =
+      Hooks.environment(slot, Map.put(side, :bound, state.bound))
+      |> Enum.zip(side.hooks[slot].sources)
+      |> Enum.find_value(&context_source/1)
+      |> elem(1)
+
+    [context]
+  end
+
+  defp context_source({value, :context}), do: {:found, value}
+  defp context_source(_source), do: nil
 
   defp advance_path_reference(state, e) do
     frame = state.path_references[e.pid]
@@ -298,7 +345,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     expected_context =
       Enum.zip(
         side.hooks[slot].sources,
-        AshOnetime.Test.ExitBoundary.Hooks.environment(slot, Map.put(side, :bound, state.bound))
+        Hooks.environment(slot, Map.put(side, :bound, state.bound))
       )
       |> Enum.find_value(fn {source, value} -> if source == :context, do: {:found, value} end)
       |> elem(1)
@@ -732,29 +779,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
         {:put, [value]} ->
           b = state.bound
 
-          expected =
-            case Enum.find(e.stack, fn {m, _, _} -> m == Delivery end) do
-              {Delivery, :armed_call, 4} ->
-                {:armed, e.pid, side.resource, side.row.action, b[:cell], b[:pk]}
-
-              {Delivery, :claim_entry, 6} ->
-                {:claimed, b[:inv], b[:pk]}
-
-              {Delivery, :seal_to_entry, 2} ->
-                {:sealed, b[:inv], b[:envelope]}
-
-              {Delivery, :complete_entry, 3} ->
-                outcome =
-                  case side.row.branch do
-                    branch when branch in [:replay, :finalize_replay] -> :replayed
-                    branch when branch in [:recovered, :unknown] -> :recovered
-                    _ -> :executed
-                  end
-
-                if outcome == :executed,
-                  do: {:done, b[:inv], outcome, b[:envelope], b[:completion]},
-                  else: {:done, b[:inv], outcome, nil, nil}
-            end
+          expected = dictionary_value(e, b, side)
 
           state = exact(state, e, :dictionary_binding, value, expected)
           state = bind(state, :previous_state, state.last_state || :undefined)
@@ -776,85 +801,122 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
 
   defp dictionary(_e, state, _, _, _), do: state
 
+  defp dictionary_value(e, b, side) do
+    e.stack
+    |> Enum.find(fn {m, _, _} -> m == Delivery end)
+    |> dictionary_frame(e, b, side)
+  end
+
+  defp dictionary_frame({Delivery, :armed_call, 4}, e, b, side),
+    do: {:armed, e.pid, side.resource, side.row.action, b[:cell], b[:pk]}
+
+  defp dictionary_frame({Delivery, :claim_entry, 6}, _e, b, _side),
+    do: {:claimed, b[:inv], b[:pk]}
+
+  defp dictionary_frame({Delivery, :seal_to_entry, 2}, _e, b, _side),
+    do: {:sealed, b[:inv], b[:envelope]}
+
+  defp dictionary_frame({Delivery, :complete_entry, 3}, _e, b, side),
+    do: done_value(side.row.branch, b)
+
+  defp done_value(branch, b) when branch in [:replay, :finalize_replay],
+    do: {:done, b[:inv], :replayed, nil, nil}
+
+  defp done_value(branch, b) when branch in [:recovered, :unknown],
+    do: {:done, b[:inv], :recovered, nil, nil}
+
+  defp done_value(_branch, b), do: {:done, b[:inv], :executed, b[:envelope], b[:completion]}
+
   defp crypto(e, state, mfa, args, _side) do
-    b = state.bound
     state = claim(state, e) |> pending(e.pid, mfa, args)
-
-    state =
-      case {mfa, args} do
-        {{:crypto, :generate_key, 2}, [:ecdh, :x25519]} ->
-          state
-
-        {{:crypto, function, 1}, [16]}
-        when function in [:strong_rand_bytes, :strong_rand_bytes_nif] ->
-          state
-
-        {{:crypto, :ensure_int_as_bin, 1}, [value]} ->
-          valid(
-            state,
-            e,
-            :crypto_integer_input,
-            value in [:undefined, b[:pk], b[:sk], b[:epk], b[:esk]]
-          )
-
-        {{:crypto, :evp_generate_key_nif, 2}, [:x25519, :undefined]} ->
-          state
-
-        {{:crypto, :max_bytes, 0}, []} ->
-          state
-
-        {{:crypto, :hash, 2}, [:sha256, ref]} ->
-          exact(state, e, :key_hash_input, ref, b[:ref])
-
-        {{:crypto, :hash, 4}, [:sha256, ref, size, 20_000]} ->
-          state |> exact(e, :key_hash_input, ref, b[:ref]) |> exact(e, :key_hash_size, size, 16)
-
-        {{:crypto, :hash_nif, 2}, [:sha256, ref]} ->
-          exact(state, e, :key_hash_input, ref, b[:ref])
-
-        {{:crypto, :generate_key, 3}, [kind, :x25519, :undefined]} when kind in [:ecdh, :eddh] ->
-          valid(state, e, :ephemeral_generation, {:crypto, :generate_key, 2} in e.stack)
-
-        {{:crypto, :generate_key, _}, _} ->
-          valid(state, e, :ephemeral_generation, false)
-
-        {{:crypto, :compute_key, 4}, [kind, pk, sk, :x25519]} when kind in [:ecdh, :eddh] ->
-          valid(state, e, :key_agreement, {pk, sk} in [{b[:pk], b[:esk]}, {b[:epk], b[:sk]}])
-
-        {{:crypto, :evp_compute_key_nif, 3}, [:x25519, pk, sk]} ->
-          valid(state, e, :key_agreement, {pk, sk} in [{b[:pk], b[:esk]}, {b[:epk], b[:sk]}])
-
-        {{:crypto, function, 4}, [:hmac, :sha256, key, data]} when function in [:mac, :mac_nif] ->
-          expected = hmac_inputs(b)
-          valid(state, e, :hmac_transfer, {key, data} in expected)
-
-        {{:crypto, :alias, 2}, [:sha256, key]} ->
-          valid(
-            state,
-            e,
-            :hmac_alias,
-            Enum.any?(hmac_inputs(b), fn {expected, _} -> expected == key end)
-          )
-
-        {{:crypto, :alias, 2}, [:aes_256_gcm, key]} ->
-          exact(state, e, :aead_alias, key, elem(derived_key(b), 0))
-
-        {{:crypto, function, 7}, [:aes_256_gcm, key, nonce, input, aad, tag, encrypt?]}
-        when function in [:crypto_one_time_aead, :aead_cipher_nif] ->
-          {expected_key, expected_nonce} = derived_key(b)
-
-          state
-          |> exact(e, :aead_key, key, expected_key)
-          |> exact(e, :aead_nonce, nonce, expected_nonce)
-          |> exact(e, :aead_aad, aad, <<1, b.context::binary>>)
-          |> exact(e, :aead_input, input, if(encrypt?, do: plaintext(b[:values]), else: b[:ct]))
-          |> exact(e, :aead_tag, tag, if(encrypt?, do: 16, else: b[:tag]))
-
-        _ ->
-          valid(state, e, :undeclared_crypto_call, false)
-      end
-
+    state = crypto_call({mfa, args}, e, state, state.bound)
     %{state | crypto: [mfa | state.crypto]}
+  end
+
+  defp crypto_call({{:crypto, :generate_key, 2}, [:ecdh, :x25519]}, _e, state, _b) do
+    state
+  end
+
+  defp crypto_call({{:crypto, function, 1}, [16]}, _e, state, _b) when function in [:strong_rand_bytes, :strong_rand_bytes_nif] do
+    state
+  end
+
+  defp crypto_call({{:crypto, :ensure_int_as_bin, 1}, [value]}, e, state, b) do
+    valid(
+      state,
+      e,
+      :crypto_integer_input,
+      value in [:undefined, b[:pk], b[:sk], b[:epk], b[:esk]]
+    )
+  end
+
+  defp crypto_call({{:crypto, :evp_generate_key_nif, 2}, [:x25519, :undefined]}, _e, state, _b) do
+    state
+  end
+
+  defp crypto_call({{:crypto, :max_bytes, 0}, []}, _e, state, _b) do
+    state
+  end
+
+  defp crypto_call({{:crypto, :hash, 2}, [:sha256, ref]}, e, state, b) do
+    exact(state, e, :key_hash_input, ref, b[:ref])
+  end
+
+  defp crypto_call({{:crypto, :hash, 4}, [:sha256, ref, size, 20_000]}, e, state, b) do
+    state |> exact(e, :key_hash_input, ref, b[:ref]) |> exact(e, :key_hash_size, size, 16)
+  end
+
+  defp crypto_call({{:crypto, :hash_nif, 2}, [:sha256, ref]}, e, state, b) do
+    exact(state, e, :key_hash_input, ref, b[:ref])
+  end
+
+  defp crypto_call({{:crypto, :generate_key, 3}, [kind, :x25519, :undefined]}, e, state, _b) when kind in [:ecdh, :eddh] do
+    valid(state, e, :ephemeral_generation, {:crypto, :generate_key, 2} in e.stack)
+  end
+
+  defp crypto_call({{:crypto, :generate_key, _}, _}, e, state, _b) do
+    valid(state, e, :ephemeral_generation, false)
+  end
+
+  defp crypto_call({{:crypto, :compute_key, 4}, [kind, pk, sk, :x25519]}, e, state, b) when kind in [:ecdh, :eddh] do
+    valid(state, e, :key_agreement, {pk, sk} in [{b[:pk], b[:esk]}, {b[:epk], b[:sk]}])
+  end
+
+  defp crypto_call({{:crypto, :evp_compute_key_nif, 3}, [:x25519, pk, sk]}, e, state, b) do
+    valid(state, e, :key_agreement, {pk, sk} in [{b[:pk], b[:esk]}, {b[:epk], b[:sk]}])
+  end
+
+  defp crypto_call({{:crypto, function, 4}, [:hmac, :sha256, key, data]}, e, state, b) when function in [:mac, :mac_nif] do
+    expected = hmac_inputs(b)
+    valid(state, e, :hmac_transfer, {key, data} in expected)
+  end
+
+  defp crypto_call({{:crypto, :alias, 2}, [:sha256, key]}, e, state, b) do
+    valid(
+      state,
+      e,
+      :hmac_alias,
+      Enum.any?(hmac_inputs(b), fn {expected, _} -> expected == key end)
+    )
+  end
+
+  defp crypto_call({{:crypto, :alias, 2}, [:aes_256_gcm, key]}, e, state, b) do
+    exact(state, e, :aead_alias, key, elem(derived_key(b), 0))
+  end
+
+  defp crypto_call({{:crypto, function, 7}, [:aes_256_gcm, key, nonce, input, aad, tag, encrypt?]}, e, state, b) when function in [:crypto_one_time_aead, :aead_cipher_nif] do
+    {expected_key, expected_nonce} = derived_key(b)
+
+    state
+    |> exact(e, :aead_key, key, expected_key)
+    |> exact(e, :aead_nonce, nonce, expected_nonce)
+    |> exact(e, :aead_aad, aad, <<1, b.context::binary>>)
+    |> exact(e, :aead_input, input, if(encrypt?, do: plaintext(b[:values]), else: b[:ct]))
+    |> exact(e, :aead_tag, tag, if(encrypt?, do: 16, else: b[:tag]))
+  end
+
+  defp crypto_call(_, e, state, _b) do
+    valid(state, e, :undeclared_crypto_call, false)
   end
 
   defp hmac_inputs(%{epk: epk, pk: pk, shared: shared, context: context}) do
@@ -919,91 +981,109 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
   end
 
   defp segment(e, state, row) do
-    marker =
-      case e.event do
-        {_, :call, {AshOnetime, :deliver, [_subject, _opts]}} ->
-          :entry
-
-        {_, :call, {Delivery, :put_cell, [_]}} ->
-          :cell
-
-        {_, :call, {Delivery, :armed_call, _}} ->
-          :arm
-
-        {_, :call, {Delivery, :put_reference, _}} ->
-          :context
-
-        {_, :call, {Delivery, :claim, _}} ->
-          if row.branch == :direct, do: :claim_refusal, else: :claim
-
-        {_, :call, {Producer, :produce, _}} ->
-          if row.branch == :producer_failure, do: :produce_failure, else: :local
-
-        {_, :call, {module, :execute, _}} when module == AshOnetime.Test.ExitBoundary.External ->
-          :external
-
-        {_, :call, {Delivery, :seal, _}} ->
-          if row.branch == :producer_failure, do: nil, else: :seal
-
-        {_, :call, {Delivery, :complete_entry, _}} ->
-          case row.branch do
-            :replay -> :replay
-            branch when branch in [:recovered, :unknown] -> :recovered
-            :finalize_replay -> :finalize_replay
-            _ -> :complete
-          end
-
-        {_, :call, {Delivery, :open, _}} ->
-          if row.branch in [:replay, :recovered, :unknown, :finalize_replay],
-            do: :open_empty,
-            else: :open
-
-        {_, :call, {:erlang, :erase, [key]}} ->
-          if key == state.bound[:key] and key != nil, do: :erase
-
-        {_, :exception_from, {Delivery, :armed, 4}, _} ->
-          :reraise
-
-        {_, :return_from, {AshOnetime, :deliver, 2}, _} ->
-          cond do
-            row.branch == :transaction ->
-              :refusal_return
-
-            row.branch in [:failure, :producer_failure, :consumer_failure, :interrupted] ->
-              :error_return
-
-            true ->
-              :return
-          end
-
-        {_, :return_from, {AshOnetime.Test.ExitBoundary.Root, :invoke, 2}, _} ->
-          if row.branch == :direct, do: :error_return
-
-        {_, :exception_from, {AshOnetime.Test.ExitBoundary.Root, :invoke, 2}, _} ->
-          :error_return
-
-        {_, :return_from, {AshOnetime.Test.ExitBoundary.ResponseClassifier, :classify, 2}, _} ->
-          if row.fault in [:classify_reject, :classify_rollback], do: :failure
-
-        {_, :return_from, {AshOnetime.Test.ExitBoundary.Codec, :encode, 3}, _} ->
-          if row.fault == :codec_encode, do: :failure
-
-        {_, :return_from, {AshOnetime.Test.ExitBoundary.Codec, :decode, 4}, _} ->
-          if row.fault == :codec_decode, do: :failure
-
-        {_, :return_from, {AshOnetime.Test.ExitBoundary.Hold, :reference, 2}, _} ->
-          if row.fault == :hold_invalid, do: :failure
-
-        {_, tag, {AshOnetime.Store, function, _}, _}
-        when tag in [:return_from, :exception_from] and
-               function in [:complete, :complete_external] ->
-          if row.fault == :store_completion, do: :failure
-
-        _ ->
-          nil
-      end
-
+    marker = segment_marker(e.event, state, row)
     if marker, do: %{state | segments: state.segments ++ [{marker, e.index}]}, else: state
+  end
+
+  defp segment_marker({_, :call, {AshOnetime, :deliver, [_subject, _opts]}}, _state, _row) do
+    :entry
+  end
+
+  defp segment_marker({_, :call, {Delivery, :put_cell, [_]}}, _state, _row) do
+    :cell
+  end
+
+  defp segment_marker({_, :call, {Delivery, :armed_call, _}}, _state, _row) do
+    :arm
+  end
+
+  defp segment_marker({_, :call, {Delivery, :put_reference, _}}, _state, _row) do
+    :context
+  end
+
+  defp segment_marker({_, :call, {Delivery, :claim, _}}, _state, row) do
+    if row.branch == :direct, do: :claim_refusal, else: :claim
+  end
+
+  defp segment_marker({_, :call, {Producer, :produce, _}}, _state, row) do
+    if row.branch == :producer_failure, do: :produce_failure, else: :local
+  end
+
+  defp segment_marker({_, :call, {module, :execute, _}}, _state, _row) when module == AshOnetime.Test.ExitBoundary.External do
+    :external
+  end
+
+  defp segment_marker({_, :call, {Delivery, :seal, _}}, _state, row) do
+    if row.branch == :producer_failure, do: nil, else: :seal
+  end
+
+  defp segment_marker({_, :call, {Delivery, :complete_entry, _}}, _state, row) do
+    case row.branch do
+      :replay -> :replay
+      branch when branch in [:recovered, :unknown] -> :recovered
+      :finalize_replay -> :finalize_replay
+      _ -> :complete
+    end
+  end
+
+  defp segment_marker({_, :call, {Delivery, :open, _}}, _state, row) do
+    if row.branch in [:replay, :recovered, :unknown, :finalize_replay],
+      do: :open_empty,
+      else: :open
+  end
+
+  defp segment_marker({_, :call, {:erlang, :erase, [key]}}, state, _row) do
+    if key == state.bound[:key] and key != nil, do: :erase
+  end
+
+  defp segment_marker({_, :exception_from, {Delivery, :armed, 4}, _}, _state, _row) do
+    :reraise
+  end
+
+  defp segment_marker({_, :return_from, {AshOnetime, :deliver, 2}, _}, _state, row) do
+    cond do
+      row.branch == :transaction ->
+        :refusal_return
+
+      row.branch in [:failure, :producer_failure, :consumer_failure, :interrupted] ->
+        :error_return
+
+      true ->
+        :return
+    end
+  end
+
+  defp segment_marker({_, :return_from, {AshOnetime.Test.ExitBoundary.Root, :invoke, 2}, _}, _state, row) do
+    if row.branch == :direct, do: :error_return
+  end
+
+  defp segment_marker({_, :exception_from, {AshOnetime.Test.ExitBoundary.Root, :invoke, 2}, _}, _state, _row) do
+    :error_return
+  end
+
+  defp segment_marker({_, :return_from, {AshOnetime.Test.ExitBoundary.ResponseClassifier, :classify, 2}, _}, _state, row) do
+    if row.fault in [:classify_reject, :classify_rollback], do: :failure
+  end
+
+  defp segment_marker({_, :return_from, {AshOnetime.Test.ExitBoundary.Codec, :encode, 3}, _}, _state, row) do
+    if row.fault == :codec_encode, do: :failure
+  end
+
+  defp segment_marker({_, :return_from, {AshOnetime.Test.ExitBoundary.Codec, :decode, 4}, _}, _state, row) do
+    if row.fault == :codec_decode, do: :failure
+  end
+
+  defp segment_marker({_, :return_from, {AshOnetime.Test.ExitBoundary.Hold, :reference, 2}, _}, _state, row) do
+    if row.fault == :hold_invalid, do: :failure
+  end
+
+  defp segment_marker({_, tag, {AshOnetime.Store, function, _}, _}, _state, row) when tag in [:return_from, :exception_from] and
+               function in [:complete, :complete_external] do
+    if row.fault == :store_completion, do: :failure
+  end
+
+  defp segment_marker(_, _state, _row) do
+    nil
   end
 
   defp finish(state, side) do

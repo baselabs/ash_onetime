@@ -7,38 +7,7 @@ defmodule AshOnetime.Test.ExitBoundary.TransportReferences do
     initial = %{active: %{}, counts: %{}, origins: %{}, errors: [], readback: readback}
     {events, state} = Enum.map_reduce(indexed.events, initial, &event/2)
 
-    events =
-      Enum.map(events, fn
-        %{event: {pid, :receive, {:inet_async, port, id, result}}} = e when is_integer(id) ->
-          case Map.fetch(state.origins, {port, id}) do
-            {:ok, frame} ->
-              %{e | event: {pid, :receive, {:inet_async, port, token(frame), result}}}
-
-            :error ->
-              e
-          end
-
-        %{event: {port, :send, {:inet_async, port, id, result}, to}} = e when is_integer(id) ->
-          case Map.fetch(state.origins, {port, id}) do
-            {:ok, frame} ->
-              %{e | event: {port, :send, {:inet_async, port, token(frame), result}, to}}
-
-            :error ->
-              e
-          end
-
-        %{event: {port, :send, {port, {:control, <<1, hi, lo>>}}, to}} = e ->
-          case Map.fetch(state.origins, {port, hi * 256 + lo}) do
-            {:ok, frame} ->
-              %{e | event: {port, :send, {port, {:control, [1, token(frame), :low_octet]}}, to}}
-
-            :error ->
-              e
-          end
-
-        e ->
-          e
-      end)
+    events = Enum.map(events, &rewrite_copy(&1, state.origins))
 
     errors =
       for %{event: event} = e <- events,
@@ -58,6 +27,32 @@ defmodule AshOnetime.Test.ExitBoundary.TransportReferences do
           }
 
     %{events: events, errors: Enum.reverse(state.errors) ++ errors}
+  end
+
+  defp rewrite_copy(%{event: {pid, :receive, {:inet_async, port, id, result}}} = e, origins)
+       when is_integer(id),
+       do: rewrite_origin(e, origins, port, id, fn frame ->
+         {pid, :receive, {:inet_async, port, token(frame), result}}
+       end)
+
+  defp rewrite_copy(%{event: {port, :send, {:inet_async, port, id, result}, to}} = e, origins)
+       when is_integer(id),
+       do: rewrite_origin(e, origins, port, id, fn frame ->
+         {port, :send, {:inet_async, port, token(frame), result}, to}
+       end)
+
+  defp rewrite_copy(%{event: {port, :send, {port, {:control, <<1, hi, lo>>}}, to}} = e, origins),
+    do: rewrite_origin(e, origins, port, hi * 256 + lo, fn frame ->
+      {port, :send, {port, {:control, [1, token(frame), :low_octet]}}, to}
+    end)
+
+  defp rewrite_copy(e, _origins), do: e
+
+  defp rewrite_origin(e, origins, port, id, build) do
+    case Map.fetch(origins, {port, id}) do
+      {:ok, frame} -> %{e | event: build.(frame)}
+      :error -> e
+    end
   end
 
   defp event(%{event: {pid, :call, {:prim_inet, :async_recv, [port, _, _]}}} = e, state) do

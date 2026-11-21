@@ -67,11 +67,12 @@ defmodule AshOnetime.Test.ExitBoundary.Producer do
 end
 
 defmodule AshOnetime.Test.ExitBoundary.External do
+  alias AshOnetime.Test.ExitBoundary.Faults
+  alias AshOnetime.Test.ExitBoundary.FinalizeReplay
+  alias AshOnetime.Test.ExternalPeer
   @moduledoc false
   @behaviour AshOnetime.ExternalEffect
 
-  alias AshOnetime.Test.ExitBoundary.Faults
-  alias AshOnetime.Test.ExternalPeer
 
   # The external effect of the withheld resource: the peer records the effect once and
   # `execute/3` returns both canaries with the peer's result. `:execute_unknown` runs the
@@ -91,7 +92,7 @@ defmodule AshOnetime.Test.ExitBoundary.External do
       Faults.pause(:after_execute)
 
       if Faults.fault() == :finalize_replay,
-        do: AshOnetime.Test.ExitBoundary.FinalizeReplay.complete(subject, operation_key)
+        do: FinalizeReplay.complete(subject, operation_key)
 
       case Faults.fault() do
         :execute_unknown -> {:error, :outcome_unknown}
@@ -116,11 +117,12 @@ defmodule AshOnetime.Test.ExitBoundary.External do
 end
 
 defmodule AshOnetime.Test.ExitBoundary.ReturnedExternal do
+  alias AshOnetime.Test.ExitBoundary.Faults
+  alias AshOnetime.Test.ExitBoundary.FinalizeReplay
+  alias AshOnetime.Test.ExternalPeer
   @moduledoc false
   @behaviour AshOnetime.ExternalEffect
 
-  alias AshOnetime.Test.ExitBoundary.Faults
-  alias AshOnetime.Test.ExternalPeer
 
   # The twin's external effect: the same peer call with no executing-only values.
   @impl true
@@ -138,7 +140,7 @@ defmodule AshOnetime.Test.ExitBoundary.ReturnedExternal do
       Faults.pause(:after_execute)
 
       if Faults.fault() == :finalize_replay,
-        do: AshOnetime.Test.ExitBoundary.FinalizeReplay.complete(subject, operation_key)
+        do: FinalizeReplay.complete(subject, operation_key)
 
       case Faults.fault() do
         :execute_unknown -> {:error, :outcome_unknown}
@@ -225,12 +227,13 @@ end
 defmodule AshOnetime.Test.ExitBoundary.Consumer do
   @moduledoc false
 
-  alias AshOnetime.Test.ExitBoundary.{Faults, Recorder}
+  alias AshOnetime.Test.ExitBoundary.Faults
+  alias AshOnetime.Test.ExitBoundary.Recorder
 
   # A consumer after-action hook on every action of both sides: a change on the CRUD
   # actions, a preparation on the generic ones. It hands what a consumer hook sees (the
-  # subject's full context and the result) to `Recorder`, a recorded callback, so X2 compares what a consumer receives on
-  # each side. Pure: it runs on replay too and has no effect. With a fault planted it
+  # subject's full context and the result) to `Recorder`, a recorded callback. X2 compares what a consumer
+  # receives on each side. Pure: it runs on replay too and has no effect. With a fault planted it
   # raises, exits or throws after recording.
   def after_action(subject, result) do
     Recorder.after_action(subject, result)

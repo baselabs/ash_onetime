@@ -3,13 +3,16 @@ for partitioning <- [nil, 2] do
               AshOnetime.Delivery.ExternalStateIntegrationTest,
               "Claims#{partitioning || "Plain"}"
             ) do
+              alias AshOnetime.Delivery
+              alias AshOnetime.Test.ExitBoundary.Faults
+              alias AshOnetime.Test.ExitBoundary.Pair
+              alias AshOnetime.Test.ExitBoundary.Pair.Path
+              alias AshOnetime.Test.ExitBoundary.Withheld
+              alias AshOnetime.Test.ExternalPeer
+              alias Mix.Tasks.AshOnetime.Doctor
     use AshOnetime.Test.ExternalStateCase, async: false
     import AshOnetime.Test.DeliveryCase
     import ExUnit.CaptureIO
-    alias AshOnetime.Delivery
-    alias AshOnetime.Test.ExitBoundary.{Faults, Pair, Withheld}
-    alias AshOnetime.Test.ExitBoundary.Pair.Path
-    alias AshOnetime.Test.ExternalPeer
     @moduletag hash_partitions: partitioning
     @moduletag :delivery_external_state_integration
 
@@ -101,7 +104,7 @@ for partitioning <- [nil, 2] do
 
         output =
           capture_io(fn ->
-            Mix.Tasks.AshOnetime.Doctor.run([
+            Doctor.run([
               "--repo",
               inspect(Repo),
               "--live",

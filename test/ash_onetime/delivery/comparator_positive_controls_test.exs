@@ -1,19 +1,18 @@
 Code.require_file("../../../scripts/delivery_comparator_controls.exs", __DIR__)
 
 defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
+  alias AshOnetime.Test.ExitBoundary.Comparator
+  alias AshOnetime.Test.ExitBoundary.Compiled
+  alias AshOnetime.Test.ExitBoundary.Completeness
+  alias AshOnetime.Test.ExitBoundary.Declarations
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
+  alias AshOnetime.Test.ExitBoundary.Returned
+  alias AshOnetime.Test.ExitBoundary.Scenarios
+  alias AshOnetime.Test.ExitBoundary.Search
+  alias AshOnetime.Test.ExitBoundary.Values
+  alias AshOnetime.Test.ExitBoundary.Withheld
   use AshOnetime.Test.ExitBoundary.ComparatorCase, async: false
 
-  alias AshOnetime.Test.ExitBoundary.{
-    Comparator,
-    Completeness,
-    Declarations,
-    Diagnostics,
-    Returned,
-    Scenarios,
-    Search,
-    Values,
-    Withheld
-  }
 
   for control <- AshOnetime.DeliveryComparatorControls.rows() do
     @tag control.id
@@ -53,10 +52,7 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
       end
 
       if errors != [] do
-        IO.inspect(%{control: control.id, errors: Diagnostics.safe(errors)},
-          label: "QUALIFIED_ORIGIN_CONTROL",
-          limit: :infinity
-        )
+        IO.puts("QUALIFIED_ORIGIN_CONTROL" <> ": " <> inspect(%{control: control.id, errors: Diagnostics.safe(errors)}, pretty: true , limit: :infinity))
 
         owned? =
           if control.kind in [:declarations, :completeness],
@@ -81,7 +77,7 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
       source =
         String.replace(source, "COMPARATOR_DATE_OPERATION", inspect(operation, limit: :infinity))
 
-      AshOnetime.Test.ExitBoundary.Compiled.with_source(source, path, callback)
+      Compiled.with_source(source, path, callback)
     else
       callback.()
     end

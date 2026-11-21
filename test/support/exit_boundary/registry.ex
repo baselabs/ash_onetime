@@ -1,7 +1,12 @@
 defmodule AshOnetime.Test.ExitBoundary.Registry do
+  alias AshOnetime.Test.ExitBoundary.Compiled
+  alias AshOnetime.Test.ExitBoundary.External
+  alias AshOnetime.Test.ExitBoundary.Hooks
+  alias AshOnetime.Test.ExitBoundary.Returned
+  alias AshOnetime.Test.ExitBoundary.ReturnedExternal
+  alias AshOnetime.Test.ExitBoundary.Withheld
   @moduledoc false
 
-  alias AshOnetime.Test.ExitBoundary.{External, Returned, ReturnedExternal, Withheld}
 
   @generators [
                 {:crypto, :generate_key, 2},
@@ -360,7 +365,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
           ],
           {argument, kind} <- arguments,
           {:ok, index} <- [
-            AshOnetime.Test.ExitBoundary.Compiled.captured_argument(
+            Compiled.captured_argument(
               module,
               function,
               callee,
@@ -454,22 +459,21 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
   def hook_phase({_, :return_from, mfa, _}, current, hooks, frames) do
     canonical = Map.get(frames, mfa)
 
-    if canonical do
-      Enum.find_value(hooks, current, fn {slot, hook} ->
-        if Map.get(frames, AshOnetime.Test.ExitBoundary.Hooks.trace_mfa(hook)) == canonical do
-          case slot do
-            {:before_action, 0} -> :sealed
-            {:around_action, 0} -> :post
-            {:after_action, 1} -> :done
-          end
-        end
-      end)
-    else
-      current
-    end
+    if canonical,
+      do: Enum.find_value(hooks, current, &hook_phase_at(&1, canonical, frames)),
+      else: current
   end
 
   def hook_phase(_, current, _hooks, _frames), do: current
+
+  defp hook_phase_at({slot, hook}, canonical, frames) do
+    if Map.get(frames, Hooks.trace_mfa(hook)) == canonical, do: hook_phase_slot(slot)
+  end
+
+  defp hook_phase_slot({:before_action, 0}), do: :sealed
+  defp hook_phase_slot({:around_action, 0}), do: :post
+  defp hook_phase_slot({:after_action, 1}), do: :done
+
 
   def frames do
     @generators ++
@@ -527,75 +531,86 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
   def trace(row) do
     prefix = if row.external?, do: :external, else: :local
 
-    case row.branch do
-      :interrupted ->
-        [:cell, :entry, :arm, :context, :claim, :external, :erase, :error_return]
+    trace_branch(row.branch, row, prefix)
+  end
 
-      :transaction ->
-        [:entry, :refusal_return]
+  defp trace_branch(:interrupted, _row, _prefix) do
+  [:cell, :entry, :arm, :context, :claim, :external, :erase, :error_return]
+  end
 
-      :direct ->
-        [:claim_refusal, :error_return]
+  defp trace_branch(:transaction, _row, _prefix) do
+  [:entry, :refusal_return]
+  end
 
-      :producer_failure ->
-        [:cell, :entry, :arm, :context, :claim, :produce_failure, :erase, :error_return]
+  defp trace_branch(:direct, _row, _prefix) do
+  [:claim_refusal, :error_return]
+  end
 
-      :replay ->
-        [:cell, :entry, :arm, :context, :claim, :replay, :open_empty, :erase, :return]
+  defp trace_branch(:producer_failure, _row, _prefix) do
+  [:cell, :entry, :arm, :context, :claim, :produce_failure, :erase, :error_return]
+  end
 
-      :unknown ->
-        [
-          :cell,
-          :entry,
-          :arm,
-          :context,
-          :claim,
-          :external,
-          :recovered,
-          :open_empty,
-          :erase,
-          :return
-        ]
+  defp trace_branch(:replay, _row, _prefix) do
+  [:cell, :entry, :arm, :context, :claim, :replay, :open_empty, :erase, :return]
+  end
 
-      :recovered ->
-        [:cell, :entry, :arm, :context, :claim, :recovered, :open_empty, :erase, :return]
+  defp trace_branch(:unknown, _row, _prefix) do
+  [
+    :cell,
+    :entry,
+    :arm,
+    :context,
+    :claim,
+    :external,
+    :recovered,
+    :open_empty,
+    :erase,
+    :return
+  ]
+  end
 
-      :finalize_replay ->
-        [
-          :cell,
-          :entry,
-          :arm,
-          :context,
-          :claim,
-          prefix,
-          :seal,
-          :finalize_replay,
-          :open_empty,
-          :erase,
-          :return
-        ]
+  defp trace_branch(:recovered, _row, _prefix) do
+  [:cell, :entry, :arm, :context, :claim, :recovered, :open_empty, :erase, :return]
+  end
 
-      :consumer_failure ->
-        [:cell, :entry, :arm, :context, :claim, prefix, :seal, :reraise, :erase, :error_return]
+  defp trace_branch(:finalize_replay, _row, prefix) do
+  [
+    :cell,
+    :entry,
+    :arm,
+    :context,
+    :claim,
+    prefix,
+    :seal,
+    :finalize_replay,
+    :open_empty,
+    :erase,
+    :return
+  ]
+  end
 
-      :failure ->
-        if row.fault == :codec_decode,
-          do: [:cell, :entry, :arm, :context, :claim, :failure, :erase, :error_return],
-          else: [
-            :cell,
-            :entry,
-            :arm,
-            :context,
-            :claim,
-            prefix,
-            :seal,
-            :failure,
-            :erase,
-            :error_return
-          ]
+  defp trace_branch(:consumer_failure, _row, prefix) do
+  [:cell, :entry, :arm, :context, :claim, prefix, :seal, :reraise, :erase, :error_return]
+  end
 
-      _execute ->
-        [:cell, :entry, :arm, :context, :claim, prefix, :seal, :complete, :open, :erase, :return]
-    end
+  defp trace_branch(:failure, row, prefix) do
+  if row.fault == :codec_decode,
+    do: [:cell, :entry, :arm, :context, :claim, :failure, :erase, :error_return],
+    else: [
+      :cell,
+      :entry,
+      :arm,
+      :context,
+      :claim,
+      prefix,
+      :seal,
+      :failure,
+      :erase,
+      :error_return
+    ]
+  end
+
+  defp trace_branch(_branch, _row, prefix) do
+  [:cell, :entry, :arm, :context, :claim, prefix, :seal, :complete, :open, :erase, :return]
   end
 end

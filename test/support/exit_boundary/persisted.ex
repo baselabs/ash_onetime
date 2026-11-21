@@ -28,16 +28,7 @@ defmodule AshOnetime.Test.ExitBoundary.Persisted do
 
       # Postgrex has no aclitem decoder. PostgreSQL's own text output preserves
       # every ACL element, array position and NULL; comparison stays exact.
-      projection =
-        Enum.map_join(fields, ", ", fn [name, acl?, acl_array?] ->
-          column = quote_identifier(name)
-
-          cond do
-            acl? -> column <> "::text AS " <> column
-            acl_array? -> column <> "::text[] AS " <> column
-            true -> column
-          end
-        end)
+      projection = Enum.map_join(fields, ", ", &project_column/1)
 
       %{columns: columns, rows: rows} =
         SQL.query!(repo, "SELECT " <> projection <> " FROM " <> relation, [])
@@ -45,6 +36,14 @@ defmodule AshOnetime.Test.ExitBoundary.Persisted do
       {table, Enum.map(rows, &(columns |> Enum.zip(&1) |> Map.new()))}
     end
   end
+
+  defp project_column([name, true, _]),
+    do: quote_identifier(name) <> "::text AS " <> quote_identifier(name)
+
+  defp project_column([name, false, true]),
+    do: quote_identifier(name) <> "::text[] AS " <> quote_identifier(name)
+
+  defp project_column([name, false, false]), do: quote_identifier(name)
 
   defp quote_identifier(name), do: "\"" <> String.replace(name, "\"", "\"\"") <> "\""
 

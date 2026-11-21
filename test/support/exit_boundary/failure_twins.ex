@@ -1,6 +1,8 @@
 defmodule AshOnetime.Test.ExitBoundary.FailureTwins do
+  alias AshOnetime.Test.ExitBoundary.Hooks
+  alias AshOnetime.Test.ExitBoundary.References
+  alias AshOnetime.Test.ExitBoundary.Returned
   @moduledoc false
-  alias AshOnetime.Test.ExitBoundary.{Hooks, Returned}
 
   # The twin faults at the same entry as the selected library hook. Calling the
   # real installed hook first on a producer failure preserves real admission.
@@ -89,7 +91,7 @@ defmodule AshOnetime.Test.ExitBoundary.FailureTwins do
   end
 
   def frames do
-    AshOnetime.Test.ExitBoundary.References.memo(:failure_twin_frames, fn ->
+    References.memo(:failure_twin_frames, fn ->
       for(
         type <- [:create, :action],
         branch <- [:direct, :producer_failure],

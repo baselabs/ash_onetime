@@ -6,7 +6,8 @@ defmodule AshOnetime.Test.ExitBoundary.Inventory do
   # SHA-256 of the primary sources:
   # 28.5: e1ccf7bdef1d78da981c19051694528de4959640a04408ea7531316db24b07e9
   # 29.1.2: 55c88258e90745e701d00702266c6422e35c31c6796ce2086ea00fa00f9d8816
-  @releases ["28.5", "29.1.2"]
+  # 28.5.0.8: e1ccf7bdef1d78da981c19051694528de4959640a04408ea7531316db24b07e9
+  @releases ["28.5", "28.5.0.8", "29.1.2"]
 
   for release <- @releases do
     @external_resource Path.join(__DIR__, "bif_inventory_#{release}.tsv")

@@ -1,9 +1,13 @@
 defmodule AshOnetime.Test.ExitBoundary.FinalizeReplay do
-  @moduledoc false
-  alias AshOnetime.{Response, Store}
-  alias AshOnetime.Store.{Claim, Postgres, Result}
+  alias AshOnetime.Resource.Info, as: OnetimeInfo
+  alias AshOnetime.Response
+  alias AshOnetime.Store
+  alias AshOnetime.Store.Claim
+  alias AshOnetime.Store.Postgres
+  alias AshOnetime.Store.Result
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
+  @moduledoc false
 
   # Complete the already locked, real claim while the peer callback is running.
   # Finalization then sees that authoritative completion after Delivery.seal.
@@ -28,7 +32,7 @@ defmodule AshOnetime.Test.ExitBoundary.FinalizeReplay do
       |> Map.update!(:state, &String.to_existing_atom/1)
 
     claim = struct!(Claim, fields)
-    protection = AshOnetime.Resource.Info.protection(subject.resource, subject.action.name)
+    protection = OnetimeInfo.protection(subject.resource, subject.action.name)
     trusted = %{tenant: prefix, limits: protection.limits}
 
     trusted =

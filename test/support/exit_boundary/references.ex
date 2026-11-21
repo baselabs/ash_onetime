@@ -1,7 +1,9 @@
 defmodule AshOnetime.Test.ExitBoundary.References do
-  @moduledoc false
   alias AshOnetime.Test.ExitBoundary
-  alias AshOnetime.Test.ExitBoundary.{Domain, Registry}
+  alias AshOnetime.Test.ExitBoundary.Domain
+  alias AshOnetime.Test.ExitBoundary.Registry
+  alias Ecto.Adapters.SQL
+  @moduledoc false
 
   def breadcrumbs(side, kind) do
     resource = side.resource
@@ -9,58 +11,62 @@ defmodule AshOnetime.Test.ExitBoundary.References do
     type = side.row.type
 
     memo({:breadcrumbs, resource, action, type, kind, side.prefix}, fn ->
-      declaration = Ash.Resource.Info.action(resource, action)
-
-      hook = fn _subject, _callback ->
-        error = AshOnetime.Error.new(:diagnostic_reference, "diagnostic reference")
-        if kind == :raise, do: raise(error), else: {:error, error}
-      end
-
-      # A fresh action with a terminal transaction hook reaches Ash's own error
-      # construction before a write. Neither its inputs nor its result contain
-      # a checked error, a delivery value, or a copied diagnostic string.
-      subject =
-        if type == :action do
-          %Ash.ActionInput{
-            resource: resource,
-            action: declaration,
-            domain: Domain,
-            tenant: side.prefix,
-            around_transaction: [hook]
-          }
-        else
-          %Ash.Changeset{
-            resource: resource,
-            data: struct(resource),
-            action: declaration,
-            action_type: type,
-            domain: Domain,
-            tenant: side.prefix,
-            to_tenant: side.prefix,
-            __validated_for_action__: action,
-            around_transaction: [hook],
-            dirty_hooks: [:around_transaction]
-          }
-        end
-
-      {module, function, arity} = Map.fetch!(Registry.rule!(:o2a_diagnostic).entries, type)
-      opts = [authorize?: false, atomic_upgrade?: false]
-
-      args =
-        if arity == 3, do: [Domain, subject, opts], else: [Domain, subject, declaration, opts]
-
-      result =
-        try do
-          apply(module, function, args)
-        rescue
-          error -> error
-        end
-
-      case collect_breadcrumbs(result) |> Enum.uniq() do
-        [crumb] -> crumb
-        _ -> raise "the Ash diagnostic reference did not produce one bound breadcrumb"
-      end
+      breadcrumbs_reference(resource, action, type, kind, side.prefix)
     end)
+  end
+
+  defp breadcrumbs_reference(resource, action, type, kind, prefix) do
+    declaration = Ash.Resource.Info.action(resource, action)
+
+    hook = fn _subject, _callback ->
+      error = AshOnetime.Error.new(:diagnostic_reference, "diagnostic reference")
+      if kind == :raise, do: raise(error), else: {:error, error}
+    end
+
+    # A fresh action with a terminal transaction hook reaches Ash's own error
+    # construction before a write. Neither its inputs nor its result contain
+    # a checked error, a delivery value, or a copied diagnostic string.
+    subject =
+      if type == :action do
+        %Ash.ActionInput{
+          resource: resource,
+          action: declaration,
+          domain: Domain,
+          tenant: prefix,
+          around_transaction: [hook]
+        }
+      else
+        %Ash.Changeset{
+          resource: resource,
+          data: struct(resource),
+          action: declaration,
+          action_type: type,
+          domain: Domain,
+          tenant: prefix,
+          to_tenant: prefix,
+          __validated_for_action__: action,
+          around_transaction: [hook],
+          dirty_hooks: [:around_transaction]
+        }
+      end
+
+    {module, function, arity} = Map.fetch!(Registry.rule!(:o2a_diagnostic).entries, type)
+    opts = [authorize?: false, atomic_upgrade?: false]
+
+    args =
+      if arity == 3, do: [Domain, subject, opts], else: [Domain, subject, declaration, opts]
+
+    result =
+      try do
+        apply(module, function, args)
+      rescue
+        error -> error
+      end
+
+    case collect_breadcrumbs(result) |> Enum.uniq() do
+      [crumb] -> crumb
+      _ -> raise "the Ash diagnostic reference did not produce one bound breadcrumb"
+    end
   end
 
   defp collect_breadcrumbs(%{bread_crumbs: crumbs} = error),
@@ -84,30 +90,32 @@ defmodule AshOnetime.Test.ExitBoundary.References do
   end
 
   def query_name(id, metadata) do
-    memo({:query_name, id, metadata.pid}, fn ->
-      target = {Ecto.Adapters.SQL, :prepare_name, 2}
+    memo({:query_name, id, metadata.pid}, fn -> query_name_reference(id, metadata) end)
+  end
 
-      capture(
-        fn ->
-          Ecto.Adapters.SQL.execute(
-            :named,
-            metadata,
-            %{},
-            {:cache, fn _ -> :ok end, {id, "SELECT 1"}},
-            [],
-            log: false
-          )
-        end,
-        target
-      )
-      |> Enum.find_value(fn
-        %{event: {_, :return_from, ^target, name}} -> {:name, name}
-        _ -> nil
-      end)
-      |> case do
-        {:name, name} -> name
-      end
+  defp query_name_reference(id, metadata) do
+    target = {Ecto.Adapters.SQL, :prepare_name, 2}
+
+    capture(
+      fn ->
+        SQL.execute(
+          :named,
+          metadata,
+          %{},
+          {:cache, fn _ -> :ok end, {id, "SELECT 1"}},
+          [],
+          log: false
+        )
+      end,
+      target
+    )
+    |> Enum.find_value(fn
+      %{event: {_, :return_from, ^target, name}} -> {:name, name}
+      _ -> nil
     end)
+    |> case do
+      {:name, name} -> name
+    end
   end
 
   def protection(resource, action) do
@@ -176,11 +184,7 @@ defmodule AshOnetime.Test.ExitBoundary.References do
             counts = Map.get(counters, e.pid, %{})
             ordinal = Map.get(counts, key, 0)
 
-            expected =
-              Enum.find_value(reference, :undeclared_reference_event, fn
-                {^key, ^ordinal, value} -> {:expected, value}
-                _ -> nil
-              end)
+            expected = reference_event(reference, key, ordinal)
 
             {Map.put(slots, e.index, expected),
              put_in(counters[e.pid], Map.put(counts, key, ordinal + 1))}
@@ -193,53 +197,56 @@ defmodule AshOnetime.Test.ExitBoundary.References do
     slots
   end
 
+  defp reference_event(reference, key, ordinal) do
+    Enum.find_value(reference, :undeclared_reference_event, fn
+      {^key, ^ordinal, value} -> {:expected, value}
+      _ -> nil
+    end)
+  end
+
   # These are positions in the package's fixed locator-validation call graph.
   # Their values must still equal operation(resource, action) on each side.
   def locator_copies(events) do
-    {slots, _} =
-      Enum.reduce(events, {%{}, %{}}, fn e, {slots, frames} ->
-        case e.event do
-          {pid, :call, {AshOnetime.Admission, f, _}}
-          when f in [:valid_locator_hashes?, :equal_locator_hashes?] ->
-            {slots, Map.put(frames, {pid, f}, 0)}
-
-          {pid, :call, {AshOnetime.Admission, :valid_hash?, _}} ->
-            key = {pid, :valid_locator_hashes?}
-
-            if {AshOnetime.Admission, :valid_locator_hashes?, 2} in e.stack do
-              n = Map.fetch!(frames, key)
-              paths = if n in [0, 3], do: [[:event, 2, 2, 0]], else: []
-              {Map.put(slots, e.index, paths), Map.put(frames, key, n + 1)}
-            else
-              {slots, frames}
-            end
-
-          {pid, :call, {:crypto, :hash_equals, _}} ->
-            key = {pid, :equal_locator_hashes?}
-
-            if {AshOnetime.Admission, :equal_locator_hashes?, 2} in e.stack do
-              n = Map.fetch!(frames, key)
-              paths = if n == 0, do: [[:event, 2, 2, 0], [:event, 2, 2, 1]], else: []
-              {Map.put(slots, e.index, paths), Map.put(frames, key, n + 1)}
-            else
-              {slots, frames}
-            end
-
-          {pid, :call, {:crypto, :hash_equals_nif, _}} ->
-            if {AshOnetime.Admission, :equal_locator_hashes?, 2} in e.stack and
-                 Map.get(frames, {pid, :equal_locator_hashes?}) == 1 do
-              {Map.put(slots, e.index, [[:event, 2, 2, 0], [:event, 2, 2, 1]]), frames}
-            else
-              {slots, frames}
-            end
-
-          _ ->
-            {slots, frames}
-        end
-      end)
-
+    {slots, _} = Enum.reduce(events, {%{}, %{}}, &locator_event/2)
     slots
   end
+
+  defp locator_event(%{event: {pid, :call, {AshOnetime.Admission, f, _}}}, {slots, frames})
+       when f in [:valid_locator_hashes?, :equal_locator_hashes?],
+       do: {slots, Map.put(frames, {pid, f}, 0)}
+
+  defp locator_event(%{event: {pid, :call, {AshOnetime.Admission, :valid_hash?, _}}} = e, {slots, frames}) do
+    key = {pid, :valid_locator_hashes?}
+
+    if {AshOnetime.Admission, :valid_locator_hashes?, 2} in e.stack do
+      n = Map.fetch!(frames, key)
+      paths = if n in [0, 3], do: [[:event, 2, 2, 0]], else: []
+      {Map.put(slots, e.index, paths), Map.put(frames, key, n + 1)}
+    else
+      {slots, frames}
+    end
+  end
+
+  defp locator_event(%{event: {pid, :call, {:crypto, :hash_equals, _}}} = e, {slots, frames}) do
+    key = {pid, :equal_locator_hashes?}
+
+    if {AshOnetime.Admission, :equal_locator_hashes?, 2} in e.stack do
+      n = Map.fetch!(frames, key)
+      paths = if n == 0, do: [[:event, 2, 2, 0], [:event, 2, 2, 1]], else: []
+      {Map.put(slots, e.index, paths), Map.put(frames, key, n + 1)}
+    else
+      {slots, frames}
+    end
+  end
+
+  defp locator_event(%{event: {pid, :call, {:crypto, :hash_equals_nif, _}}} = e, {slots, frames}) do
+    if {AshOnetime.Admission, :equal_locator_hashes?, 2} in e.stack and
+         Map.get(frames, {pid, :equal_locator_hashes?}) == 1,
+      do: {Map.put(slots, e.index, [[:event, 2, 2, 0], [:event, 2, 2, 1]]), frames},
+      else: {slots, frames}
+  end
+
+  defp locator_event(_, state), do: state
 
   def index(events) do
     {indexed, _} =

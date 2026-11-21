@@ -38,7 +38,7 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
 
     failures = for {key, false, _} <- outcomes, do: key
     locations = outcomes |> Enum.flat_map(&elem(&1, 2)) |> Enum.uniq() |> Enum.sort()
-    IO.inspect(%{pairs: length(rows) * 6, failures: failures}, label: "U3_FINALIZE_REPLAY")
+    IO.puts("U3_FINALIZE_REPLAY" <> ": " <> inspect(%{pairs: length(rows) * 6, failures: failures}, pretty: true))
     assert failures == []
     assert locations == [], "U3 comparison diverged at #{inspect(locations)}"
   end
@@ -98,12 +98,12 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
       assert Enum.uniq(path_indices) == path_indices
       assert Enum.all?(path_indices, &(&1 in 0..(expected_rows - 1)))
       rows = Enum.map(path_indices, &Enum.fetch!(rows, &1))
-      IO.inspect(Values.flipped_bits(), label: "C_POS_FLIPPED_BITS")
+      IO.puts("C_POS_FLIPPED_BITS" <> ": " <> inspect(Values.flipped_bits(), pretty: true))
       context = with_references(context, rows)
 
       {residuals, counts} =
         Enum.reduce(rows, {%{}, %{pairs: 0, events: 0}}, fn row, acc ->
-          IO.inspect({row.action, row.branch, row.fault}, label: "C_POS_ROW")
+          IO.puts("C_POS_ROW" <> ": " <> inspect({row.action, row.branch, row.fault}, pretty: true))
 
           Enum.reduce(values, acc, fn {label, tuple}, {all, counts} ->
             result =
@@ -147,6 +147,8 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
 
             all =
               Enum.reduce(result.errors, all, fn difference, found ->
+                log_difference(row, label, difference)
+
                 at =
                   case difference.at do
                     %{mfa: mfa} -> mfa
@@ -178,20 +180,33 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
           end)
         end)
 
-      IO.inspect(counts, label: "C_POS_COUNTS")
+      IO.puts("C_POS_COUNTS" <> ": " <> inspect(counts, pretty: true))
       assert counts.pairs == length(path_indices) * length(labels)
 
       for {key, sample} <- Enum.sort(residuals),
           do:
-            IO.inspect({key, sample},
-              label: "C_POS_RESIDUAL",
-              limit: :infinity,
-              printable_limit: :infinity
-            )
+            IO.puts("C_POS_RESIDUAL" <> ": " <> inspect({key, sample}, pretty: true , limit: :infinity, printable_limit: :infinity))
 
       assert residuals == %{},
              "C-pos residuals: #{map_size(residuals)} qualified locations (the whole matrix ran)"
     end
+  end
+
+  defp log_difference(row, tuple, difference) do
+    IO.puts(
+      "C_POS_RESIDUAL_OCCURRENCE: " <>
+        inspect(
+          %{
+            row: row,
+            tuple: tuple,
+            source: Diagnostics.location(difference),
+            difference: Diagnostics.safe(difference)
+          },
+          pretty: true,
+          limit: :infinity,
+          printable_limit: :infinity
+        )
+    )
   end
 
   defp rule3_errors(side) do

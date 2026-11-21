@@ -14,8 +14,9 @@ defmodule AshOnetime.Delivery.ExitBoundaryClassifierTest do
     assert Inventory.running_release() == Inventory.release()
   end
 
-  test "the inventory has every bif.tab declaration for both supported releases" do
+  test "the inventory has every bif.tab declaration for every supported release" do
     assert length(Inventory.bif_rows("28.5")) == 542
+    assert length(Inventory.bif_rows("28.5.0.8")) == 542
     assert length(Inventory.bif_rows("29.1.2")) == 553
   end
 

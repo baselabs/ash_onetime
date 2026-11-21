@@ -1,31 +1,33 @@
 defmodule AshOnetime.Test.ExitBoundary.Scenarios do
-  @moduledoc false
+  alias AshOnetime.Cache.Ets
+  alias AshOnetime.Resource.Info, as: OnetimeInfo
+  alias AshOnetime.Store.Postgres
   alias AshOnetime.Test.ExitBoundary
-
-  alias AshOnetime.Test.ExitBoundary.{
-    Codec,
-    Consumer,
-    Faults,
-    Hold,
-    Pair,
-    Persisted,
-    Producer,
-    Recorder,
-    ResponseClassifier
-  }
-
-  alias AshOnetime.Test.ExitBoundary.{
-    External,
-    Returned,
-    ReturnedExternal,
-    Withheld,
-    Hooks,
-    References,
-    Registry
-  }
-
+  alias AshOnetime.Test.ExitBoundary.Codec
+  alias AshOnetime.Test.ExitBoundary.Consumer
+  alias AshOnetime.Test.ExitBoundary.External
+  alias AshOnetime.Test.ExitBoundary.FailureTwins
+  alias AshOnetime.Test.ExitBoundary.Faults
+  alias AshOnetime.Test.ExitBoundary.Historical
+  alias AshOnetime.Test.ExitBoundary.Hold
+  alias AshOnetime.Test.ExitBoundary.Hooks
+  alias AshOnetime.Test.ExitBoundary.Pair
+  alias AshOnetime.Test.ExitBoundary.Persisted
+  alias AshOnetime.Test.ExitBoundary.Producer
+  alias AshOnetime.Test.ExitBoundary.Readback
+  alias AshOnetime.Test.ExitBoundary.Recorder
+  alias AshOnetime.Test.ExitBoundary.References
+  alias AshOnetime.Test.ExitBoundary.Registry
+  alias AshOnetime.Test.ExitBoundary.ResponseClassifier
+  alias AshOnetime.Test.ExitBoundary.Returned
+  alias AshOnetime.Test.ExitBoundary.ReturnedExternal
+  alias AshOnetime.Test.ExitBoundary.Withheld
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
+  @moduledoc false
+
+
+
 
   @routes [
     %{action: :issue, type: :create, input: %{amount: 7}, record: false},
@@ -48,10 +50,13 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
       route
       |> Map.merge(path)
       |> Map.put(:external?, external?)
-      |> Map.update!(:action, fn name -> if external?, do: @external[name], else: name end)
+      |> Map.put(:action, route_action(route.action, external?))
       |> Map.put(:key, "bound-twin")
     end
   end
+
+  defp route_action(action, true), do: @external[action]
+  defp route_action(action, false), do: action
 
   defp paths(external?) do
     common = [
@@ -117,71 +122,28 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
         Map.take(row, [:action, :type, :input, :record, :key, :external?, :opts])
       )
 
-    record =
-      if row.record do
-        resource
-        |> Ash.Changeset.for_create(:seed, %{amount: 1}, tenant: context.prefix)
-        |> Ash.Changeset.force_change_attribute(:id, "00000000-0000-4000-8000-000000000007")
-        |> Ash.create!()
-      end
+    record = seed_record(row, resource, context.prefix)
 
     prior = prior(row, values, resource, path, record, context)
     if row.fault == :store_completion, do: completion_fault!(context.prefix, :install)
 
     try do
       before = Persisted.snapshot(context.prefix, Repo.get_dynamic_repo())
-      protection = AshOnetime.Resource.Info.protection(resource, row.action)
+      protection = OnetimeInfo.protection(resource, row.action)
       operation_reference = Map.fetch!(context.operation_references, {resource, row.action})
       protection_reference = References.protection(resource, row.action)
       contract_reference = References.contract(resource, row.action, context.prefix)
       hooks = Hooks.reference(resource, row.action, row.type)
       canonical = Hooks.reference(Returned, row.action, row.type)
-      historical = AshOnetime.Test.ExitBoundary.Historical.capture(context.prefix)
+      historical = Historical.capture(context.prefix)
       allocation_checkpoint? = Registry.allocation_checkpoint?(row)
 
-      prepared =
-        if row.branch in [:transaction, :direct] do
-          ExitBoundary.observe(
-            fn ->
-              Repo.put_dynamic_repo(context.repo)
-              Faults.put_peer(context.peer)
-              Faults.put(row.fault)
-              %{resource: resource, prefix: context.prefix, row: row, path: path, record: record}
-            end,
-            &subject/1,
-            %{host: [], callbacks: @callbacks}
-          )
-        end
+      prepared = prepare_subject(row, resource, context, path, record)
+      fixture_bindings = fixture_bindings(prepared)
 
-      fixture_bindings =
-        if prepared do
-          for %{event: {_, :return_from, {:erlang, :make_ref, 0}, cell}, stack: stack} <-
-                prepared.events,
-              {AshOnetime.Delivery, :put_cell, 1} in stack,
-              into: %{},
-              do: {:cell, cell}
-        else
-          %{}
-        end
-
-      setup = fn ->
-        Repo.put_dynamic_repo(context.repo)
-        Faults.put_peer(context.peer)
-        Process.put({Faults, :canaries}, nil)
-        if resource == Withheld, do: Faults.plant(values.short, values.long)
-        Faults.put(row.fault)
-
-        input = %{
-          resource: resource,
-          prefix: context.prefix,
-          row: row,
-          path: path,
-          record: record,
-          allocation_checkpoint?: allocation_checkpoint?
-        }
-
-        if prepared, do: Map.put(input, :built, prepared.result), else: input
-      end
+      input = %{resource: resource, prefix: context.prefix, row: row, path: path, record: record,
+        allocation_checkpoint?: allocation_checkpoint?}
+      setup = fn -> setup_observation(input, context, values, prepared) end
 
       host = if row.external?, do: [External, ReturnedExternal], else: [Producer]
 
@@ -207,20 +169,72 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
         hooks: hooks,
         operation_reference: operation_reference,
         hook_frames:
-          AshOnetime.Test.ExitBoundary.FailureTwins.side_frames(hooks, canonical, row, resource),
+          FailureTwins.side_frames(hooks, canonical, row, resource),
         prefix: context.prefix,
         historical: historical,
         before: before,
         fixture_bindings: fixture_bindings,
-        prepared_subject: if(prepared, do: prepared.result, else: nil),
-        setup_events: if(prepared, do: prepared.events, else: []),
+        prepared_subject: prepared_result(prepared),
+        setup_events: prepared_events(prepared),
         protection_reference: protection_reference,
         contract_reference: contract_reference
       }
-      |> AshOnetime.Test.ExitBoundary.Readback.prepare()
+      |> Readback.prepare()
     after
       if row.fault == :store_completion, do: completion_fault!(context.prefix, :remove)
     end
+  end
+
+  defp seed_record(%{record: true}, resource, prefix) do
+    resource
+    |> Ash.Changeset.for_create(:seed, %{amount: 1}, tenant: prefix)
+    |> Ash.Changeset.force_change_attribute(:id, "00000000-0000-4000-8000-000000000007")
+    |> Ash.create!()
+  end
+
+  defp seed_record(_row, _resource, _prefix), do: nil
+
+  defp setup_observation(input, context, values, prepared) do
+    Repo.put_dynamic_repo(context.repo)
+    Faults.put_peer(context.peer)
+    Process.put({Faults, :canaries}, nil)
+    if input.resource == Withheld, do: Faults.plant(values.short, values.long)
+    Faults.put(input.row.fault)
+
+
+
+    if prepared, do: Map.put(input, :built, prepared.result), else: input
+  end
+
+  defp prepared_result(nil), do: nil
+  defp prepared_result(prepared), do: prepared.result
+  defp prepared_events(nil), do: []
+  defp prepared_events(prepared), do: prepared.events
+
+  defp prepare_subject(%{branch: branch} = row, resource, context, path, record)
+       when branch in [:transaction, :direct] do
+    ExitBoundary.observe(
+      fn ->
+        Repo.put_dynamic_repo(context.repo)
+        Faults.put_peer(context.peer)
+        Faults.put(row.fault)
+        %{resource: resource, prefix: context.prefix, row: row, path: path, record: record}
+      end,
+      &subject/1,
+      %{host: [], callbacks: @callbacks}
+    )
+  end
+
+  defp prepare_subject(_, _, _, _, _), do: nil
+
+  defp fixture_bindings(nil), do: %{}
+
+  defp fixture_bindings(prepared) do
+    for %{event: {_, :return_from, {:erlang, :make_ref, 0}, cell}, stack: stack} <-
+          prepared.events,
+        {AshOnetime.Delivery, :put_cell, 1} in stack,
+        into: %{},
+        do: {:cell, cell}
   end
 
   def invoke(%{row: %{branch: :transaction} = row, resource: resource} = input) do
@@ -252,7 +266,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
     if input.resource == Returned and input.allocation_checkpoint?, do: allocation_checkpoint()
 
     if Map.get(input.row, :release_hold?, false) do
-      target = AshOnetime.Store.Postgres.for_repo(Repo, input.prefix)
+      target = Postgres.for_repo(Repo, input.prefix)
 
       {:ok, {:ok, 1}} =
         Repo.transaction(fn ->
@@ -294,8 +308,8 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
     built = Pair.subject(input.path, input.resource, input.prefix, input.record)
 
     if input.row.branch in [:producer_failure, :direct] do
-      error = AshOnetime.Test.ExitBoundary.FailureTwins.error(input.row.branch)
-      AshOnetime.Test.ExitBoundary.FailureTwins.install(built, input.row, error)
+      error = FailureTwins.error(input.row.branch)
+      FailureTwins.install(built, input.row, error)
     else
       built
     end
@@ -318,7 +332,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
 
   defp interrupted(row, values, resource, path, record, context) do
     before = Persisted.snapshot(context.prefix, Repo.get_dynamic_repo())
-    historical = AshOnetime.Test.ExitBoundary.Historical.capture(context.prefix)
+    historical = Historical.capture(context.prefix)
     point = if row.branch == :recovered, do: :after_execute, else: :before_execute
     prior_row = %{row | branch: :interrupted, fault: point}
 
@@ -356,7 +370,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
       before: before,
       prior: nil,
       delta: Persisted.delta(before, Persisted.snapshot(context.prefix, Repo.get_dynamic_repo())),
-      protection: AshOnetime.Resource.Info.protection(resource, row.action),
+      protection: OnetimeInfo.protection(resource, row.action),
       operation_reference: Map.fetch!(context.operation_references, {resource, row.action}),
       protection_reference: References.protection(resource, row.action),
       contract_reference: References.contract(resource, row.action, context.prefix),
@@ -392,7 +406,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
         )
 
     if :ets.whereis(AshOnetime.Cache.Ets) != :undefined do
-      for {key, _, _} <- :ets.tab2list(AshOnetime.Cache.Ets), do: AshOnetime.Cache.Ets.delete(key)
+      for {key, _, _} <- :ets.tab2list(Ets), do: Ets.delete(key)
     end
   end
 

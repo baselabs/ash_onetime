@@ -1,4 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
+  alias AshOnetime.Test.ExitBoundary.Compiled
   @moduledoc false
 
   @starters [
@@ -403,8 +404,7 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
 
     active =
       Enum.map(Map.get(s.active, e.pid), fn f ->
-        if f.mfa in @starters and f.started == nil and function == :monotonic_time and
-             unit == :native, do: %{f | started: value}, else: f
+        start_frame(f, function, unit, value)
       end)
 
     s = put_in(s.active[e.pid], active)
@@ -563,66 +563,80 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
 
   defp returned(_e, _mfa, _frame, _value, s), do: s
 
+  defp start_frame(%{mfa: mfa, started: nil} = frame, :monotonic_time, :native, value)
+       when mfa in @starters, do: %{frame | started: value}
+
+  defp start_frame(frame, _function, _unit, _value), do: frame
+
   defp measurements(e, name, actual, metadata, s) do
-    cond do
-      hd(name) == :ash and List.last(name) == :start ->
-        {now, _} = read(s, e.role, {:monotonic_time, :native})
-        {wall, _} = read(s, e.role, {:system_time, :native})
-        key = {e.role, Enum.drop(name, -1)}
-        {%{system_time: wall}, put_in(s.spans[key], [now | Map.get(s.spans, key, [])])}
-
-      hd(name) == :ash and List.last(name) == :stop ->
-        {now, _} = read(s, e.role, {:monotonic_time, :native})
-        {wall, _} = read(s, e.role, {:system_time, :native})
-        key = {e.role, Enum.drop(name, -1)}
-        [start | rest] = Map.fetch!(s.spans, key)
-        {%{system_time: wall, duration: now - start}, put_in(s.spans[key], rest)}
-
-      Enum.take(name, -1) == [:start] ->
-        {now, _} = read(s, e.role, {:monotonic_time, :native})
-        {wall, _} = read(s, e.role, {:system_time, :native})
-        key = {e.role, Enum.drop(name, -1), Map.get(metadata, :telemetry_span_context)}
-        {%{monotonic_time: now, system_time: wall}, put_in(s.spans[key], now)}
-
-      Enum.take(name, -1) in [[:stop], [:exception]] ->
-        {now, _} = read(s, e.role, {:monotonic_time, :native})
-        key = {e.role, Enum.drop(name, -1), Map.get(metadata, :telemetry_span_context)}
-        {%{monotonic_time: now, duration: now - Map.fetch!(s.spans, key)}, s}
-
-      Map.has_key?(actual, :total_time) ->
-        entry = Map.get(s.entries, e.role, %{})
-
-        fields =
-          for {source, target} <- [
-                connection_time: :query_time,
-                decode_time: :decode_time,
-                pool_time: :queue_time,
-                idle_time: :idle_time
-              ],
-              Map.has_key?(entry, source),
-              into: %{},
-              do: {target, entry[source]}
-
-        total =
-          Enum.sum(
-            for key <- [:query_time, :decode_time, :queue_time],
-                Map.has_key?(fields, key),
-                do: fields[key]
-          )
-
-        {Map.put(fields, :total_time, total), s}
-
-      Map.has_key?(actual, :duration) ->
-        {%{duration: Map.get(s.durations, e.role, :missing)}, s}
-
-      Map.has_key?(actual, :system_time) ->
-        {wall, _} = read(s, e.role, {:system_time, :native})
-        {%{system_time: wall}, s}
-
-      true ->
-        {%{}, s}
-    end
+    span_measurements(hd(name), List.last(name), e, name, actual, metadata, s)
   end
+
+  defp span_measurements(:ash, :start, e, name, _actual, _metadata, s) do
+    {now, _} = read(s, e.role, {:monotonic_time, :native})
+    {wall, _} = read(s, e.role, {:system_time, :native})
+    key = {e.role, Enum.drop(name, -1)}
+    {%{system_time: wall}, put_in(s.spans[key], [now | Map.get(s.spans, key, [])])}
+  end
+
+  defp span_measurements(:ash, :stop, e, name, _actual, _metadata, s) do
+    {now, _} = read(s, e.role, {:monotonic_time, :native})
+    {wall, _} = read(s, e.role, {:system_time, :native})
+    key = {e.role, Enum.drop(name, -1)}
+    [start | rest] = Map.fetch!(s.spans, key)
+    {%{system_time: wall, duration: now - start}, put_in(s.spans[key], rest)}
+  end
+
+  defp span_measurements(_first, :start, e, name, _actual, metadata, s) do
+    {now, _} = read(s, e.role, {:monotonic_time, :native})
+    {wall, _} = read(s, e.role, {:system_time, :native})
+    key = {e.role, Enum.drop(name, -1), Map.get(metadata, :telemetry_span_context)}
+    {%{monotonic_time: now, system_time: wall}, put_in(s.spans[key], now)}
+  end
+
+  defp span_measurements(_first, terminal, e, name, _actual, metadata, s)
+       when terminal in [:stop, :exception] do
+    {now, _} = read(s, e.role, {:monotonic_time, :native})
+    key = {e.role, Enum.drop(name, -1), Map.get(metadata, :telemetry_span_context)}
+    {%{monotonic_time: now, duration: now - Map.fetch!(s.spans, key)}, s}
+  end
+
+  defp span_measurements(_first, _last, e, _name, actual, _metadata, s),
+    do: measurement_fields(actual, e, s)
+
+  defp measurement_fields(%{total_time: _}, e, s) do
+    entry = Map.get(s.entries, e.role, %{})
+
+    fields =
+      for {source, target} <- [
+            connection_time: :query_time,
+            decode_time: :decode_time,
+            pool_time: :queue_time,
+            idle_time: :idle_time
+          ],
+          Map.has_key?(entry, source),
+          into: %{},
+          do: {target, entry[source]}
+
+    total =
+      Enum.sum(
+        for key <- [:query_time, :decode_time, :queue_time],
+            Map.has_key?(fields, key),
+            do: fields[key]
+      )
+
+    {Map.put(fields, :total_time, total), s}
+  end
+
+  defp measurement_fields(%{duration: _}, e, s),
+    do: {%{duration: Map.get(s.durations, e.role, :missing)}, s}
+
+  defp measurement_fields(%{system_time: _}, e, s) do
+    {wall, _} = read(s, e.role, {:system_time, :native})
+    {%{system_time: wall}, s}
+  end
+
+  defp measurement_fields(_actual, _e, s), do: {%{}, s}
 
   defp exits(
          %{event: {_, :call, {:ets, :give_away, [holder, _pool, {:checkin, _ref, at}]}}} = e,
@@ -698,44 +712,7 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
   defp cache_copies(value, path, e, s) when is_function(value) do
     info = Map.new(Function.info(value))
 
-    if info.module == AshOnetime.Cache and info.name == :"-invoke/3-fun-0-" do
-      case info.env do
-        [:put, [key, _entry, ttl], _module] ->
-          check(
-            s,
-            e,
-            path ++ [:function, :env, 1, 2],
-            ttl,
-            Map.fetch(s.cache_ttls, key),
-            :cache_ttl_closure
-          )
-
-        _ ->
-          s
-      end
-    else
-      s =
-        if info.module == AshOnetime.Store.Postgres do
-          case outcome_capture(info.name) do
-            {:ok, n} ->
-              check(
-                s,
-                e,
-                path ++ [:function, :env, n],
-                Enum.at(info.env, n),
-                outcome_start(s, e.pid),
-                :outcome_start_closure
-              )
-
-            :not_called ->
-              s
-          end
-        else
-          s
-        end
-
-      cache_copies(info.env, path ++ [:function, :env], e, s)
-    end
+    closure_copies(info, path, e, s)
   end
 
   defp cache_copies(value, path, e, s) when is_map(value),
@@ -759,6 +736,31 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
     do: cache_list(t, path, e, cache_copies(h, path ++ [n], e, s), n + 1)
 
   defp cache_list(t, path, e, s, n), do: cache_copies(t, path ++ [n], e, s)
+
+  defp closure_copies(%{module: AshOnetime.Cache, name: :"-invoke/3-fun-0-", env: env}, path, e, s) do
+    case env do
+      [:put, [key, _entry, ttl], _module] ->
+        check(s, e, path ++ [:function, :env, 1, 2], ttl,
+          Map.fetch(s.cache_ttls, key), :cache_ttl_closure)
+      _ -> s
+    end
+  end
+
+  defp closure_copies(info, path, e, s) do
+    s = outcome_closure_copy(info, path, e, s)
+    cache_copies(info.env, path ++ [:function, :env], e, s)
+  end
+
+  defp outcome_closure_copy(%{module: AshOnetime.Store.Postgres} = info, path, e, s) do
+    case outcome_capture(info.name) do
+      {:ok, n} ->
+        check(s, e, path ++ [:function, :env, n], Enum.at(info.env, n),
+          outcome_start(s, e.pid), :outcome_start_closure)
+      :not_called -> s
+    end
+  end
+
+  defp outcome_closure_copy(_info, _path, _e, s), do: s
 
   defp meter_copy(s, _e, _path, nil), do: s
 
@@ -829,7 +831,7 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
 
   defp outcome_capture(function) do
     if String.starts_with?(Atom.to_string(function), "-record_outcome_committed/4-fun-") do
-      AshOnetime.Test.ExitBoundary.Compiled.captured_argument(
+      Compiled.captured_argument(
         AshOnetime.Store.Postgres,
         function,
         :report_abandoned_outcome,
@@ -847,13 +849,14 @@ defmodule AshOnetime.Test.ExitBoundary.ClockExpressions do
         source
 
       :error ->
-        Enum.find_value(Map.get(s.active, pid, []), :error, fn frame ->
-          if frame.mfa == {AshOnetime.Store.Postgres, :record_outcome_committed, 4} and
-               frame.started != nil,
-             do: {:ok, frame.started}
-        end)
+        Enum.find_value(Map.get(s.active, pid, []), :error, &outcome_frame_start/1)
     end
   end
+
+  defp outcome_frame_start(%{mfa: {AshOnetime.Store.Postgres, :record_outcome_committed, 4}, started: start})
+       when start != nil, do: {:ok, start}
+
+  defp outcome_frame_start(_frame), do: nil
 
   defp started(s, pid, module \\ nil) do
     Enum.find_value(Map.get(s.active, pid, []), :error, fn frame ->

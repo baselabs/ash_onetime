@@ -228,7 +228,7 @@ defmodule AshOnetime.Test.ExitBoundary.Classifier do
   def erlang_table(release \\ Inventory.release())
   def erlang_table("29.1.2"), do: @erlang_classes
 
-  def erlang_table("28.5"),
+  def erlang_table(release) when release in ["28.5", "28.5.0.8"],
     do: Map.drop(@erlang_classes, is_integer: 3, is_record: 1, exit_signal: 3)
 
   def erts_internal_table(release \\ Inventory.release()) do

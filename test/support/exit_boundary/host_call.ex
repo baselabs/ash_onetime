@@ -12,25 +12,25 @@ defmodule AshOnetime.Test.ExitBoundary.HostCall do
         MapSet.new()
 
       start ->
-        stop =
-          Enum.find(
-            events,
-            &(&1.pid == start.pid and &1.index > start.index and
-                &1.mfa == start.mfa and length(&1.stack) == length(start.stack) + 1 and
-                elem(&1.event, 1) in [:return_from, :exception_from])
-          )
-
-        if stop do
-          events
-          |> Enum.filter(fn e ->
-            e.pid == start.pid and e.index > start.index and e.index < stop.index and
-              start.mfa in e.stack and not peer?(e)
-          end)
-          |> MapSet.new(& &1.index)
-        else
-          MapSet.new()
-        end
+        stop = Enum.find(events, &host_return?(&1, start))
+        interior(events, start, stop)
     end
+  end
+
+  defp host_return?(event, start),
+    do: event.pid == start.pid and event.index > start.index and
+          event.mfa == start.mfa and length(event.stack) == length(start.stack) + 1 and
+          elem(event.event, 1) in [:return_from, :exception_from]
+
+  defp interior(_events, _start, nil), do: MapSet.new()
+
+  defp interior(events, start, stop) do
+    events
+    |> Enum.filter(fn e ->
+      e.pid == start.pid and e.index > start.index and e.index < stop.index and
+        start.mfa in e.stack and not peer?(e)
+    end)
+    |> MapSet.new(& &1.index)
   end
 
   defp peer?(e),
