@@ -2556,7 +2556,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
           do: state,
           else: error(state, :o2a_query_name, path, a, b)
 
-      _ -> if a === b, do: state, else: error(state, :o2a_query_name, path, a, b)
+      _ ->
+        if a === b, do: state, else: error(state, :o2a_query_name, path, a, b)
     end
   end
 

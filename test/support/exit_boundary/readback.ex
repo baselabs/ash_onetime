@@ -60,6 +60,8 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
   end
 
   def check(side, indexed, bound) do
+    side = Map.put(side, :bound, bound)
+
     case interval(indexed.events) do
       [] ->
         %{claimed: MapSet.new(), errors: []}

@@ -178,7 +178,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       )
     end
 
-    assert outside == [], "OPEN claimed transport outside its native interval: #{inspect(outside)}"
+    assert outside == [],
+           "OPEN claimed transport outside its native interval: #{inspect(outside)}"
+
     assert_green(pair)
   end
 
