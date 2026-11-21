@@ -112,7 +112,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
   defp target_call?(_, _), do: false
 
   defp capture_arguments(instructions, registers, labels, target, argument, {function, count}) do
-    capture_path(instructions, registers, labels, target, argument, MapSet.new())
+    capture_path(instructions, registers, labels, target, argument, MapSet.new([]))
   rescue
     error ->
       {module, _, _} = target

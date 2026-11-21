@@ -9,7 +9,7 @@ defmodule AshOnetime.Test.ExitBoundary.HostCall do
   def indexes(events) do
     case Enum.find(events, &(&1.mfa in @calls and elem(&1.event, 1) == :call)) do
       nil ->
-        MapSet.new()
+        MapSet.new([])
 
       start ->
         stop = Enum.find(events, &host_return?(&1, start))
@@ -23,7 +23,7 @@ defmodule AshOnetime.Test.ExitBoundary.HostCall do
         event.mfa == start.mfa and length(event.stack) == length(start.stack) + 1 and
         elem(event.event, 1) in [:return_from, :exception_from]
 
-  defp interior(_events, _start, nil), do: MapSet.new()
+  defp interior(_events, _start, nil), do: MapSet.new([])
 
   defp interior(events, start, stop) do
     events

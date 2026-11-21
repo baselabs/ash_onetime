@@ -364,7 +364,15 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
            "R-iso-order must pass with only the OPEN call order disabled"
   end
 
-  defp assert_mutant({:order, :r14}, _mutation, _pair, _comparison, _active_first, disabled, next) do
+  defp assert_mutant(
+         {:order, :r14},
+         _mutation,
+         _pair,
+         _comparison,
+         _active_first,
+         _disabled,
+         next
+       ) do
     assert next != nil, "R14's extra call must still fail with its order rule disabled"
   end
 

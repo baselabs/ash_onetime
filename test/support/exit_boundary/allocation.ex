@@ -292,7 +292,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     initial = %{
       events: events,
       stack: [{Root, :invoke, 2}],
-      claimed: MapSet.new(),
+      claimed: MapSet.new([]),
       errors: [],
       lease: nil
     }
