@@ -290,9 +290,14 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
             if MapSet.member?(allowed, n), do: acc, else: error(acc, {rule, :unpaired_run, key})
 
           {nil, %{index: n}} ->
-            twin_allowed = if is_map(permitted) and not is_struct(permitted, MapSet),
-              do: Map.get(permitted, {:twin, rule}, MapSet.new()), else: MapSet.new()
-            if MapSet.member?(twin_allowed, n), do: acc, else: error(acc, {rule, :unpaired_twin, key, n})
+            twin_allowed =
+              if is_map(permitted) and not is_struct(permitted, MapSet),
+                do: Map.get(permitted, {:twin, rule}, MapSet.new()),
+                else: MapSet.new()
+
+            if MapSet.member?(twin_allowed, n),
+              do: acc,
+              else: error(acc, {rule, :unpaired_twin, key, n})
         end
       end
     )
@@ -321,8 +326,16 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
   def difference({:o2, :not_bijective, {:allocation, role, ordinal, field, a, b}}, run, twin) do
     source = Enum.find(run.events, &(&1.index == a))
     other = Enum.find(twin.events, &(&1.index == b))
-    %{at: Map.take(source, [:role, :mfa, :stack]) |> Map.put(:run_index, a) |> Map.put(:twin_index, b),
-      path: [:allocation, role, ordinal, field], run: source.event, twin: other.event}
+
+    %{
+      at:
+        Map.take(source, [:role, :mfa, :stack])
+        |> Map.put(:run_index, a)
+        |> Map.put(:twin_index, b),
+      path: [:allocation, role, ordinal, field],
+      run: source.event,
+      twin: other.event
+    }
   end
 
   def difference(reason, _run, _twin),

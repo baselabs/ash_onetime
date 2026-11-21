@@ -3,8 +3,13 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
 
   # Decode only the TCP driver's documented command and PostgreSQL messages at
   # transport positions. Arbitrary binaries are never inspected for ETF or packets.
-  def build(indexed) do
+  def build(indexed, readback \\ MapSet.new()) do
     Enum.map_reduce(indexed.events, %{}, fn e, connections ->
+      # This is annotation provenance, never server or prepared-connection state.
+      # OPEN's independently checked extra statements cannot advance the ordinal
+      # of a subsequent shared statement on the same physical connection.
+      phase = if MapSet.member?(readback, e.index), do: :committed_read, else: :shared
+      connections = Map.put(connections, :annotation_phase, phase)
       {event, connections} = transport(e.event, connections)
       e = e |> Map.put(:event, event) |> Map.put(:wire_sql, statement(event, connections))
       {e, connections}
@@ -94,7 +99,12 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
     {header, bytes} = if driver?, do: driver(bytes), else: {nil, bytes}
 
     connection =
-      Map.get(state, port, %{parameter_types: [], columns: [], sql: nil, binds: [], statement: 0})
+      Map.get(state, port, %{
+        parameter_types: [], columns: [], sql: nil, binds: [],
+        statement: {:wire_statement, :shared, 0}, counts: %{}
+      })
+
+    connection = Map.put(connection, :annotation_phase, Map.fetch!(state, :annotation_phase))
 
     connection =
       Map.put(
@@ -151,7 +161,7 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
     {name, payload} = string(payload)
     {sql, <<count::16, oids::binary>>} = string(payload)
     types = for <<oid::32 <- oids>>, do: oid
-    {{:parse, name, sql, count, types}, %{state | sql: sql, statement: state.statement + 1}}
+    {{:parse, name, sql, count, types}, statement_origin(state, sql)}
   end
 
   defp message(?t, <<count::16, bytes::binary>>, state) do
@@ -226,6 +236,13 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
   end
 
   defp message(tag, payload, state), do: {{:exact_payload, tag, payload}, state}
+
+  defp statement_origin(state, sql) do
+    phase = state.annotation_phase
+    ordinal = Map.get(state.counts, phase, 0) + 1
+    %{state | sql: sql, statement: {:wire_statement, phase, ordinal},
+      counts: Map.put(state.counts, phase, ordinal)}
+  end
 
   defp decode(_oid, _format, nil), do: nil
   defp decode(2950, 1, <<_::128>> = value), do: {:uuid, Ecto.UUID.load!(value)}

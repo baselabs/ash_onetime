@@ -699,8 +699,8 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       extra: nil
     },
     %{
-      id: :r_iso_cross_lease_o2,
-      label: "R-iso-cross-lease-O2",
+      id: :r_iso_backend_copy,
+      label: "R-iso-backend-copy",
       path: "lib/ash_onetime/store/postgres.ex",
       original:
         "    case SQL.query(target.dynamic_repo, sql, parameters) do\n      {:ok, result} -> {:ok, result}\n",

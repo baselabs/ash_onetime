@@ -14,35 +14,78 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     right = leases(twin, ti)
     roles = Enum.uniq(Enum.map(left ++ right, & &1.role))
 
-    {pairing, errors, paired} = Enum.reduce(roles, {pairing, [], []}, fn role, {p, errors, pairs} ->
-      a = Enum.filter(left, &(&1.role == role))
-      b = Enum.filter(right, &(&1.role == role))
-      errors = if length(a) == length(b), do: errors,
-        else: [difference(nil, :allocation_multiplicity, length(a), length(b)) | errors]
+    {errors, paired} =
+      Enum.reduce(roles, {[], []}, fn role, {errors, pairs} ->
+        a = Enum.filter(left, &(&1.role == role))
+        b = Enum.filter(right, &(&1.role == role))
 
-      Enum.zip(a, b) |> Enum.reduce({p, errors, pairs}, fn {a, b}, {p, errors, pairs} ->
-        p = Enum.reduce([:pool, :queue, :timer, :holder, :lock, :conn_ref, :port, :owner], p,
-          fn key, acc -> Origins.bind(acc, Map.fetch!(a, key), Map.fetch!(b, key),
-            {:allocation, role, a.ordinal, key, a.acquired, b.acquired}) end)
-        p = Origins.bind(p, {:postgres_backend, a.backend}, {:postgres_backend, b.backend},
-          {:allocation, role, a.ordinal, :backend, a.acquired, b.acquired})
-        {p, errors, [{a, b} | pairs]}
+        errors =
+          if length(a) == length(b),
+            do: errors,
+            else: [difference(nil, :allocation_multiplicity, length(a), length(b)) | errors]
+
+        {errors, pairs ++ Enum.zip(a, b)}
       end)
-    end)
+    pairing = bind_pairs(pairing, paired)
 
     # Native program order, spawn and uniquely owned send/receive edges provide
     # the partial order. Sorted timestamps provide no cross-process edge here.
     rc = causal(ri.events, left)
     tc = causal(ti.events, right)
-    order_errors = for {a, b} <- paired, {c, d} <- paired, a != c,
-      from <- [:acquired, :giveaway], to <- [:acquired, :giveaway],
-      before?(rc, a[from], c[to]) != before?(tc, b[from], d[to]),
-      do: difference(a, :allocation_happens_before,
-        {from, a.ordinal, to, c.ordinal, before?(rc, a[from], c[to])},
-        {from, b.ordinal, to, d.ordinal, before?(tc, b[from], d[to])})
 
-    %{pairing: pairing, errors: errors ++ order_errors ++ errors_for_leases(left ++ right) ++
-      joined_borrowers(left, rc) ++ joined_borrowers(right, tc), leases: {left, right}}
+    order_errors =
+      for {a, b} <- paired,
+          {c, d} <- paired,
+          a != c,
+          from <- [:acquired, :giveaway],
+          to <- [:acquired, :giveaway],
+          before?(rc, a[from], c[to]) != before?(tc, b[from], d[to]),
+          do:
+            difference(
+              a,
+              :allocation_happens_before,
+              {from, a.ordinal, to, c.ordinal, before?(rc, a[from], c[to])},
+              {from, b.ordinal, to, d.ordinal, before?(tc, b[from], d[to])}
+            )
+
+    %{
+      pairing: pairing,
+      errors:
+        errors ++
+          order_errors ++
+          errors_for_leases(left ++ right) ++
+          joined_borrowers(left, rc) ++ joined_borrowers(right, tc),
+      leases: {left, right}
+    }
+  end
+
+  # The observation self-test supplies whole, independent native captures. The
+  # lease parser and the accumulated map below are the ones used by pair/5.
+  def captured_pairs(captures) do
+    pairs = Enum.map(captures, fn {run, twin} ->
+      [a] = leases(run, Origins.build(run))
+      [b] = leases(twin, Origins.build(twin))
+      {a, b}
+    end)
+    bind_pairs(%{forward: %{}, reverse: %{}, errors: []}, pairs)
+  end
+
+  defp bind_pairs(initial, pairs) do
+    Enum.reduce(pairs, initial, fn {a, b}, acc ->
+      bind_lease(acc, a, b)
+    end)
+  end
+
+  defp bind_lease(pairing, a, b) do
+    pairing = Enum.reduce(
+      [:pool, :queue, :timer, :holder, :lock, :conn_ref, :port, :owner],
+      pairing,
+      fn key, acc ->
+        Origins.bind(acc, Map.fetch!(a, key), Map.fetch!(b, key),
+          {:allocation, a.role, a.ordinal, key, a.acquired, b.acquired})
+      end)
+    Origins.bind(pairing, {:postgres_backend, a.backend}, {:postgres_backend, b.backend},
+      {:allocation, a.role, a.ordinal, :backend, a.acquired, b.acquired})
   end
 
   def leases(side, indexed) do
@@ -50,29 +93,69 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
 
     indexed.events
     |> Enum.flat_map(fn
-      %{event: {caller, :return_from, {DBConnection.Holder, :checkout, 3},
-        {:ok, {:pool_ref, ^pool, queue, timer, holder, lock} = ref, Postgrex.Protocol, _, protocol}}} = source ->
-        checkin = Enum.find(indexed.events, fn
-          %{event: {^caller, :call, {DBConnection.Holder, :checkin, [^ref]}}} -> true
-          _ -> false
-        end)
-        giveaway = Enum.find(indexed.events, fn
-          %{index: n, event: {^caller, :call, {:ets, :give_away, [^holder, ^pool, {:checkin, ^queue, _}]}}}
-            when n > source.index -> true
-          _ -> false
-        end)
-        conn_ref = Enum.find_value(indexed.events, fn
-          %{index: n, event: {^caller, :return_from, {DBConnection, :checkout, 3},
-            {:ok, %DBConnection{pool_ref: ^ref, conn_ref: value}, _}}} when n > source.index -> value
-          _ -> nil
-        end)
+      %{
+        event:
+          {caller, :return_from, {DBConnection.Holder, :checkout, 3},
+           {:ok, {:pool_ref, ^pool, queue, timer, holder, lock} = ref, Postgrex.Protocol, _,
+            protocol}}
+      } = source ->
+        checkin =
+          Enum.find(indexed.events, fn
+            %{event: {^caller, :call, {DBConnection.Holder, :checkin, [^ref]}}} -> true
+            _ -> false
+          end)
+
+        giveaway =
+          Enum.find(indexed.events, fn
+            %{
+              index: n,
+              event: {^caller, :call, {:ets, :give_away, [^holder, ^pool, {:checkin, ^queue, _}]}}
+            }
+            when n > source.index ->
+              true
+
+            _ ->
+              false
+          end)
+
+        conn_ref =
+          Enum.find_value(indexed.events, fn
+            %{
+              index: n,
+              event:
+                {^caller, :return_from, {DBConnection, :checkout, 3},
+                 {:ok, %DBConnection{pool_ref: ^ref, conn_ref: value}, _}}
+            }
+            when n > source.index ->
+              value
+
+            _ ->
+              nil
+          end)
+
         historical = Map.fetch!(side.historical.connections, holder)
-        [%{role: source.role, source: source, acquired: source.index,
-          checkin: if(checkin, do: checkin.index), giveaway: if(giveaway, do: giveaway.index),
-          pool: pool, queue: queue, timer: timer, holder: holder, lock: lock,
-          conn_ref: conn_ref, owner: historical.owner, backend: protocol.connection_id,
-          port: port(protocol.sock)}]
-      _ -> []
+
+        [
+          %{
+            role: source.role,
+            source: source,
+            acquired: source.index,
+            checkin: if(checkin, do: checkin.index),
+            giveaway: if(giveaway, do: giveaway.index),
+            pool: pool,
+            queue: queue,
+            timer: timer,
+            holder: holder,
+            lock: lock,
+            conn_ref: conn_ref,
+            owner: historical.owner,
+            backend: protocol.connection_id,
+            port: port(protocol.sock)
+          }
+        ]
+
+      _ ->
+        []
     end)
     |> Enum.map_reduce(%{}, fn lease, counts ->
       ordinal = Map.get(counts, lease.role, 0)
@@ -86,22 +169,38 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
   defp port(port) when is_port(port), do: port
 
   defp errors_for_leases(leases) do
-    for lease <- leases, lease.checkin == nil or lease.giveaway == nil or lease.conn_ref == nil,
-      do: difference(lease, :allocation_terminal, :missing, :same_reference_checkin)
+    for lease <- leases,
+        lease.checkin == nil or lease.giveaway == nil or lease.conn_ref == nil,
+        do: difference(lease, :allocation_terminal, :missing, :same_reference_checkin)
   end
 
   defp difference(nil, rule, actual, expected),
     do: %{at: nil, rule: rule, path: [], run: actual, twin: expected}
+
   defp difference(lease, rule, actual, expected),
-    do: %{at: Map.take(lease.source, [:role, :mfa, :stack]) |> Map.put(:run_index, lease.acquired),
-      rule: rule, path: [], run: actual, twin: expected}
+    do: %{
+      at: Map.take(lease.source, [:role, :mfa, :stack]) |> Map.put(:run_index, lease.acquired),
+      rule: rule,
+      path: [],
+      run: actual,
+      twin: expected
+    }
 
   defp joined_borrowers(leases, clocks) do
-    for parent <- leases, parent.role == :caller, child <- leases,
-      match?({:spawned, :caller, _}, child.role), parent.giveaway != nil,
-      parent.acquired < child.acquired and child.acquired < parent.giveaway,
-      not before?(clocks, child.giveaway, parent.giveaway),
-      do: difference(child, :allocation_borrower_join, :no_causal_checkin_order, :child_checkin_before_parent_checkin)
+    for parent <- leases,
+        parent.role == :caller,
+        child <- leases,
+        match?({:spawned, :caller, _}, child.role),
+        parent.giveaway != nil,
+        parent.acquired < child.acquired and child.acquired < parent.giveaway,
+        not before?(clocks, child.giveaway, parent.giveaway),
+        do:
+          difference(
+            child,
+            :allocation_borrower_join,
+            :no_causal_checkin_order,
+            :child_checkin_before_parent_checkin
+          )
   end
 
   defp causal(events, leases) do
@@ -110,30 +209,53 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     unique = Enum.frequencies(sends)
     receipts = for %{event: {pid, :receive, message}} <- events, do: {pid, message}
     received = Enum.frequencies(receipts)
-    {_, _, result} = Enum.reduce(Enum.sort_by(events, & &1.index), {%{}, %{}, %{}}, fn e, {actors, sent, result} ->
-      clock = Map.get(actors, e.pid, %{})
-      clock = case e.event do
-        {pid, :receive, message} ->
-          if unique[{pid, message}] == 1 and received[{pid, message}] == 1,
-            do: merge_clock(clock, Map.get(sent, {pid, message}, %{})), else: clock
-        _ -> clock
-      end
-      clock = Map.put(clock, e.pid, e.index)
-      actors = Map.put(actors, e.pid, clock)
-      {actors, sent} = case e.event do
-        {_, :send, message, to} when is_pid(to) -> {actors, Map.put(sent, {to, message}, clock)}
-        {_, :spawn, child, _} -> {Map.update(actors, child, clock, &merge_clock(&1, clock)), sent}
-        _ -> {actors, sent}
-      end
-      result = if MapSet.member?(targets, e.index), do: Map.put(result, e.index, {e.pid, clock}), else: result
-      {actors, sent, result}
-    end)
+
+    {_, _, result} =
+      Enum.reduce(Enum.sort_by(events, & &1.index), {%{}, %{}, %{}}, fn e,
+                                                                        {actors, sent, result} ->
+        clock = Map.get(actors, e.pid, %{})
+
+        clock =
+          case e.event do
+            {pid, :receive, message} ->
+              if unique[{pid, message}] == 1 and received[{pid, message}] == 1,
+                do: merge_clock(clock, Map.get(sent, {pid, message}, %{})),
+                else: clock
+
+            _ ->
+              clock
+          end
+
+        clock = Map.put(clock, e.pid, e.index)
+        actors = Map.put(actors, e.pid, clock)
+
+        {actors, sent} =
+          case e.event do
+            {_, :send, message, to} when is_pid(to) ->
+              {actors, Map.put(sent, {to, message}, clock)}
+
+            {_, :spawn, child, _} ->
+              {Map.update(actors, child, clock, &merge_clock(&1, clock)), sent}
+
+            _ ->
+              {actors, sent}
+          end
+
+        result =
+          if MapSet.member?(targets, e.index),
+            do: Map.put(result, e.index, {e.pid, clock}),
+            else: result
+
+        {actors, sent, result}
+      end)
+
     result
   end
 
   defp merge_clock(a, b), do: Map.merge(a, b, fn _, x, y -> max(x, y) end)
   defp before?(_clocks, nil, _), do: false
   defp before?(_clocks, _, nil), do: false
+
   defp before?(clocks, a, b) do
     {pid, _} = Map.fetch!(clocks, a)
     {_, clock} = Map.fetch!(clocks, b)
@@ -146,21 +268,53 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
   def check(side, indexed) do
     caller = side.run.snapshot.root
     events = Enum.filter(indexed.events, &(&1.pid == caller))
-    starts = Enum.filter(events, &match?(%{event: {_, :call, {Scenarios, :allocation_checkpoint, []}}}, &1))
+
+    starts =
+      Enum.filter(
+        events,
+        &match?(%{event: {_, :call, {Scenarios, :allocation_checkpoint, []}}}, &1)
+      )
+
     eligible? = Registry.allocation_checkpoint?(side.row)
-    initial = %{events: events, stack: [{Root, :invoke, 2}], claimed: MapSet.new(), errors: [], lease: nil}
+
+    initial = %{
+      events: events,
+      stack: [{Root, :invoke, 2}],
+      claimed: MapSet.new(),
+      errors: [],
+      lease: nil
+    }
 
     try do
-      ensure(initial, hd(events), :checkpoint_count, length(starts), if(eligible?, do: 1, else: 0))
+      ensure(
+        initial,
+        hd(events),
+        :checkpoint_count,
+        length(starts),
+        if(eligible?, do: 1, else: 0)
+      )
 
       case starts do
-        [] -> initial
+        [] ->
+          initial
+
         [start] ->
           {before, tail} = Enum.split_while(events, &(&1.index != start.index))
           previous = List.last(before)
-          ash = %{create: :create, update: :update, destroy: :destroy, action: :run_action}[side.row.type]
-          ensure(initial, start, :checkpoint_placement,
-            match?(%{event: {^caller, :return_from, {Ash, ^ash, 2}, _}}, previous), true)
+
+          ash =
+            %{create: :create, update: :update, destroy: :destroy, action: :run_action}[
+              side.row.type
+            ]
+
+          ensure(
+            initial,
+            start,
+            :checkpoint_placement,
+            match?(%{event: {^caller, :return_from, {Ash, ^ash, 2}, _}}, previous),
+            true
+          )
+
           %{initial | events: tail} |> program(side, indexed)
       end
     catch
@@ -203,22 +357,44 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
 
     source = hd(s.events)
     {^caller, :receive, {:"ETS-TRANSFER", holder, ^pool, {^lock, queue, checkin}}} = source.event
-    queue_source = Enum.find_value(indexed.events, fn
-      %{index: n, event: {_, :return_from, {DBConnection.Holder, :checkout, 3},
-        {:ok, {:pool_ref, ^pool, ref, _, _, _}, _, _, _}}} when n < source.index -> ref
-      _ -> nil
-    end)
+
+    queue_source =
+      Enum.find_value(indexed.events, fn
+        %{
+          index: n,
+          event:
+            {_, :return_from, {DBConnection.Holder, :checkout, 3},
+             {:ok, {:pool_ref, ^pool, ref, _, _, _}, _, _, _}}
+        }
+        when n < source.index ->
+          ref
+
+        _ ->
+          nil
+      end)
+
     ensure(s, source, :checkpoint_pool_reference, queue, queue_source)
     s = take(s, {caller, :receive, {:"ETS-TRANSFER", holder, pool, {lock, queue, checkin}}})
     s = leaf(s, {:erlang, :demonitor, 2}, [lock, [:flush]], true)
-    {s, timer} = origin(s, {:erlang, :start_timer, 4},
-      [deadline, pool, {queue, holder, caller, deadline - now}, [abs: true]], :reference)
+
+    {s, timer} =
+      origin(
+        s,
+        {:erlang, :start_timer, 4},
+        [deadline, pool, {queue, holder, caller, deadline - now}, [abs: true]],
+        :reference
+      )
+
     s = leaf(s, {:ets, :update_element, 3}, [holder, :conn, [{5, lock}, {7, timer}]], true)
 
     historical = Map.fetch!(side.historical.connections, holder)
     protocol = preceding_protocol(indexed.events, source.index, holder, historical.protocol)
     ensure(s, source, :checkpoint_outside_transaction, protocol.postgres, :idle)
-    conn_row = [{:conn, historical.owner, Postgrex.Protocol, protocol, lock, historical.clock, timer, :ok}]
+
+    conn_row = [
+      {:conn, historical.owner, Postgrex.Protocol, protocol, lock, historical.clock, timer, :ok}
+    ]
+
     s = leaf(s, {:ets, :lookup, 2}, [holder, :conn], conn_row)
     pool_ref = {:pool_ref, pool, queue, timer, holder, lock}
     returned = {:ok, pool_ref, Postgrex.Protocol, checkin, protocol}
@@ -255,8 +431,11 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
   defp preceding_protocol(events, before, holder, historical) do
     Enum.reduce(events, historical, fn
       %{index: n, event: {_, :call, {:ets, :update_element, [^holder, :conn, {4, protocol}]}}}, _
-        when n < before -> protocol
-      _, current -> current
+      when n < before ->
+        protocol
+
+      _, current ->
+        current
     end)
   end
 
@@ -267,10 +446,15 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     ensure(s, e, :checkpoint_logger, identity, expected)
     inputs = %{0 => meta.telemetry, 1 => meta.log_stacktrace_mfa, 2 => [], 4 => meta.opts}
     expected_env = for _ <- info.env, do: :unbound
-    expected_env = Enum.reduce(inputs, expected_env, fn {argument, value}, env ->
-      {:ok, register} = Compiled.captured_argument(Ecto.Adapters.SQL, info.name, :log, 5, argument)
-      List.replace_at(env, register - 1, value)
-    end)
+
+    expected_env =
+      Enum.reduce(inputs, expected_env, fn {argument, value}, env ->
+        {:ok, register} =
+          Compiled.captured_argument(Ecto.Adapters.SQL, info.name, :log, 5, argument)
+
+        List.replace_at(env, register - 1, value)
+      end)
+
     ensure(s, e, :checkpoint_logger_environment, info.env, expected_env)
   end
 
@@ -278,46 +462,61 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     References.memo({:allocation_literal, Scenarios.module_info(:md5)}, fn ->
       {:beam_file, _, _, _, _, functions} = :beam_disasm.file(:code.which(Scenarios))
       {_, name, 0} = @literal
-      {:function, ^name, 0, _, code} = Enum.find(functions, &match?({:function, ^name, 0, _, _}, &1))
-      body = Enum.reject(code, fn
-        {tag, _} when tag in [:line, :label] -> true
-        {:func_info, _, _, _} -> true
-        _ -> false
-      end)
+
+      {:function, ^name, 0, _, code} =
+        Enum.find(functions, &match?({:function, ^name, 0, _, _}, &1))
+
+      body =
+        Enum.reject(code, fn
+          {tag, _} when tag in [:line, :label] -> true
+          {:func_info, _, _, _} -> true
+          _ -> false
+        end)
+
       unless body == [{:move, {:atom, :allocation_checkpoint}, {:x, 0}}, :return],
         do: raise("allocation callback must compile to its fixed literal and return")
+
       true
     end)
   end
 
   defp leaf(s, mfa, args, value), do: s |> enter(mfa, args) |> leave(mfa, value)
+
   defp enter(s, {m, f, _} = mfa, args) do
     s = take(s, {hd(s.events).pid, :call, {m, f, args}})
     %{s | stack: [mfa | s.stack]}
   end
+
   defp leave(s, mfa, value) do
     s = take(s, {hd(s.events).pid, :return_from, mfa, value})
     %{s | stack: tl(s.stack)}
   end
+
   defp origin(s, mfa, args, kind) do
     s = enter(s, mfa, args)
     e = hd(s.events)
     value = elem(e.event, 3)
-    valid? = case kind do
-      :integer -> is_integer(value)
-      :reference -> is_reference(value)
-    end
+
+    valid? =
+      case kind do
+        :integer -> is_integer(value)
+        :reference -> is_reference(value)
+      end
+
     ensure(s, e, :checkpoint_origin, valid?, true)
     {leave(s, mfa, value), value}
   end
+
   defp take(%{events: [e | rest]} = s, event) do
     ensure(s, e, :checkpoint_event, e.event, event)
     ensure(s, e, :checkpoint_stack, e.stack, s.stack)
     %{s | events: rest, claimed: MapSet.put(s.claimed, e.index)}
   end
+
   defp take(s, _), do: fail(s, nil, :checkpoint_event, :missing, :next_instruction)
   defp ensure(_s, _e, _rule, value, value), do: :ok
   defp ensure(s, e, rule, actual, expected), do: fail(s, e, rule, actual, expected)
+
   defp fail(_s, e, rule, actual, expected) do
     at = if e, do: Map.take(e, [:role, :mfa, :stack]) |> Map.put(:twin_index, e.index), else: nil
     throw({:allocation, %{at: at, rule: rule, path: [], run: actual, twin: expected}})

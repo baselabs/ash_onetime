@@ -10,7 +10,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       :crypto,
       :context,
       :o2,
-      :cross_lease_o2,
+      :backend_copy,
       :o3,
       :o4,
       :order,
@@ -277,12 +277,22 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
-  def edits(:cross_lease_o2) do
+  def edits(:backend_copy) do
     [
       %{
         path: "test/support/exit_boundary/comparator.ex",
         original: "      {{ah, _}, {bh, _}} -> identity(ah, bh, state, path)\n",
         mutated: "      {{_ah, _}, {_bh, _}} -> state\n"
+      }
+    ]
+  end
+
+  def edits(:cross_lease_map) do
+    [
+      %{
+        path: "test/support/exit_boundary/allocation.ex",
+        original: "      bind_lease(acc, a, b)\n",
+        mutated: "      _ = acc\n      bind_lease(initial, a, b)\n"
       }
     ]
   end
@@ -311,7 +321,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
-  def compare(pair, rule) do
+  def compare(pair, rule), do: with_mutant(rule, fn -> Comparator.compare(pair) end)
+
+  def with_mutant(rule, callback) do
     grouped = Enum.group_by(edits(rule), & &1.path)
     originals = Map.new(grouped, fn {path, _} -> {path, File.read!(path)} end)
     previous = Code.compiler_options(ignore_module_conflict: true)
@@ -330,7 +342,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         Code.compile_string(source, path)
       end
 
-      Comparator.compare(pair)
+      callback.()
     after
       try do
         for {path, source} <- originals, do: File.write!(path, source)

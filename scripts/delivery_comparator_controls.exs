@@ -494,6 +494,33 @@ defmodule AshOnetime.DeliveryComparatorControls do
         tag: "u_store_observation",
         test_name: "U observation: real snapshots retain every row and column",
         assertion: "U_STORE_SNAPSHOT_WITNESS"
+      },
+      "u_wire_statement_phase" => %{
+        path: "test/support/exit_boundary/comparator.ex",
+        original: "    rw = Wire.build(rt, readback.claimed)\n",
+        mutated: "    rw = Wire.build(rt)\n",
+        test: "test/ash_onetime/delivery/comparator_controls_test.exs",
+        tag: "u2",
+        test_name: "U2 and U4: hold release reaches GREATEST and its next wire row",
+        assertion: "comparator differences:"
+      },
+      "u_allocation_happens_before" => %{
+        path: "test/support/exit_boundary/allocation.ex",
+        original: "        errors ++\n          order_errors ++\n          errors_for_leases(left ++ right) ++\n          joined_borrowers(left, rc) ++ joined_borrowers(right, tc),\n",
+        mutated: "        errors ++\n          Enum.take(order_errors, 0) ++\n          errors_for_leases(left ++ right) ++\n          Enum.take(joined_borrowers(left, rc) ++ joined_borrowers(right, tc), 0),\n",
+        test: "test/ash_onetime/delivery/comparator_controls_test.exs",
+        tag: "u_allocation_happens_before",
+        test_name: "U observation: overlapping borrowers require causal checkin order",
+        assertion: "U_ALLOCATION_HAPPENS_BEFORE_WITNESS"
+      },
+      "u_cross_lease_observation" => %{
+        path: "test/support/exit_boundary/allocation.ex",
+        original: "      bind_lease(acc, a, b)\n",
+        mutated: "      _ = acc\n      bind_lease(initial, a, b)\n",
+        test: "test/ash_onetime/delivery/comparator_controls_test.exs",
+        tag: "u_cross_lease_observation",
+        test_name: "U observation: physical identity remains bound across independent native leases",
+        assertion: "U_CROSS_LEASE_IDENTITY_WITNESS"
       }
     }
   end

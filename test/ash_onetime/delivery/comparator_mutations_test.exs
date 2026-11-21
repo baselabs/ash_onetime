@@ -226,9 +226,9 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         {:o2, :r_iso_o2} ->
           assert disabled.errors == [], "R-iso-O2 must pass with only UUID pairing disabled"
 
-        {:cross_lease_o2, :r_iso_cross_lease_o2} ->
+        {:backend_copy, :r_iso_backend_copy} ->
           assert disabled.errors == [],
-                 "the cross-lease backend copy must pass only with O2 backend binding disabled"
+                 "the backend copy must pass only with O2 backend binding disabled"
 
         {:o4, :r_iso_o4} ->
           assert disabled.errors == [], "R-iso-O4 must pass with only its bind equality disabled"
@@ -290,26 +290,39 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
     end
   end
 
-  defp with_runtime(%{id: :r_iso_cross_lease_o2, path: path}, context, callback) do
+  defp with_runtime(%{id: :r_iso_backend_copy, path: path}, context, callback) do
     source = File.read!(path)
 
     if String.contains?(source, "COMPARATOR_BACKEND_OPERATION") do
       repo = context.repo
-      {a, b} = AshOnetime.Test.Repo.checkout(fn ->
-        %{rows: [[a]]} = Ecto.Adapters.SQL.query!(repo, "SELECT pg_backend_pid()", [])
-        worker = Task.async(fn ->
-          %{rows: [[b]]} = Ecto.Adapters.SQL.query!(repo, "SELECT pg_backend_pid()", [])
-          b
+
+      {a, b} =
+        AshOnetime.Test.Repo.checkout(fn ->
+          %{rows: [[a]]} = Ecto.Adapters.SQL.query!(repo, "SELECT pg_backend_pid()", [])
+
+          worker =
+            Task.async(fn ->
+              %{rows: [[b]]} = Ecto.Adapters.SQL.query!(repo, "SELECT pg_backend_pid()", [])
+              b
+            end)
+
+          {a, Task.await(worker, 30_000)}
         end)
-        {a, Task.await(worker, 30_000)}
-      end)
+
       assert a != b
-      {:ok, operation} = AshOnetime.Test.ExitBoundary.Registry.operation(
-        AshOnetime.Test.ExitBoundary.Withheld, :external_issue)
-      source = source
+
+      {:ok, operation} =
+        AshOnetime.Test.ExitBoundary.Registry.operation(
+          AshOnetime.Test.ExitBoundary.Withheld,
+          :external_issue
+        )
+
+      source =
+        source
         |> String.replace("COMPARATOR_BACKEND_OPERATION", inspect(operation, limit: :infinity))
         |> String.replace("COMPARATOR_BACKEND_A", Integer.to_string(a))
         |> String.replace("COMPARATOR_BACKEND_B", Integer.to_string(b))
+
       AshOnetime.Test.ExitBoundary.Compiled.with_source(source, path, callback)
     else
       callback.()
