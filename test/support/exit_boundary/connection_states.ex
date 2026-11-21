@@ -298,6 +298,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       origin: origin,
       sock: version.protocol.sock
     }
+
     %{state | buffers: [copy | state.buffers]}
   end
 

@@ -42,6 +42,22 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias Ecto.Adapters.SQL
   use AshOnetime.Test.ExitBoundary.ComparatorCase, async: false
 
+  @helper_buffer_inputs %{
+    msg_send: [2],
+    msg_recv: [2],
+    rows_recv: [3],
+    redescribe: [5],
+    recv_ready: [2],
+    recv_strict_ready: [3],
+    recv_transaction: [-1],
+    error_ready: [3],
+    error_flushed: [3],
+    rollback_flushed: [3],
+    reload_flushed: [4],
+    ping_recv: [2, 3],
+    activate: [1]
+  }
+
   @tag :connection_streams
   test "Connection streams: native messages survive every header split", context do
     pair = observe(context, row!(:issue, :execute), Values.set()[:va])
@@ -425,6 +441,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert unbound == [], "every native Protocol copy needs its own owner-version binding"
 
+      bound_buffers = MapSet.new(states.buffers, &{&1.index, &1.path})
+
+      unbound_buffers =
+        Enum.reject(native_helper_buffers(events), fn copy ->
+          MapSet.member?(bound_buffers, {copy.index, copy.path})
+        end)
+
+      for copy <- unbound_buffers do
+        IO.puts("CONNECTION_HELPER_BUFFER_UNBOUND: " <> Diagnostics.render(copy))
+      end
+
+      assert unbound_buffers == [], "every native helper buffer needs its own byte-copy origin"
+
       assert Enum.any?(decoders.protocol_copies, fn copy ->
                copy.mfa == {Postgrex.Protocol, :handle_execute, 4} and copy.tag == :call and
                  copy.path == [2, 2, 3] and is_integer(copy.index)
@@ -457,6 +486,27 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                end)
       end
     end
+  end
+
+  defp native_helper_buffers(events) do
+    Enum.flat_map(events, fn
+      %{index: index, event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source ->
+        for position <- Map.get(@helper_buffer_inputs, function, []),
+            position = if(position < 0, do: length(arguments) + position, else: position),
+            do: %{index: index, mfa: source.mfa, path: [2, 2, position]}
+
+      %{index: index, event: {_, :return_from, {Postgrex.Protocol, function, _}, result}} =
+          source
+      when function in [:msg_recv, :rows_recv, :redescribe] and is_tuple(result) ->
+        if elem(result, 0) in [:ok, :reload, :error] do
+          [%{index: index, mfa: source.mfa, path: [3, tuple_size(result) - 1]}]
+        else
+          []
+        end
+
+      _ ->
+        []
+    end)
   end
 
   @tag :connection_streams
@@ -725,7 +775,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       )
 
     assert positive.errors == []
-    IO.puts("CONNECTION_PRIVATE_BUFFER_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
+
+    IO.puts(
+      "CONNECTION_PRIVATE_BUFFER_COPY: owning RED; sole catcher; exact restore; fresh GREEN"
+    )
   end
 
   @tag :connection_streams
