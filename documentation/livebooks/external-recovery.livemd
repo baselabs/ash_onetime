@@ -422,14 +422,21 @@ reconciliation and the reaper's boundary.
 The ledger rejects negative values with a real PostgreSQL constraint. This is a definitive
 business rejection: the adapter records that decision durably under the same operation key
 and returns `{:ok, {:declined, reason}}`. A trusted peer result can describe a refusal as well
-as a successful effect. The action stores it, so a retry replays the rejection without another
-execute. An unrecorded or ambiguous decision must remain unresolved instead.
+as a successful effect. Roll back the caller after that decision commits, then recover and
+replay the rejection without another execute. An unrecorded or ambiguous decision must
+remain unresolved instead.
 
 ```elixir
 before_failed_execute = call_count.("execute")
+before_rejection_recovery = call_count.("recover")
+{:error, :rejection_caller_abort} = Repo.transaction(fn ->
+  {:ok, {:declined, "negative_value"}} = run.("negative-receipt", -1)
+  Repo.rollback(:rejection_caller_abort)
+end)
 {:ok, {:declined, "negative_value"}} = run.("negative-receipt", -1)
 {:ok, {:declined, "negative_value"}} = run.("negative-receipt", -1)
 true = call_count.("execute") == before_failed_execute + 1
+true = call_count.("recover") == before_rejection_recovery + 1
 [[0]] = SQL.query!(PeerRepo,
   ~s{SELECT count(*) FROM "#{schema}".external_receipts WHERE value = -1}, []).rows
 [[1]] = SQL.query!(PeerRepo,
