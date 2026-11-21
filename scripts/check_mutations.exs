@@ -198,7 +198,7 @@ defmodule AshOnetime.MutationCheck do
       original:
         "WITH moved AS (DELETE FROM %s WHERE partition_date >= $1 AND partition_date < $2 RETURNING *) INSERT INTO %I.%I SELECT * FROM moved",
       test: "test/ash_onetime/store/maintenance_test.exs",
-      assertion_line: 2915,
+      assertion_line: 2916,
       test_name: "roll recovers past and forward DEFAULT months atomically and restores FORCE",
       assertion: "assert",
       mutated:
@@ -1938,7 +1938,7 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert doctor_refusal(c)",
       mutated:
         "    WHERE n.nspname=$1 AND (c.relname=ANY($2) OR EXISTS (\n      SELECT 1 FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid\n      WHERE t.tgrelid=c.oid AND p.proname='ash_onetime_fact_append_only' AND p.pronamespace=n.oid))",
-      assertion_line: 1309
+      assertion_line: 1310
     },
     "M-complete-restore" => %{
       path: "lib/ash_onetime/store/postgres.ex",
@@ -2036,7 +2036,7 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "external completion restarts exact elapsed retention across the next backward DST change",
       assertion: "assert SQL.query!",
-      assertion_line: 679,
+      assertion_line: 680,
       required_failures:
         for direction <- ["forward", "backward"] do
           %{
@@ -2044,7 +2044,7 @@ defmodule AshOnetime.MutationCheck do
               "external completion restarts exact elapsed retention across the next #{direction} DST change",
             assertion:
               if(direction == "forward", do: "assert {:ok, result}", else: "assert SQL.query!"),
-            assertion_line: if(direction == "forward", do: 678, else: 679)
+            assertion_line: if(direction == "forward", do: 679, else: 680)
           }
         end
     },
@@ -2268,7 +2268,7 @@ defmodule AshOnetime.MutationCheck do
       assertion: "refute scalar(",
       mutated:
         "false OR EXISTS (\n      SELECT 1 FROM pg_roles r WHERE pg_has_role(r.oid,holder.oid,'SET')\n        AND (r.rolcanlogin OR r.oid IN (SELECT oid FROM scheduled)\n          OR r.rolname=current_setting('role') OR r.rolname=current_user OR r.rolname=session_user)\n        AND NOT r.rolsuper AND r.oid<>@owner@\n        AND NOT pg_has_role(r.oid,@owner@,'USAGE') AND NOT pg_has_role(r.oid,@owner@,'SET')\n",
-      assertion_line: 1679
+      assertion_line: 1680
     },
     "maintenance-effective-unreachable-holder" => %{
       tag: "effective_unreachable_authority_mutation",
@@ -2278,7 +2278,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "effective authority refuses an unreachable group holder",
       assertion: "refute scalar(",
       mutated: "false",
-      assertion_line: 5560
+      assertion_line: 5561
     },
     "maintenance-effective-proxy-holder" => %{
       tag: "effective_proxy_authority_mutation",
@@ -2289,7 +2289,7 @@ defmodule AshOnetime.MutationCheck do
         "effective authority refuses an unreachable holder exposed through a PUBLIC view",
       assertion: "refute scalar(",
       mutated: "false",
-      assertion_line: 1754
+      assertion_line: 1755
     },
     "maintenance-effective-subscription-role" => %{
       path: "priv/templates/migrations/maintenance/trust.sql",
@@ -2343,7 +2343,7 @@ defmodule AshOnetime.MutationCheck do
       assertion: "refute scalar(",
       mutated:
         "CASE WHEN t.append_only OR t.owner_only THEN 'DELETE,TRIGGER,TRUNCATE' ELSE 'TRIGGER WITH GRANT OPTION,TRUNCATE WITH GRANT OPTION' END",
-      assertion_line: 5560
+      assertion_line: 5561
     },
     "maintenance-effective-cluster-isolation" => %{
       path: "test/support/cluster_isolation.ex",
@@ -2384,7 +2384,7 @@ defmodule AshOnetime.MutationCheck do
         "SELECT stays refused because existing children do not share root RLS and policies",
       assertion: "refute scalar(",
       mutated: "OR false AND has_any_column_privilege(holder.oid,t.oid,",
-      assertion_line: 1981
+      assertion_line: 1982
     },
     "maintenance-effective-relation-authority" => %{
       tag: "enforcement_table_authority_predicate_mutation",
@@ -2518,7 +2518,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "SET only MAINTAIN through pg_maintain refuses maintenance",
       assertion: "assert_refusal",
       mutated: "WHEN false",
-      assertion_line: 4682
+      assertion_line: 4683
     },
     "maintenance-upgrade-validation" => %{
       tag: "enforcement_maintenance_upgrade_validation_mutation",
@@ -2549,7 +2549,7 @@ defmodule AshOnetime.MutationCheck do
       original:
         "          OR jsonb_array_length(actual_shape->'constraints')<>jsonb_array_length(expected_shape->'constraints')\n",
       test: "test/ash_onetime/store/maintenance_test.exs",
-      assertion_line: 3753,
+      assertion_line: 3754,
       test_name: "historical upgrade refuses changed extra_duplicate_check without adopting it",
       assertion: "Expected exception Postgrex.Error but nothing was raised",
       mutated: ""
@@ -2560,7 +2560,7 @@ defmodule AshOnetime.MutationCheck do
       original:
         "          OR EXISTS (SELECT 1 FROM jsonb_array_elements(expected_shape->'constraints') e\n            WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(actual_shape->'constraints') x\n              WHERE x=e OR ((historical_shape->'constraints') @> jsonb_build_array(x)\n                AND (x-'expression'=e-'expression' OR (x->>'type'='p' AND e->>'type'='p')))))",
       test: "test/ash_onetime/store/maintenance_test.exs",
-      assertion_line: 3753,
+      assertion_line: 3754,
       test_name: "historical upgrade refuses changed duplicate_check without adopting it",
       assertion: "Expected exception Postgrex.Error but nothing was raised",
       mutated: ""
@@ -2595,7 +2595,7 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert_raise Postgrex.Error",
       mutated:
         "-- rule:maintenance-upgrade-reference\n    IF jsonb_array_length(old_functions)=0 THEN",
-      assertion_line: 2078
+      assertion_line: 2079
     },
     "maintenance-shape-type" => %{
       path: "priv/templates/migrations/maintenance/shape.sql",
@@ -2765,7 +2765,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "effective routine schema CREATE refuses an untrusted runtime grant",
       assertion: "assert_refusal",
       mutated: "AND false",
-      assertion_line: 4682
+      assertion_line: 4683
     },
     "maintenance-publication-filter" => %{
       tag: "publication_filter_mutation",
@@ -2775,7 +2775,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "publication membership permits no filter and refuses a row filter",
       assertion: "assert_refusal",
       mutated: "false",
-      assertion_line: 4682
+      assertion_line: 4683
     },
     "maintenance-owner-membership" => %{
       tag: "routine_owner_membership_mutation",
@@ -2785,7 +2785,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "maintenance refuses owner membership for runtime, INHERIT=true",
       assertion: "assert_refusal",
       mutated: "AND false",
-      assertion_line: 4682
+      assertion_line: 4683
     },
     "maintenance-name-collision" => %{
       tag: "collision",
@@ -2796,7 +2796,7 @@ defmodule AshOnetime.MutationCheck do
         "Table 1 row 33: roll refuses a colliding standalone table without adopting or executing it",
       assertion: "assert_refusal",
       mutated: "RAISE duplicate_table;",
-      assertion_line: 4682
+      assertion_line: 4683
     },
     "maintenance-shape" => %{
       tag: "maintenance_shape_mutation",
@@ -2806,7 +2806,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "a builtin array input cannot dispatch a runtime domain check",
       assertion: "assert_refusal",
       mutated: "WHERE false -- R1 relation set",
-      assertion_line: 4682
+      assertion_line: 4683
     },
     "maintenance-check-before-lock" => %{
       path: ~S|priv/templates/migrations/maintenance/cleanup_nonce.sql|,
@@ -2847,7 +2847,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "effective MAINTAIN audit covers pg_maintain and install revokes direct ANALYZE",
       assertion: "assert {:error",
       mutated: "NULL;",
-      assertion_line: 4682
+      assertion_line: 4683
     },
     "maintenance-policy" => %{
       tag: "maintenance_policy_mutation",
@@ -2857,7 +2857,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "Table 1 row 5: an owner-applicable policy cannot execute runtime-owned code",
       assertion: "assert_refusal",
       mutated: "IF false THEN RETURN offending; END IF;",
-      assertion_line: 4682
+      assertion_line: 4683
     },
     "maintenance-digest" => %{
       tag: "maintenance_digest_mutation",
@@ -2868,7 +2868,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "package routine identity also requires its exact source digest",
       assertion: "assert_refusal",
       mutated: "OR false",
-      assertion_line: 4682
+      assertion_line: 4683
     },
     "maintenance-null-bound" => %{
       path: ~S|priv/templates/migrations/maintenance/roll.sql|,
@@ -3693,7 +3693,7 @@ defmodule AshOnetime.MutationCheck do
         "owner-driven prune an event trigger blocking ALTER TABLE keeps partitions and fails nothing",
       assertion: "(raise_exception) DDL blocked",
       mutated: "WHEN OTHERS THEN RAISE;",
-      assertion_line: 1142
+      assertion_line: 1143
     },
     "payload-partition-count" => %{
       path: "priv/templates/migrations/maintenance/prune.sql",
@@ -3714,7 +3714,7 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "owner-driven prune a DDL hook reapplying FORCE is refused explicitly and preserves hidden payloads",
       assertion: "assert {:ok, %{payload_partitions_refused: %{force_reapplied: 2}}} = result",
-      assertion_line: 622
+      assertion_line: 623
     },
     "rls-prune-row-security" => %{
       path: "priv/templates/migrations/maintenance/prune.sql",
@@ -3725,7 +3725,7 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "owner-driven prune row_security is off before NO FORCE and both caller GUCs are restored",
       assertion: "assert {:ok, %{payload_partitions: 2}} =",
-      assertion_line: 654
+      assertion_line: 655
     },
     "rls-prune-parent-lock" => %{
       path: "priv/templates/migrations/maintenance/prune.sql",
@@ -3738,7 +3738,7 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "owner-driven prune a parent reader bounds prune and insert waits without a child lock deadlock",
       assertion: "assert child_locks == 0",
-      assertion_line: 743
+      assertion_line: 744
     },
     "rls-prune-lock-timeout" => %{
       path: "priv/templates/migrations/maintenance/prune.sql",
@@ -3749,7 +3749,7 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "owner-driven prune a parent reader bounds prune and insert waits without a child lock deadlock",
       assertion: "Task.await(prune_task, 4_000)",
-      assertion_line: 762
+      assertion_line: 763
     },
     "rls-prune-pass-budget" => %{
       path: "priv/templates/migrations/maintenance/prune.sql",
@@ -3761,7 +3761,7 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "owner-driven prune the budget spans acquisitions: a second holder gets only what remains",
       assertion: "assert finished_at - waiting_started < 3700",
-      assertion_line: 862
+      assertion_line: 863
     },
     "rls-prune-single-pruner" => %{
       tag: "rls_prune_single_pruner_mutation",
@@ -3772,7 +3772,7 @@ defmodule AshOnetime.MutationCheck do
         "owner-driven prune overlapping cleanups on one payload parent neither deadlock nor double-prune",
       assertion: "assert Enum.all?(results",
       mutated: "IF false THEN",
-      assertion_line: 910
+      assertion_line: 911
     },
     "prune-child-nowait" => %{
       path: "priv/templates/migrations/maintenance/prune.sql",
@@ -3793,7 +3793,7 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "owner-driven prune a DEFAULT-only holder is refused without waiting while the parent is held",
       assertion: "payload_partitions_refused: %{lock_unavailable: 2}",
-      assertion_line: 820
+      assertion_line: 821
     },
     "rls-prune-catalog-count" => %{
       path: "priv/templates/migrations/maintenance/settings.sql",
@@ -3832,7 +3832,7 @@ defmodule AshOnetime.MutationCheck do
         "owner-driven prune occupied partitions emit no refusal event and a non-owner reports refusals",
       assertion: "refute_receive {:cleanup_event, _, %{result_class: :partitions_kept}}",
       mutated: "if counts.payload_partitions_kept > 0 do",
-      assertion_line: 990
+      assertion_line: 991
     },
     "rls-prune-foreign-child" => %{
       path: "priv/templates/migrations/maintenance/trust.sql",
@@ -3843,7 +3843,7 @@ defmodule AshOnetime.MutationCheck do
       test_name:
         "owner-driven prune a real foreign child is refused before its remote RLS-filtered count",
       assertion: "untrusted_dependency",
-      assertion_line: 524
+      assertion_line: 525
     },
     "doctor-ash-floor" => %{
       path: "lib/mix/tasks/ash_onetime.doctor.ex",

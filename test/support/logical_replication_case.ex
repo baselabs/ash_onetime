@@ -3,6 +3,7 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
   use ExUnit.CaseTemplate
   import ExUnit.Assertions
   alias AshOnetime.Store.Postgres
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.{Repo, ShippedMigrations}
   alias Ecto.Adapters.SQL
   alias Mix.Tasks.AshOnetime.Gen.Migrations, as: Generator
@@ -376,7 +377,7 @@ defmodule AshOnetime.Test.LogicalReplicationCase do
         end)
 
       flunk(
-        "assert_apply_stopped!: #{AshOnetime.Test.ExitBoundary.Diagnostics.render(error)}; subscription=#{AshOnetime.Test.ExitBoundary.Diagnostics.render(state)}; expected_pid=#{checkpoint.pid}; native_errors=#{AshOnetime.Test.ExitBoundary.Diagnostics.render(errors)}"
+        "assert_apply_stopped!: #{Diagnostics.render(error)}; subscription=#{Diagnostics.render(state)}; expected_pid=#{checkpoint.pid}; native_errors=#{Diagnostics.render(errors)}"
       )
   end
 

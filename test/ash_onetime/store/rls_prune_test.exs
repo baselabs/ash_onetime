@@ -14,6 +14,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
 
   alias AshOnetime.Store.Postgres
   alias AshOnetime.Store.Result
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
@@ -91,7 +92,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
         result
 
       {:error, error} ->
-        raise "query failed: #{AshOnetime.Test.ExitBoundary.Diagnostics.render(%{error: error, sql: sql})}"
+        raise "query failed: #{Diagnostics.render(%{error: error, sql: sql})}"
     end
   end
 
@@ -1252,7 +1253,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
     result = if task, do: Task.yield(task, 0)
 
     flunk(
-      "prune did not wait for parent lock; completed result: #{AshOnetime.Test.ExitBoundary.Diagnostics.render(result)}"
+      "prune did not wait for parent lock; completed result: #{Diagnostics.render(result)}"
     )
   end
 

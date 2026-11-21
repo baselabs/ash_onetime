@@ -33,8 +33,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias AshOnetime.Test.ExitBoundary.Values
   alias AshOnetime.Test.ExitBoundary.Wire
   alias AshOnetime.Test.ExitBoundary.Withheld
+  alias AshOnetime.Test.MutationFormatter
   alias AshOnetime.Test.Repo
   alias AshOnetime.Test.StoreCase
+  alias AshOnetime.Test.TestFormatter
   alias Ecto.Adapters.SQL
   use AshOnetime.Test.ExitBoundary.ComparatorCase, async: false
 
@@ -387,6 +389,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert historical.relations[oid] == "ash_onetime_boundary_records"
     end
+
+    tls? = SQL.query!(context.repo, "SHOW ssl", []).rows == [["on"]]
+    IO.puts("CONNECTION_NATIVE_TLS_AVAILABLE=#{tls?}")
   end
 
   @tag :connection_streams
@@ -2390,11 +2395,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     {_holder, connection} = Enum.find(captured.connections, fn {_, value} -> value.protocol end)
     marker = "known-native-diagnostic-sentinel"
     private = %{connection.protocol | scram: marker, connection_key: 9_876_543_219_876}
-    state = %{captured: captured, protocol: private, copied_key: private.connection_key}
+    {:error, postgres_error} = SQL.query(context.repo, "SELECT 1 / 0", [])
+    marked_error = %{postgres_error | query: marker}
+
+    state = %{
+      captured: captured,
+      protocol: private,
+      copied_key: private.connection_key,
+      postgres_error: marked_error
+    }
 
     # This is an output-only copy of a real capture. Neither the observation nor
     # the comparison sees the marker. The unprojected printer proves the witness.
-    unguarded = ExUnit.CaptureIO.capture_io(fn -> IO.inspect(state, limit: :infinity) end)
+    unguarded = ExUnit.CaptureIO.capture_io(fn -> IO.puts(inspect(state, limit: :infinity)) end)
     assert String.contains?(unguarded, marker)
 
     assertion =
@@ -2422,30 +2435,30 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     printers = [
       residual: fn -> IO.puts(Diagnostics.render(state, limit: :infinity)) end,
-      residual_projection: fn -> IO.inspect(Diagnostics.safe(state), limit: :infinity) end,
+      residual_projection: fn -> IO.puts(inspect(Diagnostics.safe(state), limit: :infinity)) end,
       assertion_failure: fn ->
-        AshOnetime.Test.TestFormatter.print_failure(test, [{:error, assertion, stack}])
+        TestFormatter.print_failure(test, [{:error, assertion, stack}])
       end,
       pattern_failure: fn ->
-        AshOnetime.Test.TestFormatter.print_failure(test, [{:error, pattern, stack}])
+        TestFormatter.print_failure(test, [{:error, pattern, stack}])
       end,
       exit_failure: fn ->
-        AshOnetime.Test.TestFormatter.print_failure(test, [{:exit, state, stack}])
+        TestFormatter.print_failure(test, [{:exit, state, stack}])
       end,
       mutation_failure: fn ->
-        AshOnetime.Test.MutationFormatter.handle_cast(
+        MutationFormatter.handle_cast(
           {:test_finished, %{test | state: {:failed, [{:error, assertion, stack}]}}},
           nil
         )
       end,
       history_status: fn ->
-        IO.inspect(ConnectionHistory.format_status(status), limit: :infinity)
+        IO.puts(inspect(ConnectionHistory.format_status(status), limit: :infinity))
       end,
       test_formatter_status: fn ->
-        IO.inspect(AshOnetime.Test.TestFormatter.format_status(status), limit: :infinity)
+        IO.puts(inspect(TestFormatter.format_status(status), limit: :infinity))
       end,
       mutation_formatter_status: fn ->
-        IO.inspect(AshOnetime.Test.MutationFormatter.format_status(status), limit: :infinity)
+        IO.puts(inspect(MutationFormatter.format_status(status), limit: :infinity))
       end
     ]
 
@@ -2457,9 +2470,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
 
     require Logger
-    logged = ExUnit.CaptureLog.capture_log(fn -> Logger.error(fn -> %{capture: state} end) end)
-    refute String.contains?(logged, marker)
-    refute String.contains?(logged, "9876543219876")
+
+    for report <- [%{capture: state}, marked_error] do
+      logged = ExUnit.CaptureLog.capture_log(fn -> Logger.error(fn -> report end) end)
+      refute String.contains?(logged, marker)
+      refute String.contains?(logged, "9876543219876")
+    end
+
     assert state.protocol.scram == marker
     assert assertion.left === state
     IO.puts("NATIVE_DIAGNOSTIC_CLASS: unprojected RED; every typed output GREEN")

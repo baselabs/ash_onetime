@@ -236,6 +236,7 @@ jobs:
           otp: ${{ needs.toolchain.outputs.otp }}
           postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+          cache: none
           lane: native
 
   comparator-controls:

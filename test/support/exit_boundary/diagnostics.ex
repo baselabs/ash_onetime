@@ -86,6 +86,8 @@ defmodule AshOnetime.Test.ExitBoundary.Diagnostics do
 
   defp private?(%Postgrex.Protocol{}), do: true
   defp private?(%Postgrex.Query{}), do: true
+  defp private?(%Postgrex.Error{}), do: true
+  defp private?(%DBConnection.ConnectionError{}), do: true
 
   defp private?(value) when is_map(value) do
     Enum.any?(Map.to_list(value), fn {key, item} ->
