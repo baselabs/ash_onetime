@@ -151,14 +151,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
          state
        )
        when is_binary(buffer) do
-    with {:ok, cursor} <- Map.fetch(state.cursors, port) do
-      state = exact(state, e, :decoder_replay_buffer, buffer, cursor.buffer)
+    case Map.fetch(state.cursors, port) do
+      {:ok, cursor} ->
+        state = exact(state, e, :decoder_replay_buffer, buffer, cursor.buffer)
 
-      if buffer == <<>>,
-        do: state,
-        else: replay(e, protocol, buffer, port, cursor, state)
-    else
-      _ -> failure(state, e, :decoder_replay_origin, false)
+        if buffer == <<>>,
+          do: state,
+          else: replay(e, protocol, buffer, port, cursor, state)
+
+      :error ->
+        failure(state, e, :decoder_replay_origin, false)
     end
   end
 

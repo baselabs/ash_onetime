@@ -330,7 +330,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     SQL.query!(context.repo, sql, [1])
     historical = Historical.capture(context.prefix)
-    assert Map.has_key?(historical, :prepared_catalogs)
+    catalogs? = Map.has_key?(historical, :prepared_catalogs)
+    assert catalogs?, "the historical native prepared catalog is missing"
 
     descriptors =
       for {_holder, connection} <- historical.connections,
