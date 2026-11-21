@@ -531,6 +531,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
 
         native = NativeTransport.build(%{events: events})
+        native = Map.put(native, :historical, run.native_history)
         assert native.errors == []
         assert_native_streams_complete(run)
         buffer_replays(events, native)

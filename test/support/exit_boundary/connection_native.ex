@@ -7,11 +7,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   # bootstrap finish before capture; the socket is owned and closed by the root.
   # Corruptions change real native calls or real frontend messages, never captures.
   def observe(mode, corruption \\ nil) do
-    ExitBoundary.observe(
-      &connect/0,
-      &execute(&1, mode, corruption),
-      native_spec(mode)
-    )
+    observer = self()
+    tag = make_ref()
+
+    run =
+      ExitBoundary.observe(
+        fn ->
+          protocol = connect()
+          send(observer, {tag, %{self() => %{protocol: protocol}}})
+          protocol
+        end,
+        &execute(&1, mode, corruption),
+        native_spec(mode)
+      )
+
+    receive do
+      {^tag, historical} -> Map.put(run, :native_history, historical)
+    after
+      0 -> raise "native connection history was not captured"
+    end
   end
 
   defp native_spec(:buffered) do

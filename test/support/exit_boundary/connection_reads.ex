@@ -16,7 +16,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       (writes ++ requests ++ replies ++ active)
       |> Enum.sort_by(&elem(&1, 0))
       |> Enum.reduce(
-        %{connections: %{}, errors: [], demands: [], readback: readback, catalogs: catalogs},
+        %{
+          connections: %{},
+          errors: [],
+          demands: [],
+          readback: readback,
+          catalogs: catalogs,
+          pings: ping_calls(native),
+          historical: Map.get(native, :historical, %{})
+        },
         &event/2
       )
 
@@ -38,6 +46,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
 
     case ConnectionProtocol.request(connection.protocol, buffer) do
       {:ok, expected} ->
+        {timeout, state} = receive_timeout(state, read, expected.timeout)
+        expected = %{expected | timeout: timeout}
         state = exact(state, read, :receive_length, read.length, expected.length)
         state = exact(state, read, :receive_timeout, read.timeout, expected.timeout)
 
@@ -109,6 +119,50 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       copies: delivery.copies,
       phase: :backend
     })
+  end
+
+  defp ping_calls(native) do
+    for {_index, %{source: %{mfa: {Postgrex.Protocol, :ping, 1}}} = pair} <- native.pairs,
+        do: pair
+  end
+
+  defp receive_timeout(state, read, default) do
+    ping =
+      Enum.find(state.pings, fn pair ->
+        pair.source.pid == read.source.pid and pair.source.index < read.source.index and
+          read.returned.index < pair.returned.index
+      end)
+
+    if ping do
+      ping_timeout(state, read, ping, default)
+    else
+      {default, state}
+    end
+  end
+
+  defp ping_timeout(state, read, ping, default) do
+    {_, :call, {_, _, [protocol]}} = ping.source.event
+
+    origin =
+      Enum.find_value(state.historical, fn
+        {_holder, %{protocol: %{sock: {:gen_tcp, port}} = historical}}
+        when port == read.port ->
+          historical
+
+        _ ->
+          nil
+      end)
+
+    if origin do
+      state = exact(state, read, :receive_timeout_origin, protocol.sock, origin.sock)
+
+      state =
+        exact(state, read, :receive_timeout_origin, protocol.ping_timeout, origin.ping_timeout)
+
+      {origin.ping_timeout, state}
+    else
+      {default, failure(state, read, :receive_timeout_origin, :absent, :historical_ping_timeout)}
+    end
   end
 
   defp feed(state, port, chunk) do

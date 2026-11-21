@@ -12,7 +12,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     initial = %{
       ports: %{},
       cursors: historical_cursors(historical),
-      descriptors: %{},
+      descriptors: historical_descriptors(historical),
       executing: %{},
       instances: [],
       errors: [],
@@ -22,6 +22,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
     state = Enum.reduce(indexed.events, initial, &event(&1, &2, replies))
     %{instances: Enum.reverse(state.instances), errors: Enum.reverse(state.errors)}
+  end
+
+  defp historical_descriptors(historical) do
+    for {_holder, %{protocol: %{sock: {:gen_tcp, port}} = protocol} = history} <- historical,
+        origin <- Map.get(history, :descriptors, []),
+        origin.port == port and origin.query.types === protocol.types,
+        into: %{},
+        do: {origin.query.ref, origin}
   end
 
   defp historical_cursors(historical) do
