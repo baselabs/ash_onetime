@@ -991,6 +991,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       first = Persisted.snapshot(context.prefix, context.repo)
       equal = Persisted.snapshot(context.prefix, context.repo)
+
       [[expected]] =
         SQL.query!(context.repo, "SELECT permissions::text[] FROM #{relation}", []).rows
 
