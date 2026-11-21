@@ -455,10 +455,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert unbound_buffers == [], "every native helper buffer needs its own byte-copy origin"
 
       if shape == :large_rows do
+        assert Enum.any?(decoders.versions, &is_list(&1.returned_buffer))
+
         assert Enum.any?(states.buffers, fn
                  %{origin: {:continuation_buffer, _, _}} -> true
                  _ -> false
-               end), "the real large DataRow must execute a partial-read continuation"
+               end),
+               "the real large DataRow must execute a partial-read continuation"
       end
 
       assert Enum.any?(decoders.protocol_copies, fn copy ->

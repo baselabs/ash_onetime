@@ -346,6 +346,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       frame ->
         expected = if frame.input.buffer == :active_once, do: :active_once, else: nil
         origin = {:state_buffer, frame.owner.origin}
+
         buffer_copy(
           state,
           source,
@@ -382,8 +383,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     {boundary, fallback, origin} = lexical_buffer(state, frame, version)
 
     case cursor_version(state, source, version.protocol) do
-      %{index: index, port: port, cursor: cursor} when index > boundary ->
-        {cursor.buffer, {:decoder_cursor, port, index}}
+      %{index: index, port: port} = cursor when index > boundary ->
+        case cursor do
+          %{returned_buffer: buffer} -> {buffer, {:decoder_return_buffer, port, index}}
+          %{cursor: bytes} -> {bytes.buffer, {:decoder_cursor, port, index}}
+        end
 
       _ ->
         {fallback, origin}
@@ -407,8 +411,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp continuation_buffer(state, source, version, expected, origin) do
     case List.first(Map.get(state.frames, source.pid, [])) do
-      %{source: %{mfa: mfa} = parent} when mfa == source.mfa and
-          mfa in [{Postgrex.Protocol, :msg_recv, 4}, {Postgrex.Protocol, :rows_recv, 5}] ->
+      %{source: %{mfa: mfa} = parent}
+      when mfa == source.mfa and
+             mfa in [{Postgrex.Protocol, :msg_recv, 4}, {Postgrex.Protocol, :rows_recv, 5}] ->
         continued_buffer(state, source, parent, version, expected, origin)
 
       _ ->
@@ -429,8 +434,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     case reads do
       [%{bytes: bytes, returned: returned}] when is_binary(bytes) ->
         constructed = [previous.value | bytes]
+
         state =
-          exact(state, source, :state_buffer_continuation, IO.iodata_to_binary(constructed), expected)
+          exact(
+            state,
+            source,
+            :state_buffer_continuation,
+            IO.iodata_to_binary(constructed),
+            expected
+          )
 
         {state, constructed, {:continuation_buffer, parent.index, returned.index}}
 
@@ -444,6 +456,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     if elem(result, 0) in [:ok, :reload, :error] do
       position = tuple_size(result) - 1
       {expected, origin} = helper_buffer_origin(state, source, frame.owner, frame)
+
       buffer_copy(
         state,
         source,

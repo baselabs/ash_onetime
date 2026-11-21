@@ -180,8 +180,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       {nil, _pending} ->
         state
 
-      {%{port: port, cursor: cursor}, pending} ->
-        version = %{index: source.index, port: port, cursor: cursor}
+      {%{port: port, cursor: cursor, returned_buffer: buffer}, pending} ->
+        version = %{index: source.index, port: port, cursor: cursor, returned_buffer: buffer}
 
         state
         |> Map.put(:pending_cursors, pending)
@@ -501,7 +501,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     # The paired return proves the result, but its cursor becomes available only
     # at that actual return event. Copies observed inside the decoder still see
     # the preceding version, even when another role interleaves there.
-    state = put_in(state.pending_cursors[pair.returned.index], %{port: port, cursor: cursor})
+    returned_buffer =
+      case expected do
+        {:ok, _value, buffer} -> buffer
+        {:more, buffer, _rows, _required} -> buffer
+        {:more, _required} -> cursor.buffer
+      end
+
+    pending = %{port: port, cursor: cursor, returned_buffer: returned_buffer}
+    state = put_in(state.pending_cursors[pair.returned.index], pending)
     %{state | instances: [instance | state.instances]}
   end
 
