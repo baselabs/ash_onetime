@@ -153,29 +153,26 @@ for partitioning <- [nil, 2] do
       schema = Postgres.routine_schema(c.schema)
       SQL.query!(c.owner_repo, "REVOKE USAGE ON SCHEMA #{q(schema)} FROM PUBLIC", [])
 
-      try do
-        id = insert_claim(c)
-        assert {:ok, _} = record_outcome(c, id)
+      id = insert_claim(c)
+      assert {:ok, _} = record_outcome(c, id)
 
-        refute scalar(c.owner_repo, "SELECT has_schema_privilege($1,$2,'USAGE')", [
-                 c.runtime,
-                 schema
-               ])
+      refute scalar(c.owner_repo, "SELECT has_schema_privilege($1,$2,'USAGE')", [
+               c.runtime,
+               schema
+             ])
 
-        assert scalar(c.owner_repo, "SELECT has_function_privilege($1,$2,'EXECUTE')", [
-                 c.runtime,
-                 routine(c, "ash_onetime_claim_visible") <> "(bytea,text,uuid)"
-               ])
+      assert scalar(c.owner_repo, "SELECT has_function_privilege($1,$2,'EXECUTE')", [
+               c.runtime,
+               routine(c, "ash_onetime_claim_visible") <> "(bytea,text,uuid)"
+             ])
 
-        assert {:ok, %{rows: [[1]]}} =
-                 SQL.query(
-                   c.runtime_repo,
-                   "SELECT count(*) FROM #{rel(c, "ash_onetime_effect_outcomes")}",
-                   []
-                 )
-      after
-        SQL.query!(c.owner_repo, "GRANT USAGE ON SCHEMA #{q(schema)} TO PUBLIC", [])
-      end
+      assert {:ok, %{rows: [[1]]}} =
+               SQL.query(
+                 c.runtime_repo,
+                 "SELECT count(*) FROM #{rel(c, "ash_onetime_effect_outcomes")}",
+                 []
+               )
+
     end
   end
 end

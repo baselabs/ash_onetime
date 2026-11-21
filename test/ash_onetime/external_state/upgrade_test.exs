@@ -137,6 +137,7 @@ for partitioning <- [nil, 2, 4] do
           if c.forced_rollback == :maintenance, do: {14, maintenance}, else: {13, external}
 
         expected_code = if c.forced_rollback == :maintenance, do: "42501", else: "23514"
+
         assert {:error, %Postgrex.Error{postgres: %{pg_code: ^expected_code}}} =
                  migrate(c, version, source, :down)
       end

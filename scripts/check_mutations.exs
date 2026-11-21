@@ -8864,7 +8864,10 @@ defmodule AshOnetime.MutationCheck do
                  path: "priv/templates/migrations/maintenance/trust.sql",
                  original: "RAISE EXCEPTION 'untrusted_dependency: missing package root';",
                  mutated: "NULL;",
-                 test: ["test/ash_onetime/external_state/catalog_guards_test.exs", "test/ash_onetime/external_state/review_acl_test.exs"],
+                 test: [
+                   "test/ash_onetime/external_state/catalog_guards_test.exs",
+                   "test/ash_onetime/external_state/review_acl_test.exs"
+                 ],
                  tag: "enforcement_trust_missing_root_refusal_mutation",
                  test_name:
                    "plain: trust-missing-root-refusal reports its native catalog boundary",
@@ -8882,12 +8885,13 @@ defmodule AshOnetime.MutationCheck do
                        "2: trust-missing-root-refusal reports its native catalog boundary",
                      assertion: "assert actual",
                      assertion_line: 124
-                   }
-                   , %{
+                   },
+                   %{
                      test_name: "plain: trust refuses a missing rollback journal",
                      assertion: "assert {:error,",
                      assertion_line: 69
-                   }, %{
+                   },
+                   %{
                      test_name: "2: trust refuses a missing rollback journal",
                      assertion: "assert {:error,",
                      assertion_line: 69
@@ -9328,593 +9332,680 @@ defmodule AshOnetime.MutationCheck do
 
   # Review repair mutation rows.
   @mutations Map.merge(@mutations, %{
-    "external-journal-capture" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "SELECT p.oid::regprocedure::text,pg_get_functiondef(p.oid),p.proowner,p.proconfig,p.prosecdef,p.proacl",
-      mutated: "SELECT p.oid::regprocedure::text,pg_get_functiondef(p.oid),p.proowner,NULL,p.prosecdef,NULL",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: rollback restores every prior routine definition and grant",
-      assertion: "assert :ok = migrate(c, 13, source, :down)",
-      assertion_line: 35,
-      required_failures: [
-        %{
-          test_name: "plain: rollback restores every prior routine definition and grant",
-          assertion: "assert :ok = migrate(c, 13, source, :down)",
-          assertion_line: 35
-        },
-        %{
-          test_name: "2: rollback restores every prior routine definition and grant",
-          assertion: "assert :ok = migrate(c, 13, source, :down)",
-          assertion_line: 35
-        }
-      ]
-    },
-    "external-journal-restore-definition" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "EXECUTE item->>'definition';",
-      mutated: "NULL;",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: rollback restores every prior routine definition and grant",
-      assertion: "assert :ok = migrate(c, 13, source, :down)",
-      assertion_line: 35,
-      required_failures: [
-        %{
-          test_name: "plain: rollback restores every prior routine definition and grant",
-          assertion: "assert :ok = migrate(c, 13, source, :down)",
-          assertion_line: 35
-        },
-        %{
-          test_name: "2: rollback restores every prior routine definition and grant",
-          assertion: "assert :ok = migrate(c, 13, source, :down)",
-          assertion_line: 35
-        }
-      ]
-    },
-    "external-journal-clear-grants" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "        FOR grantee IN SELECT DISTINCT a.grantee FROM pg_proc p,\n          LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE p.oid=routine_oid LOOP\n          EXECUTE format('REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s CASCADE',routine_oid::regprocedure,\n            CASE WHEN grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(grantee)) END);",
-      mutated: "        FOR grantee IN SELECT DISTINCT a.grantee FROM pg_proc p,\n          LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE p.oid=routine_oid AND false LOOP\n          EXECUTE format('REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s CASCADE',routine_oid::regprocedure,\n            CASE WHEN grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(grantee)) END);",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: rollback restores every prior routine definition and grant",
-      assertion: "assert routines(c) == before",
-      assertion_line: 36,
-      required_failures: [
-        %{
-          test_name: "plain: rollback restores every prior routine definition and grant",
-          assertion: "assert routines(c) == before",
-          assertion_line: 36
-        },
-        %{
-          test_name: "2: rollback restores every prior routine definition and grant",
-          assertion: "assert routines(c) == before",
-          assertion_line: 36
-        }
-      ]
-    },
-    "external-journal-restore-grants" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "SELECT g AS value FROM jsonb_array_elements(item->'acl') g",
-      mutated: "SELECT g AS value FROM jsonb_array_elements(item->'acl') g WHERE false",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: rollback restores every prior routine definition and grant",
-      assertion: "assert routines(c) == before",
-      assertion_line: 36,
-      required_failures: [
-        %{
-          test_name: "plain: rollback restores every prior routine definition and grant",
-          assertion: "assert routines(c) == before",
-          assertion_line: 36
-        },
-        %{
-          test_name: "2: rollback restores every prior routine definition and grant",
-          assertion: "assert routines(c) == before",
-          assertion_line: 36
-        }
-      ]
-    },
-    "external-journal-primary-key" => %{
-      path: "priv/templates/migrations/external_state/restore.sql",
-      original: "PRIMARY KEY (routine_identity)",
-      mutated: "",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: the journal primary key refuses a duplicate routine snapshot",
-      assertion: "assert {:error",
-      assertion_line: 177,
-      required_failures: [
-        %{
-          test_name: "plain: the journal primary key refuses a duplicate routine snapshot",
-          assertion: "assert {:error",
-          assertion_line: 177
-        },
-        %{
-          test_name: "2: the journal primary key refuses a duplicate routine snapshot",
-          assertion: "assert {:error",
-          assertion_line: 177
-        }
-      ]
-    },
-    "external-journal-owner-only" => %{
-      path: "priv/templates/migrations/external_state/restore.sql",
-      original: "      FOR grantee IN SELECT DISTINCT a.grantee FROM pg_class c,\n        LATERAL aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a\n        WHERE c.oid=format('%I.ash_onetime_external_state_restore',install_schema)::regclass\n          AND a.grantee<>c.relowner LOOP\n        EXECUTE format('REVOKE ALL PRIVILEGES ON TABLE %I.ash_onetime_external_state_restore FROM %s CASCADE',install_schema,\n          CASE WHEN grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(grantee)) END);",
-      mutated: "      FOR grantee IN SELECT DISTINCT a.grantee FROM pg_class c,\n        LATERAL aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a\n        WHERE c.oid=format('%I.ash_onetime_external_state_restore',install_schema)::regclass\n          AND false LOOP\n        EXECUTE format('REVOKE ALL PRIVILEGES ON TABLE %I.ash_onetime_external_state_restore FROM %s CASCADE',install_schema,\n          CASE WHEN grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(grantee)) END);",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: the rollback journal captures all six routines with owner-only grants",
-      assertion: "assert scalar",
-      assertion_line: 92,
-      required_failures: [
-        %{
-          test_name: "plain: the rollback journal captures all six routines with owner-only grants",
-          assertion: "assert scalar",
-          assertion_line: 92
-        },
-        %{
-          test_name: "2: the rollback journal captures all six routines with owner-only grants",
-          assertion: "assert scalar",
-          assertion_line: 92
-        }
-      ]
-    },
-    "external-journal-capture-complete" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "      IF (SELECT count(*) FROM \#{q(\"ash_onetime_external_state_restore\")})<>6 THEN",
-      mutated: "      IF false THEN",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: upgrade refuses to capture fewer than six prior routines",
-      assertion: "assert {:error",
-      assertion_line: 156,
-      required_failures: [
-        %{
-          test_name: "plain: upgrade refuses to capture fewer than six prior routines",
-          assertion: "assert {:error",
-          assertion_line: 156
-        },
-        %{
-          test_name: "2: upgrade refuses to capture fewer than six prior routines",
-          assertion: "assert {:error",
-          assertion_line: 156
-        }
-      ]
-    },
-    "external-journal-missing" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "      IF to_regclass(format('%I.ash_onetime_external_state_restore',install_schema)) IS NULL THEN",
-      mutated: "      IF false THEN",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: rollback refuses a missing journal without changing external state",
-      assertion: "assert {:error",
-      assertion_line: 112,
-      required_failures: [
-        %{
-          test_name: "plain: rollback refuses a missing journal without changing external state",
-          assertion: "assert {:error",
-          assertion_line: 112
-        },
-        %{
-          test_name: "2: rollback refuses a missing journal without changing external state",
-          assertion: "assert {:error",
-          assertion_line: 112
-        }
-      ]
-    },
-    "external-journal-coverage" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "      IF (SELECT count(*) FROM \#{q(\"ash_onetime_external_state_restore\")})<>6 OR EXISTS (\n        SELECT 1 FROM jsonb_array_elements(\#{maintenance_literal(Jason.encode!(Enum.filter(@external_functions, &(&1.name in @previous_names))))}::jsonb) r\n        WHERE NOT EXISTS (SELECT 1 FROM \#{q(\"ash_onetime_external_state_restore\")} j\n          WHERE to_regprocedure(j.routine_identity)=to_regprocedure(format('%I.%I(%s)',install_schema,r->>'name',r->>'types')))) THEN",
-      mutated: "      IF false THEN",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: rollback refuses an incomplete journal without changing external state",
-      assertion: "assert {:error",
-      assertion_line: 139,
-      required_failures: [
-        %{
-          test_name: "plain: rollback refuses an incomplete journal without changing external state",
-          assertion: "assert {:error",
-          assertion_line: 139
-        },
-        %{
-          test_name: "2: rollback refuses an incomplete journal without changing external state",
-          assertion: "assert {:error",
-          assertion_line: 139
-        }
-      ]
-    },
-    "external-journal-restore-attributes" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "        IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid=routine_oid\n          AND p.proowner=(item->>'owner_oid')::oid\n          AND p.prosecdef=(item->>'security_definer')::boolean\n          AND to_jsonb(p.proconfig) IS NOT DISTINCT FROM nullif(item->'configuration','null'::jsonb)) THEN",
-      mutated: "      IF false THEN",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: rollback refuses journal attributes inconsistent with its saved definition",
-      assertion: "assert {:error",
-      assertion_line: 167,
-      required_failures: [
-        %{
-          test_name: "plain: rollback refuses journal attributes inconsistent with its saved definition",
-          assertion: "assert {:error",
-          assertion_line: 167
-        },
-        %{
-          test_name: "2: rollback refuses journal attributes inconsistent with its saved definition",
-          assertion: "assert {:error",
-          assertion_line: 167
-        }
-      ]
-    },
-    "external-up-restore-role" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "      -- rule:external-up-restore-role\n      PERFORM set_config('role',migrating_role,true);",
-      mutated: "      -- rule:external-up-restore-role\n      NULL;",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: external upgrade restores the migrating role before its journal insert",
-      assertion: "assert :ok =",
-      assertion_line: 190,
-      required_failures: [
-        %{
-          test_name: "plain: external upgrade restores the migrating role before its journal insert",
-          assertion: "assert :ok =",
-          assertion_line: 190
-        },
-        %{
-          test_name: "2: external upgrade restores the migrating role before its journal insert",
-          assertion: "assert :ok =",
-          assertion_line: 190
-        }
-      ]
-    },
-    "external-routines-restore-role" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "      -- rule:external-routines-restore-role\n      PERFORM set_config('role',migrating_role,true);",
-      mutated: "      -- rule:external-routines-restore-role\n      NULL;",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: external upgrade restores the migrating role before its journal insert",
-      assertion: "assert :ok =",
-      assertion_line: 190,
-      required_failures: [
-        %{
-          test_name: "plain: external upgrade restores the migrating role before its journal insert",
-          assertion: "assert :ok =",
-          assertion_line: 190
-        },
-        %{
-          test_name: "2: external upgrade restores the migrating role before its journal insert",
-          assertion: "assert :ok =",
-          assertion_line: 190
-        }
-      ]
-    },
-    "external-outcomes-restore-role" => %{
-      path: "priv/templates/migrations/external_state/outcomes.sql",
-      original: "      -- rule:external-outcomes-restore-role\n      PERFORM set_config('role',migrating_role,true);",
-      mutated: "      -- rule:external-outcomes-restore-role\n      NULL;",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: external upgrade restores the migrating role before its journal insert",
-      assertion: "assert :ok =",
-      assertion_line: 190,
-      required_failures: [
-        %{
-          test_name: "plain: external upgrade restores the migrating role before its journal insert",
-          assertion: "assert :ok =",
-          assertion_line: 190
-        },
-        %{
-          test_name: "2: external upgrade restores the migrating role before its journal insert",
-          assertion: "assert :ok =",
-          assertion_line: 190
-        }
-      ]
-    },
-    "external-down-restore-role" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "      -- rule:external-down-restore-role\n      PERFORM set_config('role',migrating_role,true);",
-      mutated: "      -- rule:external-down-restore-role\n      NULL;",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: external rollback restores the migrating role before its journal delete",
-      assertion: "assert :ok = migrate(%{c | owner_repo: migrator}",
-      assertion_line: 211,
-      required_failures: [
-        %{
-          test_name: "plain: external rollback restores the migrating role before its journal delete",
-          assertion: "assert :ok = migrate(%{c | owner_repo: migrator}",
-          assertion_line: 211
-        },
-        %{
-          test_name: "2: external rollback restores the migrating role before its journal delete",
-          assertion: "assert :ok = migrate(%{c | owner_repo: migrator}",
-          assertion_line: 211
-        }
-      ]
-    },
-    "external-down-owner" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "      -- rule:external-down-owner\n      PERFORM set_config('role',owner_name,true);",
-      mutated: "      -- rule:external-down-owner\n      NULL;",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: external rollback restores the migrating role before its journal delete",
-      assertion: "assert :ok = migrate(%{c | owner_repo: migrator}",
-      assertion_line: 211,
-      required_failures: [
-        %{
-          test_name: "plain: external rollback restores the migrating role before its journal delete",
-          assertion: "assert :ok = migrate(%{c | owner_repo: migrator}",
-          assertion_line: 211
-        },
-        %{
-          test_name: "2: external rollback restores the migrating role before its journal delete",
-          assertion: "assert :ok = migrate(%{c | owner_repo: migrator}",
-          assertion_line: 211
-        }
-      ]
-    },
-    "external-down-force-read" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "      -- rule:external-down-force-read\n      IF force_claims THEN ALTER TABLE \#{q(@claims)} NO FORCE ROW LEVEL SECURITY; END IF;",
-      mutated: "      -- rule:external-down-force-read\n      NULL;",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: rollback succeeds under FORCE and restores both row security flags",
-      assertion: "assert :ok = migrate(c, 13, source, :down)",
-      assertion_line: 238,
-      required_failures: [
-        %{
-          test_name: "plain: rollback succeeds under FORCE and restores both row security flags",
-          assertion: "assert :ok = migrate(c, 13, source, :down)",
-          assertion_line: 238
-        },
-        %{
-          test_name: "2: rollback succeeds under FORCE and restores both row security flags",
-          assertion: "assert :ok = migrate(c, 13, source, :down)",
-          assertion_line: 238
-        }
-      ]
-    },
-    "external-down-force-restore" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "      -- rule:external-down-force-restore\n      IF force_claims THEN ALTER TABLE \#{q(@claims)} FORCE ROW LEVEL SECURITY; END IF;",
-      mutated: "      -- rule:external-down-force-restore\n      NULL;",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: rollback succeeds under FORCE and restores both row security flags",
-      assertion: "assert [[true, true]]",
-      assertion_line: 240,
-      required_failures: [
-        %{
-          test_name: "plain: rollback succeeds under FORCE and restores both row security flags",
-          assertion: "assert [[true, true]]",
-          assertion_line: 240
-        },
-        %{
-          test_name: "2: rollback succeeds under FORCE and restores both row security flags",
-          assertion: "assert [[true, true]]",
-          assertion_line: 240
-        }
-      ]
-    },
-    "external-public-execute" => %{
-      path: "priv/templates/migrations/external_state.exs",
-      original: "IF routine->>'grant_class'='public_invoker' THEN",
-      mutated: "IF routine->>'grant_class' IN ('step','public_invoker') OR routine->>'name'='ash_onetime_cleanup_eligible' THEN",
-      test: "test/ash_onetime/external_state/review_upgrade_test.exs",
-      tag: "external_state_review_upgrade",
-      test_name: "plain: without maintenance an unprivileged role cannot execute ash_onetime_expire_responses",
-      assertion: "assert {:error",
-      assertion_line: 279,
-      required_failures: [
-        %{
-          test_name: "plain: without maintenance an unprivileged role cannot execute ash_onetime_expire_responses",
-          assertion: "assert {:error",
-          assertion_line: 279
-        },
-        %{
-          test_name: "plain: without maintenance an unprivileged role cannot execute ash_onetime_cleanup_idempotency",
-          assertion: "assert {:error",
-          assertion_line: 279
-        },
-        %{
-          test_name: "plain: without maintenance an unprivileged role cannot execute ash_onetime_cleanup_nonce",
-          assertion: "assert {:error",
-          assertion_line: 279
-        },
-        %{
-          test_name: "plain: without maintenance an unprivileged role cannot execute ash_onetime_reap_idempotency",
-          assertion: "assert {:error",
-          assertion_line: 279
-        },
-        %{
-          test_name: "plain: without maintenance an unprivileged role cannot execute ash_onetime_cleanup_eligible",
-          assertion: "assert {:error",
-          assertion_line: 279
-        },
-        %{
-          test_name: "2: without maintenance an unprivileged role cannot execute ash_onetime_expire_responses",
-          assertion: "assert {:error",
-          assertion_line: 279
-        },
-        %{
-          test_name: "2: without maintenance an unprivileged role cannot execute ash_onetime_cleanup_idempotency",
-          assertion: "assert {:error",
-          assertion_line: 279
-        },
-        %{
-          test_name: "2: without maintenance an unprivileged role cannot execute ash_onetime_cleanup_nonce",
-          assertion: "assert {:error",
-          assertion_line: 279
-        },
-        %{
-          test_name: "2: without maintenance an unprivileged role cannot execute ash_onetime_reap_idempotency",
-          assertion: "assert {:error",
-          assertion_line: 279
-        },
-        %{
-          test_name: "2: without maintenance an unprivileged role cannot execute ash_onetime_cleanup_eligible",
-          assertion: "assert {:error",
-          assertion_line: 279
-        }
-      ]
-    },
-    "acl-child-table-owner-only" => %{
-      path: "priv/templates/migrations/maintenance/acl.sql",
-      original: "    -- rule:acl-child-table-owner-only\n    WHERE c.oid IN (SELECT @routines@.ash_onetime_maintenance_relations()) AND a.grantee<>c.relowner",
-      mutated: "    -- rule:acl-child-table-owner-only\n    WHERE false AND c.oid IN (SELECT @routines@.ash_onetime_maintenance_relations()) AND a.grantee<>c.relowner",
-      test: "test/ash_onetime/external_state/review_acl_test.exs",
-      tag: "external_state_review_acl",
-      test_name: "plain: ACL refuses every table and column grant on ash_onetime_response_payloads children",
-      assertion: "assert [[false]]",
-      assertion_line: 121,
-      required_failures: [
-        %{
-          test_name: "plain: ACL refuses every table and column grant on ash_onetime_response_payloads children",
-          assertion: "assert [[false]]",
-          assertion_line: 121
-        },
-        %{
-          test_name: "2: ACL refuses every table and column grant on ash_onetime_idempotency_claims children",
-          assertion: "assert [[false]]",
-          assertion_line: 121
-        },
-        %{
-          test_name: "2: ACL refuses every table and column grant on ash_onetime_nonce_claims children",
-          assertion: "assert [[false]]",
-          assertion_line: 121
-        },
-        %{
-          test_name: "2: ACL refuses every table and column grant on ash_onetime_response_payloads children",
-          assertion: "assert [[false]]",
-          assertion_line: 121
-        },
-        %{
-          test_name: "plain: ACL audits table and column grants on the rollback journal",
-          assertion: "assert [[false]]",
-          assertion_line: 50
-        },
-        %{
-          test_name: "2: ACL audits table and column grants on the rollback journal",
-          assertion: "assert [[false]]",
-          assertion_line: 50
-        }
-      ]
-    },
-    "acl-child-column-owner-only" => %{
-      path: "priv/templates/migrations/maintenance/acl.sql",
-      original: "    -- rule:acl-child-column-owner-only\n    WHERE c.oid IN (SELECT @routines@.ash_onetime_maintenance_relations()) AND a.grantee<>c.relowner",
-      mutated: "    -- rule:acl-child-column-owner-only\n    WHERE false AND c.oid IN (SELECT @routines@.ash_onetime_maintenance_relations()) AND a.grantee<>c.relowner",
-      test: "test/ash_onetime/external_state/review_acl_test.exs",
-      tag: "external_state_review_acl",
-      test_name: "plain: ACL refuses every table and column grant on ash_onetime_response_payloads children",
-      assertion: "assert [[false]]",
-      assertion_line: 121,
-      required_failures: [
-        %{
-          test_name: "plain: ACL refuses every table and column grant on ash_onetime_response_payloads children",
-          assertion: "assert [[false]]",
-          assertion_line: 121
-        },
-        %{
-          test_name: "2: ACL refuses every table and column grant on ash_onetime_idempotency_claims children",
-          assertion: "assert [[false]]",
-          assertion_line: 121
-        },
-        %{
-          test_name: "2: ACL refuses every table and column grant on ash_onetime_nonce_claims children",
-          assertion: "assert [[false]]",
-          assertion_line: 121
-        },
-        %{
-          test_name: "2: ACL refuses every table and column grant on ash_onetime_response_payloads children",
-          assertion: "assert [[false]]",
-          assertion_line: 121
-        },
-        %{
-          test_name: "plain: ACL audits table and column grants on the rollback journal",
-          assertion: "assert [[false]]",
-          assertion_line: 50
-        },
-        %{
-          test_name: "2: ACL audits table and column grants on the rollback journal",
-          assertion: "assert [[false]]",
-          assertion_line: 50
-        }
-      ]
-    },
-    "journal-reset-owner-only" => %{
-      path: "priv/templates/migrations/maintenance/reset_acl.sql",
-      original: "owner_only := owner_only OR (SELECT relname='ash_onetime_external_state_restore' FROM pg_class WHERE oid=relation_oid);",
-      mutated: "owner_only := owner_only;",
-      test: "test/ash_onetime/external_state/review_acl_test.exs",
-      tag: "external_state_review_journal_acl",
-      test_name: "plain: reset ACL keeps the rollback journal owner-only in every mode",
-      assertion: "refute scalar",
-      assertion_line: 34,
-      required_failures: [
-        %{
-          test_name: "plain: reset ACL keeps the rollback journal owner-only in every mode",
-          assertion: "refute scalar",
-          assertion_line: 34
-        },
-        %{
-          test_name: "2: reset ACL keeps the rollback journal owner-only in every mode",
-          assertion: "refute scalar",
-          assertion_line: 34
-        }
-      ]
-    },
-    "private-routine-schema" => %{
-      path: "priv/templates/migrations/maintenance_helpers.exs",
-      original: "EXECUTE format('REVOKE ALL PRIVILEGES ON SCHEMA %I FROM PUBLIC',routine_schema);",
-      mutated: "EXECUTE format('GRANT USAGE ON SCHEMA %I TO PUBLIC',routine_schema);",
-      test: "test/ash_onetime/external_state/review_acl_test.exs",
-      tag: "external_state_review_schema_usage",
-      test_name: "plain: the private routine schema grants no PUBLIC usage",
-      assertion: "refute scalar",
-      assertion_line: 145,
-      required_failures: [
-        %{
-          test_name: "plain: the private routine schema grants no PUBLIC usage",
-          assertion: "refute scalar",
-          assertion_line: 145
-        },
-        %{
-          test_name: "2: the private routine schema grants no PUBLIC usage",
-          assertion: "refute scalar",
-          assertion_line: 145
-        }
-      ]
-    },
-    "doctor-rollback-journal" => %{
-      path: "lib/mix/tasks/ash_onetime.doctor.ex",
-      original: "AND to_regclass(format('%I.ash_onetime_external_state_restore',$1::text)) IS NOT NULL",
-      mutated: "AND true",
-      test: "test/ash_onetime/external_state/doctor_test.exs",
-      tag: "external_state_review_journal_doctor",
-      test_name: "plain: doctor refuses a missing rollback journal",
-      assertion: "assert_raise Mix.Error",
-      assertion_line: 20,
-      required_failures: [
-        %{
-          test_name: "plain: doctor refuses a missing rollback journal",
-          assertion: "assert_raise Mix.Error",
-          assertion_line: 20
-        },
-        %{
-          test_name: "2: doctor refuses a missing rollback journal",
-          assertion: "assert_raise Mix.Error",
-          assertion_line: 20
-        }
-      ]
-    }
-  })
+               "external-journal-capture" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original:
+                   "SELECT p.oid::regprocedure::text,pg_get_functiondef(p.oid),p.proowner,p.proconfig,p.prosecdef,p.proacl",
+                 mutated:
+                   "SELECT p.oid::regprocedure::text,pg_get_functiondef(p.oid),p.proowner,NULL,p.prosecdef,NULL",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name: "plain: rollback restores every prior routine definition and grant",
+                 assertion: "assert :ok = migrate(c, 13, source, :down)",
+                 assertion_line: 51,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: rollback restores every prior routine definition and grant",
+                     assertion: "assert :ok = migrate(c, 13, source, :down)",
+                     assertion_line: 51
+                   },
+                   %{
+                     test_name: "2: rollback restores every prior routine definition and grant",
+                     assertion: "assert :ok = migrate(c, 13, source, :down)",
+                     assertion_line: 51
+                   }
+                 ]
+               },
+               "external-journal-restore-definition" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original: "EXECUTE item->>'definition';",
+                 mutated: "NULL;",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name: "plain: rollback restores every prior routine definition and grant",
+                 assertion: "assert :ok = migrate(c, 13, source, :down)",
+                 assertion_line: 51,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: rollback restores every prior routine definition and grant",
+                     assertion: "assert :ok = migrate(c, 13, source, :down)",
+                     assertion_line: 51
+                   },
+                   %{
+                     test_name: "2: rollback restores every prior routine definition and grant",
+                     assertion: "assert :ok = migrate(c, 13, source, :down)",
+                     assertion_line: 51
+                   }
+                 ]
+               },
+               "external-journal-clear-grants" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original:
+                   "        FOR grantee IN SELECT DISTINCT a.grantee FROM pg_proc p,\n          LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE p.oid=routine_oid LOOP\n          EXECUTE format('REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s CASCADE',routine_oid::regprocedure,\n            CASE WHEN grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(grantee)) END);",
+                 mutated:
+                   "        FOR grantee IN SELECT DISTINCT a.grantee FROM pg_proc p,\n          LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE p.oid=routine_oid AND false LOOP\n          EXECUTE format('REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s CASCADE',routine_oid::regprocedure,\n            CASE WHEN grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(grantee)) END);",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name: "plain: rollback restores every prior routine definition and grant",
+                 assertion: "assert routines(c) == before",
+                 assertion_line: 52,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: rollback restores every prior routine definition and grant",
+                     assertion: "assert routines(c) == before",
+                     assertion_line: 52
+                   },
+                   %{
+                     test_name: "2: rollback restores every prior routine definition and grant",
+                     assertion: "assert routines(c) == before",
+                     assertion_line: 52
+                   }
+                 ]
+               },
+               "external-journal-restore-grants" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original: "SELECT g AS value FROM jsonb_array_elements(item->'acl') g",
+                 mutated: "SELECT g AS value FROM jsonb_array_elements(item->'acl') g WHERE false",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name: "plain: rollback restores every prior routine definition and grant",
+                 assertion: "assert routines(c) == before",
+                 assertion_line: 52,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: rollback restores every prior routine definition and grant",
+                     assertion: "assert routines(c) == before",
+                     assertion_line: 52
+                   },
+                   %{
+                     test_name: "2: rollback restores every prior routine definition and grant",
+                     assertion: "assert routines(c) == before",
+                     assertion_line: 52
+                   }
+                 ]
+               },
+               "external-journal-primary-key" => %{
+                 path: "priv/templates/migrations/external_state/restore.sql",
+                 original: "PRIMARY KEY (routine_identity)",
+                 mutated: "",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name: "plain: the journal primary key refuses a duplicate routine snapshot",
+                 assertion: "assert {:error",
+                 assertion_line: 232,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: the journal primary key refuses a duplicate routine snapshot",
+                     assertion: "assert {:error",
+                     assertion_line: 232
+                   },
+                   %{
+                     test_name: "2: the journal primary key refuses a duplicate routine snapshot",
+                     assertion: "assert {:error",
+                     assertion_line: 232
+                   }
+                 ]
+               },
+               "external-journal-owner-only" => %{
+                 path: "priv/templates/migrations/external_state/restore.sql",
+                 original:
+                   "      FOR grantee IN SELECT DISTINCT a.grantee FROM pg_class c,\n        LATERAL aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a\n        WHERE c.oid=format('%I.ash_onetime_external_state_restore',install_schema)::regclass\n          AND a.grantee<>c.relowner LOOP\n        EXECUTE format('REVOKE ALL PRIVILEGES ON TABLE %I.ash_onetime_external_state_restore FROM %s CASCADE',install_schema,\n          CASE WHEN grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(grantee)) END);",
+                 mutated:
+                   "      FOR grantee IN SELECT DISTINCT a.grantee FROM pg_class c,\n        LATERAL aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a\n        WHERE c.oid=format('%I.ash_onetime_external_state_restore',install_schema)::regclass\n          AND false LOOP\n        EXECUTE format('REVOKE ALL PRIVILEGES ON TABLE %I.ash_onetime_external_state_restore FROM %s CASCADE',install_schema,\n          CASE WHEN grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(grantee)) END);",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name:
+                   "plain: the rollback journal captures all six routines with owner-only grants",
+                 assertion: "assert scalar",
+                 assertion_line: 115,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: the rollback journal captures all six routines with owner-only grants",
+                     assertion: "assert scalar",
+                     assertion_line: 115
+                   },
+                   %{
+                     test_name:
+                       "2: the rollback journal captures all six routines with owner-only grants",
+                     assertion: "assert scalar",
+                     assertion_line: 115
+                   }
+                 ]
+               },
+               "external-journal-capture-complete" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original:
+                   "      IF (SELECT count(*) FROM \#{q(\"ash_onetime_external_state_restore\")})<>6 THEN",
+                 mutated: "      IF false THEN",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name: "plain: upgrade refuses to capture fewer than six prior routines",
+                 assertion: "assert {:error",
+                 assertion_line: 186,
+                 required_failures: [
+                   %{
+                     test_name: "plain: upgrade refuses to capture fewer than six prior routines",
+                     assertion: "assert {:error",
+                     assertion_line: 186
+                   },
+                   %{
+                     test_name: "2: upgrade refuses to capture fewer than six prior routines",
+                     assertion: "assert {:error",
+                     assertion_line: 186
+                   }
+                 ]
+               },
+               "external-journal-missing" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original:
+                   "      IF to_regclass(format('%I.ash_onetime_external_state_restore',install_schema)) IS NULL THEN",
+                 mutated: "      IF false THEN",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name:
+                   "plain: rollback refuses a missing journal without changing external state",
+                 assertion: "assert {:error",
+                 assertion_line: 135,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: rollback refuses a missing journal without changing external state",
+                     assertion: "assert {:error",
+                     assertion_line: 135
+                   },
+                   %{
+                     test_name:
+                       "2: rollback refuses a missing journal without changing external state",
+                     assertion: "assert {:error",
+                     assertion_line: 135
+                   }
+                 ]
+               },
+               "external-journal-coverage" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original:
+                   "      IF (SELECT count(*) FROM \#{q(\"ash_onetime_external_state_restore\")})<>6 OR EXISTS (\n        SELECT 1 FROM jsonb_array_elements(\#{maintenance_literal(Jason.encode!(Enum.filter(@external_functions, &(&1.name in @previous_names))))}::jsonb) r\n        WHERE NOT EXISTS (SELECT 1 FROM \#{q(\"ash_onetime_external_state_restore\")} j\n          WHERE to_regprocedure(j.routine_identity)=to_regprocedure(format('%I.%I(%s)',install_schema,r->>'name',r->>'types')))) THEN",
+                 mutated: "      IF false THEN",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name:
+                   "plain: rollback refuses an incomplete journal without changing external state",
+                 assertion: "assert {:error",
+                 assertion_line: 162,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: rollback refuses an incomplete journal without changing external state",
+                     assertion: "assert {:error",
+                     assertion_line: 162
+                   },
+                   %{
+                     test_name:
+                       "2: rollback refuses an incomplete journal without changing external state",
+                     assertion: "assert {:error",
+                     assertion_line: 162
+                   }
+                 ]
+               },
+               "external-journal-restore-attributes" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original:
+                   "        IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid=routine_oid\n          AND p.proowner=(item->>'owner_oid')::oid\n          AND p.prosecdef=(item->>'security_definer')::boolean\n          AND to_jsonb(p.proconfig) IS NOT DISTINCT FROM nullif(item->'configuration','null'::jsonb)) THEN",
+                 mutated: "      IF false THEN",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name:
+                   "plain: rollback refuses journal attributes inconsistent with its saved definition",
+                 assertion: "assert {:error",
+                 assertion_line: 213,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: rollback refuses journal attributes inconsistent with its saved definition",
+                     assertion: "assert {:error",
+                     assertion_line: 213
+                   },
+                   %{
+                     test_name:
+                       "2: rollback refuses journal attributes inconsistent with its saved definition",
+                     assertion: "assert {:error",
+                     assertion_line: 213
+                   }
+                 ]
+               },
+               "external-up-restore-role" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original:
+                   "      -- rule:external-up-restore-role\n      PERFORM set_config('role',migrating_role,true);",
+                 mutated: "      -- rule:external-up-restore-role\n      NULL;",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name:
+                   "plain: external upgrade restores the migrating role before its journal insert",
+                 assertion: "assert :ok =",
+                 assertion_line: 245,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: external upgrade restores the migrating role before its journal insert",
+                     assertion: "assert :ok =",
+                     assertion_line: 245
+                   },
+                   %{
+                     test_name:
+                       "2: external upgrade restores the migrating role before its journal insert",
+                     assertion: "assert :ok =",
+                     assertion_line: 245
+                   }
+                 ]
+               },
+               "external-routines-restore-role" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original:
+                   "      -- rule:external-routines-restore-role\n      PERFORM set_config('role',migrating_role,true);",
+                 mutated: "      -- rule:external-routines-restore-role\n      NULL;",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name:
+                   "plain: external upgrade restores the migrating role before its journal insert",
+                 assertion: "assert :ok =",
+                 assertion_line: 245,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: external upgrade restores the migrating role before its journal insert",
+                     assertion: "assert :ok =",
+                     assertion_line: 245
+                   },
+                   %{
+                     test_name:
+                       "2: external upgrade restores the migrating role before its journal insert",
+                     assertion: "assert :ok =",
+                     assertion_line: 245
+                   }
+                 ]
+               },
+               "external-outcomes-restore-role" => %{
+                 path: "priv/templates/migrations/external_state/outcomes.sql",
+                 original:
+                   "      -- rule:external-outcomes-restore-role\n      PERFORM set_config('role',migrating_role,true);",
+                 mutated: "      -- rule:external-outcomes-restore-role\n      NULL;",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name:
+                   "plain: external upgrade restores the migrating role before its journal insert",
+                 assertion: "assert :ok =",
+                 assertion_line: 245,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: external upgrade restores the migrating role before its journal insert",
+                     assertion: "assert :ok =",
+                     assertion_line: 245
+                   },
+                   %{
+                     test_name:
+                       "2: external upgrade restores the migrating role before its journal insert",
+                     assertion: "assert :ok =",
+                     assertion_line: 245
+                   }
+                 ]
+               },
+               "external-down-restore-role" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original:
+                   "      -- rule:external-down-restore-role\n      PERFORM set_config('role',migrating_role,true);",
+                 mutated: "      -- rule:external-down-restore-role\n      NULL;",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name:
+                   "plain: external rollback restores the migrating role before its journal delete",
+                 assertion: "assert :ok = migrate(%{c | owner_repo: migrator}",
+                 assertion_line: 266,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: external rollback restores the migrating role before its journal delete",
+                     assertion: "assert :ok = migrate(%{c | owner_repo: migrator}",
+                     assertion_line: 266
+                   },
+                   %{
+                     test_name:
+                       "2: external rollback restores the migrating role before its journal delete",
+                     assertion: "assert :ok = migrate(%{c | owner_repo: migrator}",
+                     assertion_line: 266
+                   }
+                 ]
+               },
+               "external-down-owner" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original:
+                   "      -- rule:external-down-owner\n      PERFORM set_config('role',owner_name,true);",
+                 mutated: "      -- rule:external-down-owner\n      NULL;",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name:
+                   "plain: external rollback restores the migrating role before its journal delete",
+                 assertion: "assert :ok = migrate(%{c | owner_repo: migrator}",
+                 assertion_line: 266,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: external rollback restores the migrating role before its journal delete",
+                     assertion: "assert :ok = migrate(%{c | owner_repo: migrator}",
+                     assertion_line: 266
+                   },
+                   %{
+                     test_name:
+                       "2: external rollback restores the migrating role before its journal delete",
+                     assertion: "assert :ok = migrate(%{c | owner_repo: migrator}",
+                     assertion_line: 266
+                   }
+                 ]
+               },
+               "external-down-force-read" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original:
+                   "      -- rule:external-down-force-read\n      IF force_claims THEN ALTER TABLE \#{q(@claims)} NO FORCE ROW LEVEL SECURITY; END IF;",
+                 mutated: "      -- rule:external-down-force-read\n      NULL;",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name:
+                   "plain: rollback succeeds under FORCE and restores both row security flags",
+                 assertion: "assert :ok = migrate(c, 13, source, :down)",
+                 assertion_line: 293,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: rollback succeeds under FORCE and restores both row security flags",
+                     assertion: "assert :ok = migrate(c, 13, source, :down)",
+                     assertion_line: 293
+                   },
+                   %{
+                     test_name:
+                       "2: rollback succeeds under FORCE and restores both row security flags",
+                     assertion: "assert :ok = migrate(c, 13, source, :down)",
+                     assertion_line: 293
+                   }
+                 ]
+               },
+               "external-down-force-restore" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original:
+                   "      -- rule:external-down-force-restore\n      IF force_claims THEN ALTER TABLE \#{q(@claims)} FORCE ROW LEVEL SECURITY; END IF;",
+                 mutated: "      -- rule:external-down-force-restore\n      NULL;",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name:
+                   "plain: rollback succeeds under FORCE and restores both row security flags",
+                 assertion: "assert [[true, true]]",
+                 assertion_line: 295,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: rollback succeeds under FORCE and restores both row security flags",
+                     assertion: "assert [[true, true]]",
+                     assertion_line: 295
+                   },
+                   %{
+                     test_name:
+                       "2: rollback succeeds under FORCE and restores both row security flags",
+                     assertion: "assert [[true, true]]",
+                     assertion_line: 295
+                   }
+                 ]
+               },
+               "external-public-execute" => %{
+                 path: "priv/templates/migrations/external_state.exs",
+                 original: "IF routine->>'grant_class'='public_invoker' THEN",
+                 mutated:
+                   "IF routine->>'grant_class' IN ('step','public_invoker') OR routine->>'name'='ash_onetime_cleanup_eligible' THEN",
+                 test: "test/ash_onetime/external_state/review_upgrade_test.exs",
+                 tag: "external_state_review_upgrade",
+                 test_name:
+                   "plain: without maintenance an unprivileged role cannot execute ash_onetime_expire_responses",
+                 assertion: "assert {:error",
+                 assertion_line: 334,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: without maintenance an unprivileged role cannot execute ash_onetime_expire_responses",
+                     assertion: "assert {:error",
+                     assertion_line: 334
+                   },
+                   %{
+                     test_name:
+                       "plain: without maintenance an unprivileged role cannot execute ash_onetime_cleanup_idempotency",
+                     assertion: "assert {:error",
+                     assertion_line: 334
+                   },
+                   %{
+                     test_name:
+                       "plain: without maintenance an unprivileged role cannot execute ash_onetime_cleanup_nonce",
+                     assertion: "assert {:error",
+                     assertion_line: 334
+                   },
+                   %{
+                     test_name:
+                       "plain: without maintenance an unprivileged role cannot execute ash_onetime_reap_idempotency",
+                     assertion: "assert {:error",
+                     assertion_line: 334
+                   },
+                   %{
+                     test_name:
+                       "plain: without maintenance an unprivileged role cannot execute ash_onetime_cleanup_eligible",
+                     assertion: "assert {:error",
+                     assertion_line: 334
+                   },
+                   %{
+                     test_name:
+                       "2: without maintenance an unprivileged role cannot execute ash_onetime_expire_responses",
+                     assertion: "assert {:error",
+                     assertion_line: 334
+                   },
+                   %{
+                     test_name:
+                       "2: without maintenance an unprivileged role cannot execute ash_onetime_cleanup_idempotency",
+                     assertion: "assert {:error",
+                     assertion_line: 334
+                   },
+                   %{
+                     test_name:
+                       "2: without maintenance an unprivileged role cannot execute ash_onetime_cleanup_nonce",
+                     assertion: "assert {:error",
+                     assertion_line: 334
+                   },
+                   %{
+                     test_name:
+                       "2: without maintenance an unprivileged role cannot execute ash_onetime_reap_idempotency",
+                     assertion: "assert {:error",
+                     assertion_line: 334
+                   },
+                   %{
+                     test_name:
+                       "2: without maintenance an unprivileged role cannot execute ash_onetime_cleanup_eligible",
+                     assertion: "assert {:error",
+                     assertion_line: 334
+                   }
+                 ]
+               },
+               "acl-child-table-owner-only" => %{
+                 path: "priv/templates/migrations/maintenance/acl.sql",
+                 original:
+                   "    -- rule:acl-child-table-owner-only\n    WHERE c.oid IN (SELECT @routines@.ash_onetime_maintenance_relations()) AND a.grantee<>c.relowner",
+                 mutated:
+                   "    -- rule:acl-child-table-owner-only\n    WHERE false AND c.oid IN (SELECT @routines@.ash_onetime_maintenance_relations()) AND a.grantee<>c.relowner",
+                 test: "test/ash_onetime/external_state/review_acl_test.exs",
+                 tag: "external_state_review_acl",
+                 test_name:
+                   "plain: ACL refuses every table and column grant on ash_onetime_response_payloads children",
+                 assertion: "assert [[false]]",
+                 assertion_line: 121,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: ACL refuses every table and column grant on ash_onetime_response_payloads children",
+                     assertion: "assert [[false]]",
+                     assertion_line: 121
+                   },
+                   %{
+                     test_name:
+                       "2: ACL refuses every table and column grant on ash_onetime_idempotency_claims children",
+                     assertion: "assert [[false]]",
+                     assertion_line: 121
+                   },
+                   %{
+                     test_name:
+                       "2: ACL refuses every table and column grant on ash_onetime_nonce_claims children",
+                     assertion: "assert [[false]]",
+                     assertion_line: 121
+                   },
+                   %{
+                     test_name:
+                       "2: ACL refuses every table and column grant on ash_onetime_response_payloads children",
+                     assertion: "assert [[false]]",
+                     assertion_line: 121
+                   },
+                   %{
+                     test_name:
+                       "plain: ACL audits table and column grants on the rollback journal",
+                     assertion: "assert [[false]]",
+                     assertion_line: 50
+                   },
+                   %{
+                     test_name: "2: ACL audits table and column grants on the rollback journal",
+                     assertion: "assert [[false]]",
+                     assertion_line: 50
+                   }
+                 ]
+               },
+               "acl-child-column-owner-only" => %{
+                 path: "priv/templates/migrations/maintenance/acl.sql",
+                 original:
+                   "    -- rule:acl-child-column-owner-only\n    WHERE c.oid IN (SELECT @routines@.ash_onetime_maintenance_relations()) AND a.grantee<>c.relowner",
+                 mutated:
+                   "    -- rule:acl-child-column-owner-only\n    WHERE false AND c.oid IN (SELECT @routines@.ash_onetime_maintenance_relations()) AND a.grantee<>c.relowner",
+                 test: "test/ash_onetime/external_state/review_acl_test.exs",
+                 tag: "external_state_review_acl",
+                 test_name:
+                   "plain: ACL refuses every table and column grant on ash_onetime_response_payloads children",
+                 assertion: "assert [[false]]",
+                 assertion_line: 121,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: ACL refuses every table and column grant on ash_onetime_response_payloads children",
+                     assertion: "assert [[false]]",
+                     assertion_line: 121
+                   },
+                   %{
+                     test_name:
+                       "2: ACL refuses every table and column grant on ash_onetime_idempotency_claims children",
+                     assertion: "assert [[false]]",
+                     assertion_line: 121
+                   },
+                   %{
+                     test_name:
+                       "2: ACL refuses every table and column grant on ash_onetime_nonce_claims children",
+                     assertion: "assert [[false]]",
+                     assertion_line: 121
+                   },
+                   %{
+                     test_name:
+                       "2: ACL refuses every table and column grant on ash_onetime_response_payloads children",
+                     assertion: "assert [[false]]",
+                     assertion_line: 121
+                   },
+                   %{
+                     test_name:
+                       "plain: ACL audits table and column grants on the rollback journal",
+                     assertion: "assert [[false]]",
+                     assertion_line: 50
+                   },
+                   %{
+                     test_name: "2: ACL audits table and column grants on the rollback journal",
+                     assertion: "assert [[false]]",
+                     assertion_line: 50
+                   }
+                 ]
+               },
+               "journal-reset-owner-only" => %{
+                 path: "priv/templates/migrations/maintenance/reset_acl.sql",
+                 original:
+                   "owner_only := owner_only OR (SELECT relname='ash_onetime_external_state_restore' FROM pg_class WHERE oid=relation_oid);",
+                 mutated: "owner_only := owner_only;",
+                 test: "test/ash_onetime/external_state/review_acl_test.exs",
+                 tag: "external_state_review_journal_acl",
+                 test_name: "plain: reset ACL keeps the rollback journal owner-only in every mode",
+                 assertion: "refute scalar",
+                 assertion_line: 34,
+                 required_failures: [
+                   %{
+                     test_name:
+                       "plain: reset ACL keeps the rollback journal owner-only in every mode",
+                     assertion: "refute scalar",
+                     assertion_line: 34
+                   },
+                   %{
+                     test_name: "2: reset ACL keeps the rollback journal owner-only in every mode",
+                     assertion: "refute scalar",
+                     assertion_line: 34
+                   }
+                 ]
+               },
+               "private-routine-schema" => %{
+                 path: "priv/templates/migrations/maintenance_helpers.exs",
+                 original:
+                   "EXECUTE format('REVOKE ALL PRIVILEGES ON SCHEMA %I FROM PUBLIC',routine_schema);",
+                 mutated: "EXECUTE format('GRANT USAGE ON SCHEMA %I TO PUBLIC',routine_schema);",
+                 test: "test/ash_onetime/external_state/review_acl_test.exs",
+                 tag: "external_state_review_schema_usage",
+                 test_name: "plain: the private routine schema grants no PUBLIC usage",
+                 assertion: "refute scalar",
+                 assertion_line: 145,
+                 required_failures: [
+                   %{
+                     test_name: "plain: the private routine schema grants no PUBLIC usage",
+                     assertion: "refute scalar",
+                     assertion_line: 145
+                   },
+                   %{
+                     test_name: "2: the private routine schema grants no PUBLIC usage",
+                     assertion: "refute scalar",
+                     assertion_line: 145
+                   }
+                 ]
+               },
+               "doctor-rollback-journal" => %{
+                 path: "lib/mix/tasks/ash_onetime.doctor.ex",
+                 original:
+                   "AND to_regclass(format('%I.ash_onetime_external_state_restore',$1::text)) IS NOT NULL",
+                 mutated: "AND true",
+                 test: "test/ash_onetime/external_state/doctor_test.exs",
+                 tag: "external_state_review_journal_doctor",
+                 test_name: "plain: doctor refuses a missing rollback journal",
+                 assertion: "assert_raise Mix.Error",
+                 assertion_line: 20,
+                 required_failures: [
+                   %{
+                     test_name: "plain: doctor refuses a missing rollback journal",
+                     assertion: "assert_raise Mix.Error",
+                     assertion_line: 20
+                   },
+                   %{
+                     test_name: "2: doctor refuses a missing rollback journal",
+                     assertion: "assert_raise Mix.Error",
+                     assertion_line: 20
+                   }
+                 ]
+               }
+             })
 
   @groups %{
     "all" => Map.keys(@mutations),

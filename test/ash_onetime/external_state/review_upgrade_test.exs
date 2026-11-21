@@ -26,15 +26,34 @@ for partitioning <- [nil, 2] do
         []
       )
 
-      SQL.query!(c.owner_repo, "REVOKE ALL ON FUNCTION #{rel(c, "ash_onetime_cleanup_nonce")}(integer) FROM PUBLIC", [])
-      SQL.query!(c.owner_repo, "ALTER FUNCTION #{rel(c, "ash_onetime_cleanup_eligible")}(timestamptz) SECURITY DEFINER", [])
+      SQL.query!(
+        c.owner_repo,
+        "REVOKE ALL ON FUNCTION #{rel(c, "ash_onetime_cleanup_nonce")}(integer) FROM PUBLIC",
+        []
+      )
+
+      SQL.query!(
+        c.owner_repo,
+        "ALTER FUNCTION #{rel(c, "ash_onetime_cleanup_eligible")}(timestamptz) SECURITY DEFINER",
+        []
+      )
+
       before = routines(c)
       source = Generator.render_external_state_upgrade(Repo, [])
       assert :ok = migrate(c, 13, source)
-      SQL.query!(c.owner_repo, "GRANT EXECUTE ON FUNCTION #{rel(c, "ash_onetime_cleanup_nonce")}(integer) TO #{q(c.runtime)}", [])
+
+      SQL.query!(
+        c.owner_repo,
+        "GRANT EXECUTE ON FUNCTION #{rel(c, "ash_onetime_cleanup_nonce")}(integer) TO #{q(c.runtime)}",
+        []
+      )
+
       assert :ok = migrate(c, 13, source, :down)
       assert routines(c) == before
-      assert scalar(c.owner_repo, "SELECT to_regclass($1) IS NULL", [rel(c, "ash_onetime_external_state_restore")])
+
+      assert scalar(c.owner_repo, "SELECT to_regclass($1) IS NULL", [
+               rel(c, "ash_onetime_external_state_restore")
+             ])
     end
 
     test "#{partitioning || "plain"}: every restored cleanup and guard executes after rollback",
@@ -71,7 +90,11 @@ for partitioning <- [nil, 2] do
 
       assert scalar(c.owner_repo, "SELECT count(*) FROM #{rel(c, "ash_onetime_nonce_claims")}") ==
                0
-      assert scalar(c.owner_repo, "SELECT count(*) FROM #{rel(c, "ash_onetime_idempotency_claims")}") == 0
+
+      assert scalar(
+               c.owner_repo,
+               "SELECT count(*) FROM #{rel(c, "ash_onetime_idempotency_claims")}"
+             ) == 0
     end
 
     @tag :external_state_review_journal
@@ -150,22 +173,54 @@ for partitioning <- [nil, 2] do
     end
 
     @tag :external_state_review_journal
-    test "#{partitioning || "plain"}: upgrade refuses to capture fewer than six prior routines", c do
+    test "#{partitioning || "plain"}: upgrade refuses to capture fewer than six prior routines",
+         c do
       legacy_install(c)
-      SQL.query!(c.owner_repo, "DROP FUNCTION #{rel(c, "ash_onetime_reap_idempotency")}(integer,bigint)", [])
-      assert {:error, %Postgrex.Error{postgres: %{pg_code: "23514", message: "external rollback journal does not cover all six routines"}}} =
+
+      SQL.query!(
+        c.owner_repo,
+        "DROP FUNCTION #{rel(c, "ash_onetime_reap_idempotency")}(integer,bigint)",
+        []
+      )
+
+      assert {:error,
+              %Postgrex.Error{
+                postgres: %{
+                  pg_code: "23514",
+                  message: "external rollback journal does not cover all six routines"
+                }
+              }} =
                migrate(c, 13, Generator.render_external_state_upgrade(Repo, []))
-      assert scalar(c.owner_repo, "SELECT to_regclass($1) IS NULL", [rel(c, "ash_onetime_external_state_restore")])
+
+      assert scalar(c.owner_repo, "SELECT to_regclass($1) IS NULL", [
+               rel(c, "ash_onetime_external_state_restore")
+             ])
     end
 
     @tag :external_state_review_journal
-    test "#{partitioning || "plain"}: rollback refuses journal attributes inconsistent with its saved definition", c do
+    test "#{partitioning || "plain"}: rollback refuses journal attributes inconsistent with its saved definition",
+         c do
       legacy_install(c)
       source = Generator.render_external_state_upgrade(Repo, [])
       assert :ok = migrate(c, 13, source)
-      SQL.query!(c.owner_repo, "UPDATE #{rel(c, "ash_onetime_external_state_restore")} SET security_definer=NOT security_definer", [])
-      assert {:error, %Postgrex.Error{postgres: %{pg_code: "23514", message: "external rollback journal routine attributes differ"}}} = migrate(c, 13, source, :down)
-      assert scalar(c.owner_repo, "SELECT to_regclass($1) IS NOT NULL", [rel(c, "ash_onetime_effect_outcomes")])
+
+      SQL.query!(
+        c.owner_repo,
+        "UPDATE #{rel(c, "ash_onetime_external_state_restore")} SET security_definer=NOT security_definer",
+        []
+      )
+
+      assert {:error,
+              %Postgrex.Error{
+                postgres: %{
+                  pg_code: "23514",
+                  message: "external rollback journal routine attributes differ"
+                }
+              }} = migrate(c, 13, source, :down)
+
+      assert scalar(c.owner_repo, "SELECT to_regclass($1) IS NOT NULL", [
+               rel(c, "ash_onetime_effect_outcomes")
+             ])
     end
 
     @tag :external_state_review_journal
@@ -306,7 +361,15 @@ for partitioning <- [nil, 2] do
     defp journal_migrator(c) do
       SQL.query!(Repo, "GRANT #{q(c.owner)} TO #{q(c.migrator)} WITH INHERIT FALSE, SET TRUE", [])
       SQL.query!(Repo, "GRANT USAGE,CREATE ON SCHEMA #{q(c.schema)} TO #{q(c.migrator)}", [])
-      on_exit(fn -> SQL.query!(Repo, "GRANT #{q(c.owner)} TO #{q(c.migrator)} WITH INHERIT TRUE, SET TRUE", []) end)
+
+      on_exit(fn ->
+        SQL.query!(
+          Repo,
+          "GRANT #{q(c.owner)} TO #{q(c.migrator)} WITH INHERIT TRUE, SET TRUE",
+          []
+        )
+      end)
+
       SQL.query!(Repo, "ALTER TABLE #{rel(c, "schema_migrations")} OWNER TO #{q(c.migrator)}", [])
 
       SQL.query!(
