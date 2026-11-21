@@ -347,7 +347,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end)
 
     assert catalog.parameter_types == [23]
-    assert [{"connection_stream_probe", 0, 0, 23, 4, -1, 0}] = catalog.columns
+    assert [{"connection_stream_probe", {:table_oid, 0}, 0, 23, 4, -1, 0}] = catalog.columns
 
     indexed =
       run.events
@@ -357,6 +357,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     refute Enum.any?(indexed, &(&1.mfa == {Postgrex.Protocol, :handle_prepare, 3}))
     native = NativeTransport.build(%{events: indexed})
     assert native.errors == []
+
     streams =
       ConnectionReads.build(native, MapSet.new(), %{origin.port => %{query.name => catalog}})
 
@@ -577,6 +578,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     # This observes the producer's actual program. Buffered-copy validation and
     # the ping's finite timeout origin are separate transducer obligations.
     demand_rules = Enum.map(ConnectionReads.build(native).errors, & &1.rule)
+    assert demand_rules == []
 
     for %{event: {pid, :call, {Postgrex.Protocol, :activate, [_, buffer]}}} = source <- events,
         is_binary(buffer) and byte_size(buffer) > 0 do
