@@ -54,6 +54,7 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
       offset: stream.received,
       source_offset: Map.get(chunk, :source_offset, 0),
       phase: Map.get(chunk, :phase, :shared),
+      copies: Map.get(chunk, :copies, []),
       length: byte_size(bytes)
     }
 
@@ -114,10 +115,14 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
         span
         | offset: start,
           source_offset: span.source_offset + start - span.offset,
+          copies: copy_spans(span.copies, start - span.offset, stop - start),
           length: stop - start
       }
     end
   end
+
+  defp copy_spans(copies, offset, size),
+    do: Enum.map(copies, &%{&1 | offset: &1.offset + offset, length: size})
 
   # Decode only the TCP driver's documented command and PostgreSQL messages at
   # transport positions. Arbitrary binaries are never inspected for ETF or packets.

@@ -161,6 +161,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert read.control_reply.index in read.indexes
       assert read.control_request.index < read.delivered.index
       assert is_integer(read.id)
+      assert length(read.copies) == 5
+      assert Enum.all?(read.copies, &(&1.index in read.indexes))
+      assert Enum.all?(read.copies, &(&1.length == byte_size(read.bytes)))
     end
 
     for write <- native.writes do
@@ -168,11 +171,21 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert write.source.index in write.indexes
       assert write.returned.index in write.indexes
       assert is_reference(write.reference)
+      assert length(write.copies) == 6
+      assert Enum.all?(write.copies, &(&1.index in write.indexes))
+      assert Enum.all?(write.copies, &(&1.length == byte_size(write.bytes)))
     end
 
     demand = ConnectionReads.build(native)
     assert demand.errors == []
     assert length(demand.demands) == length(native.reads)
+
+    for {_port, connection} <- demand.connections,
+        frame <- connection.framing.messages,
+        span <- frame.provenance do
+      assert span.copies != []
+      assert Enum.all?(span.copies, &(&1.length == span.length))
+    end
 
     for {_port, chunks} <- streams do
       framing = Wire.frames(chunks)

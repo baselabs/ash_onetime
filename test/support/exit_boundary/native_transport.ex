@@ -67,6 +67,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
          reference: ref,
          header_size: send4.header_size,
          command: command,
+         copies: write_copies(outer, send3, send4, driver.pairs, command, byte_size(bytes)),
          indexes:
            Enum.uniq(
              [command.index | signals] ++
@@ -78,6 +79,16 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       {:error, reason} -> {:error, reason}
       _ -> {:error, :native_write_program}
     end
+  end
+
+  defp write_copies(outer, send3, send4, driver, command, size) do
+    plain = for pair <- [outer, send3], do: copy(pair.source, [2, 2, 1], 0, size)
+
+    encoded =
+      for pair <- [send4.pair | driver],
+          do: copy(pair.source, [2, 2, 1], send4.header_size, size)
+
+    plain ++ encoded ++ [copy(command, [2, 1, 1], send4.header_size, size)]
   end
 
   defp write_order?([outer, send3, monitor, send4, demonitor, erlang, internal], command) do
@@ -225,6 +236,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
         received: signals.received,
         control_request: chain.requested,
         control_reply: chain.replied,
+        copies: read_copies(chain.returned, signals, bytes),
         indexes: Enum.uniq(chain.indexes ++ signals.indexes),
         provenance: chain.origin
       }
@@ -279,6 +291,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
            origin: internal.returned.index,
            requested: controls.requested,
            replied: controls.replied,
+           returned: Enum.map([outer, recv, recv0], & &1.returned),
            indexes:
              controls.indexes ++
                deferred ++ Enum.flat_map(pairs, &[&1.source.index, &1.returned.index])
@@ -291,6 +304,19 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       _ -> {:error, :native_receive_program}
     end
   end
+
+  defp read_copies(_returned, _signals, nil), do: []
+
+  defp read_copies(returned, signals, bytes) do
+    size = byte_size(bytes)
+    results = for source <- returned, do: copy(source, [3, 1], 0, size)
+
+    results ++
+      [copy(signals.sent, [2, 3, 1], 0, size), copy(signals.received, [2, 3, 1], 0, size)]
+  end
+
+  defp copy(source, path, offset, size),
+    do: %{index: source.index, path: path, offset: offset, length: size}
 
   defp program_order?([outer, socket, recv, recv0, async, time, ctl, erlang, internal]) do
     nested = [
@@ -380,7 +406,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
   defp signal_metadata(index, kind, {port, {:control, bytes}}, port, _id, _result)
        when is_binary(bytes),
-    do: %{index: index, kind: kind, message: :control, bytes: byte_size(bytes)}
+       do: %{index: index, kind: kind, message: :control, bytes: byte_size(bytes)}
 
   defp signal_metadata(index, kind, message, _port, _id, _result)
        when is_tuple(message) and tuple_size(message) > 0,

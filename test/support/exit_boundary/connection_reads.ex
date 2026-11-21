@@ -61,6 +61,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       direction: :frontend,
       bytes: write.bytes,
       source_offset: write.header_size,
+      copies: write.copies,
       phase: phase
     })
   end
@@ -79,6 +80,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       index: read.delivered.index,
       direction: :backend,
       bytes: read.bytes,
+      copies: read.copies,
       phase: :backend
     })
   end
