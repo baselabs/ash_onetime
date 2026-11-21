@@ -39,25 +39,6 @@ runs:
           echo 'checked PostgreSQL digest differs from ghcr.io/baselabs/postgres:current' >&2; exit 1
         fi
         docker pull "$engine"
-    - name: Log PostgreSQL servers after a failure
-      if: inputs.mode == 'stop' && failure()
-      shell: bash
-      env:
-        LOGICAL: ${{ inputs.logical }}
-      run: |
-        set -euo pipefail
-        server="${ASH_ONETIME_TEST_SERVER:?}"
-        case "$server" in
-          "ao-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}-"*) ;;
-          *) echo "::error::PostgreSQL requires this run's server hostname"; exit 1 ;;
-        esac
-        servers=("$server")
-        if [ "$LOGICAL" = true ]; then servers+=("$server-logical"); fi
-        for container in "${servers[@]}"; do
-          if docker container inspect "$container" > /dev/null 2>&1; then
-            docker logs "$container"
-          fi
-        done
     - name: Manage the disposable PostgreSQL servers
       if: always() && (inputs.mode == 'stop' || success())
       shell: bash
@@ -89,6 +70,7 @@ runs:
         for container in "${servers[@]}"; do
           if [ "$MODE" = stop ]; then
             if docker container inspect "$container" > /dev/null 2>&1; then
+              if ! docker logs "$container"; then cleanup_status=1; fi
               if ! docker rm -f -v "$container"; then cleanup_status=1; fi
             fi
             continue
