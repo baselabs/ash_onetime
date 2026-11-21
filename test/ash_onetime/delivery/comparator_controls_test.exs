@@ -704,6 +704,56 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: shared service timers require their completed native callback" do
+    {:ok, _applications} = Application.ensure_all_started(:ssl)
+    service = Process.whereis(:ssl_manager)
+    assert is_pid(service)
+
+    capture = fn callback ->
+      ExitBoundary.observe(
+        fn -> :ok end,
+        fn :ok -> :erlang.send_after(1, :ssl_manager, {:ash_onetime_native_timer, make_ref()}) end,
+        %{host: [], callbacks: [], services: %{ssl_manager: callback}}
+      )
+    end
+
+    positive = capture.({:ssl_manager, :handle_info, 2})
+    timer = Map.fetch!(positive.snapshot.timers, positive.result)
+    assert timer.state == :fired
+    assert timer.terminal.pid == service
+    assert {^service, :receive, message} = timer.terminal.received
+    assert message == timer.expected
+    assert {^service, :call, {:ssl_manager, :handle_info, [^message, _state]}} =
+             timer.terminal.called
+    assert {^service, :return_from, {:ssl_manager, :handle_info, 2}, {:noreply, _state}} =
+             timer.terminal.returned
+
+    assert Process.alive?(service)
+    refute MapSet.member?(positive.snapshot.pids, service)
+
+    wrong = fn -> capture.({:ssl_manager, :handle_cast, 2}) end
+    assert_raise ExUnit.AssertionError, wrong
+
+    for mutant <- [:stream_monitor_source, :stream_service_completion] do
+      ComparatorMutants.with_mutant(mutant, fn ->
+        if mutant == :stream_service_completion do
+          bypassed = wrong.()
+          assert Map.fetch!(bypassed.snapshot.timers, bypassed.result).state == :fired
+        else
+          assert_raise ExUnit.AssertionError, wrong
+        end
+      end)
+    end
+
+    assert_raise ExUnit.AssertionError, wrong
+    restored = capture.({:ssl_manager, :handle_info, 2})
+    assert Map.fetch!(restored.snapshot.timers, restored.result).state == :fired
+    assert Process.alive?(service)
+
+    IO.puts("CONNECTION_SERVICE_COMPLETION: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  @tag :connection_streams
   test "Connection streams: private send buffers retain their native owner copy" do
     captured =
       ComparatorMutants.with_postgrex_mutant(:send_buffer_copy, fn -> cached_decoders(nil) end)
@@ -3095,6 +3145,23 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           end
 
         assert run.result == expected
+
+        service_timers =
+          for {_ref, %{dest: :ssl_manager} = timer} <- run.snapshot.timers, do: timer
+
+        assert service_timers != [], "native TLS certificate cleanup must be observed"
+
+        for timer <- service_timers do
+          assert timer.state == :fired
+          assert MapSet.member?(run.snapshot.pids, timer.creator)
+          service = Map.fetch!(run.snapshot.services, timer.terminal.pid)
+          assert service.name == :ssl_manager
+          assert service.callback == {:ssl_manager, :handle_info, 2}
+          assert {_, :receive, message} = timer.terminal.received
+          assert message == timer.expected
+          assert {_, :return_from, {:ssl_manager, :handle_info, 2}, {:noreply, _}} =
+                   timer.terminal.returned
+        end
 
         for process <- run.tls_binding.processes do
           IO.puts(

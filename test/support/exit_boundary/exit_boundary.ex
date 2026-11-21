@@ -48,20 +48,33 @@ defmodule AshOnetime.Test.ExitBoundary do
       send(root, {:setup, test, setup, invoke, control, preexisting})
       {initial_state, preexisting} = await_ready(root, monitor)
 
-      frames = Capture.frames(spec.host, spec.callbacks) ++ Map.get(spec, :frames, [])
+      services = Map.get(spec, :services, %{})
+
+      frames =
+        Capture.frames(spec.host, spec.callbacks) ++
+          Map.get(spec, :frames, []) ++ Map.values(services)
 
       # U10 attaches both native patterns before releasing the same root. The
       # passive session drains its own fences after the controlling session has
       # stopped the root; it never participates in the application's execution.
       probe =
         if Map.get(spec, :compare_pure?, false) do
-          probe = Collector.start(frames, @deadline, include_pure?: true, passive?: true)
+          probe =
+            Collector.start(frames, @deadline,
+              include_pure?: true,
+              passive?: true,
+              services: services
+            )
+
           :ok = Collector.arm(probe, root, preexisting)
           probe
         end
 
       collector =
-        Collector.start(frames, @deadline, include_pure?: Map.get(spec, :include_pure?, false))
+        Collector.start(frames, @deadline,
+          include_pure?: Map.get(spec, :include_pure?, false),
+          services: services
+        )
 
       :ok = Collector.arm(collector, root, preexisting)
       {result, :post_drain} = await_result(root, monitor)

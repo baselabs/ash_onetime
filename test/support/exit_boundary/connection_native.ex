@@ -146,8 +146,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         %{
           host: [],
           callbacks: [],
-          preexisting: fn {_protocol, _binding, _other, family} ->
-            [family.owner, family.sender]
+          services: %{ssl_manager: {:ssl_manager, :handle_info, 2}},
+          preexisting: fn {_protocol, _binding, other, family} ->
+            others =
+              if other do
+                other_family = ConnectionTls.bind(elem(other.sock, 1))
+                [other_family.owner, other_family.sender]
+              else
+                []
+              end
+
+            [family.owner, family.sender | others]
           end
         }
       )

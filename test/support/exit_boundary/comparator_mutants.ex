@@ -461,6 +461,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_service_completion) do
+    [
+      %{
+        path: "test/support/exit_boundary/collector.ex",
+        original:
+          "  defp service_completed?(receipt) do\n    not is_nil(receipt.called) and not is_nil(receipt.returned) and\n      receipt.received_stamp < receipt.called_stamp and\n      receipt.called_stamp < receipt.returned_stamp\n  end\n",
+        mutated: "  defp service_completed?(_receipt), do: true\n"
+      }
+    ]
+  end
+
   def compare(pair, rule), do: with_mutant(rule, fn -> Comparator.compare(pair) end)
 
   # Run the actual Postgrex owner with one private copy changed. Socket calls,

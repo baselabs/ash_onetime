@@ -46,7 +46,9 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       :loaded_before,
       :residue,
       :monitors,
-      :down
+      :down,
+      :services,
+      :service_receipts
     ]
   end
 
@@ -96,8 +98,9 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       receive do
         {:arm, ^test, root, preexisting} ->
           pids = MapSet.new([root | preexisting])
+          services = service_bindings(Keyword.get(options, :services, %{}))
 
-          for pid <- pids do
+          for pid <- Enum.uniq(MapSet.to_list(pids) ++ Map.keys(services)) do
             1 = :trace.process(session, pid, true, @flags)
           end
 
@@ -121,6 +124,10 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
             timers: %{},
             pending_start: %{},
             pending_cancel: %{},
+            services: services,
+            service_receipts: [],
+            service_pending: %{},
+            stamp: nil,
             returned?: false,
             published?: false,
             stopped?: Keyword.get(options, :passive?, false),
@@ -146,6 +153,8 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       timers: state.timers,
       monitors: state.monitors,
       down: state.down,
+      services: state.services,
+      service_receipts: Enum.reverse(state.service_receipts),
       loaded_before: loaded_before,
       residue: state.residue
     }
@@ -185,7 +194,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
   # Phase 2: per-pid fences, then the port fence, until the known set is stable.
   defp fence(state) do
-    known = state.pids
+    known = traced(state)
 
     state =
       Enum.reduce(known, state, fn pid, acc ->
@@ -203,7 +212,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       state.untimed > 0 ->
         {:error, Map.put(pending(state), :untimed_events, state.untimed), state}
 
-      not MapSet.equal?(known, state.pids) ->
+      not MapSet.equal?(known, traced(state)) ->
         # A pid found while fencing sends the protocol back to the terminal boundary.
         collect(%{state | stopped?: true})
 
@@ -228,15 +237,18 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
   defp terminal?(state) do
     state.returned? and state.published? and MapSet.size(live(state)) <= 1 and
-      MapSet.subset?(state.opened, state.closed) and map_size(open_timers(state)) == 0
+      MapSet.subset?(state.opened, state.closed) and map_size(open_timers(state)) == 0 and
+      map_size(state.service_pending) == 0
   end
 
   defp terminal_after_stop?(state) do
     MapSet.size(live(state)) == 0 and MapSet.subset?(state.opened, state.closed) and
-      map_size(open_timers(state)) == 0
+      map_size(open_timers(state)) == 0 and map_size(state.service_pending) == 0
   end
 
   defp live(state), do: MapSet.difference(state.pids, state.down)
+
+  defp traced(state), do: MapSet.union(state.pids, MapSet.new(Map.keys(state.services)))
 
   defp open_timers(state), do: Map.filter(state.timers, fn {_ref, t} -> t.state == :pending end)
 
@@ -246,6 +258,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       live_processes: MapSet.size(live(state)),
       open_ports: MapSet.size(MapSet.difference(state.opened, state.closed)),
       pending_timers: map_size(open_timers(state)),
+      pending_service_callbacks: map_size(state.service_pending),
       live_origins:
         for pid <- live(state) do
           %{
@@ -312,11 +325,13 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     {rest, [stamp]} = Enum.split(rest, -1)
     event = List.to_tuple(rest)
 
-    %{state | events: [{stamp, event} | state.events]}
+    %{state | events: [{stamp, event} | state.events], stamp: stamp}
     |> procs(event)
     |> ports(event)
+    |> service_event(event)
     |> ledger(event)
     |> boundary(event)
+    |> settle_service_timers()
   end
 
   # Every traced process and port carries the timestamp flag; a message without one
@@ -325,6 +340,123 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     do: %{state | untimed: state.untimed + 1}
 
   defp record(_other, state), do: state
+
+  # Shared services are bound and armed before root release. Their lifetime is
+  # external to this invocation; its deferred work still requires the exact
+  # native receive and the matching callback's completed return. Every event and
+  # spawned descendant remains in the same trace session.
+  defp service_bindings(declared) do
+    Map.new(declared, fn {name, callback} ->
+      pid = Process.whereis(name)
+      unless is_pid(pid), do: raise("a declared observation service is unavailable")
+      {pid, %{name: name, callback: callback}}
+    end)
+  end
+
+  defp service_event(state, {pid, :receive, message} = event) do
+    case Map.fetch(state.services, pid) do
+      {:ok, binding} ->
+        receipt = %{
+          pid: pid,
+          message: message,
+          received: event,
+          received_stamp: state.stamp,
+          registered?: Process.whereis(binding.name) == pid,
+          called: nil,
+          called_stamp: nil,
+          returned: nil,
+          returned_stamp: nil,
+          used_by: nil
+        }
+
+        %{state | service_receipts: [receipt | state.service_receipts]}
+
+      :error ->
+        state
+    end
+  end
+
+  defp service_event(state, {pid, :call, {module, function, [message | _] = args}} = event) do
+    case Map.fetch(state.services, pid) do
+      {:ok, %{callback: {^module, ^function, arity}}} when arity == length(args) ->
+        case Enum.find(state.service_receipts, fn receipt ->
+               receipt.pid == pid and receipt.message === message and is_nil(receipt.called)
+             end) do
+          nil ->
+            state
+
+          receipt ->
+            receipt = %{receipt | called: event, called_stamp: state.stamp}
+            state = replace_service_receipt(state, receipt)
+            pending = Map.update(state.service_pending, pid, [receipt], &[receipt | &1])
+
+            %{state | service_pending: pending}
+        end
+
+      _ ->
+        state
+    end
+  end
+
+  defp service_event(state, {pid, :return_from, mfa, _result} = event) do
+    case {Map.fetch(state.services, pid), Map.get(state.service_pending, pid, [])} do
+      {{:ok, %{callback: ^mfa}}, [receipt | rest]} ->
+        receipt = %{receipt | returned: event, returned_stamp: state.stamp}
+
+        pending =
+          if rest == [],
+            do: Map.delete(state.service_pending, pid),
+            else: Map.put(state.service_pending, pid, rest)
+
+        replace_service_receipt(%{state | service_pending: pending}, receipt)
+
+      _ ->
+        state
+    end
+  end
+
+  defp service_event(state, _event), do: state
+
+  defp replace_service_receipt(state, replacement) do
+    receipts =
+      Enum.map(state.service_receipts, fn receipt ->
+        if receipt.received_stamp == replacement.received_stamp, do: replacement, else: receipt
+      end)
+
+    %{state | service_receipts: receipts}
+  end
+
+  defp settle_service_timers(state) do
+    Enum.reduce(state.timers, state, fn
+      {ref, %{state: :pending} = timer}, state -> settle_service_timer(state, ref, timer)
+      _, state -> state
+    end)
+  end
+
+  defp settle_service_timer(state, ref, timer) do
+    receipt =
+      Enum.find(state.service_receipts, fn receipt ->
+        binding = Map.fetch!(state.services, receipt.pid)
+
+        timer.dest in [receipt.pid, binding.name] and timer.expected === receipt.message and
+          timer.started_stamp < receipt.received_stamp and receipt.registered? and
+          is_nil(receipt.used_by) and service_completed?(receipt)
+      end)
+
+    if receipt do
+      terminal = Map.take(receipt, [:pid, :received, :called, :returned])
+      state = put_in(state.timers[ref], Map.merge(timer, %{state: :fired, terminal: terminal}))
+      replace_service_receipt(state, %{receipt | used_by: ref})
+    else
+      state
+    end
+  end
+
+  defp service_completed?(receipt) do
+    not is_nil(receipt.called) and not is_nil(receipt.returned) and
+      receipt.received_stamp < receipt.called_stamp and
+      receipt.called_stamp < receipt.returned_stamp
+  end
 
   # The VM cancels PID-addressed timers when that exact recipient exits. A
   # registered name can outlive its current process and has no such rule. Retain
@@ -354,6 +486,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       state
     else
       ref = Process.monitor(pid)
+
       %{
         state
         | pids: MapSet.put(state.pids, pid),
@@ -379,12 +512,12 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   defp ledger(state, {pid, :call, {:erlang, function, args}})
        when function in [:send_after, :start_timer] do
     [_time, dest, message | _opts] = args
-    put_in(state.pending_start[pid], {function, dest, message})
+    put_in(state.pending_start[pid], {function, dest, message, state.stamp})
   end
 
   defp ledger(state, {pid, :return_from, {:erlang, function, _arity}, ref})
        when function in [:send_after, :start_timer] and is_reference(ref) do
-    {{kind, dest, message}, pending} = Map.pop(state.pending_start, pid)
+    {{kind, dest, message, started}, pending} = Map.pop(state.pending_start, pid)
 
     expected =
       case kind do
@@ -392,7 +525,15 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
         :start_timer -> {:timeout, ref, message}
       end
 
-    timer = %{kind: kind, creator: pid, dest: dest, expected: expected, state: :pending}
+    timer = %{
+      kind: kind,
+      creator: pid,
+      dest: dest,
+      expected: expected,
+      state: :pending,
+      started_stamp: started
+    }
+
     state = %{state | pending_start: pending, timers: Map.put(state.timers, ref, timer)}
 
     if is_pid(dest) and MapSet.member?(state.down, dest),
@@ -421,7 +562,8 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
   defp ledger(state, {pid, :receive, message}) when is_pid(pid) do
     case Enum.find(state.timers, fn {_ref, t} ->
-           t.state == :pending and t.expected === message and recipient?(t.dest, pid)
+           t.state == :pending and t.expected === message and recipient?(t.dest, pid) and
+             not Map.has_key?(state.services, pid)
          end) do
       {ref, timer} -> put_in(state.timers[ref], %{timer | state: :fired})
       nil -> state
