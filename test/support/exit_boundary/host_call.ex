@@ -7,14 +7,17 @@ defmodule AshOnetime.Test.ExitBoundary.HostCall do
   # Only the first declared host call owns its interior. The endpoints remain in
   # the transfer program, and a second host call owns no events or origins.
   def indexes(events) do
-    case Enum.find(events, &(&1.mfa in @calls and elem(&1.event, 1) == :call)) do
-      nil ->
-        MapSet.new([])
+    indexes =
+      case Enum.find(events, &(&1.mfa in @calls and elem(&1.event, 1) == :call)) do
+        nil ->
+          []
 
-      start ->
-        stop = Enum.find(events, &host_return?(&1, start))
-        interior(events, start, stop)
-    end
+        start ->
+          stop = Enum.find(events, &host_return?(&1, start))
+          interior(events, start, stop)
+      end
+
+    MapSet.new(indexes)
   end
 
   defp host_return?(event, start),
@@ -23,7 +26,7 @@ defmodule AshOnetime.Test.ExitBoundary.HostCall do
         event.mfa == start.mfa and length(event.stack) == length(start.stack) + 1 and
         elem(event.event, 1) in [:return_from, :exception_from]
 
-  defp interior(_events, _start, nil), do: MapSet.new([])
+  defp interior(_events, _start, nil), do: []
 
   defp interior(events, start, stop) do
     events
@@ -31,7 +34,7 @@ defmodule AshOnetime.Test.ExitBoundary.HostCall do
       e.pid == start.pid and e.index > start.index and e.index < stop.index and
         start.mfa in e.stack and not peer?(e)
     end)
-    |> MapSet.new(& &1.index)
+    |> Enum.map(& &1.index)
   end
 
   defp peer?(e),

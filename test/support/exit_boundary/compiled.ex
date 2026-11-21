@@ -112,7 +112,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
   defp target_call?(_, _), do: false
 
   defp capture_arguments(instructions, registers, labels, target, argument, {function, count}) do
-    capture_path(instructions, registers, labels, target, argument, MapSet.new([]))
+    capture_path(instructions, registers, labels, target, argument, %{})
   rescue
     error ->
       {module, _, _} = target
@@ -209,7 +209,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
   defp capture_branch(0, _, _, _, _, _), do: []
 
   defp capture_branch(label, regs, labels, target, argument, seen) do
-    if MapSet.member?(seen, label), do: raise("cyclic captured-origin control flow")
+    if Map.has_key?(seen, label), do: raise("cyclic captured-origin control flow")
 
     capture_path(
       Map.fetch!(labels, label),
@@ -217,7 +217,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
       labels,
       target,
       argument,
-      MapSet.put(seen, label)
+      Map.put(seen, label, true)
     )
   end
 

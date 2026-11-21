@@ -292,46 +292,49 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     initial = %{
       events: events,
       stack: [{Root, :invoke, 2}],
-      claimed: MapSet.new([]),
+      claimed: [],
       errors: [],
       lease: nil
     }
 
-    try do
-      ensure(
-        initial,
-        hd(events),
-        :checkpoint_count,
-        length(starts),
-        if(eligible?, do: 1, else: 0)
-      )
+    checked =
+      try do
+        ensure(
+          initial,
+          hd(events),
+          :checkpoint_count,
+          length(starts),
+          if(eligible?, do: 1, else: 0)
+        )
 
-      case starts do
-        [] ->
-          initial
+        case starts do
+          [] ->
+            initial
 
-        [start] ->
-          {before, tail} = Enum.split_while(events, &(&1.index != start.index))
-          previous = List.last(before)
+          [start] ->
+            {before, tail} = Enum.split_while(events, &(&1.index != start.index))
+            previous = List.last(before)
 
-          ash =
-            %{create: :create, update: :update, destroy: :destroy, action: :run_action}[
-              side.row.type
-            ]
+            ash =
+              %{create: :create, update: :update, destroy: :destroy, action: :run_action}[
+                side.row.type
+              ]
 
-          ensure(
-            initial,
-            start,
-            :checkpoint_placement,
-            match?(%{event: {^caller, :return_from, {Ash, ^ash, 2}, _}}, previous),
-            true
-          )
+            ensure(
+              initial,
+              start,
+              :checkpoint_placement,
+              match?(%{event: {^caller, :return_from, {Ash, ^ash, 2}, _}}, previous),
+              true
+            )
 
-          %{initial | events: tail} |> program(side, indexed)
+            %{initial | events: tail} |> program(side, indexed)
+        end
+      catch
+        {:allocation, error} -> %{initial | errors: [error]}
       end
-    catch
-      {:allocation, error} -> %{initial | errors: [error]}
-    end
+
+    %{checked | claimed: MapSet.new(checked.claimed)}
   end
 
   defp program(s, side, indexed) do
@@ -522,7 +525,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
   defp take(%{events: [e | rest]} = s, event) do
     ensure(s, e, :checkpoint_event, e.event, event)
     ensure(s, e, :checkpoint_stack, e.stack, s.stack)
-    %{s | events: rest, claimed: MapSet.put(s.claimed, e.index)}
+    %{s | events: rest, claimed: [e.index | s.claimed]}
   end
 
   defp take(s, _), do: fail(s, nil, :checkpoint_event, :missing, :next_instruction)
