@@ -3929,6 +3929,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     # Trusted fixture provisioning changes exactly one real catalog field, as
     # the executable-metadata Table 1 fixtures do; every subject is runtime.
+    # Probe relation NOT NULL entries only when the native catalog stores them.
     for {table, type} <- [
           {"ash_onetime_nonce_claims", "p"},
           {"ash_onetime_nonce_claims", "u"},
@@ -3939,7 +3940,12 @@ defmodule AshOnetime.Store.MaintenanceTest do
           {"ash_onetime_response_payloads", "c"},
           {"ash_onetime_response_payloads_default", "n"},
           {"ash_onetime_response_payloads_default", "c"}
-        ] do
+        ],
+        type != "n" or
+          scalar(
+            Repo,
+            "SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=#{literal(rel(c, table))}::regclass AND contype='n')"
+          ) do
       [oid, original] =
         SQL.query!(
           Repo,
@@ -5184,7 +5190,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     sql!(
       Repo,
-      "CREATE FUNCTION #{rel(c, "index_handler")}(internal) RETURNS index_am_handler LANGUAGE internal AS 'bthandler'"
+      "CREATE FUNCTION #{rel(c, "index_handler")}(internal) RETURNS index_am_handler LANGUAGE internal AS 'hashhandler'"
     )
 
     sql!(Repo, "ALTER FUNCTION #{rel(c, "index_handler")}(internal) OWNER TO #{q(c.runtime)}")
@@ -5193,7 +5199,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
 
     sql!(
       Repo,
-      "CREATE OPERATOR CLASS #{rel(c, "am_ops")} DEFAULT FOR TYPE timestamptz USING #{q(am)} AS OPERATOR 1 < (timestamptz,timestamptz), OPERATOR 2 <= (timestamptz,timestamptz), OPERATOR 3 = (timestamptz,timestamptz), OPERATOR 4 >= (timestamptz,timestamptz), OPERATOR 5 > (timestamptz,timestamptz), FUNCTION 1 timestamptz_cmp(timestamptz,timestamptz)"
+      "CREATE OPERATOR CLASS #{rel(c, "am_ops")} DEFAULT FOR TYPE timestamptz USING #{q(am)} AS OPERATOR 1 = (timestamptz,timestamptz), FUNCTION 1 timestamp_hash(timestamp)"
     )
 
     sql!(c.owner_repo, "DROP INDEX #{rel(c, "ash_onetime_nonce_claims_retain_until_index")}")
