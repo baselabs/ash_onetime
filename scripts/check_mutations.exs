@@ -4185,7 +4185,7 @@ defmodule AshOnetime.MutationCheck do
       tag: "notifier_guard_mutation",
       test_name: "protected CRUD actions reject notifier delivery at compile time",
       assertion: "assert status != 0, output",
-      assertion_line: 531
+      assertion_line: 590
     },
     "around-capability" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -4203,7 +4203,7 @@ defmodule AshOnetime.MutationCheck do
         {"rejects matrix case global_around_action at its semantic option",
          "assert status != 0, output"}
       ],
-      assertion_line: 504
+      assertion_line: 563
     },
     "nonce-around-capability" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -4221,7 +4221,7 @@ defmodule AshOnetime.MutationCheck do
         {"rejects matrix case nonce_global_around_action at its semantic option",
          "assert status != 0, output"}
       ],
-      assertion_line: 504
+      assertion_line: 563
     },
     "pure-producer-capability" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -4239,7 +4239,7 @@ defmodule AshOnetime.MutationCheck do
         {"rejects matrix case global_pure_notification_producer at its semantic option",
          "assert status != 0, output"}
       ],
-      assertion_line: 504
+      assertion_line: 563
     },
     "marker-consumption-capability" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -4254,7 +4254,7 @@ defmodule AshOnetime.MutationCheck do
         {"rejects matrix case marker_blind_notification_producer at its semantic option",
          "assert status != 0, output"}
       ],
-      assertion_line: 504
+      assertion_line: 563
     },
     "wrapper-protection" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -4509,7 +4509,7 @@ defmodule AshOnetime.MutationCheck do
       tag: "nonce_minted_composite_mutation",
       test_name: "a fresh minted nonce source cannot join a verified key",
       assertion: "assert status != 0, output",
-      assertion_line: 523
+      assertion_line: 582
     },
     "canonical-domain-tag" => %{
       path: "lib/ash_onetime/canonical.ex",
@@ -4659,7 +4659,8 @@ defmodule AshOnetime.MutationCheck do
       test: "test/compile_fixtures_test.exs",
       tag: "executing_only_verifier_mutation",
       test_name: "rejects matrix case executing_only_nonce at its semantic option",
-      assertion: "assert status != 0, output"
+      assertion: "assert status != 0, output",
+      assertion_line: 563
     },
     "executing-only-require-atomic" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -4669,6 +4670,7 @@ defmodule AshOnetime.MutationCheck do
       tag: "executing_only_verifier_mutation",
       test_name: "rejects matrix case executing_only_atomic_update at its semantic option",
       assertion: "assert status != 0, output",
+      assertion_line: 563,
       required_failures: [
         {"rejects matrix case executing_only_atomic_update at its semantic option",
          "assert status != 0, output"},
@@ -4680,7 +4682,10 @@ defmodule AshOnetime.MutationCheck do
       path: "lib/ash_onetime/codec/resource.ex",
       original: "defp resource_state({:resource, :returned}), do: :loaded",
       mutated: "defp resource_state({:resource, :returned}), do: :built",
-      test: "test/ash_onetime/codec",
+      test: [
+        "test/ash_onetime/codec/returned_test.exs",
+        "test/ash_onetime/codec/returned_replay_test.exs"
+      ],
       tag: "returned_record_state_mutation",
       test_name: "a returned record replays with its stored fields, loaded, and no metadata",
       assertion: "assert restored.__meta__.state == :loaded",
@@ -4711,10 +4716,18 @@ defmodule AshOnetime.MutationCheck do
       tag: "returned_record_validation_mutation",
       test_name: "accepts matrix case returned_fields",
       assertion: "assert status == 0, output",
+      assertion_line: 613,
       required_failures: [
-        {"accepts matrix case returned_fields", "assert status == 0, output"},
-        {"rejects matrix case returned_action_field at its semantic option",
-         "assert status != 0, output"}
+        %{
+          test_name: "accepts matrix case returned_fields",
+          assertion: "assert status == 0, output",
+          assertion_line: 613
+        },
+        %{
+          test_name: "rejects matrix case returned_action_field at its semantic option",
+          assertion: "assert status != 0, output",
+          assertion_line: 563
+        }
       ]
     },
     "returned-record-contract-embedded" => %{
@@ -4735,7 +4748,8 @@ defmodule AshOnetime.MutationCheck do
       test: "test/compile_fixtures_test.exs",
       tag: "returned_record_embedded_mutation",
       test_name: "rejects matrix case returned_embedded_struct_field at its semantic option",
-      assertion: "assert status != 0, output"
+      assertion: "assert status != 0, output",
+      assertion_line: 563
     },
     "executing-only-embedded-return" => %{
       path: "lib/ash_onetime/resource/transformer.ex",
@@ -4745,6 +4759,7 @@ defmodule AshOnetime.MutationCheck do
       tag: "returned_record_embedded_mutation",
       test_name: "rejects matrix case executing_only_embedded_attribute at its semantic option",
       assertion: "assert status != 0, output",
+      assertion_line: 563,
       required_failures: [
         {"rejects matrix case executing_only_embedded_attribute at its semantic option",
          "assert status != 0, output"},
@@ -4758,11 +4773,11 @@ defmodule AshOnetime.MutationCheck do
       mutated: "         true do",
       test: "test/ash_onetime/delivery/nested_claim_test.exs",
       tag: "nested_cell",
-      test_name: "create: a cell replaced in the subject before the call fails closed",
+      test_name: "the entry create: a cell replaced in the subject before the call fails closed",
       assertion: "assert error_code(result) == :executing_only_refused",
       required_failures:
         for route <- [:create, :update, :destroy, :soft_destroy, :generic] do
-          {"#{route}: a cell replaced in the subject before the call fails closed",
+          {"the entry #{route}: a cell replaced in the subject before the call fails closed",
            "assert error_code(result) == :executing_only_refused"}
         end
     },
@@ -4772,11 +4787,12 @@ defmodule AshOnetime.MutationCheck do
       mutated: "    if true and resource == subject.resource",
       test: "test/ash_onetime/delivery/nested_claim_test.exs",
       tag: "nested_wrong_pid",
-      test_name: "create: an armed entry under the right H(ref) for another pid is refused",
+      test_name:
+        "the entry create: an armed entry under the right H(ref) for another pid is refused",
       assertion: "assert error_code(result) == :executing_only_refused",
       required_failures:
         for route <- [:create, :update, :destroy, :soft_destroy, :generic] do
-          {"#{route}: an armed entry under the right H(ref) for another pid is refused",
+          {"the entry #{route}: an armed entry under the right H(ref) for another pid is refused",
            "assert error_code(result) == :executing_only_refused"}
         end
     },
@@ -4787,11 +4803,11 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/delivery/nested_claim_test.exs",
       tag: "nested_hash_key",
       test_name:
-        "create: the entry lives under H(ref), and no dictionary key holds the reference",
+        "the entry create: the entry lives under H(ref), and no dictionary key holds the reference",
       assertion: "assert_received {:entry, true, false}",
       required_failures:
         for route <- [:create, :update, :destroy, :soft_destroy, :generic] do
-          {"#{route}: the entry lives under H(ref), and no dictionary key holds the reference",
+          {"the entry #{route}: the entry lives under H(ref), and no dictionary key holds the reference",
            "assert_received {:entry, true, false}"}
         end
     },
@@ -4802,12 +4818,12 @@ defmodule AshOnetime.MutationCheck do
         "      Process.put(key, {:claimed, inv, Map.get(subject.context.private.ash_onetime_delivery, :public, public)})",
       test: "test/ash_onetime/delivery/nested_claim_test.exs",
       tag: "nested_rule_one",
-      test_name: "create: entry facts placed in the subject's context are never read",
+      test_name: "the entry create: entry facts placed in the subject's context are never read",
       assertion:
         "assert %Delivery{outcome: :executed, values: %{secret: secret}} = delivery(result)",
       required_failures:
         for route <- [:create, :update, :destroy, :soft_destroy, :generic] do
-          {"#{route}: entry facts placed in the subject's context are never read",
+          {"the entry #{route}: entry facts placed in the subject's context are never read",
            "assert %Delivery{outcome: :executed, values: %{secret: secret}} = delivery(result)"}
         end
     },
@@ -4972,12 +4988,12 @@ defmodule AshOnetime.MutationCheck do
       mutated: "    if false and is_binary(head) and is_integer(last),",
       test: "test/ash_onetime/delivery/envelope_test.exs",
       tag: "executing_only_envelope:low_order",
-      test_name: "every small-order point is refused before sealing",
+      test_name: "a low-order recipient key every small-order point is refused before sealing",
       assertion: "assert Envelope.seal(key, c.values, c.context) == {:error, :low_order}",
       required_failures: [
-        {"every small-order point is refused before sealing",
+        {"a low-order recipient key every small-order point is refused before sealing",
          "assert Envelope.seal(key, c.values, c.context) == {:error, :low_order}"},
-        {"every small-order ephemeral key is refused before the agreement",
+        {"a low-order recipient key every small-order ephemeral key is refused before the agreement",
          "{:error, :low_order}"}
       ]
     },
@@ -4988,7 +5004,7 @@ defmodule AshOnetime.MutationCheck do
         "  defp split(envelope, bound) when false and is_integer(bound) and is_binary(envelope),",
       test: "test/ash_onetime/delivery/envelope_test.exs",
       tag: "executing_only_envelope:length",
-      test_name: "a total over the declared bound is refused before decrypting",
+      test_name: "the length a total over the declared bound is refused before decrypting",
       assertion:
         "assert Envelope.open(envelope, c.secret, c.public, 1, c.context) == {:error, :bound}"
     },
@@ -4998,7 +5014,7 @@ defmodule AshOnetime.MutationCheck do
       mutated: "  defp decode(_rest, 0, values), do: {:ok, Enum.reverse(values)}",
       test: "test/ash_onetime/delivery/envelope_test.exs",
       tag: "executing_only_envelope:length",
-      test_name: "a trailing byte inside the authenticated plaintext",
+      test_name: "the length a trailing byte inside the authenticated plaintext",
       assertion:
         "assert Envelope.open(envelope, c.secret, c.public, 2, c.context) == {:error, :trailing}"
     },

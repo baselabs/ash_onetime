@@ -131,10 +131,19 @@ for partitioning <- [nil, 2] do
           |> hook(
             :after_transaction,
             fn
-              _input, {:error, _} ->
+              input, {:error, _} ->
                 retry = AshOnetime.deliver(build.())
                 Process.put(:delivery_later_attempt, retry)
-                {:ok, elem(retry, 1)}
+
+                # A destroy's public return omits the record. Its transaction
+                # hook still owes Ash the record before that return is shaped.
+                result =
+                  case input do
+                    %Ash.Changeset{action_type: :destroy, data: record} -> record
+                    _other -> elem(retry, 1)
+                  end
+
+                {:ok, result}
 
               _input, result ->
                 result
