@@ -699,6 +699,21 @@ defmodule AshOnetime.DeliveryComparatorMutations do
       extra: nil
     },
     %{
+      id: :r_iso_cross_lease_o2,
+      label: "R-iso-cross-lease-O2",
+      path: "lib/ash_onetime/store/postgres.ex",
+      original:
+        "    case SQL.query(target.dynamic_repo, sql, parameters) do\n      {:ok, result} -> {:ok, result}\n",
+      mutated:
+        "    case SQL.query(target.dynamic_repo, sql, parameters) do\n      {:ok, result} ->\n        result = case {sql, parameters, result} do\n          {<<\"SELECT state\\n\", _::binary>>, [_, COMPARATOR_BACKEND_OPERATION | _], %Postgrex.Result{connection_id: backend}} ->\n            %{result | connection_id: if(backend == COMPARATOR_BACKEND_A, do: COMPARATOR_BACKEND_B, else: COMPARATOR_BACKEND_A)}\n          _ -> result\n        end\n        {:ok, result}\n",
+      action: :external_issue,
+      branch: :execute,
+      fault: nil,
+      value: :va,
+      first: {AshOnetime.Store.Postgres, :dispatched_query, 3},
+      extra: nil
+    },
+    %{
       id: :r_iso_return,
       label: "R-iso-X3",
       path: "lib/ash_onetime.ex",

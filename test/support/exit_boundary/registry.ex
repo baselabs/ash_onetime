@@ -132,6 +132,21 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
       rename: %{Withheld => Returned, External => ReturnedExternal}
     },
     %{
+      id: :allocation_checkpoint,
+      source: {AshOnetime.Test.ExitBoundary.Scenarios, :allocation_checkpoint, 0},
+      eligibility: {__MODULE__, :allocation_checkpoint?, 1},
+      locations: [:caller_after_ash_before_fixture],
+      expression: :closed_literal_checkout_program,
+      compute: {AshOnetime.Test.ExitBoundary.Allocation, :check, 2}
+    },
+    %{
+      id: :o2_allocation,
+      source: {DBConnection.Holder, :checkout, 3},
+      locations: [:all_main_pool_leases, :committed_read_result_backend_copies],
+      expression: :whole_observation_bijection_and_causal_order,
+      compute: {AshOnetime.Test.ExitBoundary.Allocation, :pair, 5}
+    },
+    %{
       id: :attribute_copy,
       source: {AshOnetime.Admission, :reject_reserved, 1},
       locations: [
@@ -462,6 +477,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {DBConnection.Holder, :checkout, :_},
         {DBConnection.Holder, :checkin, :_},
         {AshOnetime.Test.ExitBoundary.Scenarios, :allocation_checkpoint, 0},
+        {AshOnetime.Test.ExitBoundary.Scenarios, :"-allocation_checkpoint/0-fun-0-", 0},
         {Postgrex.Protocol, :handle_prepare, :_},
         {Postgrex.Protocol, :handle_execute, :_},
         {Splode, :filter_stacktrace, 2}

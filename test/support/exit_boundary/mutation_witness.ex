@@ -83,6 +83,18 @@ defmodule AshOnetime.Test.ExitBoundary.MutationWitness do
        ),
        do: Enum.at(parameters, 6) == 3_600 + 1 + rem(:binary.first(b.c_admit.id), 2)
 
+  defp location(:r_iso_cross_lease_o2,
+         %{pid: caller, event: {_, :return_from, {AshOnetime.Store.Postgres, :dispatched_query, 3},
+           {:ok, %Postgrex.Result{connection_id: changed}}}}, events, _,
+         %{rule: :o2, path: path}) do
+    leases = for %{event: {pid, :return_from, {DBConnection.Holder, :checkout, 3},
+      {:ok, {:pool_ref, pool, _, _, holder, _}, _, _, protocol}}} <- events,
+      do: {pid, pool, holder, protocol.connection_id}
+    {_, pool, holder, actual} = leases |> Enum.filter(&(elem(&1, 0) == caller)) |> List.last()
+    List.last(path) == :connection_id and changed != actual and
+      Enum.any?(leases, fn {_, p, h, backend} -> p == pool and h != holder and backend == changed end)
+  end
+
   defp location(:r1, %{event: {_, :call, {:erlang, :put, [:m, 0]}}}, events, b, _),
     do: after_seal?(events, b)
 

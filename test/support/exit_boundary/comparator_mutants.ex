@@ -10,6 +10,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       :crypto,
       :context,
       :o2,
+      :cross_lease_o2,
       :o3,
       :o4,
       :order,
@@ -272,6 +273,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
           "  defp uuid_identity(a, b, state, path) do\n    normalize = fn\n      <<_::128>> = uuid -> Ecto.UUID.load!(uuid)\n      uuid -> uuid\n    end\n\n    a = normalize.(a)\n    b = normalize.(b)\n\n    exact? =\n      a === b and\n        Map.get(state.pairing.uuid_forward, a, a) === b and\n        Map.get(state.pairing.uuid_reverse, b, b) === a\n\n    if exact? or\n         (Map.fetch(state.pairing.uuid_forward, a) === {:ok, b} and\n            Map.fetch(state.pairing.uuid_reverse, b) === {:ok, a}),\n       do: state,\n       else: error(state, :o2_uuid, path, a, b)\n  end\n\n",
         mutated:
           "  defp uuid_identity(a, b, state, path) do\n    normalize = fn\n      <<_::128>> = uuid -> Ecto.UUID.load!(uuid)\n      uuid -> uuid\n    end\n\n    a = normalize.(a)\n    b = normalize.(b)\n\n    case {a, b} do\n      {nil, nil} -> state\n      _ ->\n        case {Ecto.UUID.dump(a), Ecto.UUID.dump(b)} do\n          {{:ok, _}, {:ok, _}} -> state\n                _ -> error(state, :o2_uuid, path, a, b)\n        end\n    end\n  end\n\n"
+      }
+    ]
+  end
+
+  def edits(:cross_lease_o2) do
+    [
+      %{
+        path: "test/support/exit_boundary/comparator.ex",
+        original: "      {{ah, _}, {bh, _}} -> identity(ah, bh, state, path)\n",
+        mutated: "      {{_ah, _}, {_bh, _}} -> state\n"
       }
     ]
   end

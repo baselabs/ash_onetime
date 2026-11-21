@@ -78,6 +78,11 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         do: %{claimed: MapSet.new(), errors: []},
         else: AshOnetime.Test.ExitBoundary.Readback.check(run, ri, permitted.bound)
 
+    checkpoint =
+      if reference?,
+        do: %{claimed: MapSet.new(), errors: []},
+        else: Registry.compute(:allocation_checkpoint, [twin, ti])
+
     refusal =
       if reference?,
         do: %{claimed: MapSet.new(), errors: []},
@@ -90,8 +95,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       |> MapSet.union(rf.claimed)
 
     source_claims = readback.claimed |> MapSet.union(refusal.claimed) |> MapSet.union(rf.claimed)
-    sources = %{o1: Origins.permitted_sources(ri, source_claims), o3: claimed}
+    sources = %{{:twin, :o1} => checkpoint.claimed, {:twin, :o3} => checkpoint.claimed,
+      o1: Origins.permitted_sources(ri, source_claims), o3: claimed}
     pairing = Origins.pair(ri, ti, sources) |> inherit_pairing(prior)
+    allocation = if reference?, do: %{pairing: pairing, errors: []},
+      else: Registry.compute(:o2_allocation, [pairing, run, twin, ri, ti])
+    pairing = allocation.pairing
     rq = AshOnetime.Test.ExitBoundary.QueryOrigins.build(ri, run)
     tq = AshOnetime.Test.ExitBoundary.QueryOrigins.build(ti, twin)
     rd = Registry.compute(:o2a_computations, [ri, run])
@@ -129,6 +138,21 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         state
       end
 
+    state =
+      if not reference? and Map.get(checkpoint, :lease) do
+        backend = checkpoint.lease.protocol.connection_id
+        Enum.reduce(ri.events, state, fn e, s ->
+          if MapSet.member?(readback.claimed, e.index) do
+            at = Map.take(e, [:role, :mfa, :stack]) |> Map.put(:run_index, e.index)
+            readback_backends(e.event, backend, %{s | at: at}, [:event])
+          else
+            s
+          end
+        end)
+      else
+        state
+      end
+
     state = Enum.reduce(declarations.errors, state, &error(&2, :u13, &1.path, &1.run, &1.twin))
 
     state =
@@ -143,7 +167,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       end)
 
     state =
-      Enum.reduce(readback.errors ++ refusal.errors, state, fn e, s ->
+      Enum.reduce(readback.errors ++ refusal.errors ++ checkpoint.errors ++ allocation.errors, state, fn e, s ->
         %{s | errors: [e | s.errors]}
       end)
 
@@ -196,7 +220,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         )
       end)
 
-    rt = TransportReferences.build(ri)
+    rt = TransportReferences.build(ri, readback.claimed)
     tt = TransportReferences.build(ti)
 
     state =
@@ -245,7 +269,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     twin_claimed =
       if reference?,
         do: MapSet.new(),
-        else: MapSet.union(AshOnetime.Test.ExitBoundary.HostCall.indexes(ti.events), tf.claimed)
+        else: AshOnetime.Test.ExitBoundary.HostCall.indexes(ti.events)
+          |> MapSet.union(tf.claimed) |> MapSet.union(checkpoint.claimed)
 
     right =
       tw
@@ -287,7 +312,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       clock_count: map_size(ri.reads),
       events: {length(ri.events), length(ti.events)},
       pairing: state.pairing,
-      readback_sources: Map.get(readback, :sources, %{}),
+      readback_sources: AshOnetime.Test.ExitBoundary.Readback.whole_sources(readback, state.pairing, ti),
       databases: state.databases,
       derivations: state.derivations,
       clocks: state.clocks
@@ -1757,6 +1782,31 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       _ -> error(state, :historical_backend, path, a, b)
     end
   end
+
+  # OPEN's SQL witness never gets to rename a backend independently of the
+  # whole run. Every typed result copy also binds to the checkpoint's actual
+  # allocation under that same map, including identities used by earlier leases.
+  defp readback_backends(%Postgrex.Result{connection_id: id}, backend, state, path),
+    do: historical_backend(id, backend, state, path ++ [:connection_id])
+  defp readback_backends(%Postgrex.Error{connection_id: id}, backend, state, path),
+    do: historical_backend(id, backend, state, path ++ [:connection_id])
+  defp readback_backends(value, backend, state, path) when is_map(value),
+    do: Enum.reduce(Map.to_list(value), state, fn {key, item}, s ->
+      readback_backends(item, backend, s, path ++ [key])
+    end)
+  defp readback_backends(value, backend, state, path) when is_tuple(value),
+    do: value |> Tuple.to_list() |> Enum.with_index() |> Enum.reduce(state, fn {item, n}, s ->
+      readback_backends(item, backend, s, path ++ [n])
+    end)
+  defp readback_backends(value, backend, state, path) when is_function(value) do
+    {:env, env} = Function.info(value, :env)
+    readback_backends(env, backend, state, path ++ [:function, :env])
+  end
+  defp readback_backends([head | tail], backend, state, path) do
+    state = readback_backends(head, backend, state, path ++ [0])
+    readback_backends(tail, backend, state, path ++ [:tail])
+  end
+  defp readback_backends(_, _, state, _), do: state
 
   defp query_context(a, b, state) do
     run_sql = event_sql(a.event) || Map.fetch!(state.query_contexts.run, a.index)

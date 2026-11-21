@@ -137,7 +137,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
       hooks = Hooks.reference(resource, row.action, row.type)
       canonical = Hooks.reference(Returned, row.action, row.type)
       historical = AshOnetime.Test.ExitBoundary.Historical.capture(context.prefix)
-      allocation_checkpoint? = resource == Returned and Registry.allocation_checkpoint?(row)
+      allocation_checkpoint? = Registry.allocation_checkpoint?(row)
 
       prepared =
         if row.branch in [:transaction, :direct] do
@@ -247,7 +247,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
         built
       )
 
-    if input.allocation_checkpoint?, do: allocation_checkpoint()
+    if input.resource == Returned and input.allocation_checkpoint?, do: allocation_checkpoint()
 
     if Map.get(input.row, :release_hold?, false) do
       target = AshOnetime.Store.Postgres.for_repo(Repo, input.prefix)

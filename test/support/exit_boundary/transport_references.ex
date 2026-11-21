@@ -3,8 +3,8 @@ defmodule AshOnetime.Test.ExitBoundary.TransportReferences do
 
   # inet_drv's asynchronous receive id is created by TCP_REQ_RECV. Its two
   # octets are opaque only at this command's return and its documented copies.
-  def build(indexed) do
-    initial = %{active: %{}, counts: %{}, origins: %{}, errors: []}
+  def build(indexed, readback \\ MapSet.new()) do
+    initial = %{active: %{}, counts: %{}, origins: %{}, errors: [], readback: readback}
     {events, state} = Enum.map_reduce(indexed.events, initial, &event/2)
 
     events =
@@ -61,14 +61,15 @@ defmodule AshOnetime.Test.ExitBoundary.TransportReferences do
   end
 
   defp event(%{event: {pid, :call, {:prim_inet, :async_recv, [port, _, _]}}} = e, state) do
-    n = Map.get(state.counts, {e.role, port}, 0)
-    frame = %{port: port, ordinal: n, source: nil}
+    phase = if MapSet.member?(state.readback, e.index), do: :committed_read, else: :shared
+    n = Map.get(state.counts, {e.role, port, phase}, 0)
+    frame = %{port: port, phase: phase, ordinal: n, source: nil}
 
     {e,
      %{
        state
        | active: Map.put(state.active, pid, frame),
-         counts: Map.put(state.counts, {e.role, port}, n + 1)
+         counts: Map.put(state.counts, {e.role, port, phase}, n + 1)
      }}
   end
 
@@ -138,7 +139,7 @@ defmodule AshOnetime.Test.ExitBoundary.TransportReferences do
   end
 
   defp event(e, state), do: {e, state}
-  defp token(frame), do: {:inet_receive_reference, frame.port, frame.ordinal}
+  defp token(frame), do: {:inet_receive_reference, frame.port, frame.phase, frame.ordinal}
 
   defp replace_return(%{event: {pid, tag, mfa, _}} = e, value),
     do: %{e | event: {pid, tag, mfa, value}}

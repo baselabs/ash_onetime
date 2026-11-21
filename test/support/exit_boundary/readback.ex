@@ -125,21 +125,31 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
             %{error | at: at}
           end)
 
-        reference_origins = Origins.build(twin_side).origins
-
         sources =
           for {key, origin} <- Origins.build(run_side).origins, into: %{} do
             {Enum.fetch!(observed, origin.index).index,
              %{
                key: key,
-               value: origin.value,
-               twin: Map.get(reference_origins, key),
-               pairing: result.pairing
+               value: origin.value
              }}
           end
 
         %{claimed: MapSet.new(observed, & &1.index), errors: errors, sources: sources}
     end
+  end
+
+  # The third execution is a read-only SQL/program witness. Its private origin
+  # pairing has no authority over run -> twin allocation. Export a source only
+  # through the whole observation's map and its actual twin origin. In particular
+  # OPEN's monitor/timer/connection identities pair with the proved checkpoint,
+  # and retain that image at every subsequent lease and copied occurrence.
+  def whole_sources(readback, pairing, twin) do
+    for {index, source} <- Map.get(readback, :sources, %{}),
+        {:ok, image} <- [Map.fetch(pairing.forward, source.value)],
+        {_key, origin} <- twin.origins,
+        origin.value === image,
+        into: %{},
+        do: {index, Map.merge(source, %{twin: origin, pairing: pairing})}
   end
 
   defp origins_for_interval(events, side) do
