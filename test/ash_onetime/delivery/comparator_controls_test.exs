@@ -148,6 +148,37 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              end)
            end)
 
+    indexed = Origins.build(pair.run)
+    scheduled = AshOnetime.Test.ExitBoundary.Scheduling.build(indexed)
+    indexed = %{indexed | events: scheduled.events}
+    permitted = PermittedTrace.match(pair.run, indexed)
+    readback = AshOnetime.Test.ExitBoundary.Readback.check(pair.run, indexed, permitted.bound)
+
+    root = {AshOnetime.Store, :committed_completion, 2}
+    start = Enum.find(indexed.events, &(&1.mfa == root and elem(&1.event, 1) == :call))
+    stop = Enum.find(indexed.events, &(&1.mfa == root and elem(&1.event, 1) == :return_from))
+
+    outside = Enum.reject(readback.claimed, &(&1 >= start.index and &1 <= stop.index))
+
+    for side <- [pair.run, pair.twin] do
+      wire = side |> Origins.build() |> TransportReferences.build() |> Wire.build()
+
+      counts =
+        for event <- wire,
+            is_port(event.pid) do
+          claimed? = side.resource == Withheld and MapSet.member?(readback.claimed, event.index)
+          sql = if event.wire_sql, do: :crypto.hash(:sha256, event.wire_sql)
+          {event.role, claimed?, sql}
+        end
+        |> Enum.frequencies()
+
+      IO.inspect(%{side: side.resource, instances: counts},
+        label: "U2_NATIVE_TRANSPORT_OWNERSHIP",
+        limit: :infinity
+      )
+    end
+
+    assert outside == [], "OPEN claimed transport outside its native interval: #{inspect(outside)}"
     assert_green(pair)
   end
 
@@ -203,12 +234,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert clocks != [] and Enum.all?(clocks, &(&1 == 1184))
 
       database = AshOnetime.Test.ExitBoundary.DatabaseOrigins.build(wire, side)
+
       date_sources =
         for {:data_column, sql, _, _, name, _, _, 1082, _, _} <- rows,
             sql in database.statements.date.statements,
             do: {sql, name}
 
       assert date_sources != [], "the declared date SELECT must have a native wire origin"
+
       for {sql, name} <- date_sources,
           do: assert(database.statements.date.columns[sql] == [name])
 
@@ -223,11 +256,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         :completion_date_frame,
         :completion_date_environment
       ]
-
-      required =
-        if side.resource == Withheld,
-          do: required ++ [:payload_date_column, :payload_date_result],
-          else: required
 
       for token <- required,
           do: assert(token in tokens, "missing native clock-copy witness: #{token}")
@@ -256,6 +284,32 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
 
     assert_green(pair)
+
+    replay = observe(context, row!(:external_issue, :replay), Values.set()[:va])
+
+    for side <- [replay.run, replay.twin] do
+      prior_wire = side.prior |> Origins.build() |> TransportReferences.build() |> Wire.build()
+      prior = AshOnetime.Test.ExitBoundary.DatabaseOrigins.build(prior_wire, side.prior)
+      wire = side |> Origins.build() |> TransportReferences.build() |> Wire.build()
+
+      database =
+        AshOnetime.Test.ExitBoundary.DatabaseOrigins.build(
+          wire,
+          Map.put(side, :prior_database, prior)
+        )
+
+      assert database.errors == []
+      tokens = for {_, {:database_expression, token}} <- database.slots, do: token
+
+      for token <- [:payload_date_column, :payload_date_result],
+          do: assert(token in tokens, "missing native replay clock-copy witness: #{token}")
+
+      IO.inspect(%{side: side.resource, copies: Enum.frequencies(tokens)},
+        label: "U4_NATIVE_REPLAY_CLOCK_COPY_COVERAGE"
+      )
+    end
+
+    assert_green(replay)
   end
 
   @tag :u6
@@ -263,8 +317,22 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     pair = observe(context, row!(:rotate, :execute), Values.set()[:va])
 
     for side <- [pair.run, pair.twin] do
-      events = Origins.build(side).events
+      indexed = Origins.build(side)
+      events = indexed.events
       contexts = AshOnetime.Test.ExitBoundary.DatabaseOrigins.sql_contexts(events)
+      names = AshOnetime.Test.ExitBoundary.QueryOrigins.build(indexed, side)
+
+      prepared_names =
+        for %{event: {_, :call, {Postgrex, :prepare_execute, [_, name, statement, _, _]}}} <-
+              events do
+          assert {:ok, expected} =
+                   AshOnetime.Test.ExitBoundary.QueryOrigins.expected_name(names, statement)
+
+          assert name === expected
+          name
+        end
+
+      assert prepared_names != [], "the native scalar prepared-name slot must execute"
 
       assert Enum.any?(
                events,
@@ -292,6 +360,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             end)
 
           assert entry != nil, "each native query logger needs its actual LogEntry"
+
           if entry.call in [:prepare_execute, :execute] do
             statement = to_string(entry.query)
             assert contexts[index] === statement

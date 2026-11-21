@@ -214,6 +214,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     tw = Wire.build(tt)
     rdb = Registry.compute(:o4, [rw, run])
     tdb = Registry.compute(:o4, [tw, twin])
+
     state =
       state
       |> Map.put(:databases, {rdb, tdb})
@@ -1498,6 +1499,10 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
   defp term(a, b, state, path) do
     cond do
+      match?(%{mfa: {Postgrex, :prepare_execute, 5}}, state.at) and
+          path == [:event, 2, 2, 1] ->
+        prepared_query_name(a, b, state, path)
+
       scalar_operation?(state.at, path) ->
         derived_operation(a, b, state, path)
 
@@ -2540,6 +2545,20 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
        do: true
 
   defp scalar_uuid?(_, _), do: false
+
+  defp prepared_query_name(a, b, state, path) do
+    {run, twin} = state.queries
+
+    case {AshOnetime.Test.ExitBoundary.QueryOrigins.expected_name(run, current_sql(state, :run)),
+          AshOnetime.Test.ExitBoundary.QueryOrigins.expected_name(twin, current_sql(state, :twin))} do
+      {{:ok, run_name}, {:ok, twin_name}} ->
+        if a === run_name and b === twin_name,
+          do: state,
+          else: error(state, :o2a_query_name, path, a, b)
+
+      _ -> if a === b, do: state, else: error(state, :o2a_query_name, path, a, b)
+    end
+  end
 
   defp derived_operation(a, b, state, path) do
     {:ok, expected_a} = Registry.operation(state.run.resource, state.row.action)

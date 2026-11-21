@@ -164,40 +164,71 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
 
         range = if stop == nil, do: tail, else: Enum.take(tail, stop + 1)
         caller_events = Enum.filter(range, &(&1.pid == caller))
-        requests = driver_requests(events)
+        native = Enum.sort_by(events, & &1.index)
+        requests = driver_requests(native)
 
         owned_requests =
           for e <- caller_events, Map.has_key?(requests, e.index), do: requests[e.index]
 
-        messages = for %{event: {^caller, :receive, message}} <- caller_events, do: message
+        replies = control_replies(native)
+        messages = received_messages(native)
 
         control_replies =
-          for index <- owned_requests,
-              %{event: {port, :receive, {^caller, {:control, _}}}} <- [
-                Enum.find(events, &(&1.index == index))
-              ],
-              reply =
-                Enum.find(events, fn e ->
-                  e.index > index and
-                    match?({^port, :send, {^port, {:control, _}}, ^caller}, e.event)
-                end),
-              reply != nil,
-              do: reply.index
+          for index <- owned_requests, Map.has_key?(replies, index), do: replies[index]
+
+        received =
+          for e <- caller_events, Map.has_key?(messages, e.index), do: messages[e.index]
 
         roots = MapSet.new(caller_events, & &1.index)
-        selected = MapSet.new(owned_requests ++ control_replies)
+        selected = MapSet.new(owned_requests ++ control_replies ++ received)
 
         Enum.filter(events, fn e ->
-          MapSet.member?(roots, e.index) or MapSet.member?(selected, e.index) or
-            case e.event do
-              {port, :send, message, ^caller} when is_port(port) ->
-                message in messages
-
-              _ ->
-                false
-            end
+          MapSet.member?(roots, e.index) or MapSet.member?(selected, e.index)
         end)
     end
+  end
+
+  # Match occurrences in native timestamp order before scheduling moves. Equal
+  # payloads in other queries never become part of OPEN's reference execution.
+  defp received_messages(events) do
+    sent =
+      for %{event: {port, :send, message, caller}, index: index} <- events,
+          is_port(port),
+          do: {{caller, message}, index}
+
+    grouped = Enum.group_by(sent, &elem(&1, 0), &elem(&1, 1))
+
+    {bound, _} =
+      Enum.reduce(events, {%{}, %{}}, fn
+        %{event: {caller, :receive, message}, index: index}, {bound, counts} ->
+          request(index, {caller, message}, grouped, bound, counts)
+
+        _, state ->
+          state
+      end)
+
+    bound
+  end
+
+  defp control_replies(events) do
+    replies =
+      for %{event: {port, :send, {port, {:control, _}}, caller}, index: index} <- events,
+          is_port(port),
+          do: {{caller, port}, index}
+
+    grouped = Enum.group_by(replies, &elem(&1, 0), &elem(&1, 1))
+
+    {bound, _} =
+      Enum.reduce(events, {%{}, %{}}, fn
+        %{event: {port, :receive, {caller, {:control, _}}}, index: index}, {bound, counts}
+        when is_port(port) ->
+          request(index, {caller, port}, grouped, bound, counts)
+
+        _, state ->
+          state
+      end)
+
+    bound
   end
 
   defp driver_requests(events) do

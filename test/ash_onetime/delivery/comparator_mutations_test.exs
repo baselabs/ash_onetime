@@ -96,7 +96,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         if first do
           named? = MutationWitness.named?(mutation, first, pair, comparison)
           assert named?, "#{mutation.id}: an earlier or different divergence is not a kill"
-          comparator_mutants(mutation, pair, first)
+          comparator_mutants(mutation, pair, comparison)
 
           if mutation.extra == :u12 do
             IO.inspect(%{mutation: mutation.id, at: first.at, path: first.path, rule: first.rule},
@@ -161,7 +161,9 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
     end
   end
 
-  defp comparator_mutants(mutation, pair, active_first) do
+  defp comparator_mutants(mutation, pair, comparison) do
+    active_first = hd(comparison.errors)
+
     for rule <- ComparatorMutants.rules() do
       disabled = ComparatorMutants.compare(pair, rule)
       next = List.first(disabled.errors)
@@ -202,7 +204,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
                  "R4's shifted retention must still fail its own O4 copy at the done put"
 
           assert next.at.run_index == active_first.at.run_index
-          assert MutationWitness.named?(mutation, next, pair, disabled)
+          assert MutationWitness.named?(mutation, next, pair, comparison)
 
         {:crypto, :r5} ->
           assert disabled.errors == [], "R5 must pass with only the crypto transfer disabled"

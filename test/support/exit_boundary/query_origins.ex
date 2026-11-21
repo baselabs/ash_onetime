@@ -3,7 +3,7 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
   alias AshOnetime.Test.ExitBoundary.References
 
   def build(indexed, side) do
-    historical = side.historical.query_cache
+    historical = indexed.query_cache
     ids = for {_, _, _, {id, query}} <- historical.rows, into: %{}, do: {statement(query), id}
     generated = for {_, %{value: value}} <- indexed.origins, is_integer(value), do: value
     initial = %{ids: ids, cache_events: MapSet.new(), pending: %{}, errors: []}
