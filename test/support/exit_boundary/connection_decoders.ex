@@ -31,10 +31,98 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     %{
       instances: Enum.reverse(state.instances),
       versions: Enum.reverse(state.versions),
+      protocol_copies: protocol_copies(indexed, historical),
       replays: Enum.reverse(state.replays),
       errors: Enum.reverse(state.errors)
     }
   end
+
+  # A census of native coordinates, not a qualification or a projection. Each
+  # Protocol occurrence needs its own version/origin rule before any buffer copy
+  # can leave O5. Public SSL socket arguments/results remain opaque throughout.
+  defp protocol_copies(indexed, historical) do
+    sockets =
+      for {_holder, %{protocol: %{sock: {:ssl, socket}}}} <- historical, do: socket
+
+    opaque = MapSet.new(sockets ++ Enum.flat_map(indexed.events, &ssl_socket/1))
+
+    for source <- indexed.events,
+        {path, protocol} <- protocol_terms(source.event, [], opaque) do
+      source
+      |> Map.take([:index, :mfa, :role, :stack])
+      |> Map.put(:tag, elem(source.event, 1))
+      |> Map.put(:path, path)
+      |> Map.put(:buffer_kind, buffer_kind(protocol.buffer))
+    end
+  end
+
+  defp ssl_socket(%{event: {_, :call, {:ssl, function, [socket | _]}}})
+       when function in [
+              :send,
+              :recv,
+              :close,
+              :sockname,
+              :peername,
+              :getopts,
+              :setopts,
+              :shutdown,
+              :controlling_process,
+              :connection_information,
+              :peercert
+            ],
+       do: [socket]
+
+  defp ssl_socket(%{event: {_, :return_from, {:ssl, function, _}, {:ok, socket}}})
+       when function in [:connect, :transport_accept, :handshake],
+       do: [socket]
+
+  defp ssl_socket(_event), do: []
+
+  defp protocol_terms(value, path, opaque) do
+    if MapSet.size(opaque) == 0 or not MapSet.member?(opaque, value),
+      do: protocol_term(value, path, opaque),
+      else: []
+  end
+
+  defp protocol_term(%Postgrex.Protocol{} = protocol, path, _opaque), do: [{path, protocol}]
+
+  defp protocol_term(value, path, opaque) when is_function(value) do
+    {:env, environment} = Function.info(value, :env)
+    protocol_terms(environment, path ++ [:function, :env], opaque)
+  end
+
+  defp protocol_term(value, path, opaque) when is_map(value) do
+    Enum.flat_map(Map.to_list(value), fn {key, item} ->
+      protocol_terms(key, path ++ [{:map_key, key}], opaque) ++
+        protocol_terms(item, path ++ [key], opaque)
+    end)
+  end
+
+  defp protocol_term(value, path, opaque) when is_tuple(value) do
+    value
+    |> Tuple.to_list()
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {item, index} -> protocol_terms(item, path ++ [index], opaque) end)
+  end
+
+  defp protocol_term([_head | _tail] = list, path, opaque),
+    do: protocol_list(list, path, opaque, 0)
+
+  defp protocol_term(_value, _path, _opaque), do: []
+
+  defp protocol_list([head | tail], path, opaque, index),
+    do:
+      protocol_terms(head, path ++ [index], opaque) ++
+        protocol_list(tail, path, opaque, index + 1)
+
+  defp protocol_list([], _path, _opaque, _index), do: []
+
+  defp protocol_list(tail, path, opaque, index),
+    do: protocol_terms(tail, path ++ [{:improper_tail, index}], opaque)
+
+  defp buffer_kind(buffer) when is_binary(buffer), do: :bytes
+  defp buffer_kind(buffer) when buffer in [nil, :active_once], do: buffer
+  defp buffer_kind(_buffer), do: :invalid
 
   defp owner_descriptors(origins) do
     for %{sock: {:gen_tcp, port}, query: query} = origin <- origins,

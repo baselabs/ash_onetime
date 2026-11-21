@@ -62,6 +62,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
 
           {:backend, {^port, :send, _message, owner}} ->
             {port, :send, {:tcp, port, transport}, owner}
+
+          {:frontend, {owner, :call, {:ssl, :send, [_socket, _bytes]}}} ->
+            {owner, :call, {:ssl, :send, [port, transport]}}
+
+          {:backend, {owner, :return_from, {:ssl, :recv, 3}, {:ok, _bytes}}} ->
+            {owner, :return_from, {:ssl, :recv, 3}, {:ok, transport}}
         end
 
       source

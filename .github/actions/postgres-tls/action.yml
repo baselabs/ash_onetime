@@ -30,9 +30,26 @@ runs:
         tls_directory="$(mktemp -d)"
         trap 'rm -rf "$tls_directory"' EXIT
         openssl req -newkey rsa:2048 -nodes -x509 -days 1 \
-          -subj /CN=localhost -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+          -subj /CN=ash_onetime_native_ca \
+          -addext 'basicConstraints=critical,CA:TRUE' \
+          -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+          -keyout "$tls_directory/ao-native-ca.key" \
+          -out "$tls_directory/ao-native-ca.crt" > /dev/null 2>&1
+        openssl req -newkey rsa:2048 -nodes -subj /CN=localhost \
           -keyout "$tls_directory/ao-native-server.key" \
+          -out "$tls_directory/ao-native-server.csr" > /dev/null 2>&1
+        cat > "$tls_directory/ao-native-server.ext" <<'EXT'
+        basicConstraints=critical,CA:FALSE
+        keyUsage=critical,digitalSignature,keyEncipherment
+        extendedKeyUsage=serverAuth
+        subjectAltName=DNS:localhost,IP:127.0.0.1
+        EXT
+        openssl x509 -req -days 1 -in "$tls_directory/ao-native-server.csr" \
+          -CA "$tls_directory/ao-native-ca.crt" -CAkey "$tls_directory/ao-native-ca.key" \
+          -CAcreateserial -extfile "$tls_directory/ao-native-server.ext" \
           -out "$tls_directory/ao-native-server.crt" > /dev/null 2>&1
+        openssl verify -CAfile "$tls_directory/ao-native-ca.crt" -purpose sslserver \
+          -verify_hostname localhost "$tls_directory/ao-native-server.crt" > /dev/null
         # Extract inside the running mount namespace, including its /tmp tmpfs.
         # The archive goes only to the container's stdin, never to job output.
         tar -C "$tls_directory" -cf - ao-native-server.crt ao-native-server.key | \
@@ -56,7 +73,7 @@ runs:
           echo '::error::The disposable native server did not enable TLS'; exit 1
         fi
         certificate="$RUNNER_TEMP/ao-native-ca-$server.crt"
-        cp "$tls_directory/ao-native-server.crt" "$certificate"
+        cp "$tls_directory/ao-native-ca.crt" "$certificate"
         echo "ASH_ONETIME_NATIVE_TLS_CA_FILE=$certificate" >> "$GITHUB_ENV"
     - name: Remove this job's TLS client certificate
       if: always() && inputs.mode == 'stop'

@@ -122,6 +122,7 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
               try do
                 pair = Scenarios.observe(row, tuple, context)
                 comparison = Comparator.compare(pair)
+                log_protocol_copies(comparison, row, label)
 
                 %{
                   comparison
@@ -227,6 +228,38 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
           printable_limit: :infinity
         )
     )
+  end
+
+  defp log_protocol_copies(%{connections: {run, twin}}, row, tuple) do
+    key = {__MODULE__, :protocol_copy_sites}
+    seen = Process.get(key, MapSet.new())
+
+    seen =
+      Enum.reduce([run: run, twin: twin], seen, fn {side, proof}, seen ->
+        Enum.reduce(
+          proof.decoders.protocol_copies,
+          seen,
+          &log_protocol_copy(&1, &2, row, tuple, side)
+        )
+      end)
+
+    Process.put(key, seen)
+  end
+
+  defp log_protocol_copy(copy, seen, row, tuple, side) do
+    site = Map.take(copy, [:mfa, :tag, :role, :path, :buffer_kind, :stack])
+
+    unless MapSet.member?(seen, site) do
+      IO.puts(
+        "CONNECTION_PROTOCOL_COPY_SITE: " <>
+          Diagnostics.render(%{row: row, tuple: tuple, side: side, copy: copy},
+            pretty: true,
+            limit: :infinity
+          )
+      )
+    end
+
+    MapSet.put(seen, site)
   end
 
   defp rule3_errors(side) do

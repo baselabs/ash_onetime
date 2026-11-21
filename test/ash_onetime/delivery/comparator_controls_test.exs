@@ -403,6 +403,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert decoders.errors == []
 
+      assert Enum.any?(decoders.protocol_copies, fn copy ->
+               copy.mfa == {Postgrex.Protocol, :handle_execute, 4} and copy.tag == :call and
+                 copy.path == [2, 2, 3] and is_integer(copy.index)
+             end)
+
       rows =
         Enum.filter(decoders.instances, &(&1.source.mfa == {Postgrex.Types, :decode_rows, 4}))
 
@@ -2632,6 +2637,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         connection = Map.fetch!(streams.connections, run.tls_binding.port)
         messages = Enum.map(connection.protocol.messages, & &1.decoded)
         assert messages != []
+        logical = ConnectionReads.messages(streams, %{events: events})
+        assert length(logical) == length(messages)
+        assert Enum.all?(logical, &is_integer(&1.index))
+        assert Enum.all?(logical, &(elem(&1.message_address, 1) == run.tls_binding.port))
 
         program =
           for event <- events,

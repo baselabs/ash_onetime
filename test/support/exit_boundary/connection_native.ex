@@ -86,26 +86,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       |> Keyword.put(:ssl,
         verify: :verify_peer,
         cacertfile: System.fetch_env!("ASH_ONETIME_NATIVE_TLS_CA_FILE") |> String.to_charlist(),
-        server_name_indication: ~c"localhost",
-        verify_fun: {&tls_verify/3, nil}
+        server_name_indication: ~c"localhost"
       )
 
     {:ok, protocol} = Postgrex.Protocol.connect(options)
     {:ok, protocol} = Postgrex.Protocol.checkout(protocol)
     protocol
   end
-
-  # Preserve OTP's verify_peer decisions. Only the native error atom is printed;
-  # neither a certificate nor any part of the SSL socket is inspected.
-  defp tls_verify(_certificate, {:bad_cert, reason} = failure, _state) do
-    label = if is_atom(reason), do: reason, else: :compound
-    IO.puts("TLS_CERTIFICATE_FAILURE: " <> Atom.to_string(label))
-    {:fail, failure}
-  end
-
-  defp tls_verify(_certificate, {:extension, _extension}, state), do: {:unknown, state}
-  defp tls_verify(_certificate, event, state) when event in [:valid, :valid_peer],
-    do: {:valid, state}
 
   defp native_spec(:buffered) do
     %{
