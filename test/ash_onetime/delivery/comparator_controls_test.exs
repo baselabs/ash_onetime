@@ -400,9 +400,41 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       |> Enum.with_index()
       |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
 
-    native = NativeTransport.build(%{events: events})
+    indexed = %{events: events}
+    native = NativeTransport.build(indexed)
     assert Enum.map(native.options, & &1.mode) == [:once, false]
     assert Enum.map(native.errors, & &1.actual) == [:native_option_source]
+    assert Enum.map(native.errors, & &1.rule) == [:native_option]
+
+    for mutant <- [:stream_length, :stream_timeout, :stream_required, :stream_active_source] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> NativeTransport.build(indexed) end)
+      expected = if mutant == :stream_active_source, do: [], else: [:native_option_source]
+      assert Enum.map(checked.errors, & &1.actual) == expected
+    end
+
+    assert Enum.map(NativeTransport.build(indexed).errors, & &1.actual) == [:native_option_source]
+    {restored, _streams} = native_connection(:active, nil)
+    assert restored.errors == []
+    IO.puts("CONNECTION_STREAM_NATIVE_ISOLATION: stream_active_source RED; exact restore GREEN")
+  end
+
+  @tag :connection_streams
+  test "Connection streams: deferred controls use their actual native driver replies" do
+    {native, streams} = native_connection(:contended, nil)
+    assert native.errors == []
+    assert streams.errors == []
+
+    deferred =
+      for read <- native.reads,
+          index <- read.indexes,
+          {:ok, %{returned: %{event: {_, :return_from, mfa, ref}}}} <-
+            [Map.fetch(native.pairs, index)],
+          mfa == {:erts_internal, :port_control, 3},
+          is_reference(ref),
+          do: index
+
+    assert deferred != [], "the real contended socket must execute deferred controls"
+    IO.puts("CONNECTION_STREAM_DEFERRED_CONTROLS: " <> inspect(length(deferred)))
   end
 
   defp native_copy_bytes(event, path) do

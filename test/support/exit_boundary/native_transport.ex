@@ -7,6 +7,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   # that framing and the protocol state machine required that particular read.
   def build(indexed) do
     pairs = call_pairs(indexed.events)
+
     initial = %{
       pairs: pairs,
       events: indexed.events,
@@ -34,6 +35,8 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
           state
       end)
 
+    state = option_sources(state)
+
     %{
       pairs: pairs,
       reads: Enum.reverse(state.reads),
@@ -41,6 +44,25 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       options: Enum.reverse(state.options),
       errors: Enum.reverse(state.errors)
     }
+  end
+
+  defp option_sources(state) do
+    Enum.reduce(state.events, state, fn
+      %{event: {_, :call, {:erts_internal, :port_control, [port, command, data]}}} = source,
+      state
+      when is_port(port) and command == @control_magic + 7 ->
+        case IO.iodata_to_binary(data) do
+          <<22, _::binary>> ->
+            bound? = Enum.any?(state.options, &(source.index in &1.indexes))
+            if bound?, do: state, else: failure(state, source, :native_option_source)
+
+          _ ->
+            state
+        end
+
+      _, state ->
+        state
+    end)
   end
 
   # The once fast path and the passive enum path have different native programs.
@@ -162,6 +184,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
     name = program(:prim_inet, :enc_opt, [:active], 22)
     tail = program(:prim_inet, :enc_opt_val, [[], encoded], encoded)
+
     body =
       program(
         :prim_inet,
@@ -176,7 +199,8 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   end
 
   defp program(module, function, args, result, children \\ []) do
-    [{:call, {module, function, args}}] ++ children ++
+    [{:call, {module, function, args}}] ++
+      children ++
       [{:return_from, {module, function, length(args)}, result}]
   end
 
@@ -641,7 +665,14 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
              _ -> false
            end),
          {_, :receive, {^ref, reply}} <- received.event,
-         [sent] <- in_interval(events, outer, &(&1.event == {port, :send, {ref, reply}, pid})),
+         true <- is_list(reply) or is_binary(reply),
+         bytes <- IO.iodata_to_binary(reply),
+         [sent] <-
+           in_interval(
+             events,
+             outer,
+             &(&1.event == {port, :send, {port, {:control, bytes}}, pid})
+           ),
          true <- sent.index < received.index do
       {:ok, reply, [received.index, sent.index]}
     else
@@ -715,6 +746,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       case source.mfa do
         {:gen_tcp, :send, 2} -> :native_write
         {:prim_inet, :setopts, 2} -> :native_option
+        {:erts_internal, :port_control, 3} -> :native_option
         _ -> :native_receive
       end
 

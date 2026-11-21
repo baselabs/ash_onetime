@@ -354,6 +354,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_active_source) do
+    [
+      %{
+        path: "test/support/exit_boundary/native_transport.ex",
+        original:
+          "            if bound?, do: state, else: failure(state, source, :native_option_source)\n",
+        mutated: "            if bound?, do: state, else: state\n"
+      }
+    ]
+  end
+
   def compare(pair, rule), do: with_mutant(rule, fn -> Comparator.compare(pair) end)
 
   def with_mutant(rule, callback) do

@@ -82,6 +82,30 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     :ok = module.close(socket)
   end
 
+  defp execute(%{sock: {module, socket}}, :contended, nil) do
+    root = self()
+    worker = spawn(fn -> option_load(socket, root) end)
+
+    try do
+      for _ <- 1..64 do
+        :ok = module.send(socket, query(17))
+        :ok = drain(module, socket, 1, <<>>, true, nil)
+      end
+
+      :ok
+    after
+      send(worker, :stop)
+
+      receive do
+        {:options_stopped, ^worker} -> :ok
+      after
+        15_000 -> raise "native option load did not stop"
+      end
+
+      :ok = module.close(socket)
+    end
+  end
+
   defp execute(%{sock: {module, socket}}, mode, corruption) do
     values = values(mode, corruption)
     messages = Enum.map(values, &query/1)
@@ -95,6 +119,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     :ok
   after
     :ok = module.close(socket)
+  end
+
+  defp option_load(socket, root) do
+    receive do
+      :stop -> send(root, {:options_stopped, self()})
+    after
+      0 ->
+        {:ok, [active: false]} = :inet.getopts(socket, [:active])
+        option_load(socket, root)
+    end
   end
 
   defp values(:single, nil), do: [17]
