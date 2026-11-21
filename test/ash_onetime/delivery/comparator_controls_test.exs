@@ -6,6 +6,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias AshOnetime.Test.ExitBoundary.ComparatorMutants
   alias AshOnetime.Test.ExitBoundary.Compiled
   alias AshOnetime.Test.ExitBoundary.Completeness
+  alias AshOnetime.Test.ExitBoundary.ConnectionDecoders
   alias AshOnetime.Test.ExitBoundary.ConnectionNative
   alias AshOnetime.Test.ExitBoundary.ConnectionProtocol
   alias AshOnetime.Test.ExitBoundary.ConnectionReads
@@ -128,6 +129,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @tag :connection_streams
   test "Connection streams: native Parse Describe Flush and Bind Execute Sync associate",
        context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+
     run =
       ExitBoundary.observe(
         fn ->
@@ -135,7 +139,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           context.repo
         end,
         fn repo -> SQL.query!(repo, "SELECT 17::int4 AS connection_stream_probe", []) end,
-        %{host: [], callbacks: []}
+        %{
+          host: [],
+          callbacks: [],
+          frames: [
+            {Postgrex.Protocol, :msg_recv, :_},
+            {Postgrex.Protocol, :rows_recv, :_},
+            {Postgrex.Protocol, :msg_decode, 1},
+            {Postgrex.Types, :decode_rows, 4}
+          ]
+        }
       )
 
     assert native_result(run) == {:ok, [[17]]}
@@ -192,6 +205,17 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       bytes = <<frame.tag, byte_size(frame.payload) + 4::signed-32, frame.payload::binary>>
       expected = binary_part(bytes, span.offset - frame.start, span.length)
       assert_native_copies(span.copies, indexed, expected)
+    end
+
+    decoders = ConnectionDecoders.build(%{events: indexed}, native, demand, historical.connections)
+    assert decoders.errors == []
+    assert decoders.instances != []
+    assert Enum.any?(decoders.instances, &(&1.source.mfa == {Postgrex.Protocol, :msg_decode, 1}))
+    assert Enum.any?(decoders.instances, &(&1.source.mfa == {Postgrex.Types, :decode_rows, 4}))
+
+    for instance <- decoders.instances, copy <- instance.copies do
+      expected = if copy.index == instance.source.index, do: instance.input, else: instance.tail
+      assert_native_copies([copy], indexed, expected)
     end
 
     for {_port, chunks} <- streams do

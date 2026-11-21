@@ -305,6 +305,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
       |> Map.put(:association, association)
       |> Map.put(:sql, if(context, do: context.sql))
       |> Map.put(:statement, if(context, do: context.statement))
+      |> Map.put(:context, context)
 
     %{state | messages: [message | state.messages]}
   end

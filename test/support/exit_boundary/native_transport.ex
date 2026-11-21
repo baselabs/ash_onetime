@@ -24,6 +24,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       end)
 
     %{
+      pairs: pairs,
       reads: Enum.reverse(state.reads),
       writes: Enum.reverse(state.writes),
       errors: Enum.reverse(state.errors)
