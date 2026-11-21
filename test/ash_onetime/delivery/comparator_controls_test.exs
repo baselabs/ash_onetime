@@ -32,6 +32,86 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias Ecto.Adapters.SQL
   use AshOnetime.Test.ExitBoundary.ComparatorCase, async: false
 
+  @tag :connection_streams
+  test "Connection streams: native messages survive every header split", context do
+    pair = observe(context, row!(:issue, :execute), Values.set()[:va])
+    Code.ensure_loaded!(Wire)
+    assert function_exported?(Wire, :frames, 1), "CONNECTION_STREAM_REASSEMBLY_WITNESS"
+
+    for {_port, chunks} <- native_stream_chunks(pair.run) do
+      baseline = apply(Wire, :frames, [chunks])
+      assert baseline.errors == []
+      assert baseline.messages != []
+
+      for width <- [1, 2, 3, 4, 5, 7, 31, 4096] do
+        split = Enum.flat_map(chunks, &split_stream_chunk(&1, width))
+        result = apply(Wire, :frames, [split])
+        assert result.errors == []
+        assert stream_contents(result) == stream_contents(baseline)
+
+        for message <- result.messages do
+          copies = message.provenance
+          assert copies != []
+          assert Enum.sum(Enum.map(copies, & &1.length)) == message.stop - message.start
+          assert hd(copies).offset == message.start
+        end
+      end
+    end
+  end
+
+  @tag :connection_streams
+  test "Connection streams: a native incomplete final frame is refused", context do
+    pair = observe(context, row!(:issue, :execute), Values.set()[:va])
+    Code.ensure_loaded!(Wire)
+    assert function_exported?(Wire, :frames, 1), "CONNECTION_STREAM_FINAL_FRAME_WITNESS"
+
+    for {_port, chunks} <- native_stream_chunks(pair.run) do
+      baseline = apply(Wire, :frames, [chunks])
+      assert baseline.errors == []
+      last = List.last(chunks)
+      truncated = %{last | bytes: binary_part(last.bytes, 0, byte_size(last.bytes) - 1)}
+      result = apply(Wire, :frames, [List.replace_at(chunks, -1, truncated)])
+      assert [%{rule: :incomplete_frame, direction: direction}] = result.errors
+      assert direction == last.direction
+    end
+  end
+
+  defp native_stream_chunks(side) do
+    side.run.events
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {entry, index} ->
+      case entry.event do
+        {port, :receive, {_pid, {:command, data}}} when is_port(port) ->
+          <<size::16, reference::binary-size(size), bytes::binary>> = IO.iodata_to_binary(data)
+          assert is_reference(:erlang.binary_to_term(reference, [:safe]))
+          [{port, %{index: index, direction: :frontend, bytes: bytes}}]
+
+        {port, :send, {:inet_async, port, _id, {:ok, bytes}}, _pid} when is_port(port) ->
+          [{port, %{index: index, direction: :backend, bytes: IO.iodata_to_binary(bytes)}}]
+
+        {port, :send, {:tcp, port, bytes}, _pid} when is_port(port) ->
+          [{port, %{index: index, direction: :backend, bytes: IO.iodata_to_binary(bytes)}}]
+
+        _ ->
+          []
+      end
+    end)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+  end
+
+  defp split_stream_chunk(chunk, width) do
+    offsets =
+      Stream.iterate(0, &(&1 + width))
+      |> Enum.take_while(&(&1 < byte_size(chunk.bytes)))
+
+    for offset <- offsets do
+      %{chunk | bytes: binary_part(chunk.bytes, offset, min(width, byte_size(chunk.bytes) - offset))}
+    end
+  end
+
+  defp stream_contents(result),
+    do: Enum.map(result.messages, &Map.take(&1, [:direction, :tag, :payload, :start, :stop]))
+
   @tag :comparator_control
   test "C-tick: the twin TTL read falls in the next second", context do
     context = Map.merge(context, %{run_first?: true, between_sides: &next_second/1})
@@ -152,7 +232,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           Enum.map(checkpoint_events, fn event ->
             Map.take(event, [:index, :role, :mfa, :stack])
             |> Map.put(:event, Diagnostics.safe(event.event))
-          end), pretty: true, limit: :infinity)
+          end),
+          pretty: true,
+          limit: :infinity
+        )
     )
 
     assert Enum.any?(checkpoint_events, &match?({_, :call, _}, &1.event)),
@@ -672,7 +755,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
               side: side.resource,
               copies: Enum.frequencies(tokens),
               relations: Enum.uniq(relations)
-            }, pretty: true)
+            },
+            pretty: true
+          )
       )
     end
 
@@ -892,7 +977,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                       {m, f, if(is_list(a), do: length(a), else: a), location}
                     end)
                   )
-              }, pretty: true, limit: :infinity)
+              },
+              pretty: true,
+              limit: :infinity
+            )
         )
 
         pair
@@ -1285,7 +1373,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             %{
               path: {pair.row.action, pair.row.branch, pair.row.fault},
               first: Diagnostics.safe(first)
-            }, pretty: true, limit: :infinity)
+            },
+            pretty: true,
+            limit: :infinity
+          )
       )
     end
 
@@ -1404,7 +1495,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             scheduling_errors: scheduled.errors,
             checkouts: checkouts,
             commands: commands
-          }, pretty: true, limit: :infinity)
+          },
+          pretty: true,
+          limit: :infinity
+        )
     )
   end
 

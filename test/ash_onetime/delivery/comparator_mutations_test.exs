@@ -92,7 +92,10 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
                   source: if(first, do: Diagnostics.location(first)),
                   raw_canary_hits: hits,
                   difference: Diagnostics.safe(first)
-                }, pretty: true, limit: :infinity)
+                },
+                pretty: true,
+                limit: :infinity
+              )
           )
         end
 
@@ -193,7 +196,10 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
               active: Diagnostics.safe(active_first),
               next: Diagnostics.safe(next),
               remaining: length(disabled.errors)
-            }, pretty: true, limit: :infinity)
+            },
+            pretty: true,
+            limit: :infinity
+          )
       )
 
       assert_mutant({rule, mutation.id}, mutation, pair, comparison, active_first, disabled, next)

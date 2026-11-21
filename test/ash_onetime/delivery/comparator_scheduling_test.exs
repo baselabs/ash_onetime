@@ -70,7 +70,10 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
                   side: side,
                   missing: MapSet.difference(before, after_keys) |> Enum.sort(),
                   added: MapSet.difference(after_keys, before) |> Enum.sort()
-                }, pretty: true, limit: :infinity)
+                },
+                pretty: true,
+                limit: :infinity
+              )
           )
         end
       end

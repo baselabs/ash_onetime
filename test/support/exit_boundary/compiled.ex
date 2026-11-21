@@ -124,7 +124,10 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
               function: {module, function, count},
               callee: target,
               code: Enum.map(instructions, &Diagnostics.safe/1)
-            }, pretty: true, limit: :infinity)
+            },
+            pretty: true,
+            limit: :infinity
+          )
       )
 
       reraise error, __STACKTRACE__
