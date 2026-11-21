@@ -438,6 +438,59 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: intermediate owner returns retain their native state versions" do
+    %{events: events, decoders: decoders} = cached_decoders(nil, :cross_connection)
+
+    prepared =
+      Enum.find(events, fn
+        %{event: {_, :return_from, {Postgrex.Protocol, :close_parse_describe_flush, 4}, _}} ->
+          true
+
+        _ ->
+          false
+      end)
+
+    assert prepared != nil, "the owner return constructing the intermediate state must be captured"
+    {_, :return_from, _, {:ok, query, protocol}} = prepared.event
+    assert protocol.postgres == {:idle, query.ref}
+
+    sent =
+      Enum.find(events, fn
+        %{index: index, event: {_, :call, {Postgrex.Protocol, :msg_send, _}}} ->
+          index > prepared.index
+
+        _ ->
+          false
+      end)
+
+    {_, :call, {_, _, [sending, _messages, buffer]}} = sent.event
+    assert sending == %{protocol | buffer: nil}
+    assert buffer == protocol.buffer
+
+    ready =
+      Enum.find(events, fn
+        %{event: {_, :return_from, {Postgrex.Protocol, :recv_ready, 3}, _}} -> true
+        _ -> false
+      end)
+
+    assert ready != nil, "the owner return installing the consumed buffer must be captured"
+    {_, :return_from, _, {:ok, ready_protocol}} = ready.event
+    version = decoders.versions |> Enum.filter(&(&1.index < ready.index)) |> List.last()
+    assert ready_protocol.buffer == version.cursor.buffer
+    assert ready_protocol.postgres == :idle
+
+    completed =
+      Enum.find(events, fn
+        %{event: {_, :return_from, {Postgrex.Protocol, :handle_execute, 4}, _}} -> true
+        _ -> false
+      end)
+
+    assert elem(completed.event, 3) |> Tuple.to_list() |> List.last() == ready_protocol
+    assert prepared.index < sent.index and sent.index < ready.index
+    assert ready.index < completed.index
+  end
+
+  @tag :connection_streams
   test "Connection streams: cached query copies are independently bound" do
     captured = cached_decoders(:query_copy)
     assert Enum.map(captured.decoders.errors, & &1.rule) == [:decoder_query_copy]
