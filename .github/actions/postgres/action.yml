@@ -45,7 +45,7 @@ runs:
       env:
         MODE: ${{ inputs.mode }}
         LOGICAL: ${{ inputs.logical }}
-        JOB_FAILED: ${{ failure() }}
+        JOB_STATUS: ${{ job.status }}
         # Throwaway fixture values, never credentials for an external service.
         TEST_PG_USER: postgres
         TEST_PG_PASSWORD: postgres
@@ -71,7 +71,7 @@ runs:
         for container in "${servers[@]}"; do
           if [ "$MODE" = stop ]; then
             if docker container inspect "$container" > /dev/null 2>&1; then
-              if [ "$JOB_FAILED" = true ]; then
+              if [ "$JOB_STATUS" != success ]; then
                 if ! docker logs "$container"; then cleanup_status=1; fi
               fi
               if ! docker rm -f -v "$container"; then cleanup_status=1; fi
