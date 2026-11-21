@@ -40,6 +40,39 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     }
   end
 
+  # Several messages can finish at one native event. Keep that event's real
+  # integer index for chronology and raw source lookup, with a separate address
+  # for the logical message and all its database slots and query contexts.
+  def messages(streams, indexed) do
+    native = Map.new(indexed.events, &{&1.index, &1})
+
+    for {port, connection} <- streams.connections,
+        message <- connection.protocol.messages do
+      span = Enum.max_by(message.provenance, & &1.index)
+      source = Map.fetch!(native, span.index)
+      transport = {:pg_transport, :stream, nil, [message.decoded]}
+
+      event =
+        case {message.direction, source.event} do
+          {:frontend, {^port, :receive, {owner, {:command, _bytes}}}} ->
+            {port, :receive, {owner, {:command, transport}}}
+
+          {:backend, {^port, :send, _message, owner}} ->
+            {port, :send, {:tcp, port, transport}, owner}
+        end
+
+      source
+      |> Map.put(:event, event)
+      |> Map.put(
+        :message_address,
+        {:connection_message, port, message.direction, message.message_ordinal}
+      )
+      |> Map.put(:wire_sql, message.sql)
+      |> Map.put(:wire_frame, message)
+    end
+    |> Enum.sort_by(&{&1.index, &1.wire_frame.start})
+  end
+
   defp event({_index, :request, read}, state) do
     connection = connection(state, read.port)
     buffer = get_in(connection.framing, [:directions, :backend, :buffer]) || <<>>
@@ -107,7 +140,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       port: delivery.port,
       offset: received(connection),
       required: %{mode: :once},
-      origin: delivery.activation.requested.index
+      origin: activation_origin(delivery.activation)
     }
 
     state = %{state | demands: [demand | state.demands]}
@@ -120,6 +153,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       phase: :backend
     })
   end
+
+  defp activation_origin(%{origin: origin}), do: origin
+  defp activation_origin(%{requested: %{index: index}}), do: index
 
   defp ping_calls(native) do
     for {_index, %{source: %{mfa: {Postgrex.Protocol, :ping, 1}}} = pair} <- native.pairs,

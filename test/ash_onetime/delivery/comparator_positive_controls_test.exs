@@ -37,7 +37,10 @@ defmodule AshOnetime.Delivery.ComparatorPositiveControlsTest do
               pair = observe(context, row, Values.set()[:va])
               hits = Search.hits(pair.run)
               quiet? = hits == []
-              assert quiet?, "a positive control crossed a raw-canary exit: #{Diagnostics.render(hits)}"
+
+              assert quiet?,
+                     "a positive control crossed a raw-canary exit: #{Diagnostics.render(hits)}"
+
               Comparator.compare(pair).errors
           end
         end)

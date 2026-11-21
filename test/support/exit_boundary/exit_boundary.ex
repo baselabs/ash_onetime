@@ -61,8 +61,11 @@ defmodule AshOnetime.Test.ExitBoundary do
           pattern_probe =
             if probe do
               case Collector.snapshot(probe, @deadline) do
-                {:ok, captured} -> Capture.annotate(captured, spec)
-                {:error, reason} -> raise "U10 pattern probe did not drain: #{Diagnostics.render(reason)}"
+                {:ok, captured} ->
+                  Capture.annotate(captured, spec)
+
+                {:error, reason} ->
+                  raise "U10 pattern probe did not drain: #{Diagnostics.render(reason)}"
               end
             end
 

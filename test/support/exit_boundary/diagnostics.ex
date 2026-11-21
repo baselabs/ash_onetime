@@ -96,11 +96,11 @@ defmodule AshOnetime.Test.ExitBoundary.Diagnostics do
   defp private?(value) when is_function(value),
     do: value |> Function.info(:env) |> elem(1) |> private?()
 
-  defp private?({key, _value}) when key in [:password, :url, :connection_key, :backend_key, :scram],
-    do: true
+  defp private?({key, _value})
+       when key in [:password, :url, :connection_key, :backend_key, :scram],
+       do: true
 
-  defp private?(value) when is_tuple(value) and tuple_size(value) > 0 and elem(value, 0) == :sslsocket,
-    do: true
+  defp private?({:ssl, _socket}), do: true
 
   defp private?(value) when is_tuple(value), do: value |> Tuple.to_list() |> private?()
   defp private?([head | tail]), do: private?(head) or private?(tail)

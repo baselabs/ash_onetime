@@ -14,6 +14,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       ExitBoundary.observe(
         fn ->
           protocol = connect()
+          protocol = initial_mode(protocol, mode)
           send(observer, {tag, %{self() => %{protocol: protocol}}})
           protocol
         end,
@@ -27,6 +28,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       0 -> raise "native connection history was not captured"
     end
   end
+
+  defp initial_mode(protocol, :historical_active) do
+    {:ok, protocol} = Postgrex.Protocol.checkin(protocol)
+    protocol
+  end
+
+  defp initial_mode(protocol, _mode), do: protocol
 
   defp native_spec(:buffered) do
     %{
@@ -158,9 +166,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     :ok = module.close(socket)
   end
 
-  defp execute(%{sock: {module, socket}}, :active, corruption)
-       when corruption in [nil, :unbound_active_control] do
-    :ok = :inet.setopts(socket, active: :once)
+  defp execute(%{sock: {module, socket}}, mode, corruption)
+       when mode in [:active, :historical_active] and
+              corruption in [nil, :unbound_active_control] do
+    if mode == :active, do: :ok = :inet.setopts(socket, active: :once)
     :ok = module.send(socket, query(17))
 
     receive do

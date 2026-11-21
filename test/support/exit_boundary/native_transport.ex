@@ -5,7 +5,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   # Validate the concrete inet driver program of each read independently. This
   # ledger does not grant any event exemption: the stream consumer must also prove
   # that framing and the protocol state machine required that particular read.
-  def build(indexed) do
+  def build(indexed, historical \\ %{}) do
     pairs = call_pairs(indexed.events)
 
     initial = %{
@@ -15,7 +15,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       writes: [],
       options: [],
       active: [],
-      active_modes: %{},
+      active_modes: historical_modes(historical),
       active_receives: %{},
       errors: []
     }
@@ -47,8 +47,15 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       writes: Enum.reverse(state.writes),
       options: Enum.reverse(state.options),
       active: Enum.reverse(state.active),
+      historical: historical,
       errors: Enum.reverse(state.errors)
     }
+  end
+
+  defp historical_modes(historical) do
+    for {holder, %{protocol: %{sock: {:gen_tcp, port}, buffer: :active_once}}} <- historical,
+        into: %{},
+        do: {port, %{mode: :once, origin: {:historical_active_mode, holder}}}
   end
 
   defp option_sources(state) do

@@ -16,6 +16,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
       pending: [],
       counts: %{},
       ordinal: 0,
+      message_counts: %{},
       failed?: false,
       messages: [],
       errors: []
@@ -298,6 +299,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
 
   defp emit(state, frame, decoded, context, operation \\ nil) do
     association = if operation, do: {operation.kind, operation.ordinal}, else: :frontend
+    ordinal = Map.get(state.message_counts, frame.direction, 0)
 
     message =
       frame
@@ -306,8 +308,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
       |> Map.put(:sql, if(context, do: context.sql))
       |> Map.put(:statement, if(context, do: context.statement))
       |> Map.put(:context, context)
+      |> Map.put(:message_ordinal, ordinal)
 
-    %{state | messages: [message | state.messages]}
+    %{
+      state
+      | messages: [message | state.messages],
+        message_counts: Map.put(state.message_counts, frame.direction, ordinal + 1)
+    }
   end
 
   defp pending_kind(%{pending: [operation | _]}), do: operation.kind

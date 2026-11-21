@@ -103,13 +103,18 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
       assert Enum.uniq(path_indices) == path_indices
       assert Enum.all?(path_indices, &(&1 in 0..(expected_rows - 1)))
       rows = Enum.map(path_indices, &Enum.fetch!(rows, &1))
-      IO.puts("C_POS_FLIPPED_BITS" <> ": " <> Diagnostics.render(Values.flipped_bits(), pretty: true))
+
+      IO.puts(
+        "C_POS_FLIPPED_BITS" <> ": " <> Diagnostics.render(Values.flipped_bits(), pretty: true)
+      )
+
       context = with_references(context, rows)
 
       {residuals, counts} =
         Enum.reduce(rows, {%{}, %{pairs: 0, events: 0}}, fn row, acc ->
           IO.puts(
-            "C_POS_ROW" <> ": " <> Diagnostics.render({row.action, row.branch, row.fault}, pretty: true)
+            "C_POS_ROW" <>
+              ": " <> Diagnostics.render({row.action, row.branch, row.fault}, pretty: true)
           )
 
           Enum.reduce(values, acc, fn {label, tuple}, {all, counts} ->
@@ -195,7 +200,11 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
             IO.puts(
               "C_POS_RESIDUAL" <>
                 ": " <>
-                Diagnostics.render({key, sample}, pretty: true, limit: :infinity, printable_limit: :infinity)
+                Diagnostics.render({key, sample},
+                  pretty: true,
+                  limit: :infinity,
+                  printable_limit: :infinity
+                )
             )
 
       assert residuals == %{},

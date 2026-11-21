@@ -544,7 +544,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
 
     assert Enum.map(programs, & &1.mode) == [:once, false]
-    IO.puts("CONNECTION_STREAM_ACTIVE_PROGRAMS: " <> Diagnostics.render(programs, limit: :infinity))
+
+    IO.puts(
+      "CONNECTION_STREAM_ACTIVE_PROGRAMS: " <> Diagnostics.render(programs, limit: :infinity)
+    )
 
     demand = ConnectionReads.build(native)
     assert demand.errors == []
@@ -642,7 +645,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
 
     replays = List.flatten(replays)
-    IO.puts("CONNECTION_STREAM_BUFFER_PROGRAMS: " <> Diagnostics.render(replays, limit: :infinity))
+
+    IO.puts(
+      "CONNECTION_STREAM_BUFFER_PROGRAMS: " <> Diagnostics.render(replays, limit: :infinity)
+    )
+
     assert replays != [], "the native runs must actually execute Postgrex buffered replay"
   end
 
@@ -885,7 +892,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         IO.puts(
           "C_TICK_READS" <>
             ": " <>
-            Diagnostics.render(%{attempt: attempt, run: run, twin: twin, seconds: delta}, pretty: true)
+            Diagnostics.render(%{attempt: attempt, run: run, twin: twin, seconds: delta},
+              pretty: true
+            )
         )
 
         assert_green(pair)
@@ -959,7 +968,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     IO.puts(
       "U1_RERAISE" <>
-        ": " <> Diagnostics.render(Enum.map(tail, fn e -> {elem(e, 1), event_mfa(e)} end), pretty: true)
+        ": " <>
+        Diagnostics.render(Enum.map(tail, fn e -> {elem(e, 1), event_mfa(e)} end), pretty: true)
     )
 
     assert raises == []
@@ -1068,7 +1078,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert Enum.any?(origins, &match?(%{origin: {:wire_statement, :committed_read, _}}, &1))
     assert Enum.any?(origins, &match?(%{origin: {:wire_statement, :shared, _}}, &1))
-    IO.puts("U2_NATIVE_WIRE_ORIGINS" <> ": " <> Diagnostics.render(origins, pretty: true, limit: :infinity))
+
+    IO.puts(
+      "U2_NATIVE_WIRE_ORIGINS" <>
+        ": " <> Diagnostics.render(origins, pretty: true, limit: :infinity)
+    )
 
     for side <- [pair.run, pair.twin] do
       wire = side |> Origins.build() |> TransportReferences.build() |> Wire.build()
@@ -1085,7 +1099,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       IO.puts(
         "U2_NATIVE_TRANSPORT_OWNERSHIP" <>
           ": " <>
-          Diagnostics.render(%{side: side.resource, instances: counts}, pretty: true, limit: :infinity)
+          Diagnostics.render(%{side: side.resource, instances: counts},
+            pretty: true,
+            limit: :infinity
+          )
       )
 
       u2_command_ownership(
@@ -1330,7 +1347,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     %{positive: positive, negative: negative} = cross_lease_captures(context)
     assert Allocation.captured_pairs(positive).errors == []
     rejected = Allocation.captured_pairs(negative)
-    IO.puts("U_CROSS_LEASE_NATIVE_CONFLICT" <> ": " <> Diagnostics.render(rejected.errors, pretty: true))
+
+    IO.puts(
+      "U_CROSS_LEASE_NATIVE_CONFLICT" <> ": " <> Diagnostics.render(rejected.errors, pretty: true)
+    )
+
     assert rejected.errors != [], "U_CROSS_LEASE_IDENTITY_WITNESS"
 
     assert Enum.all?(
@@ -1361,7 +1382,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       IO.puts(
         "U_CROSS_LEASE_SAME_CAPTURE_SELECTIVITY" <>
-          ": " <> Diagnostics.render(%{mutant: rule, remaining: length(rejected.errors)}, pretty: true)
+          ": " <>
+          Diagnostics.render(%{mutant: rule, remaining: length(rejected.errors)}, pretty: true)
       )
     end
 
@@ -1399,7 +1421,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts(
       "U_ALLOCATION_NATIVE_OPPOSITE_CHECKIN_ORDER" <>
         ": " <>
-        Diagnostics.render(Enum.map(rejected.errors, &Map.take(&1, [:rule, :run, :twin])), pretty: true)
+        Diagnostics.render(Enum.map(rejected.errors, &Map.take(&1, [:rule, :run, :twin])),
+          pretty: true
+        )
     )
 
     witnessed? =
@@ -1542,7 +1566,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       IO.puts(
         "U4_NATIVE_REPLAY_CLOCK_COPY_COVERAGE" <>
-          ": " <> Diagnostics.render(%{side: side.resource, copies: Enum.frequencies(tokens)}, pretty: true)
+          ": " <>
+          Diagnostics.render(%{side: side.resource, copies: Enum.frequencies(tokens)},
+            pretty: true
+          )
       )
     end
 
@@ -1781,7 +1808,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     comparison = compare_observation(run_side, twin_side, row)
 
     first = List.first(comparison.errors)
-    IO.puts("U_CONSUMER_NATIVE_FIRST_DIVERGENCE" <> ": " <> Diagnostics.render(first, pretty: true))
+
+    IO.puts(
+      "U_CONSUMER_NATIVE_FIRST_DIVERGENCE" <> ": " <> Diagnostics.render(first, pretty: true)
+    )
 
     assert match?(
              %{
@@ -1832,7 +1862,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert compare_observation(equal_side, twin_side, row).errors == []
       comparison = compare_observation(run_side, twin_side, row)
       difference = List.first(comparison.errors)
-      IO.puts("U_STORE_NATIVE_FIRST_DIVERGENCE" <> ": " <> Diagnostics.render(difference, pretty: true))
+
+      IO.puts(
+        "U_STORE_NATIVE_FIRST_DIVERGENCE" <> ": " <> Diagnostics.render(difference, pretty: true)
+      )
 
       assert match?(
                %{
@@ -2149,7 +2182,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     now = System.system_time(:millisecond)
 
     IO.puts(
-      "C_TICK_BOUNDARY" <> ": " <> Diagnostics.render(%{target: target, after_side: now}, pretty: true)
+      "C_TICK_BOUNDARY" <>
+        ": " <> Diagnostics.render(%{target: target, after_side: now}, pretty: true)
     )
 
     Process.sleep(max(target - now, 0))
@@ -2349,7 +2383,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp wire_terms(_, _), do: []
   @tag :connection_streams
-  test "Connection diagnostics: every output boundary keeps captured native state private", context do
+  test "Connection diagnostics: every output boundary keeps captured native state private",
+       context do
     Repo.put_dynamic_repo(context.repo)
     captured = Historical.capture(context.prefix)
     {_holder, connection} = Enum.find(captured.connections, fn {_, value} -> value.protocol end)
@@ -2403,7 +2438,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           nil
         )
       end,
-      history_status: fn -> IO.inspect(ConnectionHistory.format_status(status), limit: :infinity) end,
+      history_status: fn ->
+        IO.inspect(ConnectionHistory.format_status(status), limit: :infinity)
+      end,
       test_formatter_status: fn ->
         IO.inspect(AshOnetime.Test.TestFormatter.format_status(status), limit: :infinity)
       end,
@@ -2426,5 +2463,74 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert state.protocol.scram == marker
     assert assertion.left === state
     IO.puts("NATIVE_DIAGNOSTIC_CLASS: unprojected RED; every typed output GREEN")
+  end
+  @tag :connection_streams
+  test "Connection streams: a historical active mode owns the first native delivery" do
+    run = ConnectionNative.observe(:historical_active)
+    assert run.result == :ok
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    unbound = NativeTransport.build(%{events: events})
+    assert Enum.any?(unbound.errors, &(&1.actual == :native_active_mode))
+    native = NativeTransport.build(%{events: events}, run.native_history)
+    assert native.errors == []
+    assert length(native.active) == 1
+    assert Enum.map(native.options, & &1.mode) == [false]
+    [delivery] = native.active
+    assert {:historical_active_mode, holder} = delivery.activation.origin
+    assert run.native_history[holder].protocol.buffer == :active_once
+    assert ConnectionReads.build(native).errors == []
+    assert_native_copies(delivery.copies, events, delivery.bytes)
+
+    corrupt = ConnectionNative.observe(:historical_active, :unbound_active_control)
+
+    corrupt_events =
+      corrupt.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    rejected = NativeTransport.build(%{events: corrupt_events}, corrupt.native_history)
+    assert Enum.any?(rejected.errors, &(&1.actual == :native_option_source))
+    IO.puts(
+      "CONNECTION_HISTORY_ACTIVE: missing origin RED; native origin GREEN; foreign control RED"
+    )
+  end
+  @tag :connection_streams
+  test "Connection streams: coalesced messages have distinct addresses and real native indices" do
+    run = ConnectionNative.observe(:pipeline)
+    assert run.result == :ok
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    native = NativeTransport.build(%{events: events}, run.native_history)
+    streams = ConnectionReads.build(native)
+    assert native.errors == [] and streams.errors == []
+    messages = ConnectionReads.messages(streams, %{events: events})
+    assert messages != []
+    assert Enum.all?(messages, &is_integer(&1.index))
+    assert length(Enum.uniq_by(messages, & &1.message_address)) == length(messages)
+    assert Enum.any?(Enum.group_by(messages, & &1.index), fn {_, group} -> length(group) > 1 end)
+    contexts = DatabaseOrigins.sql_contexts(messages)
+    assert map_size(contexts) == length(messages)
+
+    for message <- messages do
+      source = Enum.fetch!(events, message.index)
+      assert source.pid == message.pid
+      assert DatabaseOrigins.address(message) == message.message_address
+      assert Map.fetch!(contexts, message.message_address) == message.wire_sql
+      assert message.wire_frame.stop - message.wire_frame.start ==
+               5 + byte_size(message.wire_frame.payload)
+    end
+
+    IO.puts(
+      "CONNECTION_LOGICAL_ADDRESSES: coalesced native indices retained; all message contexts distinct"
+    )
   end
 end

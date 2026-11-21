@@ -155,7 +155,8 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
           IO.puts(
             "C_SET_NATIVE_COMPARISON" <>
               ": " <>
-              Diagnostics.render(%{mutation: mutation.id, tuple: label, first: Diagnostics.safe(first)},
+              Diagnostics.render(
+                %{mutation: mutation.id, tuple: label, first: Diagnostics.safe(first)},
                 pretty: true,
                 limit: :infinity
               )

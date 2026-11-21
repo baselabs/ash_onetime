@@ -11,8 +11,13 @@
 
 database_url = System.fetch_env!("DATABASE_URL")
 
-%URI{scheme: scheme, userinfo: userinfo, host: host, port: port, path: path} =
-  URI.parse(database_url)
+parsed_url =
+  case URI.new(database_url) do
+    {:ok, parsed} -> parsed
+    {:error, _reason} -> raise "DATABASE_URL must be a valid dedicated test database URI"
+  end
+
+%URI{scheme: scheme, userinfo: userinfo, host: host, port: port, path: path} = parsed_url
 
 [user | _] = String.split(userinfo || "", ":")
 
@@ -27,7 +32,10 @@ unless dedicated_target? do
   """
 end
 
-{:ok, _supervisor} = AshOnetime.Test.Application.start(:normal, [])
+case AshOnetime.Test.Application.start(:normal, []) do
+  {:ok, _supervisor} -> :ok
+  _error -> raise "the dedicated test fixture application did not start"
+end
 AshOnetime.Test.Migration.assert_isolated_database!()
 
 Ecto.Adapters.SQL.Sandbox.mode(AshOnetime.Test.Repo, :auto)
