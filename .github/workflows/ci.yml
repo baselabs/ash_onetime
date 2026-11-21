@@ -81,6 +81,7 @@ jobs:
         with:
           image: ${{ matrix.postgres.image }}
           logical: true
+      - uses: ./.github/actions/postgres-tls
       - uses: ./.github/actions/postgres-client
         with:
           version: ${{ matrix.postgres.client }}
@@ -106,6 +107,10 @@ jobs:
         with:
           mode: stop
           logical: true
+      - uses: ./.github/actions/postgres-tls
+        if: always()
+        with:
+          mode: stop
 
   compat:
     name: "Ash ${{ matrix.ash }}"

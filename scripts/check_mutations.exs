@@ -5302,8 +5302,7 @@ defmodule AshOnetime.MutationCheck do
                      assertion: "run: a canary crossed the boundary",
                      red_summary: "EXIT_CLASS_HIT=e#{n}\n",
                      required_failures: [
-                       {"rule 3: no plaintext crosses an undeclared exit",
-                        "assert hits == []"}
+                       {"rule 3: no plaintext crosses an undeclared exit", "assert hits == []"}
                      ]
                    }
                  end

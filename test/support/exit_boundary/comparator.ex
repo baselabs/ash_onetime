@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.Comparator do
   alias AshOnetime.Test.ExitBoundary.AttributeCopies
   alias AshOnetime.Test.ExitBoundary.ClockExpressions
+  alias AshOnetime.Test.ExitBoundary.ConnectionDecoders
   alias AshOnetime.Test.ExitBoundary.ConnectionReads
   alias AshOnetime.Test.ExitBoundary.ContextCopies
   alias AshOnetime.Test.ExitBoundary.DatabaseOrigins
@@ -396,9 +397,10 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp connection_streams(indexed, historical, readback) do
     native = NativeTransport.build(indexed, historical.connections)
     reads = ConnectionReads.build(native, readback, historical.prepared_catalogs)
+    decoders = ConnectionDecoders.build(indexed, native, reads, historical.connections)
 
     errors =
-      Enum.map(native.errors ++ reads.errors, fn
+      Enum.map(native.errors ++ reads.errors ++ decoders.errors, fn
         %{index: index} = error when is_integer(index) ->
           error
 
@@ -433,7 +435,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
           }
       end)
 
-    %{native: native, reads: reads, errors: errors}
+    %{native: native, reads: reads, decoders: decoders, errors: errors}
   end
 
   defp readback_backend_copies(state, ri, readback, checkpoint, reference?) do

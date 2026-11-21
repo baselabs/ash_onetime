@@ -6,7 +6,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   # ledger does not grant any event exemption: the stream consumer must also prove
   # that framing and the protocol state machine required that particular read.
   def build(indexed, historical \\ %{}) do
-    pairs = call_pairs(indexed.events)
+    pairs = pairs(indexed.events)
 
     initial = %{
       pairs: pairs,
@@ -448,7 +448,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     end
   end
 
-  defp call_pairs(events) do
+  def pairs(events) do
     {_pending, pairs} = Enum.reduce(events, {%{}, %{}}, &pair_event/2)
     pairs
   end

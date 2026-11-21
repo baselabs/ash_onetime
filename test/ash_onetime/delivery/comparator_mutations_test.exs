@@ -38,6 +38,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
     pair = observe(context, row!(:issue, :execute), Values.set()[:va])
     assert Analysis.unclaimed(pair.run.run.events) == []
     hits = Search.hits(pair.run)
+
     for class <- hits |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort(),
         do: IO.puts("EXIT_CLASS_HIT=#{class}")
 

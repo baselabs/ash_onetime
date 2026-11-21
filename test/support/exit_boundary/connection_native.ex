@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary
+  alias AshOnetime.Test.ExitBoundary.ConnectionTls
   alias AshOnetime.Test.Repo
 
   # Every packet here goes to the job's real PostgreSQL. Authentication and type
@@ -35,6 +36,63 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   end
 
   defp initial_mode(protocol, _mode), do: protocol
+
+  def observe_tls(corruption \\ nil) do
+    observer = self()
+    tag = make_ref()
+
+    run =
+      ExitBoundary.observe(
+        fn ->
+          protocol = connect_tls()
+          {:ssl, socket} = protocol.sock
+          binding = ConnectionTls.bind(socket)
+          other = if corruption == :binding, do: connect_tls()
+
+          checked =
+            if other do
+              {:ssl, other_socket} = other.sock
+              %{ConnectionTls.bind(other_socket) | socket: socket}
+            else
+              binding
+            end
+
+          send(observer, {tag, binding})
+          {protocol, checked, other}
+        end,
+        fn {protocol, binding, other} ->
+          try do
+            errors = ConnectionTls.validate(binding)
+            execute(protocol, :single, if(corruption == :byte, do: :byte))
+            errors
+          after
+            if other, do: :ok = :ssl.close(elem(other.sock, 1))
+          end
+        end,
+        %{host: [], callbacks: []}
+      )
+
+    receive do
+      {^tag, binding} -> Map.put(run, :tls_binding, binding)
+    after
+      0 -> raise "native TLS binding was not captured"
+    end
+  end
+
+  defp connect_tls do
+    options =
+      Repo.config()
+      |> Keyword.put(:types, Postgrex.DefaultTypes)
+      |> Keyword.put(:ssl,
+        verify: :verify_peer,
+        cacertfile: System.fetch_env!("ASH_ONETIME_NATIVE_TLS_CA_FILE") |> String.to_charlist(),
+        server_name_indication: ~c"localhost"
+      )
+
+    {:ok, protocol} = Postgrex.Protocol.connect(options)
+    {:ok, protocol} = Postgrex.Protocol.checkout(protocol)
+    protocol
+  end
 
   defp native_spec(:buffered) do
     %{
@@ -278,6 +336,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp replay_copy(_socket, buffer, _corruption), do: buffer
 
   defp values(:single, nil), do: [17]
+  defp values(:single, :byte), do: [18]
   defp values(:single, corruption) when corruption in [:length, :timeout, :extra_read], do: [17]
   defp values(:pipeline, nil), do: [17, 29]
   defp values(:pipeline, :byte), do: [18, 29]

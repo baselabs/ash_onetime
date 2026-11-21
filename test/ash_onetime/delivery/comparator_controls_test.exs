@@ -11,6 +11,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias AshOnetime.Test.ExitBoundary.ConnectionNative
   alias AshOnetime.Test.ExitBoundary.ConnectionProtocol
   alias AshOnetime.Test.ExitBoundary.ConnectionReads
+  alias AshOnetime.Test.ExitBoundary.ConnectionTls
   alias AshOnetime.Test.ExitBoundary.ContextCopies
   alias AshOnetime.Test.ExitBoundary.DatabaseOrigins
   alias AshOnetime.Test.ExitBoundary.Declarations
@@ -2555,5 +2556,55 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts(
       "CONNECTION_LOGICAL_ADDRESSES: coalesced native indices retained; all message contexts distinct"
     )
+  end
+
+  @tag :connection_streams
+  test "Connection streams: TLS plaintext has a native physical port binding" do
+    observations =
+      Map.new([nil, :binding, :byte], fn corruption ->
+        run = ConnectionNative.observe_tls(corruption)
+        expected = if corruption == :binding, do: [:tls_local_endpoint], else: []
+        assert run.result == expected
+
+        events =
+          run.events
+          |> Enum.with_index()
+          |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+        native = ConnectionTls.build(%{events: events}, run.tls_binding)
+        assert native.errors == []
+        assert length(native.writes) == 1
+        assert native.reads != []
+
+        for write <- native.writes, do: assert_native_copies(write.copies, events, write.bytes)
+        for read <- native.reads, do: assert_native_copies(read.copies, events, read.bytes)
+
+        streams = ConnectionReads.build(native)
+        assert streams.errors == []
+        assert map_size(streams.connections) == 1
+        connection = Map.fetch!(streams.connections, run.tls_binding.port)
+        messages = Enum.map(connection.protocol.messages, & &1.decoded)
+        assert messages != []
+
+        program =
+          for event <- events, event.mfa != nil,
+              do: %{index: event.index, mfa: event.mfa, tag: elem(event.event, 1)}
+
+        IO.puts("CONNECTION_TLS_NATIVE_PROGRAM: " <> Diagnostics.render(program, limit: :infinity))
+        {corruption, messages}
+      end)
+
+    assert observations[nil] == observations.binding
+    refute observations[nil] == observations.byte
+
+    bypassed =
+      ComparatorMutants.with_mutant(:stream_tls_binding, fn ->
+        ConnectionNative.observe_tls(:binding).result
+      end)
+
+    assert bypassed == []
+    assert ConnectionNative.observe_tls(:binding).result == [:tls_local_endpoint]
+    assert ConnectionNative.observe_tls().result == []
+    IO.puts("CONNECTION_TLS_BINDING: native positive; owning RED; exact restore GREEN")
   end
 end

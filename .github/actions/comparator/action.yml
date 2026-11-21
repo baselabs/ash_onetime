@@ -26,6 +26,8 @@ runs:
   using: composite
   steps:
     - uses: ./.github/actions/postgres
+    - uses: ./.github/actions/postgres-tls
+      if: inputs.lane == 'native'
     - name: Refuse an unknown cache input
       shell: bash
       env:
@@ -62,5 +64,9 @@ runs:
       run: python3 scripts/ci_test_shards.py "$LANE" "$SELECTOR"
     - uses: ./.github/actions/postgres
       if: always()
+      with:
+        mode: stop
+    - uses: ./.github/actions/postgres-tls
+      if: always() && inputs.lane == 'native'
       with:
         mode: stop

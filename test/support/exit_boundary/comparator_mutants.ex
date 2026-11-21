@@ -398,6 +398,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_tls_binding) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original:
+          "    |> mismatch(:tls_local_endpoint, local_matches?)\n",
+        mutated:
+          "    |> mismatch(:tls_local_endpoint, is_boolean(local_matches?))\n"
+      }
+    ]
+  end
+
   def compare(pair, rule), do: with_mutant(rule, fn -> Comparator.compare(pair) end)
 
   def with_mutant(rule, callback) do

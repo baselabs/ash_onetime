@@ -1,0 +1,64 @@
+name: Disposable PostgreSQL TLS
+description: Enable verified TLS on this job's existing disposable PostgreSQL server and clean its client certificate
+inputs:
+  mode:
+    description: start or stop
+    default: start
+runs:
+  using: composite
+  steps:
+    - name: Refuse an unknown TLS fixture mode
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        case "$MODE" in
+          start | stop) ;;
+          *) echo '::error::TLS fixture mode must be start or stop'; exit 1 ;;
+        esac
+    - name: Enable TLS on the disposable server
+      if: inputs.mode == 'start'
+      shell: bash
+      run: |
+        set -euo pipefail
+        server="${ASH_ONETIME_TEST_SERVER:?}"
+        case "$server" in
+          "ao-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}-"*) ;;
+          *) echo "::error::TLS requires this run's disposable server"; exit 1 ;;
+        esac
+        tls_directory="$(mktemp -d)"
+        trap 'rm -rf "$tls_directory"' EXIT
+        openssl req -newkey rsa:2048 -nodes -x509 -days 1 \
+          -subj /CN=localhost -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+          -keyout "$tls_directory/server.key" -out "$tls_directory/server.crt" > /dev/null 2>&1
+        docker cp "$tls_directory/server.crt" "$server:/tmp/ao-native-server.crt"
+        docker cp "$tls_directory/server.key" "$server:/tmp/ao-native-server.key"
+        docker exec --user root "$server" chown postgres:postgres /tmp/ao-native-server.key
+        docker exec --user postgres "$server" chmod 0600 /tmp/ao-native-server.key
+        docker exec -i --user postgres --env PGHOST=/tmp --env PGUSER=postgres \
+          --env PGDATABASE=ash_onetime_test "$server" psql --no-psqlrc --set ON_ERROR_STOP=1 <<'SQL'
+        ALTER SYSTEM SET ssl_cert_file = '/tmp/ao-native-server.crt';
+        ALTER SYSTEM SET ssl_key_file = '/tmp/ao-native-server.key';
+        ALTER SYSTEM SET ssl = on;
+        SELECT pg_reload_conf();
+        SQL
+        tls_ready=false
+        for ((attempt=0; attempt<50; attempt++)); do
+          enabled="$(docker exec --user postgres --env PGHOST=/tmp --env PGUSER=postgres \
+            --env PGDATABASE=ash_onetime_test "$server" psql --no-psqlrc -Atc 'SHOW ssl')"
+          if [ "$enabled" = on ]; then tls_ready=true; break; fi
+          sleep 0.1
+        done
+        if [ "$tls_ready" != true ]; then
+          echo '::error::The disposable native server did not enable TLS'; exit 1
+        fi
+        certificate="$RUNNER_TEMP/ao-native-ca-$server.crt"
+        cp "$tls_directory/server.crt" "$certificate"
+        echo "ASH_ONETIME_NATIVE_TLS_CA_FILE=$certificate" >> "$GITHUB_ENV"
+    - name: Remove this job's TLS client certificate
+      if: always() && inputs.mode == 'stop'
+      shell: bash
+      run: |
+        set -euo pipefail
+        rm -f "$RUNNER_TEMP/ao-native-ca-${ASH_ONETIME_TEST_SERVER:?}.crt"
