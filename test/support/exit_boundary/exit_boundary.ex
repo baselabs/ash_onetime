@@ -91,20 +91,24 @@ defmodule AshOnetime.Test.ExitBoundary do
           }
 
         {:error, reason} ->
-          for {kind, value} <- reason do
-            IO.puts(
-              "NATIVE_COLLECTOR_FAILURE: " <> Diagnostics.render(%{kind: kind, length: value})
-            )
-          end
-
-          raise ExUnit.AssertionError,
-            message: "the run did not reach the terminal boundary: #{Diagnostics.render(reason)}"
+          collector_failure(reason)
       end
     after
       Process.demonitor(monitor, [:flush])
       Process.exit(root, :kill)
       :erlang.system_flag(:backtrace_depth, depth)
     end
+  end
+
+  defp collector_failure(reason) do
+    for {kind, value} <- reason do
+      IO.puts(
+        "NATIVE_COLLECTOR_FAILURE: " <> Diagnostics.render(%{kind: kind, length: value})
+      )
+    end
+
+    raise ExUnit.AssertionError,
+      message: "the run did not reach the terminal boundary: #{Diagnostics.render(reason)}"
   end
 
   defp await_ready(root, monitor) do

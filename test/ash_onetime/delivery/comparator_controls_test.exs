@@ -515,6 +515,177 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: PID timer cancellation has a monitored native receipt" do
+    run =
+      ExitBoundary.observe(
+        fn -> :ok end,
+        fn :ok ->
+          recipient =
+            spawn(fn ->
+              receive do
+                :finish -> :ok
+              end
+            end)
+
+          monitor = Process.monitor(recipient)
+          timer = :erlang.send_after(60_000, recipient, :native_recipient_timer)
+          send(recipient, :finish)
+
+          receive do
+            {:DOWN, ^monitor, :process, ^recipient, :normal} -> :ok
+          end
+
+          {recipient, timer}
+        end,
+        %{host: [], callbacks: []}
+      )
+
+    {recipient, reference} = run.result
+    timer = Map.fetch!(run.snapshot.timers, reference)
+    assert timer.dest == recipient
+    assert timer.state == :recipient_exit
+    assert timer.terminal.process == recipient
+    assert timer.terminal.monitor == Map.fetch!(run.snapshot.monitors, recipient)
+    assert timer.terminal.timer_read == false
+    assert MapSet.member?(run.snapshot.down, recipient)
+    assert :erlang.read_timer(reference) == false
+
+    refute Enum.any?(run.events, fn
+             %{event: {_, :call, {:erlang, :cancel_timer, [^reference | _]}}} -> true
+             _ -> false
+           end)
+  end
+
+  @tag :connection_streams
+  test "Connection streams: a registered timer destination requires its own cancellation" do
+    run =
+      ExitBoundary.observe(
+        fn -> :ok end,
+        fn :ok ->
+          root = self()
+
+          recipient =
+            spawn(fn ->
+              true = Process.register(self(), :ash_onetime_native_timer_recipient)
+              send(root, :native_timer_registered)
+              receive do
+                :finish -> :ok
+              end
+            end)
+
+          receive do
+            :native_timer_registered -> :ok
+          end
+
+          monitor = Process.monitor(recipient)
+          timer =
+            :erlang.send_after(60_000, :ash_onetime_native_timer_recipient, :native_named_timer)
+          send(recipient, :finish)
+
+          receive do
+            {:DOWN, ^monitor, :process, ^recipient, :normal} -> :ok
+          end
+
+          active? = is_integer(:erlang.read_timer(timer))
+          cancelled? = is_integer(:erlang.cancel_timer(timer))
+          {timer, active?, cancelled?}
+        end,
+        %{host: [], callbacks: []}
+      )
+
+    {reference, active?, cancelled?} = run.result
+    assert active? and cancelled?
+    timer = Map.fetch!(run.snapshot.timers, reference)
+    assert timer.dest == :ash_onetime_native_timer_recipient
+    assert timer.state == :cancelled
+    refute Map.has_key?(timer, :terminal)
+  end
+
+  @tag :connection_streams
+  test "Connection streams: a forged DOWN cannot close a live traced process" do
+    observer = self()
+    tag = make_ref()
+
+    capture = fn ->
+      try do
+        ExitBoundary.observe(
+          fn ->
+            child =
+              spawn(fn ->
+                receive do
+                  :finish -> :ok
+                end
+              end)
+
+            send(observer, {tag, child})
+            child
+          end,
+          fn child ->
+            {:monitored_by, monitors} = Process.info(self(), :monitored_by)
+            [collector] = Enum.reject(monitors, &(&1 == observer))
+            send(collector, {:DOWN, make_ref(), :process, child, :normal})
+            :ok
+          end,
+          %{host: [], callbacks: [], preexisting: fn child -> [child] end}
+        )
+      after
+        receive do
+          {^tag, child} -> Process.exit(child, :kill)
+        after
+          0 -> :ok
+        end
+      end
+    end
+
+    assert_raise ExUnit.AssertionError, capture
+
+    bypassed = ComparatorMutants.with_mutant(:stream_monitor_source, capture)
+    assert bypassed.result == :ok
+    assert_raise ExUnit.AssertionError, capture
+
+    restored =
+      ExitBoundary.observe(fn -> :ok end, fn :ok -> :ok end, %{host: [], callbacks: []})
+
+    assert restored.result == :ok
+    IO.puts("CONNECTION_MONITOR_SOURCE: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  @tag :connection_streams
+  test "Connection streams: private send buffers retain their native owner copy" do
+    captured =
+      ComparatorMutants.with_postgrex_mutant(:send_buffer_copy, fn -> cached_decoders(nil) end)
+
+    assert captured.native.errors == []
+    assert captured.decoders.errors == []
+
+    [corrupted] =
+      Enum.filter(captured.events, fn
+        %{event: {_, :call, {Postgrex.Protocol, :msg_send, [_protocol, _messages, <<0>>]}}} ->
+          true
+
+        _ ->
+          false
+      end)
+
+    IO.puts(
+      "NATIVE_OWNER_SEND_BUFFER_COPY: " <>
+        Diagnostics.render(%{index: corrupted.index, mfa: corrupted.mfa, length: 1})
+    )
+
+    states =
+      ConnectionStates.build(
+        %{events: captured.events},
+        captured.native,
+        captured.decoders,
+        captured.historical,
+        {:initial, captured.initial}
+      )
+
+    assert Enum.map(states.errors, & &1.rule) == [:state_buffer_copy]
+    assert hd(states.errors).index == corrupted.index
+  end
+
+  @tag :connection_streams
   test "Connection streams: callback inputs bind to their actual owner state" do
     captured = cached_decoders(:state_copy)
 

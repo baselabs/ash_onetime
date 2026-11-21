@@ -37,7 +37,17 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     # timestamp;
     # `root` is the caller; `pids` every recorded process; `opened` the ports the run
     # opened; `timers` the ledger, each entry terminal.
-    defstruct [:events, :root, :pids, :opened, :timers, :loaded_before, :residue]
+    defstruct [
+      :events,
+      :root,
+      :pids,
+      :opened,
+      :timers,
+      :loaded_before,
+      :residue,
+      :monitors,
+      :down
+    ]
   end
 
   @doc """
@@ -89,9 +99,9 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
           for pid <- pids do
             1 = :trace.process(session, pid, true, @flags)
-            Process.monitor(pid)
           end
 
+          monitors = Map.new(pids, fn pid -> {pid, Process.monitor(pid)} end)
           :trace.port(session, :new, true, [:ports | @port_flags])
           :trace.port(session, :existing, true, @port_flags)
           send(test, {:armed, self()})
@@ -103,6 +113,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
             root: root,
             events: [],
             pids: pids,
+            monitors: monitors,
             down: MapSet.new(),
             opened: MapSet.new(),
             closed: MapSet.new(),
@@ -132,6 +143,8 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       pids: state.pids,
       opened: state.opened,
       timers: state.timers,
+      monitors: state.monitors,
+      down: state.down,
       loaded_before: loaded_before,
       residue: state.residue
     }
@@ -250,8 +263,16 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     }
   end
 
-  defp record({:DOWN, _ref, :process, pid, _reason}, state),
-    do: %{state | down: MapSet.put(state.down, pid)}
+  defp record({:DOWN, ref, :process, pid, _reason}, state) do
+    case Map.fetch(state.monitors, pid) do
+      {:ok, ^ref} ->
+        state = %{state | down: MapSet.put(state.down, pid)}
+        recipient_exit(state, pid, ref)
+
+      _ ->
+        state
+    end
+  end
 
   defp record(message, state) when elem(message, 0) == :trace_ts do
     [_trace | rest] = Tuple.to_list(message)
@@ -272,6 +293,25 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
   defp record(_other, state), do: state
 
+  # The VM cancels PID-addressed timers when that exact recipient exits. A
+  # registered name can outlive its current process and has no such rule. Retain
+  # both the monitored death and the native inactive-timer receipt.
+  defp recipient_exit(state, pid, monitor) do
+    Enum.reduce(state.timers, state, fn
+      {ref, %{state: :pending, dest: ^pid} = timer}, state ->
+        if :erlang.read_timer(ref) === false do
+          terminal = %{process: pid, monitor: monitor, timer_read: false}
+          timer = Map.merge(timer, %{state: :recipient_exit, terminal: terminal})
+          put_in(state.timers[ref], timer)
+        else
+          state
+        end
+
+      _, state ->
+        state
+    end)
+  end
+
   defp procs(state, {pid, :spawn, child, _mfa}) when is_pid(pid), do: add_pid(state, child)
   defp procs(state, {child, :spawned, _parent, _mfa}), do: add_pid(state, child)
   defp procs(state, _event), do: state
@@ -280,8 +320,8 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     if MapSet.member?(state.pids, pid) do
       state
     else
-      Process.monitor(pid)
-      %{state | pids: MapSet.put(state.pids, pid)}
+      ref = Process.monitor(pid)
+      %{state | pids: MapSet.put(state.pids, pid), monitors: Map.put(state.monitors, pid, ref)}
     end
   end
 
@@ -315,7 +355,11 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       end
 
     timer = %{kind: kind, dest: dest, expected: expected, state: :pending}
-    %{state | pending_start: pending, timers: Map.put(state.timers, ref, timer)}
+    state = %{state | pending_start: pending, timers: Map.put(state.timers, ref, timer)}
+
+    if is_pid(dest) and MapSet.member?(state.down, dest),
+      do: recipient_exit(state, dest, Map.fetch!(state.monitors, dest)),
+      else: state
   end
 
   defp ledger(state, {pid, :call, {:erlang, :cancel_timer, [ref | _opts]}}),

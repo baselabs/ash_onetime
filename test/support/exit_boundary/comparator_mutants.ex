@@ -441,7 +441,53 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_monitor_source) do
+    [
+      %{
+        path: "test/support/exit_boundary/collector.ex",
+        original: "    case Map.fetch(state.monitors, pid) do\n      {:ok, ^ref} ->\n",
+        mutated: "    case Map.fetch(state.monitors, pid) do\n      {:ok, _ref} ->\n"
+      }
+    ]
+  end
+
   def compare(pair, rule), do: with_mutant(rule, fn -> Comparator.compare(pair) end)
+
+  # Run the actual Postgrex owner with one private copy changed. Socket calls,
+  # server traffic, descriptors and captures remain native. The source file and
+  # disk BEAM never change; restore the loaded owner before returning the capture.
+  def with_postgrex_mutant(:send_buffer_copy, callback) do
+    path = Path.join(Mix.Project.deps_path(), "postgrex/lib/postgrex/protocol.ex")
+    source = File.read!(path)
+
+    original = """
+        with :ok <- msg_send(%{s | buffer: nil}, msgs, buffer) |> handle_disconnect_retry(),
+             {:ok, s, buffer} <- recv_bind(s, status, buffer) |> handle_disconnect_retry(),
+             {:ok, result, s, buffer} <- recv_execute(s, status, query, buffer),
+             {:ok, s} <- recv_ready(s, status, buffer) do
+    """
+
+    unless length(:binary.matches(source, original)) == 1,
+      do: raise("native owner mutant requires one exact bind/execute source site")
+
+    changed = String.replace(original, "msgs, buffer)", "msgs, buffer <> <<0>>)")
+    mutant = String.replace(source, original, changed, global: false)
+    previous = Code.compiler_options(ignore_module_conflict: true)
+
+    try do
+      Code.compile_string(mutant, path)
+      callback.()
+    after
+      try do
+        Code.compile_string(source, path)
+
+        unless File.read!(path) === source,
+          do: raise("native owner source changed during its in-memory mutation")
+      after
+        Code.compiler_options(previous)
+      end
+    end
+  end
 
   def with_mutant(rule, callback) do
     grouped = Enum.group_by(edits(rule), & &1.path)
