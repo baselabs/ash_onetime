@@ -8,6 +8,9 @@ All notable changes to this project are documented in this file.
   PostgreSQL 18 platform engine and a digest-pinned upstream PostgreSQL 17 lane with
   matching dump/restore clients. The compatibility declaration owns the major, image and
   client pins; both lanes enforce disposable isolation, SCRAM and unconditional cleanup.
+- Maintenance shape capture reads native constraint enforcement on both supported
+  PostgreSQL majors. Catalogs without `conenforced` have enforced constraints; catalogs
+  carrying the flag retain it, and disabling a CHECK constraint refuses maintenance.
 
 - Cleanup telemetry includes `:responses_expired`, the number of response payloads expired
   at their response deadline; claim cleanup follows its separate retention deadline.

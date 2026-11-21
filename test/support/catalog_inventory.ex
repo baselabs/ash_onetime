@@ -78,7 +78,8 @@ defmodule AshOnetime.Test.CatalogInventory do
 
     queries = %{
       constraints: """
-      SELECT r.relname,k.conname,k.contype::text,k.condeferrable,k.condeferred,k.convalidated,k.conenforced,
+      SELECT r.relname,k.conname,k.contype::text,k.condeferrable,k.condeferred,k.convalidated,
+        coalesce((to_jsonb(k)->>'conenforced')::boolean,true),
         pg_get_constraintdef(k.oid,true)
       FROM pg_constraint k JOIN pg_class r ON r.oid=k.conrelid
       WHERE k.conrelid IN (#{relations}) AND k.contype IN ('c','p','f')

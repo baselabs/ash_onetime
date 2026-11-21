@@ -8,6 +8,7 @@ defmodule AshOnetime.Test.Postgres do
       nil ->
         engine = File.read!(Path.join(@github, "postgres.ref"))
         [_, version, major] = Regex.run(~r/:(([0-9]+)\.[0-9]+)-inputs-/, engine)
+
         %{
           major: String.to_integer(major),
           version: version,

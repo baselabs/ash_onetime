@@ -45,7 +45,9 @@ BEGIN
       WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped),
     'constraints',(SELECT coalesce(jsonb_agg(value ORDER BY value::text),'[]') FROM (
       SELECT jsonb_build_object('type',x.contype,'deferrable',x.condeferrable,'deferred',x.condeferred,
-        'validated',x.convalidated,'enforced',x.conenforced,
+        -- Catalogs without conenforced enforce every constraint.
+        -- rule:maintenance-shape-constraint-enforcement
+        'validated',x.convalidated,'enforced',coalesce((to_jsonb(x)->>'conenforced')::boolean,true),
         'keys',(SELECT jsonb_agg(a.attname ORDER BY k.ordinality) FROM unnest(x.conkey) WITH ORDINALITY k(num,ordinality)
           JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.num),
         -- rule:maintenance-shape-constraint-expression

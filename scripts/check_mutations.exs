@@ -2638,6 +2638,15 @@ defmodule AshOnetime.MutationCheck do
       test_name: "Table 1 row 11: index refuses before owner code runs",
       assertion: "compared_field(before, @kind)"
     },
+    "maintenance-shape-constraint-enforcement" => %{
+      path: "priv/templates/migrations/maintenance/shape.sql",
+      original: "coalesce((to_jsonb(x)->>'conenforced')::boolean,true)",
+      mutated: "true",
+      test: "test/ash_onetime/store/constraint_enforcement_test.exs",
+      tag: "maintenance_constraint_enforcement",
+      test_name: "native constraint enforcement is preserved in maintenance shapes",
+      assertion: "assert false in Enum.map(changed"
+    },
     "maintenance-shape-constraint-expression" => %{
       path: "priv/templates/migrations/maintenance/shape.sql",
       original:
