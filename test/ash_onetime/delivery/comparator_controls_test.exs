@@ -320,6 +320,45 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  @tag prepare: :named, pool_size: 1
+  test "Connection streams: main snapshots retain native prepared catalogs and descriptors",
+       context do
+    Repo.put_dynamic_repo(context.repo)
+
+    sql =
+      ~s[SELECT id, amount FROM "#{context.prefix}".ash_onetime_boundary_records WHERE amount >= $1]
+
+    SQL.query!(context.repo, sql, [1])
+    historical = Historical.capture(context.prefix)
+    assert Map.has_key?(historical, :prepared_catalogs)
+
+    descriptors =
+      for {_holder, connection} <- historical.connections,
+          origin <- Map.get(connection, :descriptors, []),
+          IO.iodata_to_binary(origin.query.statement) == sql,
+          do: origin
+
+    assert descriptors != []
+
+    for origin <- descriptors do
+      assert origin.mfa == {Postgrex.Protocol, :handle_prepare, 3}
+      assert origin.path == [3, 1]
+      assert origin.query.param_oids == [20]
+      assert origin.query.result_oids == [2950, 20]
+      catalog = historical.prepared_catalogs[origin.port][origin.query.name]
+      assert catalog.sql == sql
+      assert catalog.parameter_types == [20]
+
+      assert [
+               {"id", {:table_oid, oid}, 1, 2950, 16, -1, _},
+               {"amount", {:table_oid, oid}, 2, 20, 8, -1, _}
+             ] = catalog.columns
+
+      assert historical.relations[oid] == "ash_onetime_boundary_records"
+    end
+  end
+
+  @tag :connection_streams
   test "Connection streams: cached decoder descriptors retain their native owner origin" do
     %{decoders: decoders, origin: origin} = cached_decoders(nil)
     assert decoders.errors == []

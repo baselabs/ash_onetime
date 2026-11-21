@@ -38,7 +38,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorCase do
 
   setup context do
     size = Map.get(context, :pool_size, 2)
-    repo = start_unboxed_repo!(prepare: :unnamed, idle_interval: 3_600_000, pool_size: size)
+    prepare = Map.get(context, :prepare, :unnamed)
+    repo = start_unboxed_repo!(prepare: prepare, idle_interval: 3_600_000, pool_size: size)
     Repo.put_dynamic_repo(repo)
     ExternalPeer.install!(context.prefix)
 

@@ -25,6 +25,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     }
 
     state = Enum.reduce(indexed.events, initial, &event(&1, &2, replies))
+
     %{
       instances: Enum.reverse(state.instances),
       replays: Enum.reverse(state.replays),
