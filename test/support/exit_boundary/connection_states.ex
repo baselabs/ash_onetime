@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Root
+
   import Postgrex.Messages,
     only: [msg_ready: 1, msg_parameter: 1, msg_notice: 1, msg_notify: 1]
 

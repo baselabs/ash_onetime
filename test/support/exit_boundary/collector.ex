@@ -231,7 +231,22 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       returned?: state.returned?,
       live_processes: MapSet.size(live(state)),
       open_ports: MapSet.size(MapSet.difference(state.opened, state.closed)),
-      pending_timers: map_size(open_timers(state))
+      pending_timers: map_size(open_timers(state)),
+      live_origins:
+        for pid <- live(state) do
+          %{
+            mfa: :proc_lib.translate_initial_call(pid),
+            current: Process.info(pid, :current_function)
+          }
+        end,
+      timer_instances:
+        for {ref, timer} <- open_timers(state) do
+          %{
+            kind: timer.kind,
+            recipient_alive?: is_pid(timer.dest) and Process.alive?(timer.dest),
+            active?: is_integer(:erlang.read_timer(ref))
+          }
+        end
     }
   end
 

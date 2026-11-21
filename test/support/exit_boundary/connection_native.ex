@@ -146,7 +146,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         %{
           host: [],
           callbacks: [],
-          preexisting: fn {_protocol, _binding, _other, family} -> [family.owner, family.sender] end
+          preexisting: fn {_protocol, _binding, _other, family} ->
+            [family.owner, family.sender]
+          end
         }
       )
 

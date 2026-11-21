@@ -272,8 +272,11 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         )
       end)
 
-    rconnections = connection_streams(raw_ri, run.historical, readback.claimed, run.run.initial_state)
-    tconnections = connection_streams(raw_ti, twin.historical, MapSet.new(), twin.run.initial_state)
+    rconnections =
+      connection_streams(raw_ri, run.historical, readback.claimed, run.run.initial_state)
+
+    tconnections =
+      connection_streams(raw_ti, twin.historical, MapSet.new(), twin.run.initial_state)
 
     state =
       Enum.reduce(

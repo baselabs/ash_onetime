@@ -91,6 +91,12 @@ defmodule AshOnetime.Test.ExitBoundary do
           }
 
         {:error, reason} ->
+          for {kind, value} <- reason do
+            IO.puts(
+              "NATIVE_COLLECTOR_FAILURE: " <> Diagnostics.render(%{kind: kind, length: value})
+            )
+          end
+
           raise ExUnit.AssertionError,
             message: "the run did not reach the terminal boundary: #{Diagnostics.render(reason)}"
       end
