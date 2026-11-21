@@ -126,11 +126,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   end
 
   defp execute(%{sock: {module, socket}} = protocol, :buffered, nil) do
-    {:ok, protocol} = Postgrex.Protocol.checkin(protocol)
-    :ok = module.send(socket, [message(?S, <<>>), query(17)])
+    syncs = List.duplicate(message(?S, <<>>), 256)
+    :ok = module.send(socket, [syncs, query(17)])
     {:ok, protocol} = Postgrex.Protocol.ping(protocol)
-    {:ok, protocol} = Postgrex.Protocol.checkout(protocol)
-    drain(module, socket, 2, protocol.buffer, true, nil)
+    {:ok, protocol} = Postgrex.Protocol.checkin(protocol)
+    drain_buffered(protocol, 257)
   after
     :ok = module.close(socket)
   end
@@ -158,6 +158,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         {:ok, [active: false]} = :inet.getopts(socket, [:active])
         option_load(socket, root)
     end
+  end
+
+  defp drain_buffered(%{sock: {module, socket}, buffer: buffer}, ready)
+       when is_binary(buffer) and byte_size(buffer) > 0 do
+    receive do
+      {:tcp, ^socket, ^buffer} -> drain(module, socket, ready, buffer, true, nil)
+    after
+      15_000 -> raise "native buffered replay did not return"
+    end
+  end
+
+  defp drain_buffered(protocol, ready) do
+    {:ok, %{sock: {module, socket}, buffer: buffer}} = Postgrex.Protocol.checkout(protocol)
+    drain(module, socket, ready, buffer, true, nil)
   end
 
   defp values(:single, nil), do: [17]
