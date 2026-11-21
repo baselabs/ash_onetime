@@ -270,6 +270,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
               history
             end
 
+          if shape == :large_rows do
+            :ok = :inet.setopts(socket, buffer: 4096, recbuf: 8192)
+          end
+
           send(observer, {tag, %{holder: self(), history: history, chunks: chunks}})
           {history.protocol, query, params}
         end,
@@ -295,6 +299,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp cached_statement(:rows), do: {"SELECT $1::int4 AS connection_stream_probe", [17]}
   defp cached_statement(:cross_connection), do: cached_statement(:rows)
+
+  defp cached_statement(:large_rows),
+    do: {"SELECT $1::int4 AS connection_stream_probe, repeat('x', 131072)::text AS filler", [17]}
 
   defp cached_statement(:none),
     do: {"SET application_name TO 'ash_onetime_native_nodata'", []}

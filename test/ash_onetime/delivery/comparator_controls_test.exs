@@ -414,7 +414,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :connection_streams
   test "Connection streams: cached decoder descriptors retain their native owner origin" do
-    for shape <- [:rows, :none, :cross_connection] do
+    for shape <- [:rows, :none, :cross_connection, :large_rows] do
       captured = cached_decoders(nil, shape)
       %{decoders: decoders, origin: origin, events: events, streams: streams} = captured
 
@@ -453,6 +453,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
 
       assert unbound_buffers == [], "every native helper buffer needs its own byte-copy origin"
+
+      if shape == :large_rows do
+        assert Enum.any?(states.buffers, fn
+                 %{origin: {:continuation_buffer, _, _}} -> true
+                 _ -> false
+               end), "the real large DataRow must execute a partial-read continuation"
+      end
 
       assert Enum.any?(decoders.protocol_copies, fn copy ->
                copy.mfa == {Postgrex.Protocol, :handle_execute, 4} and copy.tag == :call and
@@ -712,7 +719,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     capture = fn callback ->
       ExitBoundary.observe(
         fn -> :ok end,
-        fn :ok -> :erlang.send_after(1, :ssl_manager, {:ash_onetime_native_timer, make_ref()}) end,
+        fn :ok ->
+          :erlang.send_after(1, :ssl_manager, {:ash_onetime_native_timer, make_ref()})
+        end,
         %{host: [], callbacks: [], services: %{ssl_manager: callback}}
       )
     end
@@ -723,8 +732,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert timer.terminal.pid == service
     assert {^service, :receive, message} = timer.terminal.received
     assert message == timer.expected
+
     assert {^service, :call, {:ssl_manager, :handle_info, [^message, _state]}} =
              timer.terminal.called
+
     assert {^service, :return_from, {:ssl_manager, :handle_info, 2}, {:noreply, _state}} =
              timer.terminal.returned
 
@@ -986,7 +997,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp cached_decoders(corruption, shape \\ :rows) do
     %{run: run, history: history} = ConnectionNative.observe_cached(corruption, shape)
-    expected = if shape != :none, do: [[17]]
+
+    expected =
+      case shape do
+        :none -> nil
+        :large_rows -> [[17, :binary.copy("x", 131_072)]]
+        _ -> [[17]]
+      end
+
     assert native_result(run) == {:ok, expected}
     [origin] = history.history.descriptors
     query = origin.query
@@ -1015,6 +1033,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       shape when shape in [:rows, :cross_connection] ->
         assert catalog.parameter_types == [23]
         assert [{"connection_stream_probe", {:table_oid, 0}, 0, 23, 4, -1, 0}] = catalog.columns
+        assert catalog.description == :rows
+
+      :large_rows ->
+        assert catalog.parameter_types == [23]
+
+        assert [
+                 {"connection_stream_probe", {:table_oid, 0}, 0, 23, 4, -1, 0},
+                 {"filler", {:table_oid, 0}, 0, 25, -1, -1, 0}
+               ] = catalog.columns
+
         assert catalog.description == :rows
 
       :none ->
@@ -3159,6 +3187,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           assert service.callback == {:ssl_manager, :handle_info, 2}
           assert {_, :receive, message} = timer.terminal.received
           assert message == timer.expected
+
           assert {_, :return_from, {:ssl_manager, :handle_info, 2}, {:noreply, _}} =
                    timer.terminal.returned
         end

@@ -43,6 +43,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   @copies [:msg_send, :msg_recv, :rows_recv, :redescribe]
   @owners @callbacks ++ @constructors ++ @scopes ++ @copies
   @last_state @callbacks ++ [:handle_prepare_execute]
+  @cursor_buffers %{
+    msg_recv: 2,
+    rows_recv: 3,
+    redescribe: 5,
+    recv_ready: 2,
+    recv_strict_ready: 3,
+    recv_transaction: -1,
+    error_ready: 3,
+    error_flushed: 3,
+    rollback_flushed: 3,
+    reload_flushed: 4,
+    ping_recv: 3,
+    activate: 1
+  }
 
   # An owner version is a native return, or the pre-observation holder state.
   # Copies must bind to that version before a buffer can leave exact comparison.
@@ -66,6 +80,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       versions: Map.values(holders),
       copies: [],
       buffers: [],
+      buffer_values: %{},
       errors: [],
       pairs: native.pairs,
       returns: Map.new(native.pairs, fn {_index, pair} -> {pair.returned.index, pair} end),
@@ -290,19 +305,160 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       end)
 
     {state, expected, origin} = send_buffer_origin(state, source, version, cursor?)
+    buffer_copy(state, source, [2, 2, 2], buffer, expected, origin, version.protocol.sock)
+  end
+
+  defp buffer_input(state, source, function, arguments, version) do
+    case Map.fetch(@cursor_buffers, function) do
+      {:ok, position} ->
+        position = if position < 0, do: length(arguments) + position, else: position
+        {expected, origin} = helper_buffer_origin(state, source, version, nil)
+        {state, expected, origin} = continuation_buffer(state, source, version, expected, origin)
+
+        state =
+          buffer_copy(
+            state,
+            source,
+            [2, 2, position],
+            Enum.at(arguments, position),
+            expected,
+            origin,
+            version.protocol.sock
+          )
+
+        ping_buffer_input(state, source, function, arguments, version)
+
+      :error ->
+        state
+    end
+  end
+
+  defp ping_buffer_input(state, source, :ping_recv, arguments, version) do
+    frame =
+      Enum.find(Map.get(state.frames, source.pid, []), fn frame ->
+        frame.source.mfa == {Postgrex.Protocol, :ping, 1}
+      end)
+
+    case frame do
+      nil ->
+        failure(state, source, :state_ping_buffer_origin)
+
+      frame ->
+        expected = if frame.input.buffer == :active_once, do: :active_once, else: nil
+        origin = {:state_buffer, frame.owner.origin}
+        buffer_copy(
+          state,
+          source,
+          [2, 2, 2],
+          Enum.at(arguments, 2),
+          expected,
+          origin,
+          version.protocol.sock
+        )
+    end
+  end
+
+  defp ping_buffer_input(state, _source, _function, _arguments, _version), do: state
+
+  defp buffer_copy(state, source, path, buffer, expected, origin, sock) do
     state = exact(state, source, :state_buffer_copy, buffer, expected)
 
     copy = %{
       index: source.index,
-      path: [2, 2, 2],
+      path: path,
       origin: origin,
-      sock: version.protocol.sock
+      sock: sock
     }
 
-    %{state | buffers: [copy | state.buffers]}
+    value = %{value: expected, origin: origin}
+
+    state
+    |> Map.update!(:buffers, &[copy | &1])
+    |> put_in([:buffer_values, {source.index, path}], value)
   end
 
-  defp buffer_input(state, _source, _function, _arguments, _version), do: state
+  defp helper_buffer_origin(state, source, version, frame) do
+    frame = frame || List.first(Map.get(state.frames, source.pid, []))
+    {boundary, fallback, origin} = lexical_buffer(state, frame, version)
+
+    case cursor_version(state, source, version.protocol) do
+      %{index: index, port: port, cursor: cursor} when index > boundary ->
+        {cursor.buffer, {:decoder_cursor, port, index}}
+
+      _ ->
+        {fallback, origin}
+    end
+  end
+
+  defp lexical_buffer(_state, nil, version),
+    do: {-1, version.protocol.buffer, {:state_buffer, version.origin}}
+
+  defp lexical_buffer(state, frame, version) do
+    {_, function, _} = frame.source.mfa
+    {_, :call, {_, _, arguments}} = frame.source.event
+    position = Map.get(@cursor_buffers, function, -1)
+    position = if position < 0, do: length(arguments) + position, else: position
+
+    case Map.fetch(state.buffer_values, {frame.source.index, [2, 2, position]}) do
+      {:ok, %{value: value, origin: origin}} -> {frame.source.index, value, origin}
+      :error -> {frame.source.index, version.protocol.buffer, {:state_buffer, version.origin}}
+    end
+  end
+
+  defp continuation_buffer(state, source, version, expected, origin) do
+    case List.first(Map.get(state.frames, source.pid, [])) do
+      %{source: %{mfa: mfa} = parent} when mfa == source.mfa and
+          mfa in [{Postgrex.Protocol, :msg_recv, 4}, {Postgrex.Protocol, :rows_recv, 5}] ->
+        continued_buffer(state, source, parent, version, expected, origin)
+
+      _ ->
+        {state, expected, origin}
+    end
+  end
+
+  defp continued_buffer(state, source, parent, version, expected, origin) do
+    position = Map.fetch!(@cursor_buffers, elem(source.mfa, 1))
+    previous = Map.fetch!(state.buffer_values, {parent.index, [2, 2, position]})
+
+    reads =
+      Enum.filter(state.native.reads, fn read ->
+        read.returned.pid == source.pid and read.returned.index > parent.index and
+          read.returned.index < source.index and {:gen_tcp, read.port} == version.protocol.sock
+      end)
+
+    case reads do
+      [%{bytes: bytes, returned: returned}] when is_binary(bytes) ->
+        constructed = [previous.value | bytes]
+        state =
+          exact(state, source, :state_buffer_continuation, IO.iodata_to_binary(constructed), expected)
+
+        {state, constructed, {:continuation_buffer, parent.index, returned.index}}
+
+      _ ->
+        {failure(state, source, :state_buffer_continuation_origin), expected, origin}
+    end
+  end
+
+  defp buffer_return(state, source, frame, result)
+       when elem(source.mfa, 1) in [:msg_recv, :rows_recv, :redescribe] and is_tuple(result) do
+    if elem(result, 0) in [:ok, :reload, :error] do
+      position = tuple_size(result) - 1
+      {expected, origin} = helper_buffer_origin(state, source, frame.owner, frame)
+      buffer_copy(
+        state,
+        source,
+        [3, position],
+        elem(result, position),
+        expected,
+        origin,
+        frame.input.sock
+      )
+    else
+      state
+    end
+  end
+
+  defp buffer_return(state, _source, _frame, _result), do: state
 
   defp send_buffer_origin(state, _source, version, false),
     do: {state, version.protocol.buffer, {:state_buffer, version.origin}}
@@ -319,6 +475,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp returned(state, source, frame, result, rest) do
     function = elem(source.mfa, 1)
+    state = buffer_return(state, source, frame, result)
     state = described(state, source, frame, result)
 
     case returned_protocol(function, result) do
