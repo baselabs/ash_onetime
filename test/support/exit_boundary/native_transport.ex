@@ -7,7 +7,14 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   # that framing and the protocol state machine required that particular read.
   def build(indexed) do
     pairs = call_pairs(indexed.events)
-    initial = %{pairs: pairs, events: indexed.events, reads: [], writes: [], errors: []}
+    initial = %{
+      pairs: pairs,
+      events: indexed.events,
+      reads: [],
+      writes: [],
+      options: [],
+      errors: []
+    }
 
     state =
       Enum.reduce(indexed.events, initial, fn
@@ -19,6 +26,10 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
         when is_port(port) ->
           write(source, port, data, state)
 
+        %{event: {_, :call, {:prim_inet, :setopts, [port, [active: mode]]}}} = source, state
+        when is_port(port) and mode in [:once, false] ->
+          option(source, port, mode, state)
+
         _, state ->
           state
       end)
@@ -27,9 +38,155 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       pairs: pairs,
       reads: Enum.reverse(state.reads),
       writes: Enum.reverse(state.writes),
+      options: Enum.reverse(state.options),
       errors: Enum.reverse(state.errors)
     }
   end
+
+  # The once fast path and the passive enum path have different native programs.
+  # Build each from the option supplied to this instance, including every helper
+  # argument and return. No helper's result is inferred from a different call.
+  defp option(source, port, mode, state) do
+    encoded = if mode == :once, do: [<<22, 2::32>>], else: [22, [0, 0, 0, 0]]
+    args = [port, @control_magic + 7, encoded]
+
+    with {:ok, outer} <- Map.fetch(state.pairs, source.index),
+         {:ok, :ok} <- return_value(outer),
+         {:ok, internal} <- unique_call(state, outer, {:erts_internal, :port_control, 3}, args),
+         {:ok, [1], deferred} <- driver_reply(state, outer, internal, port),
+         {:ok, native_return} <- return_value(internal),
+         {:ok, signals} <- option_controls(state.events, outer, port, encoded),
+         events <- in_interval(state.events, outer, &(&1.pid == source.pid)),
+         calls <- Enum.flat_map(events, &program_event/1),
+         :ok <- option_events(calls, option_program(port, mode, encoded, native_return)) do
+      indexes = for event <- events, program_event(event) != [], do: event.index
+
+      option = %{
+        port: port,
+        mode: mode,
+        source: source,
+        returned: outer.returned,
+        requested: signals.requested,
+        replied: signals.replied,
+        indexes: indexes ++ signals.indexes ++ deferred,
+        copies: [copy(signals.requested, [2, 1, 1, 1], 0, 5)],
+        bytes: IO.iodata_to_binary(encoded)
+      }
+
+      %{state | options: [option | state.options]}
+    else
+      {:error, reason} -> failure(state, source, reason)
+      _ -> failure(state, source, :native_option_program)
+    end
+  end
+
+  defp option_events(calls, expected) when calls === expected, do: :ok
+
+  defp option_events(calls, expected) do
+    positions = 0..max(length(calls), length(expected))
+    n = Enum.find(positions, &(Enum.at(calls, &1) != Enum.at(expected, &1)))
+
+    diagnostic = %{
+      position: n,
+      actual: program_signature(Enum.at(calls, n)),
+      expected: program_signature(Enum.at(expected, n))
+    }
+
+    {:error, {:native_option_program, diagnostic}}
+  end
+
+  defp program_signature({:call, {m, f, args}}), do: {:call, {m, f, length(args)}}
+  defp program_signature({tag, mfa, _result}), do: {tag, mfa}
+  defp program_signature(nil), do: :absent
+
+  defp option_controls(events, outer, port, encoded) do
+    pid = outer.source.pid
+    command = @control_magic + 7
+    bytes = IO.iodata_to_binary(encoded)
+
+    requests =
+      in_interval(events, outer, fn
+        %{event: {^port, :receive, {^pid, {:control, _}}}} -> true
+        _ -> false
+      end)
+
+    replies =
+      in_interval(events, outer, fn
+        %{event: {^port, :send, {^port, {:control, _}}, ^pid}} -> true
+        _ -> false
+      end)
+
+    with [%{event: {_, :receive, {_, {:control, {^command, ^bytes}}}}} = requested] <- requests,
+         [%{event: {_, :send, {_, {:control, <<1>>}}, _}} = replied] <- replies,
+         true <- requested.index < replied.index do
+      {:ok, %{requested: requested, replied: replied, indexes: [requested.index, replied.index]}}
+    else
+      _ -> {:error, :native_option_control}
+    end
+  end
+
+  defp option_program(port, mode, encoded, native_return) do
+    args = [port, @control_magic + 7, encoded]
+    internal = program(:erts_internal, :port_control, args, native_return)
+    erlang = program(:erlang, :port_control, args, [1], internal)
+    control = program(:prim_inet, :ctl_cmd, [port, 7, encoded], {:ok, []}, erlang)
+    encoder = option_encoder(mode, encoded)
+    program(:prim_inet, :setopts, [port, [active: mode]], :ok, encoder ++ control)
+  end
+
+  defp option_encoder(:once, encoded) do
+    tail = program(:prim_inet, :enc_opt_val, [[], encoded], encoded)
+    body = program(:prim_inet, :enc_opt_val, [[active: :once], []], encoded, tail)
+    program(:prim_inet, :encode_opt_val, [[active: :once]], {:ok, encoded}, body)
+  end
+
+  defp option_encoder(false, encoded) do
+    type = {:enum, [{false, 0}, {true, 1}, {:once, 2}, {:multi, 3}]}
+    table = elem(type, 1)
+    enum = program(:prim_inet, :enum_val, [false, table], {:value, 0})
+    lookup = program(:prim_inet, :type_opt_1, [:active], type)
+    lookup = program(:prim_inet, :type_opt, [:set, :active], type, lookup)
+    check = program(:prim_inet, :type_value_2, [type, false], true, enum)
+
+    check =
+      Enum.reduce([:type_value_1, :type_value_default, :type_value], check, fn function, child ->
+        program(:prim_inet, function, [:set, type, false], true, child)
+      end)
+
+    value = program(:prim_inet, :enc_value_2, [type, false], [0, 0, 0, 0], enum)
+
+    value =
+      Enum.reduce([:enc_value_1, :enc_value_default, :enc_value], value, fn function, child ->
+        program(:prim_inet, function, [:set, type, false], [0, 0, 0, 0], child)
+      end)
+
+    name = program(:prim_inet, :enc_opt, [:active], 22)
+    tail = program(:prim_inet, :enc_opt_val, [[], encoded], encoded)
+    body =
+      program(
+        :prim_inet,
+        :enc_opt_val,
+        [[], [], :active, false],
+        encoded,
+        lookup ++ check ++ name ++ value ++ tail
+      )
+
+    body = program(:prim_inet, :enc_opt_val, [[active: false], []], encoded, body)
+    program(:prim_inet, :encode_opt_val, [[active: false]], {:ok, encoded}, body)
+  end
+
+  defp program(module, function, args, result, children \\ []) do
+    [{:call, {module, function, args}}] ++ children ++
+      [{:return_from, {module, function, length(args)}, result}]
+  end
+
+  defp program_event(%{event: {_, :call, mfa}}), do: [{:call, mfa}]
+
+  defp program_event(%{event: {_, tag, mfa, result}})
+       when tag in [:return_from, :exception_from],
+       do: [{tag, mfa, result}]
+
+  defp program_event(_event), do: []
 
   defp write(source, port, data, state) do
     with {:ok, outer} <- Map.fetch(state.pairs, source.index),
@@ -469,7 +626,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
   defp driver_reply(state, outer, internal, port) do
     case return_value(internal) do
-      {:ok, [1, _, _] = reply} -> {:ok, reply, []}
+      {:ok, [1 | _] = reply} -> {:ok, reply, []}
       {:ok, ref} when is_reference(ref) -> deferred_reply(state.events, outer, ref, port)
       _ -> {:error, :native_control_origin}
     end
@@ -488,9 +645,29 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
          true <- sent.index < received.index do
       {:ok, reply, [received.index, sent.index]}
     else
-      _ -> {:error, :native_deferred_control}
+      _ ->
+        signals =
+          Enum.flat_map(events, fn
+            %{event: {^pid, :receive, {^ref, reply}}, index: index} ->
+              [%{index: index, kind: :receive, result: control_result(reply)}]
+
+            %{event: {sender, :send, {^ref, reply}, ^pid}, index: index} ->
+              signal = %{index: index, kind: :send, own_port?: sender == port}
+              [Map.put(signal, :result, control_result(reply))]
+
+            _ ->
+              []
+          end)
+
+        diagnostic = %{start: outer.source.index, stop: outer.returned.index, signals: signals}
+        {:error, {:native_deferred_control, diagnostic}}
     end
   end
+
+  defp control_result(value) when is_list(value), do: {:list, length(value)}
+  defp control_result(value) when is_binary(value), do: {:binary, byte_size(value)}
+  defp control_result(value) when is_atom(value), do: value
+  defp control_result(_value), do: :other
 
   defp unique_call(state, outer, mfa, expected_args) do
     pid = outer.source.pid
@@ -534,7 +711,12 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   end
 
   defp failure(state, source, reason) do
-    rule = if source.mfa == {:gen_tcp, :send, 2}, do: :native_write, else: :native_receive
+    rule =
+      case source.mfa do
+        {:gen_tcp, :send, 2} -> :native_write
+        {:prim_inet, :setopts, 2} -> :native_option
+        _ -> :native_receive
+      end
 
     error = %{
       index: source.index,

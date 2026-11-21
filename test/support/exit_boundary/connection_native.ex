@@ -61,13 +61,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     :ok = module.close(socket)
   end
 
-  defp execute(%{sock: {module, socket}}, :active, nil) do
+  defp execute(%{sock: {module, socket}}, :active, corruption)
+       when corruption in [nil, :unbound_active_control] do
     :ok = :inet.setopts(socket, active: :once)
     :ok = module.send(socket, query(17))
 
     receive do
       {:tcp, ^socket, bytes} ->
         :ok = :inet.setopts(socket, active: false)
+
+        if corruption == :unbound_active_control do
+          [1] = :erlang.port_control(socket, 0x03F1A300 + 7, <<22, 0::32>>)
+        end
+
         drain(module, socket, 1, bytes, true, nil)
     after
       15_000 -> raise "native active query did not return"

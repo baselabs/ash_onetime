@@ -324,6 +324,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     native = NativeTransport.build(%{events: events})
     assert native.errors == []
     assert length(native.writes) == 1
+    assert Enum.map(native.options, & &1.mode) == [:once, false]
+
+    for option <- native.options do
+      assert option.indexes != []
+      assert option.source.index in option.indexes
+      assert option.returned.index in option.indexes
+      assert option.requested.index < option.replied.index
+      assert_native_copies(option.copies, events, option.bytes)
+    end
 
     delivered =
       for %{event: {port, :send, {:tcp, port, bytes}, recipient}} <- events,
@@ -379,6 +388,21 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       equal? = binary_part(bytes, copy.offset, copy.length) === expected
       assert equal?, "native copy bytes must equal their own transport origin"
     end
+  end
+
+  @tag :connection_streams
+  test "Connection streams: every active control has its own native option origin" do
+    run = ConnectionNative.observe(:active, :unbound_active_control)
+    assert run.result == :ok
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    native = NativeTransport.build(%{events: events})
+    assert Enum.map(native.options, & &1.mode) == [:once, false]
+    assert Enum.map(native.errors, & &1.actual) == [:native_option_source]
   end
 
   defp native_copy_bytes(event, path) do
