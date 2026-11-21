@@ -272,6 +272,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
         {:ok,
          %{
            id: id,
+           started: internal.source.index,
            origin: internal.returned.index,
            indexes: deferred ++ Enum.flat_map(pairs, &[&1.source.index, &1.returned.index])
          }}
@@ -310,12 +311,14 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     with [received] <- in_interval(state.events, outer, &(&1.event == {pid, :receive, message})),
          [sent] <- in_interval(state.events, outer, &(&1.event == {port, :send, message, pid})),
          true <- sent.index < received.index,
-         true <- chain.origin < received.index,
+         true <- chain.started < sent.index,
          true <- outer.returned.index > received.index,
          {:ok, controls} <- control_signals(state.events, outer, port, id, pid) do
       {:ok, %{sent: sent, received: received, indexes: [received.index, sent.index | controls]}}
     else
-      {:error, reason} -> {:error, reason}
+      {:error, reason} ->
+        {:error, reason}
+
       _ ->
         diagnostic = receive_diagnostic(state.events, outer, chain, port, result)
         {:error, {:native_receive_copy, diagnostic}}
@@ -335,6 +338,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       source: outer.source.index,
       returned: outer.returned.index,
       control_origin: chain.origin,
+      control_started: chain.started,
       id: chain.id,
       result: receive_result(result),
       signals: signals
