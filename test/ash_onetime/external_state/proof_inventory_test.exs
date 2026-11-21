@@ -171,6 +171,8 @@ for partitioning <- [nil, 2] do
           assert_raise RuntimeError, ~r/live #{kind} differs/, fn ->
             AshOnetime.MutationInventory.assert_catalog!(expected, CatalogInventory.read(c))
           end
+
+          :ok
         end)
 
         assert :ok =
@@ -181,6 +183,8 @@ for partitioning <- [nil, 2] do
         assert_raise RuntimeError, ~r/live table_acls differs/, fn ->
           AshOnetime.MutationInventory.assert_catalog!(expected, CatalogInventory.read(c))
         end
+
+        :ok
       end)
     end
   end

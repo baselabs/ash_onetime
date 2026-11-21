@@ -26,9 +26,12 @@ defmodule AshOnetime.MutationFailures do
       # rule:mutation-checker-failure-attribution
       record["test_name"] == test_name and
         Path.expand(record["file"]) in Enum.map(List.wrap(mutation.test), &Path.expand/1) and
-        assertion_matches?(record, mutation, assertion)
+        assertion_matches?(record, mutation, assertion) and error_matches?(record, mutation)
     end)
   end
+
+  defp error_matches?(record, %{postgres_code: code}), do: record["postgres_code"] == code
+  defp error_matches?(_record, _mutation), do: true
 
   defp assertion_matches?(record, %{assertion_line: line}, _assertion),
     do: record["line"] == line

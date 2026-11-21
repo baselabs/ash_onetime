@@ -750,7 +750,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
          test: "test/ash_onetime/delivery/comparator_mutations_test.exs",
          tag: name <> "_c_set",
          test_name: label(row) <> ": C-set input pair",
-         assertion: String.upcase(name) <> "_C_SET_NAMED_FIRST_DIVERGENCE"
+         assertion: "assert observed == [false, false],"
        })}
     end)
   end
@@ -764,7 +764,7 @@ defmodule AshOnetime.DeliveryComparatorMutations do
          test: "test/ash_onetime/delivery/comparator_mutations_test.exs",
          tag: name,
          test_name: label(row) <> ": named first divergence",
-         assertion: String.upcase(name) <> "_NAMED_FIRST_DIVERGENCE"
+         assertion: "assert clear?, marker"
        })}
     end)
   end

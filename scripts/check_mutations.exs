@@ -43,9 +43,10 @@ defmodule AshOnetime.MutationCheck do
       original: "[\"rule:\#{site.id} has no manifest row at \#{site.path}:\#{site.line}\"]",
       mutated: "[]",
       test: "test/ash_onetime/external_state/proof_inventory_test.exs",
+      assertion_line: 89,
       tag: "external_state_inventory_missing_row",
       test_name: "the inventory refuses a missing row inside the multi-rule claim trigger",
-      assertion: "Expected exception RuntimeError but nothing was raised"
+      assertion: "assert_raise RuntimeError"
     },
     "inventory-catalog-equality" => %{
       path: "scripts/mutation_inventory.exs",
@@ -54,7 +55,7 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/external_state/proof_inventory_test.exs",
       tag: "external_state_inventory_catalog",
       test_name: "plain: every native object equals the rendered-template inventory",
-      assertion: "Expected exception RuntimeError but nothing was raised"
+      assertion: "assert_raise RuntimeError"
     },
     "outcomes-primary-key" => %{
       path: "priv/templates/migrations/external_state/outcomes.sql",
@@ -198,7 +199,7 @@ defmodule AshOnetime.MutationCheck do
       original:
         "WITH moved AS (DELETE FROM %s WHERE partition_date >= $1 AND partition_date < $2 RETURNING *) INSERT INTO %I.%I SELECT * FROM moved",
       test: "test/ash_onetime/store/maintenance_test.exs",
-      assertion_line: 2916,
+      assertion_line: 2918,
       test_name: "roll recovers past and forward DEFAULT months atomically and restores FORCE",
       assertion: "assert",
       mutated:
@@ -1928,6 +1929,16 @@ defmodule AshOnetime.MutationCheck do
       assertion: "refute AshOnetime.MutationFailures.matches?",
       assertion_line: 17
     },
+    "mutation-checker-error-attribution" => %{
+      path: "scripts/mutation_failures.exs",
+      original:
+        "  defp error_matches?(record, %{postgres_code: code}), do: record[\"postgres_code\"] == code",
+      mutated: "  defp error_matches?(_record, %{postgres_code: _code}), do: true",
+      test: "test/mutation_check_test.exs",
+      tag: "mutation_checker_error_attribution_mutation",
+      test_name: "failure attribution binds PostgreSQL codes to the same failure",
+      assertion: "refute AshOnetime.MutationFailures.matches?"
+    },
     "M-doctor-fact-schema" => %{
       tag: "fact_schema_mutation",
       path: "lib/mix/tasks/ash_onetime.doctor.ex",
@@ -2233,11 +2244,11 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "evt_doctor_mutation",
       test_name: "trust and doctor audit ddl_command_start event code and its execution identity",
-      assertion: "Expected exception Mix.Error",
+      assertion: "assert_raise Mix.Error",
       required_failures:
         for event <- ["ddl_command_start", "login"] do
           {"trust and doctor audit #{event} event code and its execution identity",
-           "Expected exception Mix.Error"}
+           "assert_raise Mix.Error"}
         end
     },
     "M-doctor-runtime" => %{
@@ -2247,7 +2258,7 @@ defmodule AshOnetime.MutationCheck do
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "doctor_runtime_mutation",
       test_name: "live doctor refuses its cold runtime role's owner equivalence",
-      assertion: "Expected exception Mix.Error"
+      assertion: "assert_raise Mix.Error"
     },
     "maintenance-effective-admin-predefined" => %{
       path: "priv/templates/migrations/maintenance/trust.sql",
@@ -2268,7 +2279,7 @@ defmodule AshOnetime.MutationCheck do
       assertion: "refute scalar(",
       mutated:
         "false OR EXISTS (\n      SELECT 1 FROM pg_roles r WHERE pg_has_role(r.oid,holder.oid,'SET')\n        AND (r.rolcanlogin OR r.oid IN (SELECT oid FROM scheduled)\n          OR r.rolname=current_setting('role') OR r.rolname=current_user OR r.rolname=session_user)\n        AND NOT r.rolsuper AND r.oid<>@owner@\n        AND NOT pg_has_role(r.oid,@owner@,'USAGE') AND NOT pg_has_role(r.oid,@owner@,'SET')\n",
-      assertion_line: 1680
+      assertion_line: 1682
     },
     "maintenance-effective-unreachable-holder" => %{
       tag: "effective_unreachable_authority_mutation",
@@ -2278,7 +2289,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "effective authority refuses an unreachable group holder",
       assertion: "refute scalar(",
       mutated: "false",
-      assertion_line: 5561
+      assertion_line: 5576
     },
     "maintenance-effective-proxy-holder" => %{
       tag: "effective_proxy_authority_mutation",
@@ -2289,7 +2300,7 @@ defmodule AshOnetime.MutationCheck do
         "effective authority refuses an unreachable holder exposed through a PUBLIC view",
       assertion: "refute scalar(",
       mutated: "false",
-      assertion_line: 1755
+      assertion_line: 1757
     },
     "maintenance-effective-subscription-role" => %{
       path: "priv/templates/migrations/maintenance/trust.sql",
@@ -2343,13 +2354,14 @@ defmodule AshOnetime.MutationCheck do
       assertion: "refute scalar(",
       mutated:
         "CASE WHEN t.append_only OR t.owner_only THEN 'DELETE,TRIGGER,TRUNCATE' ELSE 'TRIGGER WITH GRANT OPTION,TRUNCATE WITH GRANT OPTION' END",
-      assertion_line: 5561
+      assertion_line: 5576
     },
     "maintenance-effective-cluster-isolation" => %{
       path: "test/support/cluster_isolation.ex",
       original: "unless is_binary(expected) and String.trim(hostname) == expected do",
       mutated: "unless true do",
       test: "test/ash_onetime/store/maintenance_test.exs",
+      assertion_line: 1604,
       tag: "effective_cluster_isolation_mutation",
       test_name: "cluster grant isolation refuses an unproven server",
       assertion: "Expected exception RuntimeError"
@@ -2384,7 +2396,7 @@ defmodule AshOnetime.MutationCheck do
         "SELECT stays refused because existing children do not share root RLS and policies",
       assertion: "refute scalar(",
       mutated: "OR false AND has_any_column_privilege(holder.oid,t.oid,",
-      assertion_line: 1982
+      assertion_line: 1984
     },
     "maintenance-effective-relation-authority" => %{
       tag: "enforcement_table_authority_predicate_mutation",
@@ -2518,7 +2530,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "SET only MAINTAIN through pg_maintain refuses maintenance",
       assertion: "assert_refusal",
       mutated: "WHEN false",
-      assertion_line: 4683
+      assertion_line: 4698
     },
     "maintenance-upgrade-validation" => %{
       tag: "enforcement_maintenance_upgrade_validation_mutation",
@@ -2549,7 +2561,7 @@ defmodule AshOnetime.MutationCheck do
       original:
         "          OR jsonb_array_length(actual_shape->'constraints')<>jsonb_array_length(expected_shape->'constraints')\n",
       test: "test/ash_onetime/store/maintenance_test.exs",
-      assertion_line: 3754,
+      assertion_line: 3756,
       test_name: "historical upgrade refuses changed extra_duplicate_check without adopting it",
       assertion: "Expected exception Postgrex.Error but nothing was raised",
       mutated: ""
@@ -2560,7 +2572,7 @@ defmodule AshOnetime.MutationCheck do
       original:
         "          OR EXISTS (SELECT 1 FROM jsonb_array_elements(expected_shape->'constraints') e\n            WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(actual_shape->'constraints') x\n              WHERE x=e OR ((historical_shape->'constraints') @> jsonb_build_array(x)\n                AND (x-'expression'=e-'expression' OR (x->>'type'='p' AND e->>'type'='p')))))",
       test: "test/ash_onetime/store/maintenance_test.exs",
-      assertion_line: 3754,
+      assertion_line: 3756,
       test_name: "historical upgrade refuses changed duplicate_check without adopting it",
       assertion: "Expected exception Postgrex.Error but nothing was raised",
       mutated: ""
@@ -2570,10 +2582,10 @@ defmodule AshOnetime.MutationCheck do
       original: "IF historical_key THEN",
       mutated: "IF false THEN",
       test: "test/ash_onetime/store/maintenance_test.exs",
+      postgres_code: "42830",
       tag: "shipped_primary_mutation",
       test_name: "shipped schema upgrades and restores: v0.1.0, claims 2",
-      assertion:
-        "ERROR 42830 (invalid_foreign_key) there is no unique constraint matching given keys"
+      assertion: "assert :ok = migration_result"
     },
     "maintenance-upgrade-check-names" => %{
       path: "priv/templates/migrations/external_state.exs",
@@ -2582,9 +2594,10 @@ defmodule AshOnetime.MutationCheck do
       mutated:
         "FOR check_ddl IN SELECT key AS name FROM jsonb_each_text(manifest->(target.relname || '_check_ddl')) LOOP",
       test: "test/ash_onetime/store/maintenance_test.exs",
+      postgres_code: "42704",
       tag: "shipped_check_names",
       test_name: "historical upgrade replaces validated CHECKs by their actual catalog names",
-      assertion: "does not exist"
+      assertion: "assert :ok = migration_result"
     },
     "maintenance-upgrade-reference" => %{
       tag: "review_install_mode",
@@ -2595,7 +2608,7 @@ defmodule AshOnetime.MutationCheck do
       assertion: "assert_raise Postgrex.Error",
       mutated:
         "-- rule:maintenance-upgrade-reference\n    IF jsonb_array_length(old_functions)=0 THEN",
-      assertion_line: 2079
+      assertion_line: 2081
     },
     "maintenance-shape-type" => %{
       path: "priv/templates/migrations/maintenance/shape.sql",
@@ -2737,9 +2750,10 @@ defmodule AshOnetime.MutationCheck do
         "    result := regexp_replace(result, ':(varattno|varattnosyn) ' || column_row.attnum || '( |})',\n      ':\\1 ' || quote_ident(column_row.attname) || '\\2', 'g');",
       mutated: "    result := result;",
       test: "test/ash_onetime/store/maintenance_test.exs",
+      postgres_code: "P0001",
       tag: "normalize_attnum_mutation",
       test_name: "ADD COLUMN upgrade uses a same-server reference and maps attribute numbers",
-      assertion: "untrusted_dependency: upgrade relation shape"
+      assertion: "assert :ok = migration_result"
     },
     "maintenance-restore-fixpoint" => %{
       path: "priv/templates/migrations/maintenance/shape.sql",
@@ -2765,7 +2779,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "effective routine schema CREATE refuses an untrusted runtime grant",
       assertion: "assert_refusal",
       mutated: "AND false",
-      assertion_line: 4683
+      assertion_line: 4698
     },
     "maintenance-publication-filter" => %{
       tag: "publication_filter_mutation",
@@ -2775,7 +2789,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "publication membership permits no filter and refuses a row filter",
       assertion: "assert_refusal",
       mutated: "false",
-      assertion_line: 4683
+      assertion_line: 4698
     },
     "maintenance-owner-membership" => %{
       tag: "routine_owner_membership_mutation",
@@ -2785,7 +2799,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "maintenance refuses owner membership for runtime, INHERIT=true",
       assertion: "assert_refusal",
       mutated: "AND false",
-      assertion_line: 4683
+      assertion_line: 4698
     },
     "maintenance-name-collision" => %{
       tag: "collision",
@@ -2796,7 +2810,7 @@ defmodule AshOnetime.MutationCheck do
         "Table 1 row 33: roll refuses a colliding standalone table without adopting or executing it",
       assertion: "assert_refusal",
       mutated: "RAISE duplicate_table;",
-      assertion_line: 4683
+      assertion_line: 4698
     },
     "maintenance-shape" => %{
       tag: "maintenance_shape_mutation",
@@ -2806,7 +2820,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "a builtin array input cannot dispatch a runtime domain check",
       assertion: "assert_refusal",
       mutated: "WHERE false -- R1 relation set",
-      assertion_line: 4683
+      assertion_line: 4698
     },
     "maintenance-check-before-lock" => %{
       path: ~S|priv/templates/migrations/maintenance/cleanup_nonce.sql|,
@@ -2847,7 +2861,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "effective MAINTAIN audit covers pg_maintain and install revokes direct ANALYZE",
       assertion: "assert {:error",
       mutated: "NULL;",
-      assertion_line: 4683
+      assertion_line: 4698
     },
     "maintenance-policy" => %{
       tag: "maintenance_policy_mutation",
@@ -2857,7 +2871,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "Table 1 row 5: an owner-applicable policy cannot execute runtime-owned code",
       assertion: "assert_refusal",
       mutated: "IF false THEN RETURN offending; END IF;",
-      assertion_line: 4683
+      assertion_line: 4698
     },
     "maintenance-digest" => %{
       tag: "maintenance_digest_mutation",
@@ -2868,7 +2882,7 @@ defmodule AshOnetime.MutationCheck do
       test_name: "package routine identity also requires its exact source digest",
       assertion: "assert_refusal",
       mutated: "OR false",
-      assertion_line: 4683
+      assertion_line: 4698
     },
     "maintenance-null-bound" => %{
       path: ~S|priv/templates/migrations/maintenance/roll.sql|,
@@ -2944,6 +2958,8 @@ defmodule AshOnetime.MutationCheck do
       mutated:
         "mode = if target.repo_module.in_transaction?(), do: :transaction, else: :transaction",
       test: "test/ash_onetime/nonce_retention_test.exs",
+      assertion_line: 240,
+      postgres_code: "25P02",
       tag: "retention_read_savepoint_mutation",
       test_name: "a deadline query failure preserves caller writes and transaction usability",
       assertion: "ERROR 25P02 (in_failed_sql_transaction)"
@@ -3117,6 +3133,7 @@ defmodule AshOnetime.MutationCheck do
       original: "    audit_registered_" <> "sites!()",
       mutated: "    :ok",
       test: "test/mutation_check_test.exs",
+      assertion_line: 111,
       tag: "mutation_checker_source_site_mutation",
       test_name:
         "mutation checker self-test proves restoration requires an executed ExUnit result",
@@ -3417,6 +3434,7 @@ defmodule AshOnetime.MutationCheck do
         "  defp verify_nonce(protection, context), do: verify_nonce_details(protection, context)",
       mutated: "  defp verify_nonce(protection, _context), do: {:ok, protection}",
       test: "test/compile_fixtures_test.exs",
+      assertion_line: 743,
       tag: "dsl_nonce_mutation",
       test_name: "nonce rejects replay response configuration",
       assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
@@ -3428,6 +3446,7 @@ defmodule AshOnetime.MutationCheck do
         "  defp verify_nonce_key(protection, context), do: verify_nonce_key_details(protection, context)",
       mutated: "  defp verify_nonce_key(_protection, _context), do: :ok",
       test: "test/compile_fixtures_test.exs",
+      assertion_line: 743,
       tag: "dsl_nonce_key_mutation",
       test_name: "nonce requires trusted key sources",
       assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
@@ -3439,6 +3458,7 @@ defmodule AshOnetime.MutationCheck do
         "  defp verify_lifecycle(protection, context), do: verify_lifecycle_details(protection, context)",
       mutated: "  defp verify_lifecycle(_protection, _context), do: :ok",
       test: "test/compile_fixtures_test.exs",
+      assertion_line: 743,
       tag: "dsl_lifecycle_mutation",
       test_name: "idempotency rejects replay-unsafe lifecycle callbacks",
       assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
@@ -3450,6 +3470,7 @@ defmodule AshOnetime.MutationCheck do
         "  defp reject_duplicates(protections, dsl_state),\n    do: reject_duplicate_details(protections, dsl_state)",
       mutated: "  defp reject_duplicates(_protections, _dsl_state), do: :ok",
       test: "test/compile_fixtures_test.exs",
+      assertion_line: 743,
       tag: "dsl_duplicate_mutation",
       test_name: "duplicate protection is transformer-owned",
       assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
@@ -3472,6 +3493,7 @@ defmodule AshOnetime.MutationCheck do
         "  defp verify_replay_ref(ref, allowlist), do: verify_replay_ref_details(ref, allowlist)",
       mutated: "  defp verify_replay_ref(_ref, _allowlist), do: :ok",
       test: "test/compile_fixtures_test.exs",
+      assertion_line: 743,
       tag: "dsl_builtin_options_mutation",
       test_name: "replay-safe built-ins require literal options",
       assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
@@ -3483,6 +3505,7 @@ defmodule AshOnetime.MutationCheck do
         "  defp verify_replay_validation(validation), do: verify_replay_validation_details(validation)",
       mutated: "  defp verify_replay_validation(_validation), do: :ok",
       test: "test/compile_fixtures_test.exs",
+      assertion_line: 743,
       tag: "dsl_validations_mutation",
       test_name: "idempotency rejects replay-unsafe validations",
       assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
@@ -3494,6 +3517,7 @@ defmodule AshOnetime.MutationCheck do
         "  defp verify_tenant_scope(scope, protection, context),\n    do: verify_tenant_scope_details(scope, protection, context)",
       mutated: "  defp verify_tenant_scope(_scope, _protection, _context), do: :ok",
       test: "test/compile_fixtures_test.exs",
+      assertion_line: 743,
       tag: "dsl_attribute_tenant_scope_mutation",
       test_name: "attribute multitenancy requires the tenant discriminator in scope",
       assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
@@ -3506,6 +3530,7 @@ defmodule AshOnetime.MutationCheck do
       original: "not is_nil(tenant_attribute) and attribute == tenant_attribute",
       mutated: "not is_nil(tenant_attribute) and is_atom(attribute)",
       test: "test/compile_fixtures_test.exs",
+      assertion_line: 743,
       tag: "dsl_attribute_tenant_scope_equality_mutation",
       test_name: "attribute multitenancy rejects a non-tenant attribute in scope",
       assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
@@ -3520,6 +3545,7 @@ defmodule AshOnetime.MutationCheck do
       mutated:
         "      field: [\n        type: {:list, :atom},\n        default: [],\n        doc: \"mutant alias that accepts the typo the guard rejects.\"\n      ],\n      fields: [\n        type: {:list, :atom},\n        default: [],\n        doc:\n          \"The stored response's field allowlist. The first tracked caller receives this \" <>\n            \"projection too: an attribute not named here is unavailable to it (returned as \" <>\n            \"`Ash.NotLoaded`), not only to replays. Untracked execution returns the action's \" <>\n            \"own result. A value only the executing caller may receive is declared with \" <>\n            \"`executing_only`, delivered only through `AshOnetime.deliver/2`, and never stored.\"\n      ],",
       test: "test/compile_fixtures_test.exs",
+      assertion_line: 702,
       tag: "response_unknown_opt_mutation",
       test_name: "response rejects unknown options (no silent drop)",
       assertion: "ASH_ONETIME_FIXTURE_RESULT=compiled",
@@ -5259,7 +5285,7 @@ defmodule AshOnetime.MutationCheck do
                owner =
                  if n == 18 do
                    test_name = "no dependency module calls load_nif directly"
-                   assertion = "1 modules load a NIF: [AshOnetime.Delivery]"
+                   assertion = "assert loading == []"
 
                    %{
                      test: "test/ash_onetime/delivery/exit_boundary_classifier_test.exs",
@@ -5274,10 +5300,10 @@ defmodule AshOnetime.MutationCheck do
                      tag: "exit_boundary_search",
                      test_name: "rule 3: no plaintext crosses an undeclared exit",
                      assertion: "run: a canary crossed the boundary",
+                     red_summary: "EXIT_CLASS_HIT=e#{n}\n",
                      required_failures: [
                        {"rule 3: no plaintext crosses an undeclared exit",
-                        "run: a canary crossed the boundary"},
-                       {"rule 3: no plaintext crosses an undeclared exit", "{:e#{n}, "}
+                        "assert hits == []"}
                      ]
                    }
                  end
@@ -6067,7 +6093,7 @@ defmodule AshOnetime.MutationCheck do
                  original: "RAISE EXCEPTION 'untrusted_dependency: routine support';",
                  mutated: "NULL;",
                  test_name: "executable pg_proc metadata rejects support",
-                 assertion_line: 4386
+                 assertion_line: 4388
                },
                "maintenance-routine-executable-trees" => %{
                  tag: "routine_executable_mutation",
@@ -6077,7 +6103,7 @@ defmodule AshOnetime.MutationCheck do
                  original: "RAISE EXCEPTION 'untrusted_dependency: routine executable trees';",
                  mutated: "NULL;",
                  test_name: "executable pg_proc metadata rejects argument_default",
-                 assertion_line: 4682
+                 assertion_line: 4684
                },
                "claim-trigger-inline-active" => %{
                  tag: "external_state_claim_trigger_mutation",
@@ -6304,7 +6330,7 @@ defmodule AshOnetime.MutationCheck do
                  test_name:
                    "DEFAULT recovery failure at move changes no rows, partitions, flags, ACLs, or records",
                  assertion: "assert",
-                 assertion_line: 4531
+                 assertion_line: 4533
                },
                "inventory-unmarked-reraise" => %{
                  path: "scripts/mutation_inventory.exs",
@@ -6610,7 +6636,7 @@ defmodule AshOnetime.MutationCheck do
                      assertion: "refute scalar("
                    }
                  ],
-                 assertion_line: 5560
+                 assertion_line: 5562
                },
                "current-delete-unarmed" => %{
                  path: "priv/templates/migrations/maintenance/guard_idempotency.sql",
@@ -10781,7 +10807,8 @@ defmodule AshOnetime.MutationCheck do
   }
 
   @groups Map.put(@groups, "mutation-checker-attribution", [
-            "mutation-checker-failure-attribution"
+            "mutation-checker-failure-attribution",
+            "mutation-checker-error-attribution"
           ])
 
   @groups Map.put(@groups, "external-state-claims", [
@@ -11519,7 +11546,7 @@ defmodule AshOnetime.MutationCheck do
           "--formatter",
           "AshOnetime.Test.MutationFormatter",
           "--formatter",
-          "ExUnit.CLIFormatter"
+          "AshOnetime.Test.TestFormatter"
         ],
       env: env,
       stderr_to_stdout: true

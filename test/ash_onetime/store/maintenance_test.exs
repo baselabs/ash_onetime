@@ -1317,6 +1317,8 @@ defmodule AshOnetime.Store.MaintenanceTest do
             "--live"
           ])
         end
+
+        :ok
       end)
     after
       Repo.put_dynamic_repo(previous)
@@ -3992,14 +3994,20 @@ defmodule AshOnetime.Store.MaintenanceTest do
     previous = Repo.put_dynamic_repo(owner_repo)
 
     try do
-      assert :ok =
-               Ecto.Migrator.up(
-                 Repo,
-                 20_261_113_100_000 + System.unique_integer([:positive, :monotonic]),
-                 module,
-                 prefix: schema,
-                 log: false
-               )
+      migration_result =
+        try do
+          Ecto.Migrator.up(
+            Repo,
+            20_261_113_100_000 + System.unique_integer([:positive, :monotonic]),
+            module,
+            prefix: schema,
+            log: false
+          )
+        rescue
+          error in Postgrex.Error -> {:migration_error, error}
+        end
+
+      assert :ok = migration_result
     after
       Repo.put_dynamic_repo(previous)
       :code.purge(module)
@@ -4183,7 +4191,14 @@ defmodule AshOnetime.Store.MaintenanceTest do
     previous = Repo.put_dynamic_repo(c.owner_repo)
 
     try do
-      :ok = Ecto.Migrator.up(Repo, 20_261_114_000_002, module, prefix: c.schema, log: false)
+      migration_result =
+        try do
+          Ecto.Migrator.up(Repo, 20_261_114_000_002, module, prefix: c.schema, log: false)
+        rescue
+          error in Postgrex.Error -> {:migration_error, error}
+        end
+
+      assert :ok = migration_result
       callback.()
     after
       Repo.put_dynamic_repo(previous)

@@ -2178,6 +2178,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     locations = Enum.map(result.errors, &{&1.at, &1.rule, &1.path})
     assert locations == [], "comparator differences: #{Diagnostics.render(locations)}"
+    :ok
   end
 
   defp next_second(side) do
@@ -2432,6 +2433,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     status = %{state: state, message: state, reason: state, log: [state]}
     stack = [{__MODULE__, :diagnostic_witness, [state], [file: __ENV__.file, line: 0]}]
+    assert TestFormatter.failure(test, marked_error, stack).postgres_code == "22012"
 
     printers = [
       residual: fn -> IO.puts(Diagnostics.render(state, limit: :infinity)) end,

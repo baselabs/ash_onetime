@@ -38,6 +38,9 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
     pair = observe(context, row!(:issue, :execute), Values.set()[:va])
     assert Analysis.unclaimed(pair.run.run.events) == []
     hits = Search.hits(pair.run)
+    for class <- hits |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort(),
+        do: IO.puts("EXIT_CLASS_HIT=#{class}")
+
     assert hits == [], "run: a canary crossed the boundary: #{Diagnostics.render(hits)}"
     assert Comparator.compare(pair).errors == []
   end
@@ -122,6 +125,7 @@ defmodule AshOnetime.Delivery.ComparatorMutationsTest do
         clear? = comparison.errors == []
         marker = String.upcase(Atom.to_string(mutation.id)) <> "_NAMED_FIRST_DIVERGENCE"
         assert clear?, marker
+        :ok
       end)
     end
   end

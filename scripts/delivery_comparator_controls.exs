@@ -577,7 +577,7 @@ defmodule AshOnetime.DeliveryComparatorControls do
          test: "test/ash_onetime/delivery/comparator_positive_controls_test.exs",
          tag: name,
          test_name: name <> ": qualified origin positive control",
-         assertion: String.upcase(name) <> "_QUALIFIED_ORIGIN_REJECTED"
+         assertion: "assert clear?, String.upcase(Atom.to_string(control.id))"
        })}
     end)
     |> Map.merge(observation_checks())

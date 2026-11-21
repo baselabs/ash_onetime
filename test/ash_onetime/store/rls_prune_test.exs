@@ -1252,9 +1252,7 @@ defmodule AshOnetime.Store.RLSPruneTest do
   defp wait_for_parent_waiter!(_prefix, task, 0) do
     result = if task, do: Task.yield(task, 0)
 
-    flunk(
-      "prune did not wait for parent lock; completed result: #{Diagnostics.render(result)}"
-    )
+    flunk("prune did not wait for parent lock; completed result: #{Diagnostics.render(result)}")
   end
 
   defp wait_for_parent_waiter!(prefix, task, attempts) do

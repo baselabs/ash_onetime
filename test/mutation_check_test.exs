@@ -79,7 +79,7 @@ defmodule AshOnetime.MutationCheckTest do
             "--formatter",
             "AshOnetime.Test.MutationFormatter",
             "--formatter",
-            "ExUnit.CLIFormatter"
+            "AshOnetime.Test.TestFormatter"
           ],
           stderr_to_stdout: true
         )
@@ -118,5 +118,22 @@ defmodule AshOnetime.MutationCheckTest do
 
     assert output =~
              "mutation checker self-test: every shard count partitions the battery exactly"
+  end
+
+  @tag :mutation_checker_error_attribution_mutation
+  test "failure attribution binds PostgreSQL codes to the same failure" do
+    mutation = %{test: __ENV__.file, assertion_line: 42, postgres_code: "42704"}
+    owned = %{"test_name" => "owned case", "file" => __ENV__.file, "line" => 42}
+    wrong = Map.put(owned, "postgres_code", "42830")
+    other = %{owned | "test_name" => "other case"} |> Map.put("postgres_code", "42704")
+
+    refute AshOnetime.MutationFailures.matches?([wrong, other], mutation, "owned case", "assert")
+
+    assert AshOnetime.MutationFailures.matches?(
+             [Map.put(owned, "postgres_code", "42704")],
+             mutation,
+             "owned case",
+             "assert"
+           )
   end
 end

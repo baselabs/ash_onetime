@@ -4,6 +4,17 @@ defmodule AshOnetime.Test.TestFormatter do
 
   alias AshOnetime.Test.ExitBoundary.Diagnostics
 
+  @assertions [
+    :assert,
+    :refute,
+    :assert_raise,
+    :assert_receive,
+    :assert_received,
+    :refute_receive,
+    :refute_received,
+    :flunk
+  ]
+
   @impl true
   def init(options) do
     IO.puts("Running ExUnit with seed: #{options[:seed]}")
@@ -62,7 +73,7 @@ defmodule AshOnetime.Test.TestFormatter do
     end
   end
 
-  def failure(test, _error, stacktrace) do
+  def failure(test, error, stacktrace) do
     file = Path.expand(Map.get(Map.get(test, :tags, %{}), :file, Map.get(test, :file)))
 
     line =
@@ -75,32 +86,93 @@ defmodule AshOnetime.Test.TestFormatter do
           nil
       end) || 0
 
+    {line, assertion} = source_assertion(file, line, error)
+
     %{
       test_name: test.name |> Atom.to_string() |> String.replace_prefix("test ", ""),
       file: Path.relative_to_cwd(file),
       line: line,
-      assertion: source_assertion(file, line)
+      assertion: assertion,
+      postgres_code: postgres_code(error)
     }
   end
 
-  defp source_assertion(file, line) do
+  defp postgres_code(%ExUnit.AssertionError{right: {:migration_error, error}}),
+    do: postgres_code(error)
+
+  defp postgres_code(%Postgrex.Error{postgres: %{pg_code: code}}) when is_binary(code) do
+    if Regex.match?(~r/\A[0-9A-Z]{5}\z/, code), do: code
+  end
+
+  defp postgres_code(_error), do: nil
+
+  defp source_assertion(file, line, error) do
     with {:ok, source} <- File.read(file),
          {:ok, ast} <- Code.string_to_quoted(source) do
       {_ast, assertions} =
         Macro.prewalk(ast, [], fn
           {name, metadata, arguments} = node, found
-          when name in [:assert, :refute, :assert_raise, :assert_receive, :refute_receive, :flunk] and
-                 is_list(arguments) ->
-            {node, if(metadata[:line] == line, do: [node | found], else: found)}
+          when name in @assertions and is_list(arguments) ->
+            {node, [{metadata[:line], node} | found]}
 
           node, found ->
             {node, found}
         end)
 
-      assertions |> List.first() |> Macro.to_string()
+      selected =
+        expression_assertion(assertions, error) ||
+          Enum.find(assertions, fn {start, node} -> start <= line and line <= last_line(node) end)
+
+      case selected do
+        {start, node} ->
+          location = if start <= line and line <= last_line(node), do: line, else: start
+          {location, Macro.to_string(node)}
+
+        nil ->
+          {line, "source assertion unavailable"}
+      end
     else
-      _ -> "source assertion unavailable"
+      _ -> {line, "source assertion unavailable"}
     end
+  end
+
+  # Tail calls can remove an assertion's caller from the native stack. ExUnit's
+  # assertion macros retain their quoted source expression. Use it only to select
+  # one parsed source assertion; no runtime field becomes printable source.
+  defp expression_assertion(assertions, %ExUnit.AssertionError{expr: {kind, _, [expression]}}) do
+    matches =
+      Enum.filter(assertions, fn
+        {_line, {^kind, _, [source | _]}} -> quoted(source) == quoted(expression)
+        _ -> false
+      end)
+
+    case matches do
+      [assertion] -> assertion
+      _ -> nil
+    end
+  end
+
+  defp expression_assertion(_assertions, _error), do: nil
+
+  defp quoted(expression) do
+    Macro.prewalk(expression, fn
+      {name, _metadata, context} when is_atom(name) and is_atom(context) -> {name, [], nil}
+      {name, _metadata, arguments} when is_list(arguments) -> {name, [], arguments}
+      node -> node
+    end)
+  end
+
+  defp last_line(expression) do
+    {_expression, line} =
+      Macro.prewalk(expression, 0, fn
+        {_, metadata, _} = node, line when is_list(metadata) ->
+          {node, max(line, metadata[:line] || 0)}
+
+        node, line ->
+          {node, line}
+      end)
+
+    line
   end
 
   defp stack(stacktrace) do
