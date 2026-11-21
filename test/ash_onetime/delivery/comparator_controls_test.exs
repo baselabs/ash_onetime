@@ -320,6 +320,56 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: cached decoder descriptors retain their native owner origin" do
+    %{run: run, history: history} = ConnectionNative.observe_cached()
+    assert native_result(run) == {:ok, [[17]]}
+    [origin] = history.history.descriptors
+    query = origin.query
+    framing = Wire.frames(history.chunks)
+    assert framing.errors == []
+
+    context = %{
+      sql: IO.iodata_to_binary(query.statement),
+      statement: {:historical_statement, query.name},
+      parameter_types: [],
+      columns: [],
+      binds: []
+    }
+
+    catalog =
+      Enum.reduce(framing.messages, context, fn frame, context ->
+        if frame.direction == :backend and frame.tag in [?t, ?T] do
+          {_decoded, context} = Wire.decode_message(frame.tag, frame.payload, context)
+          context
+        else
+          context
+        end
+      end)
+
+    assert catalog.parameter_types == [23]
+    assert [{"connection_stream_probe", 0, 0, 23, 4, -1, 0}] = catalog.columns
+
+    indexed =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    refute Enum.any?(indexed, &(&1.mfa == {Postgrex.Protocol, :handle_prepare, 3}))
+    native = NativeTransport.build(%{events: indexed})
+    assert native.errors == []
+    streams =
+      ConnectionReads.build(native, MapSet.new(), %{origin.port => %{query.name => catalog}})
+
+    assert streams.errors == []
+    historical = %{history.holder => history.history}
+    decoders = ConnectionDecoders.build(%{events: indexed}, native, streams, historical)
+    assert decoders.errors == []
+    rows = Enum.filter(decoders.instances, &(&1.source.mfa == {Postgrex.Types, :decode_rows, 4}))
+    assert rows != []
+    assert Enum.all?(rows, &(&1.descriptor == Map.take(origin, [:index, :path])))
+  end
+
+  @tag :connection_streams
   test "Connection streams: native active delivery changes back to passive mode" do
     run = ConnectionNative.observe(:active)
     assert run.result == :ok

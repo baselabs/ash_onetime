@@ -57,8 +57,70 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  defp connect do
+  def observe_cached do
+    observer = self()
+    tag = make_ref()
+
+    run =
+      ExitBoundary.observe(
+        fn ->
+          protocol = connect(:named)
+
+          query = %Postgrex.Query{
+            name: "native_cached",
+            statement: "SELECT $1::int4 AS connection_stream_probe",
+            cache: :statement
+          }
+
+          {:ok, query, protocol} = Postgrex.Protocol.handle_prepare(query, [], protocol)
+          params = DBConnection.Query.encode(query, [17], [])
+
+          {:ok, ^query, _result, protocol} =
+            Postgrex.Protocol.handle_execute(query, params, [], protocol)
+
+          %{sock: {module, socket}} = protocol
+          describe = message(?D, <<?S, query.name::binary, 0>>)
+          bytes = IO.iodata_to_binary([describe, message(?S, <<>>)])
+          :ok = module.send(socket, bytes)
+          chunks = [%{index: 0, direction: :frontend, bytes: bytes}]
+          chunks = history_replies(module, socket, 1, <<>>, chunks)
+          descriptor = %{query: query, port: socket, index: {:historical, self()}, path: [:query]}
+          history = %{protocol: protocol, descriptors: [descriptor]}
+          send(observer, {tag, %{holder: self(), history: history, chunks: chunks}})
+          {protocol, query, params}
+        end,
+        &execute_cached/1,
+        %{
+          host: [],
+          callbacks: [],
+          frames: [
+            {Postgrex.Protocol, :msg_recv, :_},
+            {Postgrex.Protocol, :rows_recv, :_},
+            {Postgrex.Protocol, :msg_decode, 1},
+            {Postgrex.Types, :decode_rows, 4}
+          ]
+        }
+      )
+
+    receive do
+      {^tag, history} -> %{run: run, history: history}
+    after
+      0 -> raise "native cached descriptor history was not captured"
+    end
+  end
+
+  defp execute_cached({%{sock: {module, socket}} = protocol, query, params}) do
+    {:ok, ^query, result, _protocol} =
+      Postgrex.Protocol.handle_execute(query, params, [], protocol)
+
+    DBConnection.Query.decode(query, result, [])
+  after
+    :ok = module.close(socket)
+  end
+
+  defp connect(prepare \\ nil) do
     options = Keyword.put(Repo.config(), :types, Postgrex.DefaultTypes)
+    options = if prepare, do: Keyword.put(options, :prepare, prepare), else: options
     {:ok, protocol} = Postgrex.Protocol.connect(options)
     {:ok, protocol} = Postgrex.Protocol.checkout(protocol)
     protocol
