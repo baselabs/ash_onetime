@@ -398,10 +398,26 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @tag :connection_streams
   test "Connection streams: cached decoder descriptors retain their native owner origin" do
     for shape <- [:rows, :none, :cross_connection] do
-      %{decoders: decoders, origin: origin, events: events, streams: streams} =
-        cached_decoders(nil, shape)
+      captured = cached_decoders(nil, shape)
+      %{decoders: decoders, origin: origin, events: events, streams: streams} = captured
 
       assert decoders.errors == []
+
+      states =
+        AshOnetime.Test.ExitBoundary.ConnectionStates.build(
+          %{events: events},
+          captured.native,
+          decoders,
+          captured.historical
+        )
+
+      assert states.errors == []
+      covered = MapSet.new(states.copies, &{&1.index, &1.path})
+
+      unbound =
+        Enum.reject(decoders.protocol_copies, &MapSet.member?(covered, {&1.index, &1.path}))
+
+      assert unbound == [], "every native Protocol copy needs its own owner-version binding"
 
       assert Enum.any?(decoders.protocol_copies, fn copy ->
                copy.mfa == {Postgrex.Protocol, :handle_execute, 4} and copy.tag == :call and
@@ -604,7 +620,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         run.native_history
       )
 
-    {%{events: events, native: native, decoders: decoders, historical: run.native_history}, states}
+    {%{events: events, native: native, decoders: decoders, historical: run.native_history},
+     states}
   end
 
   @tag :connection_streams
@@ -2783,9 +2800,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @tag :connection_streams
   test "Connection streams: TLS plaintext has a native physical port binding" do
     observations =
-      Map.new([nil, :binding, :byte], fn corruption ->
+      Map.new([nil, :binding, :workers, :byte], fn corruption ->
         run = ConnectionNative.observe_tls(corruption)
-        expected = if corruption == :binding, do: [:tls_local_endpoint], else: []
+
+        expected =
+          case corruption do
+            :binding -> [:tls_local_endpoint]
+            :workers -> [:tls_connection_workers]
+            _ -> []
+          end
+
         assert run.result == expected
 
         for process <- run.tls_binding.processes do
@@ -2793,7 +2817,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             "CONNECTION_TLS_PROCESS_ORIGIN: " <>
               Diagnostics.render(%{
                 mfa: process.mfa,
-                role: if(process.pid == run.tls_binding.owner, do: :transport_owner, else: :linked)
+                role:
+                  if(process.pid == run.tls_binding.owner, do: :transport_owner, else: :linked)
               })
           )
         end
@@ -2846,6 +2871,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end)
 
     assert observations[nil] == observations.binding
+    assert observations[nil] == observations.workers
     refute observations[nil] == observations.byte
 
     bypassed =
@@ -2857,5 +2883,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert ConnectionNative.observe_tls(:binding).result == [:tls_local_endpoint]
     assert ConnectionNative.observe_tls().result == []
     IO.puts("CONNECTION_TLS_BINDING: native positive; owning RED; exact restore GREEN")
+
+    bypassed =
+      ComparatorMutants.with_mutant(:stream_tls_workers, fn ->
+        ConnectionNative.observe_tls(:workers).result
+      end)
+
+    assert bypassed == []
+    assert ConnectionNative.observe_tls(:workers).result == [:tls_connection_workers]
+    assert ConnectionNative.observe_tls().result == []
+    IO.puts("CONNECTION_TLS_WORKERS: native positive; owning RED; exact restore GREEN")
   end
 end

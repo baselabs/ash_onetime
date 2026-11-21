@@ -2121,8 +2121,11 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp readback_backends(_, _, state, _), do: state
 
   defp query_context(a, b, state) do
-    run_sql = event_sql(a.event) || Map.fetch!(state.query_contexts.run, DatabaseOrigins.address(a))
-    twin_sql = event_sql(b.event) || Map.fetch!(state.query_contexts.twin, DatabaseOrigins.address(b))
+    run_sql =
+      event_sql(a.event) || Map.fetch!(state.query_contexts.run, DatabaseOrigins.address(a))
+
+    twin_sql =
+      event_sql(b.event) || Map.fetch!(state.query_contexts.twin, DatabaseOrigins.address(b))
 
     %{state | current: %{run: a, twin: b, run_sql: run_sql, twin_sql: twin_sql}}
   end

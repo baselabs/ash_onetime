@@ -408,6 +408,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_tls_workers) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original: "    |> mismatch(:tls_connection_workers, connection_workers?(binding))\n",
+        mutated:
+          "    |> mismatch(:tls_connection_workers, is_boolean(connection_workers?(binding)))\n"
+      }
+    ]
+  end
+
   def edits(:stream_state_copy) do
     [
       %{
@@ -424,10 +435,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_states.ex",
-        original:
-          "        |> exact(source, :state_holder_update, protocol, version.protocol)\n",
-        mutated:
-          "        |> exact(source, :state_holder_update, protocol, protocol)\n"
+        original: "        |> exact(source, :state_holder_update, protocol, version.protocol)\n",
+        mutated: "        |> exact(source, :state_holder_update, protocol, protocol)\n"
       }
     ]
   end

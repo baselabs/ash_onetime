@@ -49,6 +49,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           options =
             Repo.config()
             |> Keyword.delete(:name)
+            |> Keyword.put(:pool, DBConnection.ConnectionPool)
             |> Keyword.put(:pool_size, 1)
             |> Keyword.put(:types, Postgrex.DefaultTypes)
 
@@ -111,14 +112,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           protocol = connect_tls()
           {:ssl, socket} = protocol.sock
           binding = ConnectionTls.bind(socket)
-          other = if corruption == :binding, do: connect_tls()
+          other = if corruption in [:binding, :workers], do: connect_tls()
 
           checked =
-            if other do
+            if corruption == :binding do
               {:ssl, other_socket} = other.sock
               %{ConnectionTls.bind(other_socket) | socket: socket}
             else
               binding
+            end
+
+          checked =
+            if corruption == :workers do
+              {:ssl, other_socket} = other.sock
+              foreign = ConnectionTls.bind(other_socket)
+              %{checked | supervisor: foreign.supervisor, sender: foreign.sender}
+            else
+              checked
             end
 
           send(observer, {tag, binding})

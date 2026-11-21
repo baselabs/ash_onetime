@@ -17,22 +17,41 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     {:connected, owner} = Port.info(port, :connected)
     {:links, links} = Process.info(owner, :links)
+    linked = process_origins(links)
 
-    processes =
-      for pid <- Enum.uniq([owner | links]), is_pid(pid) do
-        mfa =
-          case :proc_lib.translate_initial_call(pid) do
-            {module, function, arity} when is_atom(module) and is_atom(function) and is_integer(arity) ->
-              {module, function, arity}
+    [supervisor] =
+      for %{pid: pid, mfa: {:supervisor, :tls_dyn_connection_sup, 1}} <- linked, do: pid
 
-            _ ->
-              :unknown_initial_call
-          end
+    children = :supervisor.which_children(supervisor)
+    {:receiver, ^owner, :worker, _modules} = List.keyfind(children, :receiver, 0)
+    {:sender, sender, :worker, [:tls_sender]} = List.keyfind(children, :sender, 0)
 
-        %{pid: pid, mfa: mfa}
-      end
+    %{
+      socket: socket,
+      port: port,
+      owner: owner,
+      local: local,
+      peer: peer,
+      supervisor: supervisor,
+      sender: sender,
+      processes: process_origins([owner, sender, supervisor])
+    }
+  end
 
-    %{socket: socket, port: port, owner: owner, local: local, peer: peer, processes: processes}
+  defp process_origins(pids) do
+    for pid <- Enum.uniq(pids), is_pid(pid) do
+      mfa =
+        case :proc_lib.translate_initial_call(pid) do
+          {module, function, arity}
+          when is_atom(module) and is_atom(function) and is_integer(arity) ->
+            {module, function, arity}
+
+          _ ->
+            :unknown_initial_call
+        end
+
+      %{pid: pid, mfa: mfa}
+    end
   end
 
   def validate(binding) do
@@ -47,6 +66,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     |> mismatch(:tls_local_endpoint, local_matches?)
     |> mismatch(:tls_peer_endpoint, peer == transport_peer and peer == {:ok, binding.peer})
     |> mismatch(:tls_transport_owner, owner == {:connected, binding.owner})
+    |> mismatch(:tls_connection_workers, connection_workers?(binding))
+  end
+
+  defp connection_workers?(binding) do
+    children = :supervisor.which_children(binding.supervisor)
+
+    match?({:receiver, owner, :worker, _} when owner == binding.owner,
+      List.keyfind(children, :receiver, 0)
+    ) and List.keyfind(children, :sender, 0) == {:sender, binding.sender, :worker, [:tls_sender]}
+  catch
+    :exit, _reason -> false
   end
 
   # Only the public SSL send/recv arguments and returns are PostgreSQL bytes.
