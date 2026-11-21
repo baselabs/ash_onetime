@@ -17,7 +17,7 @@ defmodule AshOnetime.Store.OperationHoldPrivilegedTest do
 
     true ->
       @moduletag skip:
-                   "supply ASH_ONETIME_SUPERUSER_URL for an isolated PostgreSQL 18 superuser connection"
+                   "supply ASH_ONETIME_SUPERUSER_URL for an isolated PostgreSQL superuser connection"
   end
 
   setup do
@@ -45,7 +45,9 @@ defmodule AshOnetime.Store.OperationHoldPrivilegedTest do
       :code.delete(module)
     end)
 
-    assert %{rows: [[true, 18]]} =
+    major = AshOnetime.Test.Postgres.contract().major
+
+    assert %{rows: [[true, ^major]]} =
              query!(
                super,
                "SELECT rolsuper, current_setting('server_version_num')::integer / 10000 FROM pg_roles WHERE rolname = current_user"

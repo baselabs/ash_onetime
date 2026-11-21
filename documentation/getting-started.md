@@ -2,7 +2,8 @@
 
 `ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.5; the requirement admits later 1.x
 releases and excludes 2.0 or newer), Erlang/OTP 28 or 29, Ash `>= 3.37.2 and < 4.0.0`,
-AshPostgres `~> 2.15 and >= 2.15.2`, and PostgreSQL 17+ (maintenance uses `MAINTAIN`; CI exercises 18). This guide targets
+AshPostgres `~> 2.15 and >= 2.15.2`, and PostgreSQL 17 and 18. Work and qualification run the
+whole suite on both majors; maintenance uses `MAINTAIN`. This guide targets
 v2.0.0 (`{:ash_onetime, "~> 2.0.0"}`); see the
 [release notes](../CHANGELOG.md).
 
@@ -148,6 +149,7 @@ render an exception's diagnostic message to the client.
 
 Contributors and library maintainers need the test database harness documented in
 [CONTRIBUTING.md](../CONTRIBUTING.md). GitHub Actions starts the checked platform engine
-through the shared PostgreSQL action. The suite fails closed unless `DATABASE_URL` points
-at its dedicated PostgreSQL 18 database on a non-default loopback port; agents run the
-checks only on those hosted runners.
+through the shared PostgreSQL action; the compatibility lane uses the declared upstream
+PostgreSQL 17 image. The suite fails closed unless `DATABASE_URL` points at its dedicated
+database on a non-default loopback port and the server matches its lane's declaration.
+Agents run the checks only on those hosted runners.

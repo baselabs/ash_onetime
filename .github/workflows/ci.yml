@@ -40,6 +40,7 @@ jobs:
       beam_lanes: ${{ steps.versions.outputs.beam_lanes }}
       ash_floor: ${{ steps.versions.outputs.ash_floor }}
       postgres_client: ${{ steps.versions.outputs.postgres_client }}
+      postgres_lanes: ${{ steps.versions.outputs.postgres_lanes }}
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
       mutation_shards: ${{ steps.versions.outputs.mutation_shards }}
     steps:
@@ -49,6 +50,55 @@ jobs:
       - name: Read defaults, compatibility lanes, Ash floor, and service pins
         id: versions
         uses: ./.github/actions/toolchain
+
+  postgres-compatibility:
+    name: "PostgreSQL ${{ matrix.postgres.major }} compatibility"
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ${{ fromJSON(needs.toolchain.outputs.postgres_lanes) }}
+
+    env:
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-postgres-${{ strategy.job-index }}"
+      ASH_ONETIME_POSTGRES_COMPAT_MAJOR: ${{ matrix.postgres.major }}
+      ASH_ONETIME_RLS_PRUNE_TESTS: "1"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/postgres
+        with:
+          image: ${{ matrix.postgres.image }}
+          logical: true
+      - uses: ./.github/actions/postgres-client
+        with:
+          version: ${{ matrix.postgres.client }}
+          libpq-version: ${{ needs.toolchain.outputs.postgres_client }}
+          pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
+      - uses: ./.github/actions/beam
+        with:
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      - uses: ./.github/actions/mix-cache
+        with:
+          mode: restore
+          cell: release
+          elixir: ${{ needs.toolchain.outputs.elixir }}
+          otp: ${{ needs.toolchain.outputs.otp }}
+      - run: mix deps.get --check-locked
+      - run: mix compile --warnings-as-errors
+      - run: MIX_ENV='test' mix compile --warnings-as-errors
+      - run: mix test
+
+      - uses: ./.github/actions/postgres
+        if: always()
+        with:
+          mode: stop
+          logical: true
 
   compat:
     name: "Ash ${{ matrix.ash }}"
@@ -190,7 +240,7 @@ jobs:
   # failed job refuses; no job is allowed to be absent.
   qualified:
     if: always()
-    needs: [toolchain, compat, release-checks, mutations, compatibility, security]
+    needs: [toolchain, postgres-compatibility, compat, release-checks, mutations, compatibility, security]
     runs-on: ubuntu-24.04
     # Slowest green: 6 s, run 44145457629. Five minutes is the floor for any job.
     timeout-minutes: 5

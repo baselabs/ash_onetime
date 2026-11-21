@@ -2664,7 +2664,7 @@ defmodule AshOnetime.MutationCheck do
       mutated: "result := result;",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "restore_fixpoint",
-      test_name: "every package expression is a PostgreSQL 18 dump restore fixpoint, default",
+      test_name: "every package expression is a PostgreSQL dump restore fixpoint, default",
       assertion: "assert normalized_policies(c) == policies"
     },
     "maintenance-normalize-referenced" => %{
@@ -2673,7 +2673,7 @@ defmodule AshOnetime.MutationCheck do
       mutated: "WHERE false;",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "restore_fixpoint",
-      test_name: "every package expression is a PostgreSQL 18 dump restore fixpoint, default",
+      test_name: "every package expression is a PostgreSQL dump restore fixpoint, default",
       assertion: "assert normalized_policies(c) == policies"
     },
     "maintenance-normalize-attnum" => %{
@@ -2692,11 +2692,11 @@ defmodule AshOnetime.MutationCheck do
       mutated: "false",
       test: "test/ash_onetime/store/maintenance_test.exs",
       tag: "restore_fixpoint",
-      test_name: "every package expression is a PostgreSQL 18 dump restore fixpoint, default",
+      test_name: "every package expression is a PostgreSQL dump restore fixpoint, default",
       assertion: "assert relation_shapes(c) == shapes",
       required_failures:
         for variant <- [:default, :hash, :facts, :logical_partitions, :prefix] do
-          {"every package expression is a PostgreSQL 18 dump restore fixpoint, #{variant}",
+          {"every package expression is a PostgreSQL dump restore fixpoint, #{variant}",
            "assert relation_shapes(c) == shapes"}
         end,
       red_summary: "Result: 0/6 passed",

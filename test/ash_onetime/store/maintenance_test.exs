@@ -3767,7 +3767,7 @@ defmodule AshOnetime.Store.MaintenanceTest do
     @tag restore_fixpoint: true
     @tag hash_partitions: if(variant == :hash, do: 2, else: nil)
     @tag quoted_schema: variant == :prefix
-    test "every package expression is a PostgreSQL 18 dump restore fixpoint, #{@variant}", c do
+    test "every package expression is a PostgreSQL dump restore fixpoint, #{@variant}", c do
       if @variant == :facts do
         source = Generator.render_fact_tables(Repo, fact_tables: ["maintenance_facts"])
         module = Module.concat(__MODULE__, "Facts#{System.unique_integer([:positive])}")
@@ -4115,9 +4115,10 @@ defmodule AshOnetime.Store.MaintenanceTest do
   end
 
   defp postgres_tool!(tool) do
-    path = System.find_executable(tool) || "/usr/lib/postgresql/18/bin/#{tool}"
+    major = AshOnetime.Test.Postgres.contract().major
+    path = System.find_executable(tool) || "/usr/lib/postgresql/#{major}/bin/#{tool}"
     {version, 0} = System.cmd(path, ["--version"])
-    assert version =~ ~r/\(PostgreSQL\) 18\./
+    assert version =~ "(PostgreSQL) #{major}."
     IO.puts("PG_CLIENT #{String.trim(version)}")
     path
   end

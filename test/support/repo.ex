@@ -7,5 +7,7 @@ defmodule AshOnetime.Test.Repo do
   def installed_extensions, do: ["ash-functions"]
 
   @impl AshPostgres.Repo
-  def min_pg_version, do: %Version{major: 18, minor: 0, patch: 0}
+  def min_pg_version do
+    %Version{major: AshOnetime.Test.Postgres.contract().major, minor: 0, patch: 0}
+  end
 end

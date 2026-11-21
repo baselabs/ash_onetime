@@ -16,6 +16,9 @@ outputs:
   postgres_client:
     description: PGDG PostgreSQL client package version from .github/service-pins
     value: ${{ steps.service-pins.outputs.postgres_client }}
+  postgres_lanes:
+    description: Declared upstream PostgreSQL compatibility images and matching clients as JSON
+    value: ${{ steps.service-pins.outputs.postgres_lanes }}
   pgdg_key:
     description: PGDG apt signing key fingerprint from .github/service-pins
     value: ${{ steps.service-pins.outputs.pgdg_key }}
@@ -70,6 +73,7 @@ runs:
       shell: bash
       run: |
         python3 - <<'PYTHON'
+        import json
         import os
         import re
         from pathlib import Path
@@ -95,7 +99,25 @@ runs:
         major = re.fullmatch(r'ghcr\.io/baselabs/postgres:([0-9]+)\.[0-9]+-inputs-[0-9a-f]{64}@sha256:[0-9a-f]{64}', engine)
         if major is None or entries['postgres_client'].split('.')[0] != major[1]:
             raise SystemExit('The PGDG client major must match .github/postgres.ref')
+        lanes = json.loads(Path('.github/postgres-compat.json').read_text())
+        if not isinstance(lanes, list) or not lanes:
+            raise SystemExit('Declare the supported non-platform majors in .github/postgres-compat.json')
+        seen = {major[1]}
+        for lane in lanes:
+            if not isinstance(lane, dict) or set(lane) != {'major', 'image', 'client'}:
+                raise SystemExit('Each PostgreSQL lane must declare major, image and client exactly once')
+            if not all(isinstance(value, str) for value in lane.values()):
+                raise SystemExit('PostgreSQL lane pins must be strings')
+            if re.fullmatch(r'[1-9][0-9]*', lane['major']) is None or lane['major'] in seen:
+                raise SystemExit('PostgreSQL compatibility majors must be unique and exclude the platform major')
+            seen.add(lane['major'])
+            image = re.fullmatch(r'postgres:([0-9]+)\.[0-9]+@sha256:[0-9a-f]{64}', lane['image'])
+            if image is None or image[1] != lane['major']:
+                raise SystemExit('The upstream PostgreSQL image must pin its declared major, patch and digest')
+            if re.fullmatch(patterns['postgres_client'], lane['client']) is None or lane['client'].split('.')[0] != lane['major']:
+                raise SystemExit('Each PGDG client must pin its compatibility server major')
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             for name, value in entries.items():
                 output.write(f'{name}={value}\n')
+            output.write(f'postgres_lanes={json.dumps(lanes)}\n')
         PYTHON

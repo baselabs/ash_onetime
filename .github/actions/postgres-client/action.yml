@@ -7,6 +7,9 @@ inputs:
   pgdg-key:
     description: PGDG apt signing key fingerprint from .github/service-pins
     required: true
+  libpq-version:
+    description: Exact libpq5 package version; compatibility clients use the platform client pin
+    required: false
 runs:
   using: composite
   steps:
@@ -16,6 +19,7 @@ runs:
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
+        LIBPQ_VERSION: ${{ inputs.libpq-version }}
         PGDG_KEY: ${{ inputs.pgdg-key }}
       run: |
         major="${VERSION%%.*}"
@@ -31,7 +35,7 @@ runs:
         echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
           | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
         sudo apt-get update -q
-        sudo apt-get install -y -q --no-install-recommends "postgresql-client-$major=$VERSION" "libpq5=$VERSION"
+        sudo apt-get install -y -q --no-install-recommends "postgresql-client-$major=$VERSION" "libpq5=${LIBPQ_VERSION:-$VERSION}"
         bin="/usr/lib/postgresql/$major/bin"
         "$bin/pg_dump" --version
         echo "$bin" >> "$GITHUB_PATH"
