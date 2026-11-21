@@ -116,6 +116,26 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     pair = observe(context, row, Values.set()[:va])
     events = pair.run.run.events
 
+    checkpoint = {Scenarios, :allocation_checkpoint, 0}
+
+    checkpoint_events =
+      pair.twin
+      |> Origins.build()
+      |> Map.fetch!(:events)
+      |> Enum.filter(&(&1.mfa == checkpoint or checkpoint in &1.stack))
+
+    IO.inspect(
+      Enum.map(checkpoint_events, fn event ->
+        Map.take(event, [:index, :role, :mfa, :stack])
+        |> Map.put(:event, AshOnetime.Test.ExitBoundary.Diagnostics.safe(event.event))
+      end),
+      label: "U2_ALLOCATION_NATIVE_CHECKPOINT",
+      limit: :infinity
+    )
+
+    assert Enum.count(checkpoint_events, &match?({_, :call, _}, &1.event)) > 0,
+           "the declared caller allocation checkpoint must execute natively"
+
     assert Enum.any?(
              events,
              &match?(
@@ -187,6 +207,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            "OPEN claimed transport outside its native interval: #{inspect(outside)}"
 
     assert_green(pair)
+  end
+
+  @tag :allocation_checkpoint
+  test "allocation eligibility is fixed by the declared path and fault" do
+    for row <- Scenarios.rows() do
+      expected = row.branch in [:execute, :recovery_absent]
+      assert Registry.allocation_checkpoint?(row) == expected
+    end
+
+    assert Enum.count(Scenarios.rows(), &Registry.allocation_checkpoint?/1) == 15
   end
 
   @tag :u5

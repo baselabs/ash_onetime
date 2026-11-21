@@ -600,7 +600,8 @@ defmodule AshOnetime.Test.ExitBoundary.Returned do
   @moduledoc false
 
   # The twin: the same actions, table width, store options and callbacks as the withheld
-  # resource, with no executing-only values. Every boundary run is compared with it.
+  # resource, with no executing-only values. The comparator caller also performs
+  # the registry's declared allocation checkpoint after eligible ordinary Ash calls.
 
   use Ash.Resource,
     domain: AshOnetime.Test.ExitBoundary.Domain,

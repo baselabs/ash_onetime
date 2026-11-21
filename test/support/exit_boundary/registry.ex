@@ -461,6 +461,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {DBConnection, :log, :_},
         {DBConnection.Holder, :checkout, :_},
         {DBConnection.Holder, :checkin, :_},
+        {AshOnetime.Test.ExitBoundary.Scenarios, :allocation_checkpoint, 0},
         {Postgrex.Protocol, :handle_prepare, :_},
         {Postgrex.Protocol, :handle_execute, :_},
         {Splode, :filter_stacktrace, 2}
@@ -470,6 +471,10 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
   def operation(resource, action),
     do:
       compute(:o2a_operation, [%{domain: :operation, resource: inspect(resource), action: action}])
+
+  # Chosen before observation from the prescribed trace, never from an observed
+  # delivery result or OPEN. Recursive prior invocations use the same predicate.
+  def allocation_checkpoint?(row), do: :open in trace(row)
 
   def declarations(resource) do
     Map.new(readers(), fn {module, function, 1} = reader ->

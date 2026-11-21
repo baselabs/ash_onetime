@@ -20,7 +20,8 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
     ReturnedExternal,
     Withheld,
     Hooks,
-    References
+    References,
+    Registry
   }
 
   alias AshOnetime.Test.Repo
@@ -87,7 +88,8 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
 
   def observe(row, values, context) do
     # The same fixture installation is reset between sides. SQL identifiers therefore
-    # compare literally; tenant names never need a string substitution rule.
+    # compare literally; tenant names never need a string substitution rule. The
+    # twin is non-delivery Ash plus the registry's declared allocation checkpoint.
     {run, twin} =
       if Map.get(context, :run_first?, false) do
         run = side(row, values, Withheld, context)
@@ -135,6 +137,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
       hooks = Hooks.reference(resource, row.action, row.type)
       canonical = Hooks.reference(Returned, row.action, row.type)
       historical = AshOnetime.Test.ExitBoundary.Historical.capture(context.prefix)
+      allocation_checkpoint? = resource == Returned and Registry.allocation_checkpoint?(row)
 
       prepared =
         if row.branch in [:transaction, :direct] do
@@ -173,7 +176,8 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
           prefix: context.prefix,
           row: row,
           path: path,
-          record: record
+          record: record,
+          allocation_checkpoint?: allocation_checkpoint?
         }
 
         if prepared, do: Map.put(input, :built, prepared.result), else: input
@@ -243,6 +247,8 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
         built
       )
 
+    if input.allocation_checkpoint?, do: allocation_checkpoint()
+
     if Map.get(input.row, :release_hold?, false) do
       target = AshOnetime.Store.Postgres.for_repo(Repo, input.prefix)
 
@@ -267,6 +273,10 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
 
     result
   end
+
+  # The counterfactual's sole allocation effect. The callback is a literal,
+  # value-free operation; eligibility is decided before the caller is observed.
+  def allocation_checkpoint, do: Repo.checkout(fn -> :allocation_checkpoint end)
 
   defp subject(input) do
     built = Pair.subject(input.path, input.resource, input.prefix, input.record)
