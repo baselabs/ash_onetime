@@ -126,7 +126,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
       end
 
     prior = prior(row, values, resource, path, record, context)
-    if row.fault == :store_completion, do: move_payloads!(context.prefix, :away)
+    if row.fault == :store_completion, do: completion_fault!(context.prefix, :install)
 
     try do
       before = Persisted.snapshot(context.prefix, Repo.get_dynamic_repo())
@@ -217,7 +217,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
       }
       |> AshOnetime.Test.ExitBoundary.Readback.prepare()
     after
-      if row.fault == :store_completion, do: move_payloads!(context.prefix, :back)
+      if row.fault == :store_completion, do: completion_fault!(context.prefix, :remove)
     end
   end
 
@@ -394,15 +394,21 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
     end
   end
 
-  defp move_payloads!(prefix, direction) do
-    {from, to} =
-      if direction == :away,
-        do: {"ash_onetime_response_payloads", "ash_onetime_response_payloads_moved"},
-        else: {"ash_onetime_response_payloads_moved", "ash_onetime_response_payloads"}
+  # The joined caller read needs the payload relation before the peer runs.
+  # Keep that read available and make the completion's real INSERT fail.
+  defp completion_fault!(prefix, operation) do
+    alteration =
+      case operation do
+        :install ->
+          "ADD CONSTRAINT ash_onetime_boundary_completion_failure CHECK (false) NOT VALID"
+
+        :remove ->
+          "DROP CONSTRAINT ash_onetime_boundary_completion_failure"
+      end
 
     SQL.query!(
       Repo.get_dynamic_repo(),
-      ~s(ALTER TABLE "#{prefix}"."#{from}" RENAME TO "#{to}"),
+      ~s(ALTER TABLE "#{prefix}".ash_onetime_response_payloads #{alteration}),
       []
     )
   end
