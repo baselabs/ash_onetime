@@ -710,6 +710,32 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [{call, changed}, {receive_source, restored}]
   end
 
+  defp postgrex_edits(:receive_timeout_copy) do
+    call = """
+      defp rows_msg(s, rows, buffer) do
+        case msg_recv(s, :infinity, buffer) do
+    """
+
+    receive_source = """
+      defp msg_recv(s, timeout, buffer) do
+        case msg_decode(buffer) do
+    """
+
+    restored = """
+      defp msg_recv(s, copied_timeout, buffer) do
+        timeout =
+          case copied_timeout do
+            {:native_foreign_timeout, original} -> original
+            original -> original
+          end
+
+        case msg_decode(buffer) do
+    """
+
+    changed = String.replace(call, ":infinity", "{:native_foreign_timeout, :infinity}")
+    [{call, changed}, {receive_source, restored}]
+  end
+
   def with_mutant(rule, callback) do
     grouped = Enum.group_by(edits(rule), & &1.path)
     originals = Map.new(grouped, fn {path, _} -> {path, File.read!(path)} end)

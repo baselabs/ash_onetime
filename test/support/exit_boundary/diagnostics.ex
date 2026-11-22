@@ -116,6 +116,16 @@ defmodule AshOnetime.Test.ExitBoundary.Diagnostics do
   defp private?(%Postgrex.Error{}), do: true
   defp private?(%DBConnection.ConnectionError{}), do: true
 
+  # SSL worker records also appear without a Postgrex struct or SSL socket.
+  # These pinned native records carry traffic keys and connection state.
+  defp private?({:data, _environment, _states, _sent, _buffer}), do: true
+
+  defp private?(value)
+       when is_tuple(value) and tuple_size(value) == 13 and elem(value, 0) == :state,
+       do: true
+
+  defp private?({:sslsocket, _transport, _handles, _tracker}), do: true
+
   defp private?(value) when is_map(value) do
     Enum.any?(Map.to_list(value), fn {key, item} ->
       key in [:password, :url, :connection_key, :backend_key, :scram, :sock] or private?(item)

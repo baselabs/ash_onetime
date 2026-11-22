@@ -61,7 +61,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @helper_term_inputs %{
     {:rows_recv, 4} => [1, 2],
     {:rows_recv, 5} => [1, 2, 4],
-    {:msg_recv, 4} => [3]
+    {:msg_recv, 3} => [1],
+    {:msg_recv, 4} => [1, 3]
   }
 
   @tag :connection_streams
@@ -420,7 +421,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :connection_streams
   test "Connection streams: cached decoder descriptors retain their native owner origin" do
-    for shape <- [:rows, :none, :cross_connection, :large_rows, :notice, :parameter, :notification] do
+    for shape <- [
+          :rows,
+          :none,
+          :cross_connection,
+          :large_rows,
+          :notice,
+          :parameter,
+          :notification
+        ] do
       captured = cached_decoders(nil, shape)
       %{decoders: decoders, origin: origin, events: events, streams: streams} = captured
 
@@ -860,6 +869,39 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Enum.map(native_copy_states(captured).errors, & &1.rule) == [:state_helper_copy]
     assert native_copy_states(cached_decoders(nil)).errors == []
     IO.puts("CONNECTION_ROW_TYPE_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native receive helpers retain their caller timeout" do
+    captured =
+      ComparatorMutants.with_postgrex_mutant(:receive_timeout_copy, fn -> cached_decoders(nil) end)
+
+    [corrupted] =
+      Enum.filter(captured.events, fn
+        %{
+          event:
+            {_, :call,
+             {Postgrex.Protocol, :msg_recv, [_, {:native_foreign_timeout, :infinity}, _]}}
+        } ->
+          true
+
+        _ ->
+          false
+      end)
+
+    states = native_copy_states(captured)
+    assert Enum.map(states.errors, & &1.rule) == [:state_helper_copy]
+    assert hd(states.errors).index == corrupted.index
+
+    for mutant <- [:stream_buffer_copy, :stream_state_copy, :stream_helper_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+      expected = if mutant == :stream_helper_copy, do: [], else: [:state_helper_copy]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    assert Enum.map(native_copy_states(captured).errors, & &1.rule) == [:state_helper_copy]
+    assert native_copy_states(cached_decoders(nil)).errors == []
+    IO.puts("CONNECTION_HELPER_TIMEOUT_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
   defp native_copy_states(captured) do

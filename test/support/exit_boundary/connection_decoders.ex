@@ -471,8 +471,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp row_context(messages, offset) do
+    # Unsolicited messages have no command context. They remain in the stream;
+    # the next associated backend message supplies this execution's descriptor.
     %{context: context} =
-      Enum.find(messages, &(&1.direction == :backend and &1.start >= offset))
+      Enum.find(messages, fn message ->
+        message.direction == :backend and message.start >= offset and message.context != nil
+      end)
 
     context
   end
