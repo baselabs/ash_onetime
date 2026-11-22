@@ -76,7 +76,7 @@ CI runs these checks:
 ```sh
 mix format --check-formatted
 mix compile --warnings-as-errors
-mix test
+mix test --exclude exit_boundary
 mix credo --strict
 mix dialyzer
 MIX_ENV=test mix dialyzer
