@@ -43,9 +43,24 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
     end
   end
 
+  # Native owner mutants are loaded only in memory. Their factory identities
+  # must come from those exact object bytes, including their own FunT indices.
+  def with_object(module, binary, callback) do
+    key = {__MODULE__, :object, module}
+    previous = Process.get(key)
+    Process.put(key, binary)
+
+    try do
+      callback.()
+    after
+      if is_nil(previous), do: Process.delete(key), else: Process.put(key, previous)
+    end
+  end
+
   def identity(module, name, arity) do
     References.memo({:compiled_fun, module, module.module_info(:md5), name, arity}, fn ->
-      {:ok, {^module, chunks}} = :beam_lib.chunks(:code.which(module), [:atoms, ~c"FunT"])
+      object = Process.get({__MODULE__, :object, module}, :code.which(module))
+      {:ok, {^module, chunks}} = :beam_lib.chunks(object, [:atoms, ~c"FunT"])
       atoms = Map.new(chunks[:atoms])
       <<_count::32, entries::binary>> = elem(List.keyfind(chunks, ~c"FunT", 0), 1)
 

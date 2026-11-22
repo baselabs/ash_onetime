@@ -276,6 +276,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       machine_callbacks: %{},
       machine_zero: %{},
       machine_programs: %{},
+      direct_replies: %{},
       machine_received: %{},
       messages: %{},
       encoded: %{},
@@ -375,20 +376,64 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp machine_program(state, source, :reply, [from, reply]) do
-    case Map.get(state.machine_programs, source.pid) do
-      %{reply: {expected_from, expected_reply}} = context ->
-        state
-        |> program_term(source, [2, 2, 0], expected_from, context.origin)
-        |> program_term(source, [2, 2, 1], expected_reply, context.origin)
+  defp machine_program(state, source, :reply, _arguments) do
+    action? = Enum.any?(source.stack, fn
+      {:gen_statem, function, _} -> function in [:loop_actions_reply, :do_reply_then_terminate]
+      _ -> false
+    end)
 
-      _ ->
-        _ = {from, reply}
-        tls_failure(state, source, :tls_machine_program_reply_origin)
+    expected =
+      if action? do
+        case state.machine_programs[source.pid] do
+          %{reply: {from, reply}, origin: origin} -> {:ok, from, reply, origin}
+          _ -> :error
+        end
+      else
+        direct_reply(state, source)
+      end
+
+    case expected do
+      {:ok, from, reply, origin} ->
+        state
+        |> program_term(source, [2, 2, 0], from, origin)
+        |> program_term(source, [2, 2, 1], reply, origin)
+        |> Map.update!(:direct_replies, &Map.delete(&1, source.pid))
+      :error -> tls_failure(state, source, :tls_machine_program_reply_origin)
     end
   end
 
   defp machine_program(state, _source, _function, _arguments), do: state
+
+  defp direct_reply(state, source) do
+    case state.direct_replies[source.pid] do
+      %{from: from, reply: reply, origin: origin, last: last} when source.index < last ->
+        {:ok, from, reply, origin}
+      _ -> receiver_reply(state, source)
+    end
+  end
+
+  defp receiver_reply(state, source) do
+    with [%{source: %{mfa: {:ssl_gen_statem, :read_application_data, 2}}, input: version} | _] <-
+           Map.get(state.frames, source.pid, []),
+         %{fragments: fragments, remaining: []} <- state.parsed[source.pid],
+         {:socket_options, :binary, packet, _max_packet, 0, false} <- elem(version.data, 5),
+         true <- packet in [0, :raw],
+         recv <- elem(version.data, 9),
+         from <- elem(recv, 1),
+         required <- elem(recv, 2),
+         true <- from != :undefined and is_integer(required) and required >= 0 do
+      {front, _size, rear} = elem(version.data, 12)
+      {bytes, front, rear} = queued_binary(front, [IO.iodata_to_binary(fragments) | rear])
+      count = if required == 0, do: byte_size(bytes), else: required
+      available = IO.iodata_to_binary([bytes, front, Enum.reverse(rear)])
+
+      if count <= byte_size(available),
+        do: {:ok, from, {:ok, binary_part(available, 0, count)}, version.origin},
+        else: :error
+    else
+      _ -> :error
+    end
+  end
 
   defp program_before(state, source, :loop_event, _context) do
     queue = state.machine_queues[source.pid]
@@ -1830,7 +1875,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             state = tls_exact(state, source, :tls_reply_copy, arguments, [from, reply])
             origin = {:tls_reply, message.origin, write.returned.index}
             copy = %{index: source.index, path: [2, 2], origin: origin}
-            Map.update!(state, :terms, &[copy | &1])
+            state
+            |> Map.update!(:terms, &[copy | &1])
+            |> put_in([:direct_replies, source.pid], %{
+              from: from, reply: reply, origin: origin,
+              last: state.pairs[source.index].returned.index
+            })
 
           _ ->
             tls_failure(state, source, :tls_reply_origin)

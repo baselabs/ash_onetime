@@ -348,6 +348,42 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
+  def observe_query_factory do
+    observer = self()
+    tag = make_ref()
+
+    run =
+      ExitBoundary.observe(
+        fn ->
+          protocol = connect(:named)
+          send(observer, {tag, %{self() => %{protocol: protocol}}})
+          protocol
+        end,
+        fn %{sock: {module, socket}} = protocol ->
+          query = %Postgrex.Query{
+            name: "native_query_factory",
+            statement: "SELECT $1::int4 AS connection_stream_probe",
+            cache: :statement
+          }
+
+          try do
+            {:ok, %Postgrex.Query{}, %Postgrex.Protocol{}} =
+              Postgrex.Protocol.handle_prepare(query, [], protocol)
+            :ok
+          after
+            :ok = module.close(socket)
+          end
+        end,
+        %{host: [], callbacks: []}
+      )
+
+    receive do
+      {^tag, historical} -> Map.put(run, :native_history, historical)
+    after
+      0 -> raise "native query factory history was not captured"
+    end
+  end
+
   def observe_transactions do
     observer = self()
     tag = make_ref()

@@ -291,6 +291,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     end
   end
 
+  defp query_event(
+         %{event: {_, :return_from, {Postgrex.Protocol, :handle_prepare, 3},
+             {:ok, %Postgrex.Query{}, _protocol}}} = source,
+         state
+       ) do
+    with %{source: call} <- returned_pair(state, source),
+         %{query: query, origin: origin} <-
+           earlier_query_factory(state, source, call.index) || cached_query_origin(state, call) do
+      put_in(state.query_outputs[source.index], %{query: query, origin: origin, pid: source.pid})
+    else
+      _ -> failure(state, source, :decoder_query_factory_origin, false)
+    end
+  end
+
   defp query_event(_source, state), do: state
 
   defp returned_pair(state, source) do
@@ -452,6 +466,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     end
   end
 
+  defp cached_query_origin(state, %{event: {_, :call, {_, :handle_prepare,
+         [%Postgrex.Query{cache: :statement} = query, _options, protocol]}}}) do
+    matches =
+      for {_ref, descriptor} <- state.descriptors,
+          descriptor.port == elem(protocol.sock, 1),
+          descriptor.query.name == query.name,
+          descriptor.query.statement === query.statement,
+          descriptor.query.types === protocol.types,
+          do: descriptor
+
+    case matches do
+      [descriptor] -> %{query: descriptor.query, origin: {:cached_query, descriptor.index, descriptor.path}}
+      _ -> nil
+    end
+  end
+
+  defp cached_query_origin(_state, _call), do: nil
+
   defp commit_cursor(source, state) do
     case Map.pop(state.pending_cursors, source.index) do
       {nil, _pending} ->
@@ -517,12 +549,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
          %{
            event:
              {_, :return_from, {Postgrex.Protocol, :handle_prepare, 3},
-              {:ok, %Postgrex.Query{} = query, %{sock: {:gen_tcp, port}}}}
+              {:ok, %Postgrex.Query{}, %{sock: {:gen_tcp, port}}}}
          } = e,
          state
        ) do
-    origin = %{query: query, port: port, index: e.index, path: [3, 1]}
-    put_in(state.descriptors[query.ref], origin)
+    case state.query_outputs[e.index] do
+      %{query: expected} ->
+        origin = %{query: expected, port: port, index: e.index, path: [3, 1]}
+        put_in(state.descriptors[expected.ref], origin)
+      nil -> failure(state, e, :decoder_query_factory_origin, false)
+    end
   end
 
   defp decoder_event(

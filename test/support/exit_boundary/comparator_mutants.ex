@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Comparator
+  alias AshOnetime.Test.ExitBoundary.Compiled
   alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.ConnectionNative
   alias AshOnetime.Test.ExitBoundary.ConnectionTls
@@ -845,7 +846,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       for %{event: {_, :call, {:gen_statem, function, arguments}}} = source <- events,
           positions = Map.get(targets, {function, length(arguments)}, []),
           position <- positions do
-        assert match?({:native_foreign_helper, _}, Enum.at(arguments, position))
+        wrapped? = match?({:native_foreign_helper, _}, Enum.at(arguments, position))
+        assert wrapped?, "native machine input must be wrapped: #{inspect(source.mfa)} argument #{position}"
         {source.index, [2, 2, position]}
       end
 
@@ -949,7 +951,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     try do
       if sticky?, do: true = :code.unstick_mod(module)
       {:module, ^module} = :code.load_binary(module, path, mutant)
-      callback.()
+      Compiled.with_object(module, mutant, callback)
     after
       try do
         true = :code.soft_purge(module)
@@ -1015,9 +1017,19 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   # A duplicated Elixir clause must not duplicate its inherited Erlang
   # underscore-match warnings. Rename only repeated named underscore variables
   # in the copy; preserve the original clause and exact warning equality.
-  defp hygienic_input_clause(clause) do
+  defp hygienic_input_clause({:clause, location, arguments, _guards, _body} = clause) do
     counts = input_variables(clause, %{})
-    rename_input_variables(clause, counts)
+    head = input_variables(arguments, %{})
+    renamed = Map.take(counts, Map.keys(head))
+    {:clause, _, arguments, guards, body} = rename_input_variables(clause, renamed)
+
+    uses =
+      for {name, count} <- renamed,
+          count > 1 and name != :_ and String.starts_with?(Atom.to_string(name), "_"),
+          do: {:match, location, {:var, location, :_},
+               {:var, location, String.to_atom("AshOnetimeInput" <> Atom.to_string(name))}}
+
+    {:clause, location, arguments, guards, uses ++ body}
   end
 
   defp input_variables({:var, _, name}, counts), do: Map.update(counts, name, 1, &(&1 + 1))
@@ -1031,7 +1043,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   defp input_variables(_form, counts), do: counts
 
   defp rename_input_variables({:var, location, name} = form, counts) do
-    if name != :_ and String.starts_with?(Atom.to_string(name), "_") and counts[name] > 1,
+    if name != :_ and String.starts_with?(Atom.to_string(name), "_") and Map.get(counts, name, 0) > 1,
       do: {:var, location, String.to_atom("AshOnetimeInput" <> Atom.to_string(name))},
       else: form
   end
@@ -1042,6 +1054,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   defp rename_input_variables(form, counts) when is_list(form),
     do: Enum.map(form, &rename_input_variables(&1, counts))
+
   defp rename_input_variables(form, _counts), do: form
 
   defp owner_input_calls(
@@ -1049,6 +1062,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
          sites,
          targets
        ) do
+    {arguments, sites} = owner_input_calls(arguments, sites, targets)
+    form = put_elem(form, 3, arguments)
+
     case Map.fetch(targets, {function, length(arguments)}) do
       {:ok, positions} ->
         {{:call, location, name, helper_arguments(arguments, positions, location)}, sites + 1}
@@ -1127,6 +1143,24 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     do: Enum.map_reduce(form, sites, &postgrex_output_calls(&1, &2, targets))
 
   defp postgrex_output_calls(form, sites, _targets), do: {form, sites}
+
+  defp helper_output_case(expression, location, %{kind: :element} = target, site, operation) do
+    fields =
+      for position <- 0..(target.size - 1),
+          do: {:var, location, String.to_atom("AshOnetimeElement#{site}_#{position}")}
+
+    value = Enum.fetch!(fields, target.position)
+    marker = {:tuple, location, [{:atom, location, :native_foreign_return}, value]}
+    input = if operation == :restore, do: List.replace_at(fields, target.position, marker), else: fields
+    output = if operation == :corrupt, do: List.replace_at(fields, target.position, marker), else: fields
+    other = {:var, location, String.to_atom("AshOnetimeElementOther#{site}")}
+
+    {:case, location, expression,
+     [
+       {:clause, location, [{:tuple, location, input}], [], [{:tuple, location, output}]},
+       {:clause, location, [other], [], [other]}
+     ]}
+  end
 
   defp helper_output_case(expression, location, %{kind: :factory}, site, :corrupt) do
     original = {:var, location, String.to_atom("AshOnetimeFactory#{site}")}
@@ -1525,6 +1559,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   # server traffic, descriptors and captures remain native. The source file and
   # disk BEAM never change; restore the loaded owner before returning the capture.
   def with_postgrex_mutant(rule, callback) do
+    {:module, Postgrex.Protocol} = :code.ensure_loaded(Postgrex.Protocol)
+    {Postgrex.Protocol, original, beam_path} = :code.get_object_code(Postgrex.Protocol)
     path = Path.join(Mix.Project.deps_path(), "postgrex/lib/postgrex/protocol.ex")
     source = File.read!(path)
 
@@ -1539,11 +1575,15 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     previous = Code.compiler_options(ignore_module_conflict: true)
 
     try do
-      Code.compile_string(mutant, path)
-      callback.()
+      modules = Code.compile_string(mutant, path)
+      {Postgrex.Protocol, binary} = List.keyfind(modules, Postgrex.Protocol, 0)
+      Compiled.with_object(Postgrex.Protocol, binary, callback)
     after
       try do
-        Code.compile_string(source, path)
+        true = :code.soft_purge(Postgrex.Protocol)
+        {:module, Postgrex.Protocol} = :code.load_binary(Postgrex.Protocol, beam_path, original)
+        true = :code.soft_purge(Postgrex.Protocol)
+        {Postgrex.Protocol, ^original, ^beam_path} = :code.get_object_code(Postgrex.Protocol)
 
         unless File.read!(path) === source,
           do: raise("native owner source changed during its in-memory mutation")
