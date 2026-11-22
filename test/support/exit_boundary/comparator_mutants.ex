@@ -486,6 +486,60 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   def compare(pair, rule), do: with_mutant(rule, fn -> Comparator.compare(pair) end)
 
+  # Change a real TLS sender's private state argument, restoring it inside the
+  # actual callee before encryption or transport. Loaded code alone changes;
+  # native workers, the socket, server and captured events remain untouched.
+  def with_tls_sender_mutant(callback) do
+    module = :tls_sender
+    {^module, original, path} = :code.get_object_code(module)
+    {:ok, {^module, [abstract_code: {:raw_abstract_v1, forms}]}} =
+      :beam_lib.chunks(original, [:abstract_code])
+
+    {forms, sites} = Enum.map_reduce(forms, 0, &tls_sender_form/2)
+    unless sites == 2, do: raise("TLS sender mutant requires its two pinned owner sites")
+    {:ok, ^module, mutant, []} = :compile.forms(forms, [:binary, :return, :debug_info])
+
+    try do
+      {:module, ^module} = :code.load_binary(module, path, mutant)
+      callback.()
+    after
+      true = :code.soft_purge(module)
+      {:module, ^module} = :code.load_binary(module, path, original)
+      true = :code.soft_purge(module)
+      {^module, ^original, ^path} = :code.get_object_code(module)
+    end
+  end
+
+  defp tls_sender_form({:function, annotation, :connection, 3, [first | rest]}, sites) do
+    {:clause, clause_annotation, args, guards,
+     [{:call, call_annotation, {:atom, atom_annotation, :send_application_data},
+       [data, from, {:atom, _, :connection} = name, {:var, _, :StateData} = state]}]} = first
+
+    changed = {:tuple, call_annotation, [{:atom, call_annotation, :native_foreign_tls_state}, state]}
+    call = {:call, call_annotation, {:atom, atom_annotation, :send_application_data},
+            [data, from, name, changed]}
+    clause = {:clause, clause_annotation, args, guards, [call]}
+    {{:function, annotation, :connection, 3, [clause | rest]}, sites + 1}
+  end
+
+  defp tls_sender_form({:function, annotation, :send_application_data, 4, [clause]}, sites) do
+    {:clause, clause_annotation, [data, from, name, pattern], guards, body} = clause
+    {:match, _, {:record, _, :data, _}, {:var, _, :StateData0}} = pattern
+    input = {:var, clause_annotation, :NativeTlsState}
+    restored = {:var, clause_annotation, :NativeTlsRestored}
+    tagged = {:tuple, clause_annotation,
+              [{:atom, clause_annotation, :native_foreign_tls_state}, restored]}
+    cases = [
+      {:clause, clause_annotation, [tagged], [], [restored]},
+      {:clause, clause_annotation, [restored], [], [restored]}
+    ]
+    restore = {:match, clause_annotation, pattern, {:case, clause_annotation, input, cases}}
+    changed = {:clause, clause_annotation, [data, from, name, input], guards, [restore | body]}
+    {{:function, annotation, :send_application_data, 4, [changed]}, sites + 1}
+  end
+
+  defp tls_sender_form(form, sites), do: {form, sites}
+
   # Run the actual Postgrex owner with one private copy changed. Socket calls,
   # server traffic, descriptors and captures remain native. The source file and
   # disk BEAM never change; restore the loaded owner before returning the capture.

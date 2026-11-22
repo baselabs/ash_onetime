@@ -3253,6 +3253,35 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: native TLS sender state copies need an owning guard" do
+    run = ComparatorMutants.with_tls_sender_mutant(&ConnectionNative.observe_tls/0)
+    assert run.result == []
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    [corrupted] =
+      Enum.filter(events, fn
+        %{event: {_, :call, {:tls_sender, :send_application_data,
+          [_data, _from, :connection, {:native_foreign_tls_state, _state}]}}} -> true
+        _ -> false
+      end)
+
+    assert corrupted.pid == run.tls_binding.sender
+
+    IO.puts(
+      "NATIVE_OWNER_TLS_STATE_COPY: " <>
+        Diagnostics.render(%{index: corrupted.index, mfa: corrupted.mfa})
+    )
+
+    native = ConnectionTls.build(%{events: events}, run.tls_binding)
+    assert Enum.map(native.errors, & &1.rule) == [:tls_state_copy]
+    assert hd(native.errors).index == corrupted.index
+  end
+
+  @tag :connection_streams
   test "Connection streams: TLS plaintext has a native physical port binding" do
     observations =
       Map.new([nil, :binding, :workers, :byte], fn corruption ->
