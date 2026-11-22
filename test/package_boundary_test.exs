@@ -10,8 +10,10 @@ defmodule AshOnetime.PackageBoundaryTest do
   # callbacks (KeyCustody and verifier workers) and the maintenance installs.
   @package_application "lib/ash_onetime/application.ex"
 
+  Code.require_file("../scripts/package_entries.exs", __DIR__)
   Code.require_file("../scripts/reference_projects.exs", __DIR__)
 
+  alias AshOnetime.PackageEntries
   alias AshOnetime.ReferenceProjects
 
   test "the live package contains no forbidden boundary violations" do
@@ -35,6 +37,21 @@ defmodule AshOnetime.PackageBoundaryTest do
              violations([{"lib/example.ex", "# depends on #{String.upcase(control)}"}], [])
 
     assert violations([{"lib/example.ex", "# #{control}_suffix is another token"}], []) == []
+  end
+
+  test "package entries in hidden directories or dev and test trees are refused" do
+    assert PackageEntries.refusal("lib/.state/x") ==
+             "forbidden hidden entry in package: lib/.state/x"
+
+    assert PackageEntries.refusal(".formatter.exs") ==
+             "forbidden hidden entry in package: .formatter.exs"
+
+    assert PackageEntries.refusal("test/support/example.ex") ==
+             "forbidden dev/test entry in package: test/support/example.ex"
+
+    assert PackageEntries.refusal("lib/ash_onetime.ex") == nil
+    assert PackageEntries.refusal("lib/v1.2/example.ex") == nil
+    assert PackageEntries.refusal("documentation/dsls/DSL-AshOnetime.Resource.md") == nil
   end
 
   test "runtime application callbacks outside the package application are rejected" do
