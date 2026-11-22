@@ -45,11 +45,11 @@ runs:
         PYTHON
     - name: Validate the shared toolchain reader
       shell: bash
-      run: sh scripts/toolchain.sh --self-test
+      run: scripts/toolchain.sh --self-test
     - name: Read defaults and compatibility lanes
       id: versions
       shell: bash
-      run: sh scripts/toolchain.sh >> "$GITHUB_OUTPUT"
+      run: scripts/toolchain.sh >> "$GITHUB_OUTPUT"
     - name: Read the declared Ash security floor
       id: ash-floor
       shell: bash
