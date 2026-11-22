@@ -108,6 +108,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     {:done, 5} => [1, 2, 3, 4]
   }
 
+  @type_helper_inputs %{
+    {Postgrex.Types, :owner, 1} => [0],
+    {Postgrex.Types, :fetch, 2} => [0, 1],
+    {Postgrex.Types, :build_type_info, 1} => [0],
+    {Postgrex.TypeServer, :fetch, 1} => [0],
+    {Postgrex.TypeServer, :update, 3} => [0, 1, 2]
+  }
+
   @tag :connection_streams
   test "Connection streams: native messages survive every header split", context do
     pair = observe(context, row!(:issue, :execute), Values.set()[:va])
@@ -678,6 +686,34 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp native_helper_buffer(_source), do: []
 
   defp native_helper_terms(events), do: Enum.flat_map(events, &native_helper_term/1)
+
+  defp native_helper_term(
+         %{index: index, event: {_, :call, {module, function, arguments}}} = source
+       )
+       when module in [Postgrex.Types, Postgrex.TypeServer] do
+    for position <- Map.get(@type_helper_inputs, {module, function, length(arguments)}, []),
+        do: %{index: index, mfa: source.mfa, path: [2, 2, position]}
+  end
+
+  defp native_helper_term(
+         %{index: index, event: {_, :return_from, {module, function, _arity}, result}} = source
+       )
+       when module in [Postgrex.Types, Postgrex.TypeServer] do
+    paths =
+      case {module, function, result} do
+        {Postgrex.Types, :owner, {:ok, _owner}} -> [[3, 0], [3, 1]]
+        {Postgrex.Types, :owner, :error} -> [[3]]
+        {Postgrex.Types, :fetch, {:ok, _info}} -> [[3, 0], [3, 1]]
+        {Postgrex.Types, :fetch, {:error, _info, _module}} -> [[3, 0], [3, 1], [3, 2]]
+        {Postgrex.Types, :build_type_info, _info} -> [[3]]
+        {Postgrex.TypeServer, :fetch, {:lock, _reference, _types}} -> [[3, 0], [3, 1], [3, 2]]
+        {Postgrex.TypeServer, :fetch, status} when status in [:error, :noproc] -> [[3]]
+        {Postgrex.TypeServer, :update, _status} -> [[3]]
+        _ -> []
+      end
+
+    for path <- paths, do: %{index: index, mfa: source.mfa, path: path}
+  end
 
   defp native_helper_term(
          %{index: index, event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source
@@ -1642,9 +1678,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
-  test "Connection streams: native type lock request retains the catalog owner" do
+  test "Connection streams: native type lock and update retain owner, lock and catalog origins" do
     assert_native_helper_inputs(
-      %{{:fetch, 1} => [0]},
+      %{{:fetch, 1} => [0], {:update, 3} => [0, 1, 2]},
       fn -> native_query_factory(:domain_reload) end,
       Postgrex.TypeServer
     )

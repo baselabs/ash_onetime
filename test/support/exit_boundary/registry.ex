@@ -555,6 +555,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {Postgrex.Types, :owner, 1},
         {Postgrex.Types, :build_type_info, 1},
         {Postgrex.TypeServer, :fetch, 1},
+        {Postgrex.TypeServer, :update, 3},
         {Postgrex.Parameters, :fetch, 1},
         {:tls_sender, :connection, 3},
         {:tls_sender, :send_application_data, 4},
