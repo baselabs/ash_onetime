@@ -5,7 +5,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   # Validate the concrete inet driver program of each read independently. This
   # ledger does not grant any event exemption: the stream consumer must also prove
   # that framing and the protocol state machine required that particular read.
-  def build(indexed, historical \\ %{}) do
+  def build(indexed, historical \\ %{}, transports \\ []) do
     pairs = pairs(indexed.events)
 
     initial = %{
@@ -15,7 +15,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       writes: [],
       options: [],
       active: [],
-      active_modes: historical_modes(historical),
+      active_modes: Map.merge(historical_modes(historical), transport_modes(transports)),
       active_receives: %{},
       errors: []
     }
@@ -31,7 +31,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
           write(source, port, data, state)
 
         %{event: {_, :call, {:prim_inet, :setopts, [port, [active: mode]]}}} = source, state
-        when is_port(port) and mode in [:once, false] ->
+        when is_port(port) and (mode in [:once, false] or is_integer(mode)) ->
           option(source, port, mode, state)
 
         _, state ->
@@ -56,6 +56,13 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     for {holder, %{protocol: %{sock: {:gen_tcp, port}, buffer: :active_once}}} <- historical,
         into: %{},
         do: {port, %{mode: :once, origin: {:historical_active_mode, holder}}}
+  end
+
+  defp transport_modes(transports) do
+    for %{port: port, active: mode} <- transports,
+        is_port(port) and (mode in [:once, true, false] or (is_integer(mode) and mode > 0)),
+        into: %{},
+        do: {port, %{mode: mode, origin: {:historical_transport_option, port}}}
   end
 
   defp option_sources(state) do
@@ -92,12 +99,27 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     |> Enum.reduce(state, &active_event/2)
   end
 
-  defp active_event({_index, :mode, option}, state),
-    do: put_in(state.active_modes[option.port], option)
+  defp active_event({_index, :mode, option}, state) do
+    current = Map.get(state.active_modes, option.port, %{mode: false}).mode
+
+    mode =
+      if is_integer(option.mode) do
+        previous = if is_integer(current), do: current, else: 0
+        count = previous + option.mode
+        if count > 0, do: count, else: false
+      else
+        option.mode
+      end
+
+    put_in(state.active_modes[option.port], %{option | mode: mode})
+  end
 
   defp active_event({_index, :data, source}, state) do
     case Map.fetch(state.active_modes, source.pid) do
-      {:ok, %{mode: :once} = option} -> active_delivery(source, option, state)
+      {:ok, %{mode: mode} = option}
+      when mode in [:once, true] or (is_integer(mode) and mode > 0) ->
+        active_delivery(source, option, state)
+
       _ -> failure(state, source, :native_active_mode)
     end
   end
@@ -132,7 +154,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       }
 
       state
-      |> put_in([:active_modes, port], %{option | mode: false})
+      |> put_in([:active_modes, port], %{option | mode: after_delivery(option.mode)})
       |> put_in([:active_receives, index], true)
       |> Map.update!(:active, &[delivery | &1])
     else
@@ -140,11 +162,16 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     end
   end
 
+  defp after_delivery(:once), do: false
+  defp after_delivery(true), do: true
+  defp after_delivery(1), do: false
+  defp after_delivery(count) when is_integer(count) and count > 1, do: count - 1
+
   # The once fast path and the passive enum path have different native programs.
   # Build each from the option supplied to this instance, including every helper
   # argument and return. No helper's result is inferred from a different call.
   defp option(source, port, mode, state) do
-    encoded = if mode == :once, do: [<<22, 2::32>>], else: [22, [0, 0, 0, 0]]
+    encoded = option_bytes(mode)
     args = [port, @control_magic + 7, encoded]
 
     with {:ok, outer} <- Map.fetch(state.pairs, source.index),
@@ -166,7 +193,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
         requested: signals.requested,
         replied: signals.replied,
         indexes: indexes ++ signals.indexes ++ deferred,
-        copies: [copy(signals.requested, [2, 1, 1, 1], 0, 5)],
+        copies: [copy(signals.requested, [2, 1, 1, 1], 0, IO.iodata_length(encoded))],
         bytes: IO.iodata_to_binary(encoded)
       }
 
@@ -176,6 +203,10 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       _ -> failure(state, source, :native_option_program)
     end
   end
+
+  defp option_bytes(:once), do: [<<22, 2::32>>]
+  defp option_bytes(false), do: [22, [0, 0, 0, 0]]
+  defp option_bytes(count), do: [<<22, 3::32, count::signed-16>>]
 
   defp option_events(calls, expected) when calls === expected, do: :ok
 
@@ -231,10 +262,10 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     program(:prim_inet, :setopts, [port, [active: mode]], :ok, encoder ++ control)
   end
 
-  defp option_encoder(:once, encoded) do
+  defp option_encoder(mode, encoded) when mode == :once or is_integer(mode) do
     tail = program(:prim_inet, :enc_opt_val, [[], encoded], encoded)
-    body = program(:prim_inet, :enc_opt_val, [[active: :once], []], encoded, tail)
-    program(:prim_inet, :encode_opt_val, [[active: :once]], {:ok, encoded}, body)
+    body = program(:prim_inet, :enc_opt_val, [[active: mode], []], encoded, tail)
+    program(:prim_inet, :encode_opt_val, [[active: mode]], {:ok, encoded}, body)
   end
 
   defp option_encoder(false, encoded) do

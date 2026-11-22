@@ -112,6 +112,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           protocol = connect_tls()
           {:ssl, socket} = protocol.sock
           binding = ConnectionTls.bind(socket)
+          if corruption == :fragmented, do: :ok = :inet.setopts(binding.port, buffer: 1024)
           other = if corruption in [:binding, :workers], do: connect_tls()
           other_binding = if other, do: ConnectionTls.bind(elem(other.sock, 1))
           families = if other_binding, do: [binding, other_binding], else: [binding]
@@ -137,7 +138,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         fn {protocol, binding, other, _family} ->
           try do
             errors = ConnectionTls.validate(binding)
-            execute(protocol, :single, if(corruption == :byte, do: :byte))
+            execute_tls(protocol, corruption)
             errors
           after
             if other, do: :ok = :ssl.close(elem(other.sock, 1))
@@ -159,6 +160,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       0 -> raise "native TLS binding was not captured"
     end
   end
+
+  defp execute_tls(%{sock: {module, socket}}, :fragmented) do
+    sql = "SELECT 17::int4 AS connection_stream_probe, repeat('x', 1048576)::text AS filler"
+
+    :ok = module.send(socket, query_sql(sql))
+    drain(module, socket, 1, <<>>, true, nil)
+  after
+    :ok = module.close(socket)
+  end
+
+  defp execute_tls(protocol, corruption),
+    do: execute(protocol, :single, if(corruption == :byte, do: :byte))
 
   defp connect_tls do
     options =

@@ -496,6 +496,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
+  defp helper_input(state, source, :done, [_protocol, _query, rows | _], version),
+    do: helper_rows(state, source, [2, 2, 2], rows, version.protocol)
+
   defp helper_input(state, _source, _function, _arguments, _version), do: state
 
   defp helper_timeout(state, source, actual) do

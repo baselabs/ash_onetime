@@ -16,6 +16,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           do: port
 
     {:connected, owner} = Port.info(port, :connected)
+    {:ok, [active: active]} = :inet.getopts(port, [:active])
     {:links, links} = Process.info(owner, :links)
     linked = process_origins(links)
 
@@ -34,6 +35,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       peer: peer,
       supervisor: supervisor,
       sender: sender,
+      transport: %{port: port, active: active},
       states: %{owner => :sys.get_state(owner), sender => :sys.get_state(sender)},
       processes: process_origins([owner, sender, supervisor])
     }

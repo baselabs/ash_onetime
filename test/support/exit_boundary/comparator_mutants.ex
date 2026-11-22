@@ -506,6 +506,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_active_mode) do
+    [
+      %{
+        path: "test/support/exit_boundary/native_transport.ex",
+        original: "      _ -> failure(state, source, :native_active_mode)\n",
+        mutated:
+          "      _ -> active_delivery(source, %{mode: true, origin: :unchecked_active_mode}, state)\n"
+      }
+    ]
+  end
+
   def edits(:stream_tls_record_copy) do
     [
       %{
@@ -716,6 +727,31 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     changed = String.replace(original, "msgs, buffer)", "msgs, buffer <> <<0>>)")
     [{original, changed}]
+  end
+
+  defp postgrex_edits(:send_message_copy) do
+    original = """
+        with :ok <- msg_send(%{s | buffer: nil}, msgs, buffer) |> handle_disconnect_retry(),
+             {:ok, s, buffer} <- recv_bind(s, status, buffer) |> handle_disconnect_retry(),
+             {:ok, result, s, buffer} <- recv_execute(s, status, query, buffer),
+             {:ok, s} <- recv_ready(s, status, buffer) do
+    """
+
+    changed =
+      String.replace(original, "msgs, buffer)", "[{:native_foreign_messages, msgs}], buffer)")
+
+    head = "  defp msg_send(s, msgs, buffer) when is_list(msgs) do\n"
+
+    restored = """
+      defp msg_send(s, copied_messages, buffer) when is_list(copied_messages) do
+        msgs =
+          case copied_messages do
+            [{:native_foreign_messages, original}] -> original
+            original -> original
+          end
+    """
+
+    [{original, changed}, {head, restored}]
   end
 
   defp postgrex_edits(:row_type_copy) do

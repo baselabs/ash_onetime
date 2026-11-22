@@ -62,7 +62,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     {:rows_recv, 4} => [1, 2],
     {:rows_recv, 5} => [1, 2, 4],
     {:msg_recv, 3} => [1],
-    {:msg_recv, 4} => [1, 3]
+    {:msg_recv, 4} => [1, 3],
+    {:done, 4} => [2],
+    {:done, 5} => [2]
   }
 
   @tag :connection_streams
@@ -948,8 +950,42 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       Enum.filter(captured.events, fn
         %{
           event:
-            {_, :call,
-             {Postgrex.Protocol, :done, [_, _, {:native_foreign_done_rows, _}, _, _]}}
+            {_, :call, {Postgrex.Protocol, :done, [_, _, {:native_foreign_done_rows, _}, _, _]}}
+        } ->
+          true
+
+        _ ->
+          false
+      end)
+
+    states = native_copy_states(captured)
+    assert Enum.map(states.errors, & &1.rule) == [:state_helper_copy]
+    assert hd(states.errors).index == corrupted.index
+
+    for mutant <- [:stream_buffer_copy, :stream_state_copy, :stream_helper_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+      expected = if mutant == :stream_helper_copy, do: [], else: [:state_helper_copy]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    assert Enum.map(native_copy_states(captured).errors, & &1.rule) == [:state_helper_copy]
+    assert native_copy_states(cached_decoders(nil)).errors == []
+    IO.puts("CONNECTION_DONE_ROWS_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  @tag :connection_streams
+  test "Connection streams: encoded send messages retain their earlier caller origin" do
+    captured =
+      ComparatorMutants.with_postgrex_mutant(:send_message_copy, fn -> cached_decoders(nil) end)
+
+    assert captured.native.errors == []
+    assert captured.decoders.errors == []
+
+    [corrupted] =
+      Enum.filter(captured.events, fn
+        %{
+          event:
+            {_, :call, {Postgrex.Protocol, :msg_send, [_, [{:native_foreign_messages, _}], _]}}
         } ->
           true
 
@@ -3554,10 +3590,50 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     # This is the encrypted transport ledger only. These bytes never enter the
     # PostgreSQL framing or association machine at the plaintext SSL boundary.
-    transport = NativeTransport.build(%{events: events})
+    transport = NativeTransport.build(%{events: events}, %{}, [run.tls_binding.transport])
     assert transport.errors == []
     assert transport.writes != []
     assert transport.active != []
+
+    missing = NativeTransport.build(%{events: events})
+    assert missing.errors != []
+    assert Enum.all?(missing.errors, &(&1.actual == :native_active_mode))
+
+    bypassed =
+      ComparatorMutants.with_mutant(:stream_active_mode, fn ->
+        NativeTransport.build(%{events: events})
+      end)
+
+    assert bypassed.errors == []
+    assert NativeTransport.build(%{events: events}).errors != []
+    assert NativeTransport.build(%{events: events}, %{}, [run.tls_binding.transport]).errors == []
+  end
+
+  @tag :connection_streams
+  test "Connection streams: fragmented TLS binds active counts and worker transitions" do
+    run = ConnectionNative.observe_tls(:fragmented)
+    assert run.result == []
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    transport = NativeTransport.build(%{events: events}, %{}, [run.tls_binding.transport])
+    assert transport.errors == []
+
+    assert Enum.any?(transport.options, fn option ->
+             is_integer(option.mode) and option.mode > 0
+           end),
+           "real fragmented TLS must replenish its native active count"
+
+    tls = ConnectionTls.build(%{events: events}, run.tls_binding)
+
+    for error <- tls.errors do
+      IO.puts("CONNECTION_TLS_FRAGMENTED: " <> Diagnostics.render(error))
+    end
+
+    assert tls.errors == []
   end
 
   @tag :connection_streams
