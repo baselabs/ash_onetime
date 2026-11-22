@@ -948,7 +948,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp tls_exact(state, _source, _rule, actual, expected) when actual === expected, do: state
-  defp tls_exact(state, source, rule, _actual, _expected), do: tls_failure(state, source, rule)
+
+  defp tls_exact(state, source, rule, actual, expected) do
+    state = tls_failure(state, source, rule)
+    [error | errors] = state.errors
+    differences = tls_difference_paths(actual, expected)
+    %{state | errors: [Map.put(error, :differences, differences) | errors]}
+  end
+
+  defp tls_difference_paths(actual, expected)
+       when is_tuple(actual) and is_tuple(expected) and tuple_size(actual) == tuple_size(expected) do
+    for position <- 0..(tuple_size(expected) - 1),
+        elem(actual, position) !== elem(expected, position),
+        do: %{path: [position]}
+  end
+
+  defp tls_difference_paths(_actual, _expected), do: []
 
   defp tls_failure(state, source, rule) do
     error = %{

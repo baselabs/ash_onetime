@@ -3654,8 +3654,31 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
-  test "Connection streams: TLS reply forwarding binds its recipient and result" do
-    for corruption <- [:reply_copy, :reply_value] do
+  test "Connection streams: TLS machine roots retain queue and timer metadata" do
+    run = ConnectionNative.observe_tls()
+    assert run.result == []
+    machines = Map.get(run.tls_binding, :machines)
+    assert is_map(machines), "TLS_MACHINE_HISTORY_ORIGIN_WITNESS"
+    assert Enum.sort(Map.keys(machines)) == Enum.sort(Map.keys(run.tls_binding.states))
+
+    for {pid, %{params: params, state: state}} <- machines do
+      assert tuple_size(params) == 7
+      assert elem(params, 0) == :params
+      assert tuple_size(state) == 6
+      assert elem(state, 0) == :state
+      assert elem(state, 1) === Map.fetch!(run.tls_binding.states, pid)
+      assert is_list(elem(state, 2))
+      assert is_map(elem(state, 3))
+      assert is_list(elem(state, 4))
+      assert is_boolean(elem(state, 5))
+    end
+  end
+
+  for corruption <- [:reply_copy, :reply_value] do
+    @tag :connection_streams
+    test "Connection streams: TLS reply forwarding binds #{corruption}" do
+      corruption = unquote(corruption)
+
       run =
         ComparatorMutants.with_tls_sender_mutant(corruption, &ConnectionNative.observe_tls/0)
 

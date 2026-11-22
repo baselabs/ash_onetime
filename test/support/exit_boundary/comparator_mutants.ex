@@ -576,12 +576,14 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       :beam_lib.chunks(original, [:abstract_code])
 
     {forms, sites} = Enum.map_reduce(forms, 0, &tls_sender_form(&1, &2, rule))
+
     required =
       case rule do
         :helper_state -> 2
         rule when rule in [:reply_copy, :reply_value] -> 7
         _ -> 3
       end
+
     unless sites == required, do: raise("TLS sender mutant requires every pinned owner site")
     {:ok, ^module, mutant, []} = :compile.forms(forms, [:binary, :return, :debug_info])
 
@@ -656,11 +658,24 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
          rule
        )
        when rule in [:reply_copy, :reply_value] do
-    arguments = [{:var, annotation, :NativeFrom}, {:var, annotation, :NativeReply}]
-    tagged = tls_forward_argument(arguments, annotation, rule)
-    call = {:call, annotation, {:atom, annotation, :send_reply}, arguments}
-    clause = {:clause, annotation, tagged, [], [call]}
-    {{:function, annotation, :send_reply, 2, [clause | clauses]}, sites + 1}
+    {prefix, [clause]} = Enum.split(clauses, -1)
+    {:clause, location, arguments, guards, body} = clause
+    position = if rule == :reply_copy, do: 0, else: 1
+    input = {:var, location, :NativeTlsReplyInput}
+    restored = {:var, location, :NativeTlsReplyRestored}
+    tagged = {:tuple, location, [{:atom, location, :native_foreign_tls_reply}, restored]}
+
+    cases = [
+      {:clause, location, [tagged], [], [restored]},
+      {:clause, location, [restored], [], [restored]}
+    ]
+
+    restore =
+      {:match, location, Enum.at(arguments, position), {:case, location, input, cases}}
+
+    arguments = List.replace_at(arguments, position, input)
+    changed = {:clause, location, arguments, guards, [restore | body]}
+    {{:function, annotation, :send_reply, 2, prefix ++ [changed]}, sites + 1}
   end
 
   defp tls_sender_form(
