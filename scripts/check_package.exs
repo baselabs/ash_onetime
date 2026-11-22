@@ -19,7 +19,7 @@ defmodule AshOnetime.PackageCheck do
     "documentation/security.md",
     "documentation/dsls/DSL-AshOnetime.Resource.md"
   ]
-  @forbidden_prefixes [".forge/", ".git/", "_build/", "config/", "deps/", "scripts/", "test/"]
+  @forbidden_prefixes ["_build/", "config/", "deps/", "scripts/", "test/"]
   @secret_literal ~r/\b(?:api[_-]?key|password|private[_-]?key|secret)\s*[:=]\s*["'][^"']+["']/i
   @provider_crypto ~r/defmodule\s+\S*(?:Stripe|GitHub|Slack|Twilio)\S*(?:Signature|Verifier)/i
 
@@ -103,6 +103,10 @@ defmodule AshOnetime.PackageCheck do
     for entry <- entries do
       if Enum.any?(@forbidden_prefixes, &String.starts_with?(entry, &1)) do
         raise "forbidden dev/test entry in package: #{entry}"
+      end
+
+      if Enum.any?(Path.split(entry), &String.starts_with?(&1, ".")) do
+        raise "forbidden hidden entry in package: #{entry}"
       end
 
       source = File.read!(Path.join(package, entry))

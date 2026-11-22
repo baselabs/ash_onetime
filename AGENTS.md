@@ -32,16 +32,15 @@ The lock and `.tool-versions` pin development releases; published ranges preserv
 
 ## CI/CD and releases
 
-infra-1, the DevOps session, owns CI/CD, the build box, releases and their keys for every
-product. Its requirements are binding here: the section "What infra requires of every product"
-in `baselabs/docs/ci.md` of the infra repository, read from its default branch
-(`git -C ~/Developer/infra fetch -q origin && git -C ~/Developer/infra show origin/main:baselabs/docs/ci.md`).
-Re-read it whenever you touch a workflow, a Dockerfile, a release script or a secret.
+The organization's infrastructure session owns CI/CD, the build box, releases and their keys for
+every product. The organization's CI requirements for every product are binding here. Re-read
+them, from the infrastructure repository's default branch, whenever you touch a workflow, a
+Dockerfile, a release script or a secret.
 
 - **Your part ends at the default branch.** Land only through the landing tool. Never release,
   deploy, publish, tag a version, dispatch a workflow, push an image by hand, or handle a
-  release, publish or CI key. When something should go out, send infra-1 one message: the
-  repository, the full commit, what goes out and anything it needs.
+  release, publish or CI key. When something should go out, send the infrastructure session one
+  message: the repository, the full commit, what goes out and anything it needs.
 - **A landing ends with its cleanup.** A landing is not done until everything the change created
   is gone. In the same step that confirms the default branch moved, remove:
   - its work branch, on GitHub and locally (`git branch -d` succeeds, because the landed commits
@@ -69,15 +68,15 @@ Re-read it whenever you touch a workflow, a Dockerfile, a release script or a se
   on the published commit. A held run exports none. No archive is replaced. No workflow creates
   a release or runs on a tag. The `published-livebooks` job needs the publish job, uses the same
   actor restriction, and holds no environment or key. Qualification uses only local package consumers.
-- **You write your own workflow changes; infra-1 reviews them.** Before landing a change to
-  `.github/`, a Dockerfile, a release script or anything that touches a secret, send infra-1 the
-  branch and head and wait for its review. Take any CI/CD, runner, box or key problem to
-  infra-1, never around it.
+- **You write your own workflow changes; the infrastructure session reviews them.** Before landing a change to
+  `.github/`, a Dockerfile, a release script or anything that touches a secret, send the
+  infrastructure session the branch and head and wait for its review. Take any CI/CD, runner,
+  box or key problem to the infrastructure session, never around it.
 - **The box.** This repository is public and never uses the build box or its runners. Never list
   process arguments (no `ps` with `args` or `-f`, no `/proc/*/cmdline`; use
   `ps -eo pid,etimes,pcpu,comm`). A secret never appears on a command line, in a log or in a
-  message; report an exposed one to infra-1 by where it sits, never by its value. Nothing that
+  message; report an exposed one to the infrastructure session by where it sits, never by its value. Nothing that
   compiles or tests runs on the owner's workstation.
-- **Messages to infra-1:** one message per result, complete enough to act on without a reply.
+- **Messages to the infrastructure session:** one message per result, complete enough to act on without a reply.
   No acknowledgements and no status notes.
 - Every brief given to a child agent carries these rules.
