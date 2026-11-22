@@ -1,7 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   @moduledoc false
-  alias AshOnetime.Test.ExitBoundary.Wire
   alias AshOnetime.Test.ExitBoundary.Compiled
+  alias AshOnetime.Test.ExitBoundary.Wire
 
   # Decoder buffers are copies of one physical connection's unconsumed bytes.
   # Their source is the native receive ledger and the pre-observation snapshot,
@@ -385,24 +385,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
     parameters = Enum.find(messages, &match?({:ok, {:msg_parameter_desc, _}, _}, &1.expected))
 
-    {oids, mods, columns, fields, origin} =
-      case description do
-        %{expected: {:ok, {:msg_row_desc, fields}, _}, returned: returned} ->
-          {Enum.map(fields, &elem(&1, 4)), Enum.map(fields, &elem(&1, 6)),
-           Enum.map(fields, &elem(&1, 1)), fields, returned.index}
-
-        %{expected: {:ok, {:msg_no_data}, _}, returned: returned} ->
-          {nil, nil, nil, nil, returned.index}
-
-        nil ->
-          {nil, nil, nil, nil, :no_description}
-      end
-
-    param_oids =
-      case parameters do
-        %{expected: {:ok, {:msg_parameter_desc, values}, _}} -> values
-        nil -> root.query.param_oids || []
-      end
+    {oids, mods, columns, fields, origin} = query_columns(description)
+    param_oids = query_parameter_oids(parameters, root.query)
 
     %{
       result_oids: oids,
@@ -413,6 +397,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       origin: origin
     }
   end
+
+  defp query_columns(%{expected: {:ok, {:msg_row_desc, fields}, _}, returned: returned}),
+    do:
+      {Enum.map(fields, &elem(&1, 4)), Enum.map(fields, &elem(&1, 6)),
+       Enum.map(fields, &elem(&1, 1)), fields, returned.index}
+
+  defp query_columns(%{expected: {:ok, {:msg_no_data}, _}, returned: returned}),
+    do: {nil, nil, nil, nil, returned.index}
+
+  defp query_columns(nil), do: {nil, nil, nil, nil, :no_description}
+
+  defp query_parameter_oids(%{expected: {:ok, {:msg_parameter_desc, values}, _}}, _query),
+    do: values
+
+  defp query_parameter_oids(nil, query), do: query.param_oids || []
 
   defp query_factory(state, source, call, input, :describe_params) do
     with {:ok, infos} <- query_type_info(state, source, call) do

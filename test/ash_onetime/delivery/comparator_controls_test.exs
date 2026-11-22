@@ -684,40 +684,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
               :columns
             ] and
               is_tuple(result) do
-    positions =
-      case {function, result} do
-        {:recv_describe, {:ok, _, _, _, _, %Postgrex.Protocol{}, _}} ->
-          [1, 2, 3, 4]
-
-        {:fetch_type_info, {tag, _}} when tag in [:ok, :reload, :error] ->
-          [1]
-
-        {:columns, {_, _, _}} ->
-          [0, 1, 2]
-
-        {:done, {%Postgrex.Result{}, %Postgrex.Protocol{}}} ->
-          [0]
-
-        {function, {:error, _error, %Postgrex.Protocol{}}}
-        when function in [:error_ready, :error_flushed, :rollback_flushed] ->
-          [1]
-
-        {function, {:ok, %Postgrex.Query{}, _protocol}} when function != :done ->
-          [1]
-
-        {:redescribe, {:ok, %Postgrex.Query{}, _protocol, _buffer}} ->
-          [1]
-
-        {:describe, {:ok, %Postgrex.Query{}, _protocol, _buffer}} ->
-          [1]
-
-        {function, {:ok, %Postgrex.Query{}}}
-        when function in [:describe_params, :describe_result] ->
-          [1]
-
-        _ ->
-          []
-      end
+    positions = native_helper_return_positions(function, result)
 
     for position <- positions, do: %{index: index, mfa: source.mfa, path: [3, position]}
   end
@@ -732,6 +699,37 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   defp native_helper_term(_source), do: []
+
+  defp native_helper_return_positions(
+         :recv_describe,
+         {:ok, _, _, _, _, %Postgrex.Protocol{}, _}
+       ),
+       do: [1, 2, 3, 4]
+
+  defp native_helper_return_positions(:fetch_type_info, {tag, _})
+       when tag in [:ok, :reload, :error],
+       do: [1]
+
+  defp native_helper_return_positions(:columns, {_, _, _}), do: [0, 1, 2]
+  defp native_helper_return_positions(:done, {%Postgrex.Result{}, %Postgrex.Protocol{}}), do: [0]
+
+  defp native_helper_return_positions(function, {:error, _error, %Postgrex.Protocol{}})
+       when function in [:error_ready, :error_flushed, :rollback_flushed],
+       do: [1]
+
+  defp native_helper_return_positions(function, {:ok, %Postgrex.Query{}, _protocol})
+       when function != :done,
+       do: [1]
+
+  defp native_helper_return_positions(function, {:ok, %Postgrex.Query{}, _protocol, _buffer})
+       when function in [:redescribe, :describe],
+       do: [1]
+
+  defp native_helper_return_positions(function, {:ok, %Postgrex.Query{}})
+       when function in [:describe_params, :describe_result],
+       do: [1]
+
+  defp native_helper_return_positions(_function, _result), do: []
 
   @tag :connection_streams
   test "Connection streams: intermediate owner returns retain their native state versions" do
@@ -1410,7 +1408,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     }
   end
 
-  for shape <- [:rows, :none, :prepare_error] do
+  for shape <- [:rows, :none, :prepare_error, :external_notify] do
     @tag :connection_streams
     test "Connection streams: fresh native #{shape} preparation binds every helper return coordinate" do
       captured = native_query_factory(unquote(shape))
@@ -1434,6 +1432,66 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert unbound == [], "every fresh preparation helper coordinate needs its own origin"
       end
     end
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native cursor callbacks bind each operation and suspended result" do
+    run = ConnectionNative.observe_cursor()
+    assert run.result == [[1], [2], [3]]
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    for function <- [
+          :handle_prepare,
+          :handle_declare,
+          :handle_fetch,
+          :handle_deallocate,
+          :handle_close
+        ] do
+      assert Enum.any?(events, fn source ->
+               match?({_, :call, {Postgrex.Protocol, ^function, _}}, source.event)
+             end)
+    end
+
+    native = NativeTransport.build(%{events: events}, run.native_history)
+    assert native.errors == []
+    streams = ConnectionReads.build(native)
+    assert streams.errors == []
+    decoders = ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
+
+    for error <- decoders.errors do
+      IO.puts("CONNECTION_CURSOR_DECODER: " <> Diagnostics.render(error))
+    end
+
+    assert decoders.errors == []
+
+    states =
+      ConnectionStates.build(
+        %{events: events},
+        native,
+        decoders,
+        run.native_history,
+        {:initial, run.initial_state}
+      )
+
+    for error <- states.errors do
+      IO.puts("CONNECTION_CURSOR_STATE: " <> Diagnostics.render(error))
+    end
+
+    assert states.errors == []
+    covered = MapSet.new(states.terms, &{&1.index, &1.path})
+
+    unbound =
+      Enum.reject(native_helper_terms(events), &MapSet.member?(covered, {&1.index, &1.path}))
+
+    for copy <- unbound do
+      IO.puts("CONNECTION_CURSOR_COORDINATE_UNBOUND: " <> Diagnostics.render(copy))
+    end
+
+    assert unbound == [], "every cursor helper coordinate needs its own origin"
   end
 
   for {function, arity, size, position} <- [{:describe, 7, 4, 3}, {:recv_describe, 4, 7, 6}] do
@@ -1990,34 +2048,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         end
       end)
 
-    case shape do
-      shape when shape in [:rows, :cross_connection, :strict, :bind_error, :execute_error] ->
-        assert catalog.parameter_types == [23]
-        assert [{"connection_stream_probe", {:table_oid, 0}, 0, 23, 4, -1, 0}] = catalog.columns
-        assert catalog.description == :rows
-
-      :large_rows ->
-        assert catalog.parameter_types == [23]
-
-        assert [
-                 {"connection_stream_probe", {:table_oid, 0}, 0, 23, 4, -1, 0},
-                 {"filler", {:table_oid, 0}, 0, 25, -1, -1, 0}
-               ] = catalog.columns
-
-        assert catalog.description == :rows
-
-      :redescribe ->
-        assert catalog.parameter_types == []
-        assert [{"connection_stream_probe", {:table_oid, oid}, 1, 23, 4, -1, 0}] = catalog.columns
-        assert is_integer(oid) and oid > 0
-        assert catalog.description == :rows
-
-      shape when shape in [:none, :notice, :parameter, :notification] ->
-        assert catalog.parameter_types == []
-        assert catalog.columns == []
-        assert catalog.description == :none
-        assert query.columns == nil and query.result_oids == nil
-    end
+    assert_cached_catalog(shape, query, catalog)
 
     indexed =
       run.events
@@ -2045,6 +2076,39 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       historical: historical,
       initial: run.initial_state
     }
+  end
+
+  defp assert_cached_catalog(shape, _query, catalog)
+       when shape in [:rows, :cross_connection, :strict, :bind_error, :execute_error] do
+    assert catalog.parameter_types == [23]
+    assert [{"connection_stream_probe", {:table_oid, 0}, 0, 23, 4, -1, 0}] = catalog.columns
+    assert catalog.description == :rows
+  end
+
+  defp assert_cached_catalog(:large_rows, _query, catalog) do
+    assert catalog.parameter_types == [23]
+
+    assert [
+             {"connection_stream_probe", {:table_oid, 0}, 0, 23, 4, -1, 0},
+             {"filler", {:table_oid, 0}, 0, 25, -1, -1, 0}
+           ] = catalog.columns
+
+    assert catalog.description == :rows
+  end
+
+  defp assert_cached_catalog(:redescribe, _query, catalog) do
+    assert catalog.parameter_types == []
+    assert [{"connection_stream_probe", {:table_oid, oid}, 1, 23, 4, -1, 0}] = catalog.columns
+    assert is_integer(oid) and oid > 0
+    assert catalog.description == :rows
+  end
+
+  defp assert_cached_catalog(shape, query, catalog)
+       when shape in [:none, :notice, :parameter, :notification] do
+    assert catalog.parameter_types == []
+    assert catalog.columns == []
+    assert catalog.description == :none
+    assert query.columns == nil and query.result_oids == nil
   end
 
   defp cached_rows(shape) when shape in [:none, :notice, :parameter, :notification], do: nil
@@ -4756,13 +4820,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         pid == binding.owner and port == binding.port,
         elem(elem(data, 9), 1) == :undefined or elem(elem(data, 11), 3) != [],
         pair = Map.fetch!(native.pairs, source.index) do
-      Enum.find_value(events, fn event ->
-        if event.pid == pid and event.index > source.index and
-             event.index < pair.returned.index and
-             event.mfa == {:tls_gen_connection, :next_event, 3},
-           do: event.index
-      end)
+      tls_passive_transition(events, pid, source.index, pair.returned.index)
     end
+  end
+
+  defp tls_passive_transition(events, pid, first, last) do
+    Enum.find_value(events, fn
+      %{pid: ^pid, index: index, mfa: {:tls_gen_connection, :next_event, 3}}
+      when index > first and index < last ->
+        index
+
+      _ ->
+        nil
+    end)
   end
 
   @tag :connection_streams

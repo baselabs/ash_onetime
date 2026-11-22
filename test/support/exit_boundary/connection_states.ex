@@ -190,39 +190,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       {:ok, input, first} ->
         progress = type_progress(state, source, input, first)
 
-        expected =
-          case {module, length(arguments), progress.remaining} do
-            {Postgrex.Types, 2, [oid | _]} ->
-              [oid, input.types]
-
-            {Postgrex.Protocol, 2, _} ->
-              [input.oids, input.types]
-
-            {Postgrex.Protocol, 3, _} ->
-              [input.oids, input.types, []]
-
-            {Postgrex.Protocol, 4, _} ->
-              [progress.remaining, input.types, progress.infos, progress.reloads]
-
-            _ ->
-              :no_type_origin
-          end
-
-        if expected == :no_type_origin do
-          failure(state, source, :state_type_factory_origin)
-        else
-          Enum.with_index(expected)
-          |> Enum.reduce(state, fn {value, position}, state ->
-            helper_copy(
-              state,
-              source,
-              [2, 2, position],
-              Enum.at(arguments, position),
-              value,
-              {:type_factory, first, progress.origins}
-            )
-          end)
-        end
+        expected = type_arguments(module, length(arguments), input, progress)
+        origin = {:type_factory, first, progress.origins}
+        type_input_copies(state, source, arguments, expected, origin)
 
       :error ->
         failure(state, source, :state_type_factory_origin)
@@ -237,19 +207,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       {:ok, input, first} ->
         progress = type_progress(state, source, input, first)
 
-        expected =
-          case progress.error do
-            {%Postgrex.TypeInfo{} = info, module} ->
-              {:error, Postgrex.QueryError.exception(Postgrex.Utils.type_msg(info, module))}
-
-            nil ->
-              if MapSet.size(progress.reloads) == 0,
-                do: {:ok, Enum.reverse(progress.infos)},
-                else: {:reload, progress.reloads}
-
-            :invalid ->
-              :no_type_origin
-          end
+        expected = type_result(progress)
 
         origin = {:type_factory_result, first, progress.origins}
 
@@ -300,20 +258,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       expected = {input.result_oids, input.columns, input.result_mods}
       origin = {:column_factory, input.origin}
 
-      if is_tuple(actual) and tuple_size(actual) == 3 do
-        Enum.reduce(0..2, state, fn position, state ->
-          helper_copy(
-            state,
-            source,
-            [3, position],
-            elem(actual, position),
-            elem(expected, position),
-            origin
-          )
-        end)
-      else
-        helper_copy(state, source, [3], actual, expected, origin)
-      end
+      column_result_copies(state, source, actual, expected, origin)
     else
       _ -> failure(state, source, :state_helper_query_origin)
     end
@@ -327,25 +272,67 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         elem(frame.source.mfa, 1) in [:describe_params, :describe_result]
       end)
 
-    case frame do
-      %{source: owner} ->
-        case Map.fetch(state.decoders.query_inputs, owner.index) do
-          {:ok, input} ->
-            oids =
-              if elem(owner.mfa, 1) == :describe_params,
-                do: input.param_oids,
-                else: input.result_oids
-
-            {:ok, %{oids: oids, types: input.types}, owner.index}
-
-          :error ->
-            :error
-        end
-
-      nil ->
-        :error
+    with %{source: owner} <- frame,
+         {:ok, input} <- Map.fetch(state.decoders.query_inputs, owner.index) do
+      oids = type_oids(elem(owner.mfa, 1), input)
+      {:ok, %{oids: oids, types: input.types}, owner.index}
+    else
+      _ -> :error
     end
   end
+
+  defp type_oids(:describe_params, input), do: input.param_oids
+  defp type_oids(:describe_result, input), do: input.result_oids
+
+  defp type_arguments(Postgrex.Types, 2, input, %{remaining: [oid | _]}),
+    do: [oid, input.types]
+
+  defp type_arguments(Postgrex.Protocol, 2, input, _progress), do: [input.oids, input.types]
+  defp type_arguments(Postgrex.Protocol, 3, input, _progress), do: [input.oids, input.types, []]
+
+  defp type_arguments(Postgrex.Protocol, 4, input, progress),
+    do: [progress.remaining, input.types, progress.infos, progress.reloads]
+
+  defp type_arguments(_module, _arity, _input, _progress), do: :no_type_origin
+
+  defp type_input_copies(state, source, _arguments, :no_type_origin, _origin),
+    do: failure(state, source, :state_type_factory_origin)
+
+  defp type_input_copies(state, source, arguments, expected, origin) do
+    expected
+    |> Enum.with_index()
+    |> Enum.reduce(state, fn {value, position}, state ->
+      helper_copy(state, source, [2, 2, position], Enum.at(arguments, position), value, origin)
+    end)
+  end
+
+  defp type_result(%{error: {%Postgrex.TypeInfo{} = info, module}}),
+    do: {:error, Postgrex.QueryError.exception(Postgrex.Utils.type_msg(info, module))}
+
+  defp type_result(%{error: nil} = progress) do
+    if MapSet.size(progress.reloads) == 0,
+      do: {:ok, Enum.reverse(progress.infos)},
+      else: {:reload, progress.reloads}
+  end
+
+  defp type_result(%{error: :invalid}), do: :no_type_origin
+
+  defp column_result_copies(state, source, actual, expected, origin)
+       when is_tuple(actual) and tuple_size(actual) == 3 do
+    Enum.reduce(0..2, state, fn position, state ->
+      helper_copy(
+        state,
+        source,
+        [3, position],
+        elem(actual, position),
+        elem(expected, position),
+        origin
+      )
+    end)
+  end
+
+  defp column_result_copies(state, source, actual, expected, origin),
+    do: helper_copy(state, source, [3], actual, expected, origin)
 
   defp type_progress(state, source, input, first) do
     initial = %{remaining: input.oids, infos: [], reloads: MapSet.new(), origins: [], error: nil}
@@ -357,27 +344,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           &1.returned.index < source.index and &1.source.mfa == {Postgrex.Types, :fetch, 2})
     )
     |> Enum.sort_by(& &1.source.index)
-    |> Enum.reduce(initial, fn pair, progress ->
-      case {progress.remaining, pair.returned.event} do
-        {[oid | remaining], {_, :return_from, _, result}} ->
-          progress = %{
-            progress
-            | remaining: remaining,
-              origins: progress.origins ++ [pair.returned.index]
-          }
-
-          case result do
-            {:ok, info} -> %{progress | infos: [info | progress.infos]}
-            {:error, nil, _module} -> %{progress | reloads: MapSet.put(progress.reloads, oid)}
-            {:error, %Postgrex.TypeInfo{} = info, module} -> %{progress | error: {info, module}}
-            _ -> %{progress | error: :invalid}
-          end
-
-        _ ->
-          %{progress | error: :invalid}
-      end
-    end)
+    |> Enum.reduce(initial, &type_progress_step/2)
   end
+
+  defp type_progress_step(
+         %{returned: %{event: {_, :return_from, _, result}, index: index}},
+         %{remaining: [oid | remaining]} = progress
+       ) do
+    progress = %{progress | remaining: remaining, origins: progress.origins ++ [index]}
+    type_progress_result(result, oid, progress)
+  end
+
+  defp type_progress_step(_pair, progress), do: %{progress | error: :invalid}
+
+  defp type_progress_result({:ok, info}, _oid, progress),
+    do: %{progress | infos: [info | progress.infos]}
+
+  defp type_progress_result({:error, nil, _module}, oid, progress),
+    do: %{progress | reloads: MapSet.put(progress.reloads, oid)}
+
+  defp type_progress_result({:error, %Postgrex.TypeInfo{} = info, module}, _oid, progress),
+    do: %{progress | error: {info, module}}
+
+  defp type_progress_result(_result, _oid, progress), do: %{progress | error: :invalid}
 
   defp factory_value(state, source, function, actual, options) do
     expected = factory_expected(state, function, options)
@@ -1063,7 +1052,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
        when function in [:error_ready, :error_flushed, :rollback_flushed] do
     case native_message_instance(state, source, version.protocol) do
       %{expected: {:ok, msg_error(fields: fields), _}, returned: %{index: index}} ->
-        expected = Postgrex.Error.exception(postgres: fields)
+        expected = prepare_error(state, source, version, fields)
         origin = {:server_error, index}
         error_copy(state, source, [2, 2, 2], actual, expected, origin)
 
@@ -1095,6 +1084,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp helper_input(state, _source, _function, _arguments, _version), do: state
+
+  defp prepare_error(state, source, version, fields) do
+    error = Postgrex.Error.exception(postgres: fields)
+
+    frame =
+      Enum.find(Map.get(state.frames, source.pid, []), fn frame ->
+        elem(frame.source.mfa, 1) in [:parse_describe_flush, :close_parse_describe_flush]
+      end)
+
+    query = if frame, do: state.term_values[{frame.source.index, [2, 2, 2]}]
+    annotate_prepare_error(error, query, version.protocol.types)
+  end
+
+  defp annotate_prepare_error(error, %{value: %Postgrex.Query{} = query}, types)
+       when is_nil(query.ref) or query.types != types,
+       do: %{error | query: query.statement}
+
+  defp annotate_prepare_error(error, _query, _types), do: error
 
   defp transaction_messages(state, source, frame, callback, actual) do
     {_, :call, {_, function, [options, _protocol]}} = callback.event
@@ -1467,26 +1474,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          source: %{mfa: {Postgrex.Protocol, :done, 2}} = call,
          input: protocol
        }) do
-    with {:ok, %{value: tags, origin: origin}} <-
-           Map.fetch(state.term_values, {call.index, [2, 2, 1]}) do
-      command =
-        case Enum.map(tags, &command_tag/1) do
-          [{command, _count}] -> command
-          commands -> Enum.map(commands, &elem(&1, 0))
-        end
+    case Map.fetch(state.term_values, {call.index, [2, 2, 1]}) do
+      {:ok, %{value: tags, origin: origin}} ->
+        command =
+          case Enum.map(tags, &command_tag/1) do
+            [{command, _count}] -> command
+            commands -> Enum.map(commands, &elem(&1, 0))
+          end
 
-      expected = %Postgrex.Result{
-        command: command,
-        num_rows: nil,
-        rows: nil,
-        columns: nil,
-        connection_id: protocol.connection_id,
-        messages: protocol.messages
-      }
+        expected = %Postgrex.Result{
+          command: command,
+          num_rows: nil,
+          rows: nil,
+          columns: nil,
+          connection_id: protocol.connection_id,
+          messages: protocol.messages
+        }
 
-      {:ok, expected, {:transaction_result, call.index, origin}}
-    else
-      _ -> :error
+        {:ok, expected, {:transaction_result, call.index, origin}}
+
+      _ ->
+        :error
     end
   end
 

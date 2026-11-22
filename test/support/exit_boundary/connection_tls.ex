@@ -653,29 +653,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       program_prefix(context, context.events, context.postponed) ++
         [{9, context.timers}, {10, context.seen}, {11, context.zero}]
 
-    extra =
-      case {function, arity, context.timeout} do
-        {:loop_timeouts, 12, _} ->
-          []
-
-        {:loop_timeouts, 16, {type, time, message, options}} ->
-          [{12, type}, {13, time}, {14, message}, {15, options}]
-
-        {:loop_timeouts_register, 17, {type, time, message, options}} ->
-          [{12, type}, {13, time}, {14, message}, {15, options}, {16, context.timeout_ref}]
-
-        {:loop_timeouts_register, 15, {type, _time, message, _options}} ->
-          [{12, type}, {13, context.timeout_ref}, {14, message}]
-
-        {:loop_timeouts_cancel, 13, {type, _, _, _}} ->
-          [{12, type}]
-
-        {:loop_timeouts_update, 14, {type, _, message, _}} ->
-          [{12, type}, {13, message}]
-
-        _ ->
-          :error
-      end
+    extra = program_timeout_fields(function, arity, context)
 
     if extra == :error, do: :error, else: {:ok, base ++ extra}
   end
@@ -700,6 +678,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp program_fields(_function, _arity, _context, _state, _source), do: :error
+
+  defp program_timeout_fields(:loop_timeouts, 12, _context), do: []
+
+  defp program_timeout_fields(:loop_timeouts, 16, %{timeout: {type, time, message, options}}),
+    do: [{12, type}, {13, time}, {14, message}, {15, options}]
+
+  defp program_timeout_fields(:loop_timeouts_register, 17, context) do
+    {type, time, message, options} = context.timeout
+    [{12, type}, {13, time}, {14, message}, {15, options}, {16, context.timeout_ref}]
+  end
+
+  defp program_timeout_fields(:loop_timeouts_register, 15, context) do
+    {type, _time, message, _options} = context.timeout
+    [{12, type}, {13, context.timeout_ref}, {14, message}]
+  end
+
+  defp program_timeout_fields(:loop_timeouts_cancel, 13, %{timeout: {type, _, _, _}}),
+    do: [{12, type}]
+
+  defp program_timeout_fields(:loop_timeouts_update, 14, %{timeout: {type, _, message, _}}),
+    do: [{12, type}, {13, message}]
+
+  defp program_timeout_fields(_function, _arity, _context), do: :error
 
   defp program_prefix(context, events, postponed),
     do: [
@@ -758,24 +759,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {state, context}
 
       :error ->
-        case context.result do
-          {:stop_and_reply, reason, replies, next_data} ->
-            {state, %{context | data: {name, next_data}, stop: {:exit, reason}, replies: replies}}
-
-          {:stop_and_reply, reason, replies} ->
-            {state, %{context | stop: {:exit, reason}, replies: replies}}
-
-          {:stop, reason, next_data} ->
-            {state, %{context | data: {name, next_data}, stop: {:exit, reason}}}
-
-          {:stop, reason} ->
-            {state, %{context | stop: {:exit, reason}}}
-
-          :stop ->
-            {state, %{context | stop: {:exit, :normal}}}
-
-          _ ->
-            {tls_failure(state, source, :tls_machine_program_result_origin), context}
+        case program_stop_result(context.result, context) do
+          {:ok, context} -> {state, context}
+          :error -> {tls_failure(state, source, :tls_machine_program_result_origin), context}
         end
     end
   end
@@ -893,6 +879,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        do: {state, %{context | reply: {from, reply}, replies: rest}}
 
   defp program_after(state, _source, _function, _arity, context), do: {state, context}
+
+  defp program_stop_result({:stop_and_reply, reason, replies, next_data}, context) do
+    {name, _data} = context.data
+    {:ok, %{context | data: {name, next_data}, stop: {:exit, reason}, replies: replies}}
+  end
+
+  defp program_stop_result({:stop_and_reply, reason, replies}, context),
+    do: {:ok, %{context | stop: {:exit, reason}, replies: replies}}
+
+  defp program_stop_result({:stop, reason, next_data}, context) do
+    {name, _data} = context.data
+    {:ok, %{context | data: {name, next_data}, stop: {:exit, reason}}}
+  end
+
+  defp program_stop_result({:stop, reason}, context),
+    do: {:ok, %{context | stop: {:exit, reason}}}
+
+  defp program_stop_result(:stop, context), do: {:ok, %{context | stop: {:exit, :normal}}}
+  defp program_stop_result(_result, _context), do: :error
 
   defp timeout_action({type, time, message, options}) do
     options = native_list(options)

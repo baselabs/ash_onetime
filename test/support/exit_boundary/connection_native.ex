@@ -115,25 +115,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           {:ssl, socket} = protocol.sock
           binding = ConnectionTls.bind(socket)
           if corruption == :fragmented, do: :ok = :inet.setopts(binding.port, buffer: 1024)
-          other = if corruption in [:binding, :workers], do: connect_tls()
-          other_binding = if other, do: ConnectionTls.bind(elem(other.sock, 1))
-          families = if other_binding, do: [binding, other_binding], else: [binding]
-
-          checked =
-            if corruption == :binding do
-              %{other_binding | socket: socket}
-            else
-              binding
-            end
-
-          checked =
-            if corruption == :workers do
-              %{checked | supervisor: other_binding.supervisor, sender: other_binding.sender}
-            else
-              checked
-            end
-
-          binding = Map.put(binding, :families, families)
+          {binding, checked, other} = tls_families(binding, corruption)
           send(observer, {tag, binding})
           {protocol, checked, other, binding}
         end,
@@ -173,6 +155,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       0 -> raise "native TLS binding was not captured"
     end
   end
+
+  defp tls_families(binding, corruption) when corruption in [:binding, :workers] do
+    other = connect_tls()
+    other_binding = ConnectionTls.bind(elem(other.sock, 1))
+
+    checked =
+      case corruption do
+        :binding -> %{other_binding | socket: binding.socket}
+        :workers -> %{binding | supervisor: other_binding.supervisor, sender: other_binding.sender}
+      end
+
+    {Map.put(binding, :families, [binding, other_binding]), checked, other}
+  end
+
+  defp tls_families(binding, _corruption),
+    do: {Map.put(binding, :families, [binding]), binding, nil}
 
   defp execute_tls(%{sock: {module, socket}}, :fragmented) do
     sql = "SELECT 17::int4 AS connection_stream_probe, repeat('x', 1048576)::text AS filler"
@@ -367,8 +365,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           }
 
           try do
-            case Postgrex.Protocol.handle_prepare(query, [], protocol) do
-              {:ok, %Postgrex.Query{}, %Postgrex.Protocol{}} when shape in [:rows, :none] ->
+            case Postgrex.Protocol.handle_prepare(query, query_factory_options(shape), protocol) do
+              {:ok, %Postgrex.Query{}, %Postgrex.Protocol{}}
+              when shape in [:rows, :none, :external_notify] ->
                 :ok
 
               {:error, %Postgrex.Error{postgres: %{code: :syntax_error}}, %Postgrex.Protocol{}}
@@ -390,8 +389,70 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   end
 
   defp query_factory_statement(:rows), do: "SELECT $1::int4 AS connection_stream_probe"
+  defp query_factory_statement(:external_notify), do: query_factory_statement(:rows)
   defp query_factory_statement(:none), do: "SET application_name TO 'ash_onetime_native_prepare'"
   defp query_factory_statement(:prepare_error), do: "SELECT ("
+
+  defp query_factory_options(:external_notify), do: [notify: &__MODULE__.ignore_notification/2]
+  defp query_factory_options(_shape), do: []
+
+  def ignore_notification(_channel, _payload), do: :ok
+
+  def observe_cursor do
+    observer = self()
+    tag = make_ref()
+
+    run =
+      ExitBoundary.observe(
+        fn ->
+          protocol = connect(:named)
+          send(observer, {tag, %{self() => %{protocol: protocol}}})
+          protocol
+        end,
+        fn %{sock: {module, socket}} = protocol ->
+          query = %Postgrex.Query{
+            name: "native_cursor",
+            statement: "SELECT generate_series(1, 3)::int4 AS connection_stream_probe",
+            cache: :statement
+          }
+
+          try do
+            {:ok, query, protocol} =
+              Postgrex.Protocol.handle_prepare(query, [postgrex_prepare: true], protocol)
+
+            params = DBConnection.Query.encode(query, [], [])
+            {:ok, %Postgrex.Result{}, protocol} = Postgrex.Protocol.handle_begin([], protocol)
+
+            {:ok, query, cursor, protocol} =
+              Postgrex.Protocol.handle_declare(query, params, [], protocol)
+
+            {:cont, first, protocol} =
+              Postgrex.Protocol.handle_fetch(query, cursor, [max_rows: 2], protocol)
+
+            {:halt, last, protocol} =
+              Postgrex.Protocol.handle_fetch(query, cursor, [max_rows: 2], protocol)
+
+            {:ok, %Postgrex.Result{}, protocol} =
+              Postgrex.Protocol.handle_deallocate(query, cursor, [], protocol)
+
+            {:ok, %Postgrex.Result{}, protocol} = Postgrex.Protocol.handle_close(query, [], protocol)
+            {:ok, %Postgrex.Result{}, _protocol} = Postgrex.Protocol.handle_commit([], protocol)
+
+            DBConnection.Query.decode(query, first, []).rows ++
+              DBConnection.Query.decode(query, last, []).rows
+          after
+            :ok = module.close(socket)
+          end
+        end,
+        %{host: [], callbacks: []}
+      )
+
+    receive do
+      {^tag, historical} -> Map.put(run, :native_history, historical)
+    after
+      0 -> raise "native cursor history was not captured"
+    end
+  end
 
   def observe_transactions do
     observer = self()

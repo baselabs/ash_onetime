@@ -2,9 +2,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Comparator
   alias AshOnetime.Test.ExitBoundary.Compiled
-  alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.ConnectionNative
   alias AshOnetime.Test.ExitBoundary.ConnectionTls
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
+  alias AshOnetime.Test.Repo
   import ExUnit.Assertions
 
   def rules,
@@ -755,8 +756,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       :ok =
         :peer.call(peer, Application, :put_env, [
           :ash_onetime,
-          AshOnetime.Test.Repo,
-          AshOnetime.Test.Repo.config()
+          Repo,
+          Repo.config()
         ])
 
       :ok = :peer.call(peer, __MODULE__, :prepare_machine_peer, [])
@@ -1027,14 +1028,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     loaded? = :code.is_loaded(module) != false
     {:module, ^module} = :code.ensure_loaded(module)
 
-    if module == :gen_statem do
-      IO.puts(
-        "NATIVE_MACHINE_OWNER_READY: " <>
-          Diagnostics.render(%{loaded_before: loaded?, sticky: :code.is_sticky(module)})
-      )
-    end
-
-    if module == :gen_statem, do: require_machine_idle!()
+    owner_ready(module, loaded?)
     {^module, original, path} = :code.get_object_code(module)
 
     {:ok, {^module, [abstract_code: {:raw_abstract_v1, forms}]}} =
@@ -1047,11 +1041,21 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     valid? = if is_function(required, 1), do: required.(sites), else: sites == required
     unless valid?, do: raise("native mutant requires every pinned owner site")
 
-    {:ok, ^module, mutant, ^original_warnings} =
+    {:ok, ^module, mutant, mutant_warnings} =
       :compile.forms(forms, [:binary, :return, :debug_info])
 
+    if mutant_warnings !== original_warnings do
+      for {file, warnings} <- mutant_warnings,
+          baseline = List.keyfind(original_warnings, file, 0, {file, []}) |> elem(1),
+          warning <- warnings -- baseline do
+        IO.puts("NATIVE_OWNER_ADDED_WARNING: " <> Diagnostics.render(warning))
+      end
+    end
+
+    ^original_warnings = mutant_warnings
+
     sticky? = :code.is_sticky(module)
-    if module == :gen_statem, do: require_machine_idle!()
+    require_owner_idle!(module)
 
     try do
       if sticky?, do: true = :code.unstick_mod(module)
@@ -1068,10 +1072,27 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         ^sticky? = :code.is_sticky(module)
       end
 
-      if module == :gen_statem,
-        do: IO.puts("NATIVE_MACHINE_OWNER_RESTORED: original bytes and sticky flag")
+      owner_restored(module)
     end
   end
+
+  defp owner_ready(:gen_statem, loaded?) do
+    IO.puts(
+      "NATIVE_MACHINE_OWNER_READY: " <>
+        Diagnostics.render(%{loaded_before: loaded?, sticky: :code.is_sticky(:gen_statem)})
+    )
+
+    require_machine_idle!()
+  end
+
+  defp owner_ready(_module, _loaded?), do: :ok
+  defp require_owner_idle!(:gen_statem), do: require_machine_idle!()
+  defp require_owner_idle!(_module), do: :ok
+
+  defp owner_restored(:gen_statem),
+    do: IO.puts("NATIVE_MACHINE_OWNER_RESTORED: original bytes and sticky flag")
+
+  defp owner_restored(_module), do: :ok
 
   defp require_machine_idle! do
     executors =
