@@ -36,13 +36,18 @@ stop removes both with `docker rm -f -v`, including on failed jobs, and prints f
 The PGDG platform client tools remain pinned in `.github/service-pins`; their major must
 match the engine, while client patch releases may advance independently.
 
-Work and qualification also run the whole suite in the PostgreSQL compatibility job.
+Work and qualification run the same suite and comparator partitions for every declared
+PostgreSQL major. Suite jobs exclude `exit_boundary`; dedicated native, controls, matrix
+and scheduling jobs cover that tag. The shared `.github/test-shards.json` declares every
+matrix route and scheduling group, and each partition runs on each major. Both workflows
+require every job and expanded matrix cell in their `qualified` verdict.
 [`.github/postgres-compat.json`](.github/postgres-compat.json) declares each supported
 non-platform major once, with its upstream patch tag, image digest and exact PGDG client
-package. The shared toolchain reader validates and emits the matrix; the platform major is
-excluded. This lane restores the existing release Mix cache, so it needs no additional
-cache-warmer job. It installs client executables matching its server major, with the pinned
-platform `libpq5` package, which supports both client majors.
+package. The shared toolchain reader validates the compatibility matrix and emits the
+platform-plus-compatibility list used by every comparator group. The platform major is
+excluded from the compatibility declaration. Compatibility jobs restore the release Mix
+cache, so they need no additional cache-warmer job. Each installs client executables matching
+its server major, with the pinned platform `libpq5` package.
 
 The same PostgreSQL action starts these upstream images with their native entrypoint and
 `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` derived from `TEST_PG_*`.

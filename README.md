@@ -161,7 +161,8 @@ Every protected action declares `:idempotency` or `:one_time_nonce` and a nonemp
 - AshPostgres `~> 2.15 and >= 2.15.2`, AshSql `~> 0.8 and >= 0.8.6`
 - Optional Mint `~> 1.10 and >= 1.10.2` when the host carries the installer HTTP closure
 - PostgreSQL 17 and 18. Work and qualification run the whole suite on the checked
-  PostgreSQL 18 platform engine and the pinned upstream PostgreSQL 17 compatibility image.
+  PostgreSQL 18 platform engine and the pinned upstream PostgreSQL 17 compatibility image,
+  with the same suite and dedicated comparator partitions on each major.
   The generated maintenance SQL uses PostgreSQL 17's `MAINTAIN` privilege checks and revocations.
 
 The security floors follow
@@ -174,7 +175,7 @@ Optional integrations remain excluded from this package's runtime applications.
 ## Development
 
 Push a work branch to run `Work` on GitHub's hosted Ubuntu runners. Every database job
-starts the checked platform PostgreSQL engine through the shared action, including its
+starts its declared PostgreSQL engine by digest through the shared action, including its
 dedicated logical server when needed. Compile, tests, format, docs and type checks run
 there; agents never run them on a workstation. The engine startup and environment contract
 are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
