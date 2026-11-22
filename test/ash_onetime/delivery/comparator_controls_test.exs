@@ -992,7 +992,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Enum.map(states.errors, & &1.rule) == [:state_status_copy]
     assert hd(states.errors).index == corrupted.index
 
-    for mutant <- [:stream_buffer_copy, :stream_state_copy, :stream_helper_copy, :stream_status_copy] do
+    for mutant <- [
+          :stream_buffer_copy,
+          :stream_state_copy,
+          :stream_helper_copy,
+          :stream_status_copy
+        ] do
       checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
       expected = if mutant == :stream_status_copy, do: [], else: [:state_status_copy]
       assert Enum.map(checked.errors, & &1.rule) == expected
@@ -1002,6 +1007,35 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert native_copy_states(cached_decoders(nil)).errors == []
 
     IO.puts("CONNECTION_STATUS_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native error helpers retain the server error origin" do
+    for shape <- [:bind_error, :execute_error] do
+      captured =
+        ComparatorMutants.with_postgrex_mutant(:error_copy, fn -> cached_decoders(nil, shape) end)
+
+      assert captured.native.errors == []
+      assert captured.decoders.errors == []
+
+      [corrupted] =
+        Enum.filter(captured.events, fn
+          %{
+            event:
+              {_, :call,
+               {Postgrex.Protocol, :error_ready,
+                [_, _, %Postgrex.Error{message: {:native_foreign_error, _}}, _]}}
+          } ->
+            true
+
+          _ ->
+            false
+        end)
+
+      states = native_copy_states(captured)
+      assert Enum.map(states.errors, & &1.rule) == [:state_error_copy]
+      assert hd(states.errors).index == corrupted.index
+    end
   end
 
   @tag :connection_streams
@@ -3552,6 +3586,40 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
     IO.puts("CONNECTION_TLS_STATE_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native TLS callback actions retain their constructor" do
+    run =
+      ComparatorMutants.with_tls_sender_mutant(
+        :callback_actions,
+        &ConnectionNative.observe_tls/0
+      )
+
+    assert run.result == []
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    corrupted =
+      Enum.filter(events, fn
+        %{
+          event:
+            {_, :return_from, {:tls_sender, :hibernate_after, 3},
+             {:next_state, :connection, _, [{:hibernate, false} | _]}}
+        } ->
+          true
+
+        _ ->
+          false
+      end)
+
+    assert corrupted != []
+    native = ConnectionTls.build(%{events: events}, run.tls_binding)
+    assert Enum.map(native.errors, & &1.rule) == [:tls_callback_result]
+    assert hd(native.errors).index == hd(corrupted).index
   end
 
   @tag :connection_streams

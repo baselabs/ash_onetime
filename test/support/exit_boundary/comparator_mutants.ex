@@ -622,6 +622,34 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   defp tls_sender_form(
+         {:function, annotation, :hibernate_after, 3, clauses},
+         sites,
+         :callback_actions
+       ) do
+    clauses =
+      Enum.map(clauses, fn {:clause, location, arguments, guards, [result]} ->
+        {:tuple, tuple_location, [tag, name, data | tail]} = result
+
+        actions =
+          case tail do
+            [] -> {:nil, tuple_location}
+            [actions] -> actions
+          end
+
+        action =
+          {:tuple, tuple_location,
+           [{:atom, tuple_location, :hibernate}, {:atom, tuple_location, false}]}
+
+        changed =
+          {:tuple, tuple_location, [tag, name, data, {:cons, tuple_location, action, actions}]}
+
+        {:clause, location, arguments, guards, [changed]}
+      end)
+
+    {{:function, annotation, :hibernate_after, 3, clauses}, sites + length(clauses)}
+  end
+
+  defp tls_sender_form(
          {:function, annotation, :connection, 3, [first | rest]},
          sites,
          :helper_state
@@ -960,6 +988,38 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       end)
 
     [{call, changed} | restored]
+  end
+
+  defp postgrex_edits(:error_copy) do
+    call = """
+        else
+          {:error, %Postgrex.Error{} = err, s, buffer} ->
+            query_delete_on_error(s, err, query)
+
+            error_ready(s, status, err, buffer)
+            |> maybe_disconnect()
+    """
+
+    changed =
+      String.replace(
+        call,
+        "error_ready(s, status, err, buffer)",
+        "error_ready(s, status, %{err | message: {:native_foreign_error, err.message}}, buffer)"
+      )
+
+    head = "  defp error_ready(s, status, %Postgrex.Error{} = err, buffer) do\n"
+
+    restored = """
+      defp error_ready(s, status, %Postgrex.Error{} = err, buffer) do
+        err =
+          case err.message do
+            {:native_foreign_error, original} -> %{err | message: original}
+            _ -> err
+          end
+
+    """
+
+    [{call, changed}, {head, restored}]
   end
 
   def with_mutant(rule, callback) do

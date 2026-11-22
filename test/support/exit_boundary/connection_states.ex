@@ -242,8 +242,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
            input: %{postgres: {_, locked_ref}},
            source: %{
              event:
-               {_, :call,
-                {_, :handle_fetch, [_, %Postgrex.Cursor{ref: ref, mode: mode}, _, _]}}
+               {_, :call, {_, :handle_fetch, [_, %Postgrex.Cursor{ref: ref, mode: mode}, _, _]}}
            }
          },
          _options
@@ -253,7 +252,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp status_mode(
          state,
-         %{source: %{event: {_, :call, {_, :handle_deallocate, [_, cursor, _, protocol]}}}} = frame,
+         %{source: %{event: {_, :call, {_, :handle_deallocate, [_, cursor, _, protocol]}}}} =
+           frame,
          options
        ) do
     case protocol.postgres do
