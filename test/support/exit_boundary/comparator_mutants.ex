@@ -964,10 +964,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
           :stream_tls_machine_copy,
           :stream_tls_worker_state_copy
         ] do
-      checked =
-        machine_reply_phase({:mutant, mutant}, fn ->
-          with_mutant(mutant, fn -> ConnectionTls.build(%{events: events}, run.tls_binding) end)
-        end)
+      checked = machine_reply_checked(mutant, events, run.tls_binding)
 
       expected = if mutant == :stream_tls_machine_program, do: [], else: native.errors
       assert checked.errors == expected
@@ -998,6 +995,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   # Temporary phase probe for the hosted fragmented-peer timeout. Native
   # captures and every validation/restoration assertion remain unchanged.
+  defp machine_reply_checked(mutant, events, binding) do
+    machine_reply_phase({:mutant, mutant}, fn ->
+      with_mutant(mutant, fn -> ConnectionTls.build(%{events: events}, binding) end)
+    end)
+  end
+
   defp machine_reply_phase(phase, callback) do
     IO.puts("NATIVE_MACHINE_REPLY_PHASE: " <> Diagnostics.render(%{phase: phase, status: :start}))
     started = System.monotonic_time(:millisecond)

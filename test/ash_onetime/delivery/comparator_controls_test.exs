@@ -55,6 +55,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     error_ready: [3],
     error_flushed: [3],
     rollback_flushed: [3],
+    reload_ready: [4],
+    reload_transaction: [4],
+    reload_closed: [4],
     reload_flushed: [4],
     reload_spawn: [4],
     reload_init: [4],
@@ -63,6 +66,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   }
 
   @helper_term_inputs %{
+    {:parse_describe, 3} => [1, 2],
+    {:parse_describe_close, 3} => [1, 2],
+    {:close_parse_describe, 3} => [1, 2],
     {:parse_describe_flush, 4} => [1, 2, 3],
     {:close_parse_describe_flush, 4} => [1, 2, 3],
     {:recv_ready, 3} => [1],
@@ -72,6 +78,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     {:error_ready, 4} => [1, 2],
     {:error_flushed, 4} => [1, 2],
     {:rollback_flushed, 4} => [1, 2],
+    {:reload_ready, 5} => [1, 2, 3],
+    {:reload_transaction, 5} => [1, 2, 3],
+    {:reload_closed, 5} => [1, 2, 3],
     {:reload_flushed, 5} => [1, 2, 3],
     {:reload_spawn, 5} => [1, 2, 3],
     {:reload_init, 5} => [1, 2, 3],
@@ -677,8 +686,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
               :error_ready,
               :error_flushed,
               :rollback_flushed,
+              :reload_ready,
+              :reload_transaction,
+              :reload_closed,
               :reload_flushed,
               :reload_spawn,
+              :parse_describe,
+              :parse_describe_close,
+              :close_parse_describe,
               :parse_describe_flush,
               :close_parse_describe_flush,
               :redescribe,
@@ -1424,6 +1439,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         :external_notify,
         :enum_reload,
         :composite_reload,
+        :domain_reload,
+        :domain_array_reload,
+        :composite_domain_reload,
+        :composite_domain_array_reload,
+        :nested_composite_domain_reload,
+        :nested_composite_array_domain_reload,
+        :array_composite_domain_reload,
+        :array_nested_composite_array_domain_reload,
         :unsupported_type
       ] do
     @tag :connection_streams
@@ -1512,6 +1535,34 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert unbound == [], "every reload helper coordinate needs its own origin"
       end
     end
+  end
+
+  for {prepare, mode, targets} <- [
+        {:named, :transaction,
+         %{{:close_parse_describe, 3} => [2], {:parse_describe, 3} => [2],
+           {:reload_ready, 5} => [2, 3], {:reload_closed, 5} => [2, 3]}},
+        {:unnamed, :transaction,
+         %{{:parse_describe_close, 3} => [2], {:reload_closed, 5} => [2, 3]}},
+        {:named, :savepoint,
+         %{{:close_parse_describe, 3} => [2], {:parse_describe, 3} => [2],
+           {:reload_transaction, 5} => [2, 3], {:reload_closed, 5} => [2, 3]}}
+      ] do
+    @tag :connection_streams
+    test "Connection streams: prepared reload #{prepare}/#{mode} inputs retain their origins" do
+      targets = unquote(Macro.escape(targets))
+      assert_native_helper_inputs(targets, fn ->
+        native_query_factory(:composite_reload, unquote(prepare),
+          postgrex_prepare: true, mode: unquote(mode))
+      end)
+    end
+  end
+
+  @tag :connection_streams
+  test "Connection streams: savepoint tags retain the active transaction receive origin" do
+    targets = %{{:recv_transaction, 4} => [2], {:done, 2} => [1]}
+    assert_native_helper_inputs(targets, fn ->
+      native_query_factory(:composite_reload, :named, mode: :savepoint)
+    end)
   end
 
   for {kind, owner} <- [
@@ -1606,7 +1657,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   defp assert_query_factory_path(captured, shape)
-       when shape in [:enum_reload, :composite_reload] do
+       when shape in [:enum_reload, :composite_reload, :domain_reload, :domain_array_reload,
+                      :composite_domain_reload, :composite_domain_array_reload,
+                      :nested_composite_domain_reload, :nested_composite_array_domain_reload,
+                      :array_composite_domain_reload, :array_nested_composite_array_domain_reload] do
     assert captured.run.result == :ok
 
     for mfa <- [{Postgrex.Protocol, :reload_spawn, 5}, {Postgrex.Protocol, :reload_init, 5}] do
@@ -1617,6 +1671,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              %{event: {_, :return_from, {Postgrex.Types, :fetch, 2}, {:error, nil, _}}} -> true
              _ -> false
            end)
+
+    assert_reload_domains(captured, shape)
   end
 
   defp assert_query_factory_path(captured, :unsupported_type) do
@@ -1650,6 +1706,30 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     do: assert(captured.run.result == :prepare_error)
 
   defp assert_query_factory_path(captured, _shape), do: assert(captured.run.result == :ok)
+
+  defp assert_reload_domains(_captured, shape) when shape in [:enum_reload, :composite_reload],
+    do: :ok
+
+  defp assert_reload_domains(captured, shape) do
+    infos =
+      for instance <- captured.decoders.instances,
+          {Postgrex.Protocol, :reload_init, 5} in instance.source.stack,
+          {:ok, {:msg_data_row, values}, _buffer} <- [instance.expected],
+          do: Postgrex.Types.build_type_info(values)
+
+    assert Enum.any?(infos, &(&1.category == :domain and &1.base_type != 0))
+
+    if shape not in [:domain_reload, :domain_array_reload],
+      do: assert(Enum.any?(infos, &(&1.category == :composite and &1.comp_elems != [])))
+  end
+
+  @tag :connection_streams
+  test "Connection streams: explicit native ping options retain callback, buffer and timeout origins" do
+    run = ConnectionNative.observe_ping_options()
+    assert run.result == :ok
+    assert Enum.any?(run.events, &(&1.mfa == {Postgrex.Protocol, :ping, 2}))
+    assert_native_caller_census(run)
+  end
 
   @tag :connection_streams
   test "Connection streams: native prepare cache hits, reprepare and invalidation retain origins" do

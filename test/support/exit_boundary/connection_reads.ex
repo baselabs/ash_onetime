@@ -167,7 +167,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
   defp activation_origin(%{requested: %{index: index}}), do: index
 
   defp ping_calls(native) do
-    for {_index, %{source: %{mfa: {Postgrex.Protocol, :ping, 1}}} = pair} <- native.pairs,
+    for {_index, %{source: %{mfa: {Postgrex.Protocol, :ping, 2}}} = pair} <- native.pairs,
         do: pair
   end
 
@@ -186,7 +186,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
   end
 
   defp ping_timeout(state, read, ping, default) do
-    {_, :call, {_, _, [protocol]}} = ping.source.event
+    {_, :call, {_, _, [protocol, _options]}} = ping.source.event
 
     origin =
       Enum.find_value(state.historical, fn

@@ -6,6 +6,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   alias AshOnetime.Test.ExitBoundary.ConnectionTls
   alias AshOnetime.Test.Repo
 
+  @domain_shapes [
+    :domain_reload,
+    :domain_array_reload,
+    :composite_domain_reload,
+    :composite_domain_array_reload,
+    :nested_composite_domain_reload,
+    :nested_composite_array_domain_reload,
+    :array_composite_domain_reload,
+    :array_nested_composite_array_domain_reload
+  ]
+
   # Every packet here goes to the job's real PostgreSQL. Authentication and type
   # bootstrap finish before capture; the socket is owned and closed by the root.
   # Corruptions change real native calls or real frontend messages, never captures.
@@ -234,6 +245,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       callbacks: [],
       frames: [
         {Postgrex.Protocol, :ping, 1},
+        {Postgrex.Protocol, :ping, 2},
         {Postgrex.Protocol, :checkin, 1},
         {Postgrex.Protocol, :checkout, 1},
         {Postgrex.Protocol, :msg_send, 3},
@@ -394,9 +406,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
             settings = Keyword.merge(query_factory_options(shape), options)
 
             case Postgrex.Protocol.handle_prepare(query, settings, protocol) do
-              {:ok, %Postgrex.Query{}, %Postgrex.Protocol{}}
-              when shape in [:rows, :none, :external_notify, :enum_reload, :composite_reload] ->
-                :ok
+              {:ok, %Postgrex.Query{} = prepared, %Postgrex.Protocol{} = current}
+              when shape in [:rows, :none, :external_notify, :enum_reload, :composite_reload] or
+                     shape in @domain_shapes ->
+                query_factory_result(shape, prepared, current)
 
               {:error, %Postgrex.Error{postgres: %{code: :syntax_error}}, %Postgrex.Protocol{}}
               when shape == :prepare_error ->
@@ -448,8 +461,47 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     do:
       "SELECT ROW(17, 'native')::pg_temp.ash_onetime_native_composite AS connection_stream_probe"
 
+  defp query_factory_statement(shape) when shape in @domain_shapes do
+    {type, _expected} = domain_case(shape)
+    "SELECT $1::pg_temp." <> type <> " AS connection_stream_probe"
+  end
+
   defp query_factory_statement(:unsupported_type),
     do: "SELECT NULL::pg_node_tree AS connection_stream_probe"
+
+  defp domain_case(:domain_reload), do: {"native_scalar_domain", 17}
+  defp domain_case(:domain_array_reload), do: {"native_array_domain", [17]}
+
+  defp domain_case(:composite_domain_reload),
+    do: {"native_composite_domain", {17, "native"}}
+
+  defp domain_case(:composite_domain_array_reload),
+    do: {"native_composite_array_domain", [{17, "native"}]}
+
+  defp domain_case(:nested_composite_domain_reload),
+    do: {"native_nested_domain", {17, "native"}}
+
+  defp domain_case(:nested_composite_array_domain_reload),
+    do: {"native_nested_array_domain", [{17, "native"}]}
+
+  defp domain_case(:array_composite_domain_reload),
+    do: {"native_composite_domain[]", [{17, "native"}]}
+
+  defp domain_case(:array_nested_composite_array_domain_reload),
+    do: {"native_nested_array_domain[]", [[{17, "native"}]]}
+
+  defp query_factory_result(shape, query, protocol) when shape in @domain_shapes do
+    {_type, expected} = domain_case(shape)
+    parameters = DBConnection.Query.encode(query, [expected], [])
+
+    {:ok, query, result, _protocol} =
+      Postgrex.Protocol.handle_execute(query, parameters, [], protocol)
+
+    [[^expected]] = DBConnection.Query.decode(query, result, []).rows
+    :ok
+  end
+
+  defp query_factory_result(_shape, _query, _protocol), do: :ok
 
   defp query_factory_environment(protocol, :enum_reload) do
     {:ok, _, protocol} =
@@ -473,12 +525,58 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     protocol
   end
 
+  defp query_factory_environment(protocol, shape) when shape in @domain_shapes do
+    statement = """
+    CREATE TYPE pg_temp.native_domain_composite AS (number int4, label text);
+    CREATE DOMAIN pg_temp.native_scalar_domain AS int4;
+    CREATE DOMAIN pg_temp.native_array_domain AS int4[];
+    CREATE DOMAIN pg_temp.native_composite_domain AS pg_temp.native_domain_composite;
+    CREATE DOMAIN pg_temp.native_composite_array_domain AS pg_temp.native_domain_composite[];
+    CREATE DOMAIN pg_temp.native_nested_domain AS pg_temp.native_composite_domain;
+    CREATE DOMAIN pg_temp.native_nested_array_domain AS pg_temp.native_composite_array_domain;
+    """
+
+    {:ok, _, protocol} = Postgrex.Protocol.handle_simple(statement, [], protocol)
+    protocol
+  end
+
   defp query_factory_environment(protocol, _shape), do: protocol
 
   defp query_factory_options(:external_notify), do: [notify: &__MODULE__.ignore_notification/2]
   defp query_factory_options(_shape), do: []
 
   def ignore_notification(_channel, _payload), do: :ok
+
+  def observe_ping_options do
+    observer = self()
+    tag = make_ref()
+
+    run =
+      ExitBoundary.observe(
+        fn ->
+          protocol = connect()
+          send(observer, {tag, %{self() => %{protocol: protocol}}})
+          protocol
+        end,
+        fn %{sock: {module, socket}} = protocol ->
+          try do
+            {:ok, %Postgrex.Protocol{}} =
+              Postgrex.Protocol.ping(protocol, notify: &__MODULE__.ignore_notification/2)
+
+            :ok
+          after
+            :ok = module.close(socket)
+          end
+        end,
+        %{host: [], callbacks: []}
+      )
+
+    receive do
+      {^tag, history} -> Map.put(run, :native_history, history)
+    after
+      0 -> raise "native ping options history was not captured"
+    end
+  end
 
   def observe_prepare_cycle do
     observer = self()

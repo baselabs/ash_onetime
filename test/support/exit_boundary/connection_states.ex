@@ -36,6 +36,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     :ping
   ]
   @constructors [
+    :parse_describe,
+    :parse_describe_close,
+    :close_parse_describe,
     :parse_describe_flush,
     :close_parse_describe_flush,
     :recv_ready,
@@ -56,6 +59,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     :error_ready,
     :error_flushed,
     :rollback_flushed,
+    :reload_ready,
+    :reload_transaction,
+    :reload_closed,
     :reload_flushed,
     :reload_spawn,
     :reload_init
@@ -64,6 +70,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   @owners @callbacks ++ @constructors ++ @scopes ++ @copies
   @last_state @callbacks ++ [:handle_prepare_execute]
   @status_consumers [
+    :parse_describe,
+    :parse_describe_close,
+    :close_parse_describe,
     :parse_describe_flush,
     :close_parse_describe_flush,
     :recv_ready,
@@ -74,6 +83,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     :error_ready,
     :error_flushed,
     :rollback_flushed,
+    :reload_ready,
+    :reload_transaction,
+    :reload_closed,
     :reload_flushed,
     :recv_describe
   ]
@@ -89,6 +101,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     error_ready: 3,
     error_flushed: 3,
     rollback_flushed: 3,
+    reload_ready: 4,
+    reload_transaction: 4,
+    reload_closed: 4,
     reload_flushed: 4,
     reload_spawn: 4,
     reload_init: 4,
@@ -446,6 +461,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp status_options(%{source: %{event: {_, :call, {_, :ping, [_]}}}}), do: {:ok, []}
 
+  defp status_options(%{source: %{event: {_, :call, {_, :ping, [_protocol, options]}}}}),
+    do: {:ok, options}
+
   defp status_options(%{source: %{event: {_, :call, {_, function, arguments}}}})
        when function in @last_state do
     case Enum.at(arguments, -2) do
@@ -555,33 +573,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp fixture_event(_source, state), do: state
 
   defp reload_event(
-         %{event: {pid, :call, {Postgrex.Protocol, :reload_flushed, _}}} = source,
+         %{event: {pid, :call, {Postgrex.Protocol, function, _}}} = source,
          state
-       ) do
-    case List.first(Map.get(state.frames, pid, [])) do
-      %{source: owner} = frame ->
-        with %{value: query} <- state.term_values[{owner.index, [2, 2, 2]}],
-             %{value: status} <- state.term_values[{owner.index, [2, 2, 1]}] do
-          context = %{
-            source: source,
-            version: %{frame.owner | protocol: frame.current},
-            query: query,
-            status: status,
-            oids: missing_type_origins(state, pid, owner.index, source.index),
-            buffer: cursor_buffer(state, source, frame)
-          }
-
-          callback = status_callback(state, pid).source
-          native_notify = state.factories[{callback.index, :notify}].native
-          context = Map.put(context, :native_status, Map.put(status, :notify, native_notify))
-
-          put_in(state.reload_spawns[pid], context)
-        else
-          _ -> failure(state, source, :state_reload_origin)
-        end
-
-      _ ->
-        failure(state, source, :state_reload_origin)
+       )
+       when function in [:reload_flushed, :reload_ready, :reload_transaction, :reload_closed] do
+    case active_reload(state, pid, source.index) do
+      nil -> reload_origin(state, source)
+      context -> put_in(state.reload_spawns[pid], %{context | source: source})
     end
   end
 
@@ -817,6 +815,34 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp reload_event(_source, state), do: state
 
+  defp reload_origin(state, %{pid: pid} = source) do
+    case List.first(Map.get(state.frames, pid, [])) do
+      %{source: owner} = frame ->
+        with %{value: query} <- state.term_values[{owner.index, [2, 2, 2]}],
+             %{value: status} <- state.term_values[{owner.index, [2, 2, 1]}] do
+          context = %{
+            source: source,
+            version: %{frame.owner | protocol: frame.current},
+            query: query,
+            status: status,
+            oids: missing_type_origins(state, pid, owner.index, source.index),
+            buffer: cursor_buffer(state, source, frame)
+          }
+
+          callback = status_callback(state, pid).source
+          native_notify = state.factories[{callback.index, :notify}].native
+          context = Map.put(context, :native_status, Map.put(status, :notify, native_notify))
+
+          put_in(state.reload_spawns[pid], context)
+        else
+          _ -> failure(state, source, :state_reload_origin)
+        end
+
+      _ ->
+        failure(state, source, :state_reload_origin)
+    end
+  end
+
   defp missing_type_origins(state, pid, first, last) do
     for {_index, %{source: call, returned: returned}} <- state.pairs,
         call.pid == pid and call.index > first and returned.index < last,
@@ -944,7 +970,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          state
        )
        when function in @owners do
-    argument = if function in @last_state, do: length(arguments) - 1, else: 0
+    argument =
+      if function in @last_state and function != :ping, do: length(arguments) - 1, else: 0
     protocol = Enum.at(arguments, argument)
     frames = Map.get(state.frames, pid, [])
 
@@ -1007,7 +1034,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     cursor? =
       Enum.any?(source.stack, fn
         {Postgrex.Protocol, function, _} ->
-          function in [:error_flushed, :rollback_flushed, :reload_flushed, :reload_init]
+          function in [
+            :error_flushed,
+            :rollback_flushed,
+            :reload_flushed,
+            :reload_ready,
+            :reload_transaction,
+            :reload_init
+          ]
 
         _ ->
           false
@@ -1045,7 +1079,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp ping_buffer_input(state, source, :ping_recv, arguments, version) do
     frame =
       Enum.find(Map.get(state.frames, source.pid, []), fn frame ->
-        frame.source.mfa == {Postgrex.Protocol, :ping, 1}
+        elem(frame.source.mfa, 1) == :ping
       end)
 
     case frame do
@@ -1205,7 +1239,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp helper_input(state, source, function, arguments, _version)
-       when function in [:reload_flushed, :reload_spawn, :reload_init] do
+       when function in [
+              :reload_flushed,
+              :reload_ready,
+              :reload_transaction,
+              :reload_closed,
+              :reload_spawn,
+              :reload_init
+            ] do
     context =
       if function == :reload_init,
         do: state.reload_children[source.pid],
@@ -1333,10 +1374,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
-  defp helper_input(state, source, :done, [_protocol, tags], version) do
-    {expected, origins} = transaction_tags(state, source, version.protocol)
-    helper_copy(state, source, [2, 2, 1], tags, expected, {:transaction_tags, origins})
-  end
+  defp helper_input(state, source, :done, [_protocol, tags], version),
+    do: transaction_tag_copy(state, source, [2, 2, 1], tags, version.protocol, false)
 
   defp helper_input(
          state,
@@ -1344,40 +1383,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          :recv_transaction,
          [_protocol, _status, tags, _buffer],
          version
-       ) do
-    {expected, origins} = transaction_tags(state, source, version.protocol)
+       ),
+       do: transaction_tag_copy(state, source, [2, 2, 2], tags, version.protocol, true)
 
-    helper_copy(
-      state,
-      source,
-      [2, 2, 2],
-      tags,
-      Enum.reverse(expected),
-      {:transaction_tags, origins}
-    )
-  end
-
-  defp helper_input(
-         state,
-         source,
-         function,
-         [_protocol, _status, actual_query, actual_comment],
-         _version
-       )
-       when function in [:parse_describe_flush, :close_parse_describe_flush] do
+  defp helper_input(state, source, function, [_protocol, _status, actual_query | rest], _version)
+       when function in [
+              :parse_describe,
+              :parse_describe_close,
+              :close_parse_describe,
+              :parse_describe_flush,
+              :close_parse_describe_flush
+            ] do
     with %{source: callback} = frame <- status_callback(state, source.pid),
          {:ok, options} <- status_options(frame),
          {_, :call, {_, _, [query | _]}} <- callback.event,
          %Postgrex.Query{} <- query do
-      state
-      |> helper_copy(source, [2, 2, 2], actual_query, query, {:callback_query, callback.index})
-      |> helper_copy(
-        source,
-        [2, 2, 3],
-        actual_comment,
-        options[:comment],
-        {:callback_comment, callback.index}
-      )
+      state =
+        helper_copy(state, source, [2, 2, 2], actual_query, query, {:callback_query, callback.index})
+
+      comment = if {Postgrex.Protocol, :reload_spawn, 5} in source.stack, do: nil, else: options[:comment]
+      prepare_comment(state, source, rest, comment, callback.index)
     else
       _ -> failure(state, source, :state_helper_query_origin)
     end
@@ -1454,6 +1479,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp helper_input(state, _source, _function, _arguments, _version), do: state
 
+  defp transaction_tag_copy(state, source, path, actual, protocol, reverse?) do
+    case transaction_tags(state, source, protocol) do
+      {:ok, tags, origins} ->
+        expected = if reverse?, do: Enum.reverse(tags), else: tags
+        helper_copy(state, source, path, actual, expected, {:transaction_tags, origins})
+
+      :error ->
+        failure(state, source, :state_transaction_origin)
+    end
+  end
+
+  defp prepare_comment(state, _source, [], _comment, _origin), do: state
+
+  defp prepare_comment(state, source, [actual], comment, origin),
+    do: helper_copy(state, source, [2, 2, 3], actual, comment, {:callback_comment, origin})
+
   defp helper_messages(
          state,
          source,
@@ -1468,10 +1509,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp helper_messages(
          state,
          source,
-         %{source: %{mfa: {Postgrex.Protocol, :ping, 1}} = callback},
+         %{source: %{mfa: {Postgrex.Protocol, :ping, arity}} = callback},
          _version,
          messages
-       ) do
+       ) when arity in [1, 2] do
     helper_copy(state, source, [2, 2, 1], messages, msg_sync(), {:ping_sync, callback.index})
   end
 
@@ -1489,11 +1530,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp helper_messages(
          state,
          source,
-         %{source: %{mfa: {Postgrex.Protocol, function, 4}}} = frame,
+         %{source: %{mfa: {Postgrex.Protocol, function, _}}} = frame,
          _version,
          messages
        )
-       when function in [:parse_describe_flush, :close_parse_describe_flush] do
+       when function in [
+              :parse_describe,
+              :parse_describe_close,
+              :close_parse_describe,
+              :parse_describe_flush,
+              :close_parse_describe_flush
+            ] do
     prepare_messages(state, source, frame, messages)
   end
 
@@ -1522,15 +1569,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp helper_messages(
          state,
          source,
-         %{source: %{mfa: {Postgrex.Protocol, :reload_flushed, 5}} = owner},
+         %{source: %{mfa: {Postgrex.Protocol, function, 5}} = owner},
          _version,
          messages
-       ) do
+       ) when function in [:reload_flushed, :reload_ready, :reload_transaction] do
     context = Map.fetch!(state.reload_spawns, source.pid)
     close = msg_close(type: :statement, name: context.query.name)
 
     tail =
-      if context.status.mode == :transaction,
+      if function != :reload_flushed or context.status.mode == :transaction,
         do: msg_sync(),
         else:
           msg_query(
@@ -1577,7 +1624,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp reload_query_messages(state, source, actual) do
-    context = Map.fetch!(state.reload_children, source.pid)
+    case Map.fetch(state.reload_children, source.pid) do
+      {:ok, context} -> reload_query_messages(state, source, actual, context)
+      :error -> failure(state, source, :state_reload_origin)
+    end
+  end
+
+  defp reload_query_messages(state, source, actual, context) do
 
     parameters =
       for {_index, %{source: call, returned: returned}} <- state.pairs,
@@ -1755,7 +1808,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     frame =
       Enum.find(Map.get(state.frames, source.pid, []), fn frame ->
-        elem(frame.source.mfa, 1) in [:parse_describe_flush, :close_parse_describe_flush]
+        elem(frame.source.mfa, 1) in [
+          :parse_describe,
+          :parse_describe_close,
+          :close_parse_describe,
+          :parse_describe_flush,
+          :close_parse_describe_flush
+        ]
       end)
 
     query = if frame, do: state.term_values[{frame.source.index, [2, 2, 2]}]
@@ -1807,32 +1866,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp prepare_messages(state, source, frame, actual) do
-    values = fn position ->
-      Map.fetch(state.term_values, {frame.source.index, [2, 2, position]})
-    end
-
-    with {:ok, %{value: query}} <- values.(2),
-         {:ok, %{value: comment}} <- values.(3),
-         {:ok, %{value: status}} <- values.(1) do
-      statement =
-        if is_binary(comment), do: [query.statement, "/*", comment, "*/"], else: query.statement
+    with %{value: query} <- state.term_values[{frame.source.index, [2, 2, 2]}],
+         %{value: status} <- state.term_values[{frame.source.index, [2, 2, 1]}] do
+      function = elem(frame.source.mfa, 1)
+      comment = state.term_values[{frame.source.index, [2, 2, 3]}]
+      statement = prepare_statement(query.statement, comment)
+      tail = prepare_tail(function, status.mode, query.name)
 
       messages = [
         msg_parse(name: query.name, statement: statement, type_oids: query.param_oids || []),
-        msg_describe(type: :statement, name: query.name),
-        msg_flush()
+        msg_describe(type: :statement, name: query.name)
+        | tail
       ]
 
-      messages =
-        if elem(frame.source.mfa, 1) == :close_parse_describe_flush,
-          do: [msg_close(type: :statement, name: query.name) | messages],
-          else: messages
-
-      messages =
-        if status.mode == :savepoint,
-          do: [msg_query(statement: "SAVEPOINT postgrex_query") | messages],
-          else: messages
-
+      messages = prepare_head(function, status.mode, query.name) ++ messages
       helper_copy(
         state,
         source,
@@ -1844,6 +1891,37 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     else
       _ -> failure(state, source, :state_helper_send_origin)
     end
+  end
+
+  defp prepare_statement(statement, %{value: comment}) when is_binary(comment),
+    do: [statement, "/*", comment, "*/"]
+
+  defp prepare_statement(statement, _comment), do: statement
+
+  defp prepare_tail(function, _mode, _name)
+       when function in [:parse_describe_flush, :close_parse_describe_flush],
+       do: [msg_flush()]
+
+  defp prepare_tail(_function, :savepoint, _name),
+    do: [msg_query(statement: "RELEASE SAVEPOINT postgrex_query")]
+
+  defp prepare_tail(:parse_describe_close, :transaction, name),
+    do: [msg_close(type: :statement, name: name), msg_sync()]
+
+  defp prepare_tail(_function, :transaction, _name), do: [msg_sync()]
+
+  defp prepare_head(function, mode, name) do
+    close =
+      if function in [:close_parse_describe, :close_parse_describe_flush],
+        do: [msg_close(type: :statement, name: name)],
+        else: []
+
+    savepoint =
+      if mode == :savepoint,
+        do: [msg_query(statement: "SAVEPOINT postgrex_query")],
+        else: []
+
+    savepoint ++ close
   end
 
   defp execute_messages(state, source, frame, version, actual) do
@@ -2022,8 +2100,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
               :describe_result,
               :describe,
               :redescribe,
+              :parse_describe,
+              :parse_describe_close,
+              :close_parse_describe,
               :parse_describe_flush,
               :close_parse_describe_flush,
+              :reload_ready,
+              :reload_transaction,
+              :reload_closed,
               :reload_flushed,
               :reload_spawn,
               :handle_prepare
@@ -2204,8 +2288,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp transaction_tags(state, source, protocol) do
-    first = callback_boundary(state, source)
+    frame =
+      Enum.find(Map.get(state.frames, source.pid, []), fn frame ->
+        frame.source.mfa == {Postgrex.Protocol, :recv_transaction, 3}
+      end)
 
+    case frame do
+      %{source: entry} ->
+        {tags, origins} = transaction_commands(state, source, protocol, entry.index)
+        {:ok, tags, origins}
+
+      nil ->
+        :error
+    end
+  end
+
+  defp transaction_commands(state, source, protocol, first) do
     state.decoders.instances
     |> Enum.filter(fn instance ->
       {:gen_tcp, instance.port} == protocol.sock and instance.returned.pid == source.pid and
@@ -2353,7 +2451,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     do: state
 
   defp advance_owner(state, pid, function, version, [parent | outer]) do
-    parsed? = function in [:parse_describe_flush, :close_parse_describe_flush]
+    parsed? =
+      function in [
+        :parse_describe,
+        :parse_describe_close,
+        :close_parse_describe,
+        :parse_describe_flush,
+        :close_parse_describe_flush
+      ]
 
     parent = %{
       parent
@@ -2392,7 +2497,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     preserve? =
       case List.first(source.stack) do
         {Postgrex.Protocol, function, _} ->
-          function in [:error_flushed, :rollback_flushed, :reload_flushed]
+          function in [
+            :error_flushed,
+            :rollback_flushed,
+            :reload_flushed,
+            :reload_ready,
+            :reload_transaction
+          ]
 
         _ ->
           false
@@ -2405,7 +2516,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp input_protocol(state, _source, protocol, :reload_spawn, _arguments),
     do: {state, %{protocol | buffer: nil}}
 
-  defp input_protocol(state, source, protocol, :parse_describe_flush, _arguments) do
+  defp input_protocol(state, source, protocol, function, _arguments)
+       when function in [
+              :parse_describe,
+              :parse_describe_close,
+              :close_parse_describe,
+              :parse_describe_flush
+            ] do
     if {Postgrex.Protocol, :reload_spawn, 5} in source.stack,
       do: {state, %{protocol | buffer: cursor_buffer(state, source, %{input: protocol})}},
       else: {state, protocol}
