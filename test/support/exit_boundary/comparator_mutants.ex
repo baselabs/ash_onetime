@@ -484,6 +484,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_tls_worker_state_copy) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original: "      state = tls_exact(state, source, :tls_worker_state_copy, actual, expected)\n",
+        mutated:
+          "      _ = actual\n      state = tls_exact(state, source, :tls_worker_state_copy, expected, expected)\n"
+      }
+    ]
+  end
+
   def edits(:stream_service_completion) do
     [
       %{
@@ -500,15 +511,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   # Change a real TLS sender's private state argument, restoring it inside the
   # actual callee before encryption or transport. Loaded code alone changes;
   # native workers, the socket, server and captured events remain untouched.
-  def with_tls_sender_mutant(callback) do
+  def with_tls_sender_mutant(callback), do: with_tls_sender_mutant(:helper_state, callback)
+
+  def with_tls_sender_mutant(rule, callback) do
     module = :tls_sender
     {^module, original, path} = :code.get_object_code(module)
 
     {:ok, {^module, [abstract_code: {:raw_abstract_v1, forms}]}} =
       :beam_lib.chunks(original, [:abstract_code])
 
-    {forms, sites} = Enum.map_reduce(forms, 0, &tls_sender_form/2)
-    unless sites == 2, do: raise("TLS sender mutant requires its two pinned owner sites")
+    {forms, sites} = Enum.map_reduce(forms, 0, &tls_sender_form(&1, &2, rule))
+    required = if rule == :helper_state, do: 2, else: 3
+    unless sites == required, do: raise("TLS sender mutant requires every pinned owner site")
     {:ok, ^module, mutant, []} = :compile.forms(forms, [:binary, :return, :debug_info])
 
     try do
@@ -522,7 +536,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end
   end
 
-  defp tls_sender_form({:function, annotation, :connection, 3, [first | rest]}, sites) do
+  defp tls_sender_form({:function, annotation, :connection, 3, [first | rest]}, sites, :helper_state) do
     {:clause, clause_annotation, args, guards,
      [
        {:call, call_annotation, {:atom, atom_annotation, :send_application_data},
@@ -540,7 +554,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     {{:function, annotation, :connection, 3, [clause | rest]}, sites + 1}
   end
 
-  defp tls_sender_form({:function, annotation, :send_application_data, 4, [clause]}, sites) do
+  defp tls_sender_form({:function, annotation, :send_application_data, 4, [clause]}, sites, :helper_state) do
     {:clause, clause_annotation, [data, from, name, pattern], guards, body} = clause
     {:match, _, {:record, _, :data, _}, {:var, _, :StateData0}} = pattern
     input = {:var, clause_annotation, :NativeTlsState}
@@ -560,7 +574,49 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     {{:function, annotation, :send_application_data, 4, [changed]}, sites + 1}
   end
 
-  defp tls_sender_form(form, sites), do: {form, sites}
+  defp tls_sender_form({:function, _, :send_application_data, 4, _} = form, sites, :constructed_state),
+    do: tls_constructed_call(form, sites)
+
+  defp tls_sender_form({:function, annotation, :send_or_buffer, 5, clauses}, sites, :constructed_state) do
+    changed =
+      Enum.map(clauses, fn {:clause, location, [transport, socket, bytes, from, pattern], [], body} ->
+        input = {:var, location, :NativeTlsConstructedInput}
+        restored = {:var, location, :NativeTlsConstructedOriginal}
+        tagged = {:tuple, location, [{:atom, location, :native_foreign_tls_constructed}, restored]}
+
+        cases = [
+          {:clause, location, [tagged], [], [restored]},
+          {:clause, location, [restored], [], [restored]}
+        ]
+
+        restore = {:match, location, pattern, {:case, location, input, cases}}
+        {:clause, location, [transport, socket, bytes, from, input], [], [restore | body]}
+      end)
+
+    {{:function, annotation, :send_or_buffer, 5, changed}, sites + length(clauses)}
+  end
+
+  defp tls_sender_form(form, sites, _rule), do: {form, sites}
+
+  defp tls_constructed_call(
+         {:call, location, {:atom, name_location, :send_or_buffer},
+          [transport, socket, bytes, from, data]},
+         sites
+       ) do
+    tagged = {:tuple, location, [{:atom, location, :native_foreign_tls_constructed}, data]}
+    {{:call, location, {:atom, name_location, :send_or_buffer},
+      [transport, socket, bytes, from, tagged]}, sites + 1}
+  end
+
+  defp tls_constructed_call(form, sites) when is_tuple(form) do
+    {elements, sites} = form |> Tuple.to_list() |> Enum.map_reduce(sites, &tls_constructed_call/2)
+    {List.to_tuple(elements), sites}
+  end
+
+  defp tls_constructed_call(form, sites) when is_list(form),
+    do: Enum.map_reduce(form, sites, &tls_constructed_call/2)
+
+  defp tls_constructed_call(form, sites), do: {form, sites}
 
   # Run the actual Postgrex owner with one private copy changed. Socket calls,
   # server traffic, descriptors and captures remain native. The source file and

@@ -140,14 +140,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     {:ssl_gen_statem, :hibernate_after, 3} => 1
   }
   @loop_state_functions [
-    :loop, :loop_msg, :loop_msg_event, :loop_event, :loop_state_callback,
-    :loop_state_callback_result, :loop_actions, :loop_actions_list, :loop_actions_reply,
-    :loop_state_transition, :loop_keep_state, :loop_next_events, :loop_timeouts,
-    :loop_timeouts_cancel, :loop_done
+    :loop,
+    :loop_msg,
+    :loop_msg_event,
+    :loop_event,
+    :loop_state_callback,
+    :loop_state_callback_result,
+    :loop_actions,
+    :loop_actions_list,
+    :loop_actions_reply,
+    :loop_state_transition,
+    :loop_keep_state,
+    :loop_next_events,
+    :loop_timeouts,
+    :loop_timeouts_cancel,
+    :loop_done
   ]
   @loop_next_functions [
-    :loop_actions, :loop_actions_list, :loop_actions_reply, :loop_state_transition,
-    :loop_keep_state, :loop_next_events, :loop_timeouts, :loop_timeouts_cancel
+    :loop_actions,
+    :loop_actions_list,
+    :loop_actions_reply,
+    :loop_state_transition,
+    :loop_keep_state,
+    :loop_next_events,
+    :loop_timeouts,
+    :loop_timeouts_cancel
   ]
 
   # Native sys:get_state roots precede observation. Gen_statem retains its old
@@ -165,9 +182,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       end
 
     initial = %{
-      owners: owners, pending: %{}, frames: %{}, received: %{}, messages: %{},
-      encoded: %{}, parsed: %{}, terms: [], errors: [], pairs: pairs, events: events,
-      records: %{}, returns: Map.new(pairs, fn {index, pair} -> {pair.returned.index, index} end),
+      owners: owners,
+      pending: %{},
+      frames: %{},
+      received: %{},
+      messages: %{},
+      encoded: %{},
+      parsed: %{},
+      terms: [],
+      errors: [],
+      pairs: pairs,
+      events: events,
+      records: %{},
+      returns: Map.new(pairs, fn {index, pair} -> {pair.returned.index, index} end),
       covered: MapSet.new(covered, &{&1.index, &1.path})
     }
 
@@ -199,7 +226,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     version = state.owners[source.pid].version
     next = Map.get(state.pending, source.pid, version)
 
-    state = state
+    state =
+      state
       |> loop_current_copy(source, function, version)
       |> loop_next_copy(source, function, version, next)
       |> loop_result_copy(source, function, arguments, next)
@@ -215,7 +243,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       function in [:reply_then_terminate, :do_reply_then_terminate, :terminate] ->
         worker_copy(state, source, [2, 2, 5, 1, 1], version.data, version.origin)
 
-      true -> state
+      true ->
+        state
     end
   end
 
@@ -227,7 +256,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       function in @loop_next_functions ->
         worker_copy(state, source, [2, 2, 4, 1], next.data, next.origin)
 
-      true -> state
+      true ->
+        state
     end
   end
 
@@ -243,7 +273,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp loop_commit(state, pid, function)
        when function in [:loop_done, :reply_then_terminate, :do_reply_then_terminate, :terminate] do
     case Map.pop(state.pending, pid) do
-      {nil, _pending} -> state
+      {nil, _pending} ->
+        state
+
       {version, pending} ->
         state |> Map.put(:pending, pending) |> put_in([:owners, pid, :version], version)
     end
@@ -255,9 +287,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case Map.get(state.received, source.pid) do
       %{message: message, source: origin} when origin.index < source.index ->
         state = tls_exact(state, source, :tls_event_copy, Enum.at(arguments, 3), message)
-        put_in(state.messages[source.pid], %{value: callback_message(message), origin: origin.index})
 
-      _ -> tls_failure(state, source, :tls_event_origin)
+        put_in(state.messages[source.pid], %{
+          value: callback_message(message),
+          origin: origin.index
+        })
+
+      _ ->
+        tls_failure(state, source, :tls_event_origin)
     end
   end
 
@@ -284,7 +321,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           |> tls_exact(source, :tls_event_copy, Enum.at(arguments, 0), type)
           |> tls_exact(source, :tls_event_copy, Enum.at(arguments, 1), message)
 
-        nil -> tls_failure(state, source, :tls_event_origin)
+        nil ->
+          tls_failure(state, source, :tls_event_origin)
       end
 
     {state, version}
@@ -315,7 +353,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         origin = {:tls_recv, parent.source.index, parent.event.origin}
         {state, %{version | data: put_elem(version.data, 9, recv), origin: origin}}
 
-      _ -> {tls_failure(state, source, :tls_recv_origin), parent.current}
+      _ ->
+        {tls_failure(state, source, :tls_recv_origin), parent.current}
     end
   end
 
@@ -323,14 +362,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case Map.get(state.encoded, source.pid) do
       %{result: {_bytes, states}, origin: origin, plaintext: plaintext} ->
         data = parent.input.data
-        data = data |> put_elem(2, states) |> put_elem(3, elem(data, 3) + IO.iodata_length(plaintext))
+
+        data =
+          data |> put_elem(2, states) |> put_elem(3, elem(data, 3) + IO.iodata_length(plaintext))
+
         {state, %{parent.input | data: data, origin: origin}}
 
-      nil -> {tls_failure(state, source, :tls_encode_origin), parent.current}
+      nil ->
+        {tls_failure(state, source, :tls_encode_origin), parent.current}
     end
   end
 
-  defp buffered_input(state, source, %{source: %{mfa: {:ssl_gen_statem, :passive_receive, 3}}} = parent) do
+  defp buffered_input(
+         state,
+         source,
+         %{source: %{mfa: {:ssl_gen_statem, :passive_receive, 3}}} = parent
+       ) do
     if elem(elem(parent.current.data, 12), 1) > 0,
       do: consume_buffer(state, source, parent.current, elem(parent.current.data, 12)),
       else: {state, parent.current}
@@ -350,8 +397,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp native_term(value, []), do: value
+
   defp native_term(value, [position | path]) when is_tuple(value),
     do: native_term(elem(value, position), path)
+
   defp native_term(value, [position | path]) when is_list(value),
     do: native_term(Enum.at(value, position), path)
 
@@ -374,14 +423,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         data = frame.input.data
         version = elem(elem(data, 1), 6)
         states = elem(data, 2)
-        expected_args = if module == :tls_record, do: [plaintext, version, states], else: [plaintext, states]
+
+        expected_args =
+          if module == :tls_record, do: [plaintext, version, states], else: [plaintext, states]
+
         expected = :tls_record.encode_data(plaintext, version, states)
 
         state
         |> tls_exact(source, :tls_record_input, arguments, expected_args)
-        |> put_in([:records, source.index], %{result: expected, kind: :encode, plaintext: plaintext})
+        |> put_in([:records, source.index], %{
+          result: expected,
+          kind: :encode,
+          plaintext: plaintext
+        })
 
-      :error -> tls_failure(state, source, :tls_plaintext_origin)
+      :error ->
+        tls_failure(state, source, :tls_plaintext_origin)
     end
   end
 
@@ -395,17 +452,32 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       %{value: {:info, {:tcp, port, bytes}}} when port == family.port ->
         buffers = elem(data, 11)
         environment = elem(data, 3)
-        expected_args = [bytes, elem(environment, 5), elem(buffers, 1),
-          Map.get(elem(data, 10), :max_fragment_length, :undefined), elem(environment, 2)]
+
+        expected_args = [
+          bytes,
+          elem(environment, 5),
+          elem(buffers, 1),
+          Map.get(elem(data, 10), :max_fragment_length, :undefined),
+          elem(environment, 2)
+        ]
+
         {records, buffer} = expected = apply(:tls_record, :get_tls_records, expected_args)
-        parsed = %{input: version, buffer: buffer, remaining: elem(buffers, 3) ++ records,
-          states: elem(data, 10), fragments: [], origin: source.index}
+
+        parsed = %{
+          input: version,
+          buffer: buffer,
+          remaining: elem(buffers, 3) ++ records,
+          states: elem(data, 10),
+          fragments: [],
+          origin: source.index
+        }
 
         state
         |> tls_exact(source, :tls_record_input, arguments, expected_args)
         |> put_in([:records, source.index], %{result: expected, kind: :records, parsed: parsed})
 
-      _ -> tls_failure(state, source, :tls_record_origin)
+      _ ->
+        tls_failure(state, source, :tls_record_origin)
     end
   end
 
@@ -416,20 +488,28 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         expected_args =
           if module == :tls_record_1_3,
             do: [record, states],
-            else: [elem(elem(input.data, 3), 5), record, states,
-              Map.get(elem(input.data, 4), :padding_check, true)]
+            else: [
+              elem(elem(input.data, 3), 5),
+              record,
+              states,
+              Map.get(elem(input.data, 4), :padding_check, true)
+            ]
 
         expected = apply(module, :decode_cipher_text, expected_args)
-        nested? = Enum.any?(state.records, fn {_index, record} ->
-          Map.get(record, :pid) == source.pid and record.kind == :decode
-        end)
+
+        nested? =
+          Enum.any?(state.records, fn {_index, record} ->
+            Map.get(record, :pid) == source.pid and record.kind == :decode
+          end)
+
         kind = if nested?, do: :decode_copy, else: :decode
 
         state
         |> tls_exact(source, :tls_record_input, arguments, expected_args)
         |> put_in([:records, source.index], %{result: expected, kind: kind, pid: source.pid})
 
-      _ -> tls_failure(state, source, :tls_record_origin)
+      _ ->
+        tls_failure(state, source, :tls_record_origin)
     end
   end
 
@@ -450,10 +530,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           [%{source: %{event: {_, :call, {:ssl, :send, [^socket, data]}}}}] ->
             {:ok, :erlang.iolist_to_iovec(data)}
 
-          _ -> :error
+          _ ->
+            :error
         end
 
-      _ -> :error
+      _ ->
+        :error
     end
   end
 
@@ -461,7 +543,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     call = Map.get(state.returns, source.index)
 
     case Map.pop(state.records, call) do
-      {nil, _records} -> worker_frame_return(state, source, result)
+      {nil, _records} ->
+        worker_frame_return(state, source, result)
+
       {record, records} ->
         state
         |> Map.put(:records, records)
@@ -485,12 +569,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     case record do
       {:ssl_tls, 23, _version, fragment, _early_data} ->
-        parsed = %{parsed | remaining: remaining, states: states,
-          fragments: parsed.fragments ++ [fragment], origin: source.index}
+        parsed = %{
+          parsed
+          | remaining: remaining,
+            states: states,
+            fragments: parsed.fragments ++ [fragment],
+            origin: source.index
+        }
+
         state = put_in(state.parsed[source.pid], parsed)
         decoded_state(state, source, parsed)
 
-      _ -> tls_failure(state, source, :tls_application_record_origin)
+      _ ->
+        tls_failure(state, source, :tls_application_record_origin)
     end
   end
 
@@ -512,11 +603,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       [%{source: %{mfa: mfa}} = frame | rest] when mfa == source.mfa ->
         {state, version} = worker_output(state, source, frame)
         path = result_data_path(result)
-        state = if path, do: worker_copy(state, source, [3 | path], version.data, version.origin), else: state
+
+        state =
+          if path,
+            do: worker_copy(state, source, [3 | path], version.data, version.origin),
+            else: state
+
         state = put_in(state.frames[source.pid], rest)
         advance_worker(state, source, version, rest)
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
@@ -533,21 +630,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       {:ok, alert} ->
         state = tls_exact(state, frame.source, :tls_alert_copy, hd(frame.arguments), alert)
         data = frame.input.data
-        {_bytes, states} = :tls_record.encode_alert_record(alert, elem(elem(data, 1), 6), elem(data, 2))
-        {state, %{frame.input | data: put_elem(data, 2, states), origin: {:tls_alert, source.index}}}
 
-      :error -> {tls_failure(state, source, :tls_alert_origin), frame.current}
+        {_bytes, states} =
+          :tls_record.encode_alert_record(alert, elem(elem(data, 1), 6), elem(data, 2))
+
+        {state,
+         %{frame.input | data: put_elem(data, 2, states), origin: {:tls_alert, source.index}}}
+
+      :error ->
+        {tls_failure(state, source, :tls_alert_origin), frame.current}
     end
   end
 
-  defp worker_output(state, source, %{source: %{mfa: {:ssl_gen_statem, :read_application_data, 2}}} = frame) do
+  defp worker_output(
+         state,
+         source,
+         %{source: %{mfa: {:ssl_gen_statem, :read_application_data, 2}}} = frame
+       ) do
     case Map.get(state.parsed, source.pid) do
       %{fragments: fragments, remaining: []} ->
         expected = IO.iodata_to_binary(fragments)
         state = tls_exact(state, frame.source, :tls_plaintext_copy, hd(frame.arguments), expected)
         delivered_state(state, source, frame.input, expected)
 
-      _ -> {tls_failure(state, source, :tls_plaintext_origin), frame.current}
+      _ ->
+        {tls_failure(state, source, :tls_plaintext_origin), frame.current}
     end
   end
 
@@ -556,9 +663,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       {{:ssl_gen_statem, :connection, 3}, %{value: {{:call, _}, {:close, _}}}} ->
         data = frame.input.data
         environment = put_elem(elem(data, 3), 3, true)
-        {state, %{frame.input | data: put_elem(data, 3, environment), origin: {:tls_close, source.index}}}
 
-      _ -> {state, frame.current}
+        {state,
+         %{frame.input | data: put_elem(data, 3, environment), origin: {:tls_close, source.index}}}
+
+      _ ->
+        {state, frame.current}
     end
   end
 
@@ -571,7 +681,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     {:socket_options, :binary, packet, _max_packet, 0, false} = elem(data, 5)
     true = packet in [0, :raw]
     {front, size, rear} = elem(data, 12)
-    consume_buffer(state, source, version, {front, size + byte_size(plaintext), [plaintext | rear]})
+
+    consume_buffer(
+      state,
+      source,
+      version,
+      {front, size + byte_size(plaintext), [plaintext | rear]}
+    )
   end
 
   defp consume_buffer(state, source, version, {_front, 0, _rear}) do
@@ -597,7 +713,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     {front, rear, remaining} =
       if byte_size(bytes) >= count do
-        <<_delivered::binary-size(count), remaining::binary>> = bytes
+        <<_delivered::binary-size(^count), remaining::binary>> = bytes
         {front, rear, remaining}
       else
         {front, rear} = consume_queue(count - byte_size(bytes), front, rear)
@@ -619,10 +735,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp consume_queue(0, front, rear), do: {front, rear}
   defp consume_queue(count, [], rear), do: consume_queue(count, Enum.reverse(rear), [])
+
   defp consume_queue(count, [bytes | front], rear) when byte_size(bytes) <= count,
     do: consume_queue(count - byte_size(bytes), front, rear)
+
   defp consume_queue(count, [bytes | front], rear) do
-    <<_consumed::binary-size(count), rest::binary>> = bytes
+    <<_consumed::binary-size(^count), rest::binary>> = bytes
     {[rest | front], rear}
   end
 

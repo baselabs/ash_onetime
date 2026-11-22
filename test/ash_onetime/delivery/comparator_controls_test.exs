@@ -3083,12 +3083,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     {_holder, connection} = Enum.find(captured.connections, fn {_, value} -> value.protocol end)
     marker = "known-native-diagnostic-sentinel"
     private = %{connection.protocol | scram: marker, connection_key: 9_876_543_219_876}
+    tls = ConnectionNative.observe_tls()
+
+    tls_states =
+      for {_pid, {_name, data}} <- tls.tls_binding.states,
+          do: diagnostic_sentinel(data, marker)
+
     {:error, postgres_error} = SQL.query(context.repo, "SELECT 1 / 0", [])
     marked_error = %{postgres_error | query: marker}
 
     state = %{
       captured: captured,
       protocol: private,
+      tls: tls_states,
       copied_key: private.connection_key,
       postgres_error: marked_error
     }
@@ -3168,7 +3175,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     require Logger
 
-    for report <- [%{capture: state}, marked_error] do
+    for report <- [%{capture: state}, marked_error] ++ tls_states do
       logged = ExUnit.CaptureLog.capture_log(fn -> Logger.error(fn -> report end) end)
       refute String.contains?(logged, marker)
       refute String.contains?(logged, "9876543219876")
@@ -3178,6 +3185,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert assertion.left === state
     IO.puts("NATIVE_DIAGNOSTIC_CLASS: unprojected RED; every typed output GREEN")
   end
+
+  defp diagnostic_sentinel(value, marker) when is_binary(value), do: marker
+
+  defp diagnostic_sentinel(value, marker) when is_tuple(value),
+    do: value |> Tuple.to_list() |> Enum.map(&diagnostic_sentinel(&1, marker)) |> List.to_tuple()
+
+  defp diagnostic_sentinel(value, marker) when is_map(value),
+    do: Map.new(Map.to_list(value), fn {key, item} -> {key, diagnostic_sentinel(item, marker)} end)
+
+  defp diagnostic_sentinel([head | tail], marker),
+    do: [diagnostic_sentinel(head, marker) | diagnostic_sentinel(tail, marker)]
+
+  defp diagnostic_sentinel(value, _marker), do: value
 
   @tag :connection_streams
   test "Connection streams: a historical active mode owns the first native delivery" do
@@ -3309,6 +3329,57 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
     IO.puts("CONNECTION_TLS_STATE_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native TLS constructed state needs its own guard" do
+    run = ComparatorMutants.with_tls_sender_mutant(:constructed_state, &ConnectionNative.observe_tls/0)
+    assert run.result == []
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    [corrupted] =
+      Enum.filter(events, fn
+        %{
+          event:
+            {_, :call,
+             {:tls_sender, :send_or_buffer, [_, _, _, _, {:native_foreign_tls_constructed, _}]}}
+        } ->
+          true
+
+        _ ->
+          false
+      end)
+
+    assert corrupted.pid == run.tls_binding.sender
+    native = ConnectionTls.build(%{events: events}, run.tls_binding)
+    assert Enum.map(native.errors, & &1.rule) == [:tls_worker_state_copy]
+    assert hd(native.errors).index == corrupted.index
+
+    for mutant <- [:stream_tls_state_copy, :stream_buffer_copy, :stream_tls_worker_state_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn ->
+        ConnectionTls.build(%{events: events}, run.tls_binding)
+      end)
+
+      expected = if mutant == :stream_tls_worker_state_copy, do: [], else: [:tls_worker_state_copy]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    assert Enum.map(ConnectionTls.build(%{events: events}, run.tls_binding).errors, & &1.rule) ==
+             [:tls_worker_state_copy]
+
+    restored = ConnectionNative.observe_tls()
+
+    restored_events =
+      restored.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+    IO.puts("CONNECTION_TLS_CONSTRUCTED_STATE: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
   @tag :connection_streams
