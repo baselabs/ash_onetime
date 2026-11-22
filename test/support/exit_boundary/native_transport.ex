@@ -1,12 +1,14 @@
 defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   @moduledoc false
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
   @control_magic 0x03F1A300
 
   # Validate the concrete inet driver program of each read independently. This
   # ledger does not grant any event exemption: the stream consumer must also prove
   # that framing and the protocol state machine required that particular read.
   def build(indexed, historical \\ %{}, transports \\ []) do
-    pairs = pairs(indexed.events)
+    profile = Map.get(indexed, :profile)
+    pairs = profile_component(profile, :native_pairs, fn -> pairs(indexed.events) end)
 
     initial = %{
       pairs: pairs,
@@ -25,26 +27,31 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     }
 
     state =
-      Enum.reduce(indexed.events, initial, fn
-        %{event: {_, :call, {:gen_tcp, :recv, [port, length, timeout]}}} = source, state
-        when is_port(port) ->
-          read(source, port, length, timeout, state)
+      profile_component(profile, :native_calls, fn ->
+        Enum.reduce(indexed.events, initial, fn
+          %{event: {_, :call, {:gen_tcp, :recv, [port, length, timeout]}}} = source, state
+          when is_port(port) ->
+            read(source, port, length, timeout, state)
 
-        %{event: {_, :call, {:gen_tcp, :send, [port, data]}}} = source, state
-        when is_port(port) ->
-          write(source, port, data, state)
+          %{event: {_, :call, {:gen_tcp, :send, [port, data]}}} = source, state
+          when is_port(port) ->
+            write(source, port, data, state)
 
-        %{event: {_, :call, {:prim_inet, :setopts, [port, [active: mode]]}}} = source, state
-        when is_port(port) and (mode in [:once, false] or is_integer(mode)) ->
-          option(source, port, mode, state)
+          %{event: {_, :call, {:prim_inet, :setopts, [port, [active: mode]]}}} = source, state
+          when is_port(port) and (mode in [:once, false] or is_integer(mode)) ->
+            option(source, port, mode, state)
 
-        _, state ->
-          state
+          _, state ->
+            state
+        end)
       end)
 
-    state = option_sources(state)
-    state = active_deliveries(state)
-    state = passive_sources(state)
+    state = profile_component(profile, :native_option_sources, fn -> option_sources(state) end)
+
+    state =
+      profile_component(profile, :native_active_deliveries, fn -> active_deliveries(state) end)
+
+    state = profile_component(profile, :native_passive_sources, fn -> passive_sources(state) end)
 
     %{
       pairs: pairs,
@@ -56,6 +63,23 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       historical: historical,
       errors: Enum.reverse(state.errors)
     }
+  end
+
+  # Temporary native subcomponent timing, enabled only by the owning TLS
+  # experiment. Event selection, arguments and validation remain identical.
+  defp profile_component(nil, _component, callback), do: callback.()
+
+  defp profile_component(profile, component, callback) do
+    started = System.monotonic_time(:microsecond)
+    value = callback.()
+    elapsed = System.monotonic_time(:microsecond) - started
+
+    IO.puts(
+      "NATIVE_TLS_COMPONENT: " <>
+        Diagnostics.render(Map.merge(profile, %{component: component, length: elapsed}))
+    )
+
+    value
   end
 
   defp historical_modes(historical) do

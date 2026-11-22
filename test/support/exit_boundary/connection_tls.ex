@@ -187,7 +187,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     transport =
       profile_component(profile, :native_transport, fn ->
-        NativeTransport.build(indexed, %{}, Enum.map(families, & &1.transport))
+        NativeTransport.build(
+          Map.put(indexed, :profile, profile),
+          %{},
+          Enum.map(families, & &1.transport)
+        )
       end)
 
     pairs = transport.pairs

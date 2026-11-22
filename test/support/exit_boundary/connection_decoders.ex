@@ -86,7 +86,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     context = %{
       state: state,
       direct: direct,
-      instances: Map.new(state.instances, &{&1.source.index, &1})
+      instances: Map.new(state.instances, &{&1.source.index, &1}),
+      ingress: decoder_ingress(state)
     }
 
     pairs =
@@ -102,19 +103,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       end)
       |> Enum.sort_by(& &1.source.index, :desc)
 
+    context = Map.put(context, :active_inputs, active_inputs(context, pairs))
+
     # Inner calls start later. Build each semantic result once, then use that
     # result in its callers without recursively walking the same program again.
     plans =
       Enum.reduce(pairs, %{}, fn pair, plans ->
         events = decoder_direct(context, pair)
+        ingress = Enum.filter(events, &Map.has_key?(context.ingress, &1.index))
+        execution = Enum.reject(events, &Map.has_key?(context.ingress, &1.index))
 
         {expected, terminal, origins} =
-          decoder_branch(Map.put(context, :plans, plans), pair, events)
+          decoder_branch(Map.put(context, :plans, plans), pair, execution)
 
         program = %{
           source: pair.source,
           returned: pair.returned,
           events: events,
+          execution: execution,
+          ingress: Enum.map(ingress, &Map.fetch!(context.ingress, &1.index)),
           origins: origins,
           expected: {expected, terminal}
         }
@@ -126,13 +133,92 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     |> Enum.reverse()
     |> Enum.reduce(state, fn pair, state ->
       program = Map.fetch!(plans, pair.source.index)
-      actual = {Enum.map(program.events, &program_event/1), program_terminal(pair.returned.event)}
+      actual =
+        {Enum.map(program.execution, &program_event/1), program_terminal(pair.returned.event)}
+
       state = %{state | programs: [program | state.programs]}
 
       if decoder_program_equal?(actual, program.expected),
         do: state,
         else: failure(state, pair.source, :decoder_program, false)
     end)
+  end
+
+  # An arrival is reported when it enters the mailbox, possibly before the
+  # selective receive that consumes it. Its native source/copy proof owns its
+  # position independently of the executing call stack. Keep every raw event
+  # in the program and keep these exact ingress receipts in a separate lane;
+  # they grant no allowance for any non-transport or later event.
+  defp decoder_ingress(state) do
+    active = for delivery <- state.native.active, do: delivery.returned
+    passive = for delivery <- state.native.passive, do: delivery.received
+    replay = for delivery <- state.replays, do: delivery.received
+    Map.new(active ++ passive ++ replay, &{&1.index, &1})
+  end
+
+  defp active_inputs(context, pairs) do
+    versions = Map.new(context.state.timeline, &{&1.index, &1})
+    initial = historical_cursors(context.state.native.historical)
+
+    active =
+      for delivery <- context.state.native.active,
+          %{cursor: cursor} <- [versions[delivery.returned.index]],
+          span <- cursor.spans,
+          span.index == delivery.returned.index,
+          do: %{received: delivery.returned, start: span.offset, port: delivery.port}
+
+    replay =
+      for delivery <- context.state.replays,
+          do: %{received: delivery.received, start: delivery.start, port: delivery.port}
+
+    deliveries = Enum.sort_by(active ++ replay, & &1.received.index)
+
+    {inputs, _used} =
+      pairs
+      |> Enum.reverse()
+      |> Enum.reduce({%{}, MapSet.new()}, fn pair, {inputs, used} ->
+        events = decoder_direct(context, pair)
+
+        if pair.source.mfa == {Postgrex.Protocol, :msg_recv, 3} and
+             is_nil(direct_call(events, {Postgrex.Protocol, :msg_decode, 1})) do
+          {_, :call, {_, _, [protocol, _, _]}} = pair.source.event
+          {module, socket} = protocol.sock
+          tag = if module == :gen_tcp, do: :tcp, else: :ssl
+          child = direct_call(events, {Postgrex.Protocol, :msg_recv, 3})
+
+          cursor =
+            context.state.timeline
+            |> Enum.filter(&(&1.port == socket and &1.index < pair.source.index))
+            |> Enum.max_by(& &1.index, fn -> nil end)
+            |> case do
+              %{cursor: cursor} -> cursor
+              nil -> initial[socket]
+            end
+
+          delivery =
+            if child && cursor do
+              Enum.find(deliveries, fn delivery ->
+                received = delivery.received
+
+                delivery.port == socket and delivery.start >= cursor.offset and
+                  received.index < child.index and received.pid == pair.source.pid and
+                  not MapSet.member?(used, received.index) and
+                  match?({_, :receive, {^tag, ^socket, _}}, received.event)
+              end)
+            end
+
+          if delivery do
+            received = delivery.received
+            {Map.put(inputs, pair.source.index, received), MapSet.put(used, received.index)}
+          else
+            {inputs, used}
+          end
+        else
+          {inputs, used}
+        end
+      end)
+
+    inputs
   end
 
   defp decoder_program_equal?(actual, expected), do: actual === expected
@@ -282,27 +368,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     {module, socket} = protocol.sock
     tag = if module == :gen_tcp, do: :tcp, else: :ssl
 
-    case Enum.find(events, &(elem(&1.event, 1) == :receive)) do
-      %{event: {_, :receive, {^tag, ^socket, _}}, index: index} = received ->
-        deliveries = context.state.native.active ++ context.state.replays
+    received =
+      Map.get(context.active_inputs, pair.source.index) ||
+        Enum.find(events, &(elem(&1.event, 1) == :receive))
 
-        bound? =
-          Enum.any?(deliveries, fn delivery ->
-            source = Map.get(delivery, :received, Map.get(delivery, :returned))
-            source.index == index and source.event === received.event
-          end)
-
-        if bound? do
-          child_program(
-            context,
-            events,
-            {Postgrex.Protocol, :msg_recv, 3},
-            [program_event(received)],
-            [index]
-          )
-        else
-          {[:missing_active_origin], :missing_active_origin, []}
-        end
+    case received do
+      %{event: {_, :receive, {^tag, ^socket, _}}, index: index} ->
+        child_program(context, events, {Postgrex.Protocol, :msg_recv, 3}, [], [index])
 
       %{event: {_, :receive, message}} = received ->
         closed = if tag == :tcp, do: :tcp_closed, else: :ssl_closed
@@ -323,7 +395,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
         end
 
       nil ->
-        {[], {:return_from, :disconnect, 3}, []}
+        {[:missing_active_origin], :missing_active_origin, []}
     end
   end
 
@@ -1025,14 +1097,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
     case {program, received} do
       {[_source, call, sent, returned, _stop], %{index: index}} ->
-        record_replay(e, pair, cursor, buffer, [call, sent, returned], received, index, state)
+        record_replay(e, pair, cursor, buffer, port, [call, sent, returned], received, index, state)
 
       _ ->
         failure(state, e, :decoder_replay_copy, false)
     end
   end
 
-  defp record_replay(e, pair, cursor, buffer, [call, sent, returned], received, index, state) do
+  defp record_replay(e, pair, cursor, buffer, port, [call, sent, returned], received, index, state) do
     size = byte_size(buffer)
 
     copies = [
@@ -1044,6 +1116,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     ]
 
     replay = %{
+      port: port,
       source: e,
       returned: pair.returned,
       received: received,

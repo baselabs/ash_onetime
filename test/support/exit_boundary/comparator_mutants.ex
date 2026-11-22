@@ -1018,7 +1018,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       end)
 
     assert rechecked.errors == native.errors
-    restored = machine_reply_phase(mode, :fresh_native, fn -> ConnectionNative.observe_tls(mode) end)
+    restored =
+      machine_reply_phase(mode, :fresh_native, fn -> ConnectionNative.observe_tls(mode) end)
 
     restored_events =
       restored.events

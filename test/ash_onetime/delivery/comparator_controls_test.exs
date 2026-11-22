@@ -1712,6 +1712,52 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: native type requests retain their completed server callbacks" do
+    captured = native_query_factory(:domain_reload)
+    assert captured.native.errors == []
+    assert captured.streams.errors == []
+    pairs = NativeTransport.pairs(captured.events)
+
+    requests =
+      for {_index, pair} <- pairs,
+          pair.source.mfa in [
+            {Postgrex.TypeServer, :fetch, 1},
+            {Postgrex.TypeServer, :update, 3}
+          ],
+          do: pair
+
+    for function <- [:fetch, :update] do
+      assert Enum.any?(requests, &(elem(&1.source.mfa, 1) == function))
+    end
+
+    for pair <- requests do
+      {caller, :call, {_, function, [server | arguments]}} = pair.source.event
+      assert is_pid(server)
+      request = if function == :fetch, do: :fetch, else: List.to_tuple([:update | arguments])
+
+      callback =
+        Enum.find(captured.events, fn
+          %{
+            pid: ^server,
+            event: {_, :call, {Postgrex.TypeServer, :handle_call, [actual, {^caller, _}, _]}}
+          } = source ->
+            actual === request and source.index > pair.source.index and
+              source.index < pair.returned.index
+
+          _ ->
+            false
+        end)
+
+      assert callback, "every native type request needs its actual server callback"
+      assert Map.has_key?(pairs, callback.index)
+
+      # The update sends its reply before next/1 finishes. Completion is owed
+      # by the terminal drain, rather than an invented callback-before-reply edge.
+      assert elem(pairs[callback.index].returned.event, 1) == :return_from
+    end
+  end
+
+  @tag :connection_streams
   test "Connection streams: savepoint tags retain the active transaction receive origin" do
     targets = %{{:recv_transaction, 4} => [2], {:done, 2} => [1]}
 
