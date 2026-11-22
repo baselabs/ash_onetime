@@ -143,8 +143,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       ports: ports,
       rows: rows,
       commits:
-        for {holder, row} <- rows,
-            do: %{holder: holder, index: -1, origin: {:historical, holder}, row: row},
+        for(
+          {holder, row} <- rows,
+          do: %{holder: holder, index: -1, origin: {:historical, holder}, row: row}
+        ),
       lookups: %{},
       completed: %{},
       frames: %{},
