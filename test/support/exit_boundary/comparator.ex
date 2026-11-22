@@ -2077,6 +2077,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       else: error(state, :historical_connection, path ++ [side, field], actual, expected)
   end
 
+  defp historical_backend(nil, nil, state, _path), do: state
+
   defp historical_backend(a, b, state, path) do
     left =
       Enum.find_value(state.run.historical.connections, fn {holder, c} ->

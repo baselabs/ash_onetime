@@ -3,7 +3,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   alias AshOnetime.Test.ExitBoundary.Root
 
   import Postgrex.Messages,
-    only: [msg_ready: 1, msg_parameter: 1, msg_notice: 1, msg_notify: 1]
+    only: [
+      msg_ready: 1,
+      msg_parameter: 1,
+      msg_notice: 1,
+      msg_notify: 1,
+      msg_bind: 1,
+      msg_execute: 1,
+      msg_close: 1,
+      msg_sync: 0,
+      msg_query: 1
+    ]
 
   @callbacks [
     :handle_prepare,
@@ -499,7 +509,56 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp helper_input(state, source, :done, [_protocol, _query, rows | _], version),
     do: helper_rows(state, source, [2, 2, 2], rows, version.protocol)
 
+  defp helper_input(state, source, :msg_send, [_protocol, messages, _buffer], version) do
+    case List.first(Map.get(state.frames, source.pid, [])) do
+      %{source: %{mfa: {Postgrex.Protocol, function, 4}}} = frame
+      when function in [:handle_execute, :handle_prepare_execute] ->
+        execute_messages(state, source, frame, version, messages)
+
+      _ ->
+        state
+    end
+  end
+
   defp helper_input(state, _source, _function, _arguments, _version), do: state
+
+  defp execute_messages(state, source, frame, version, actual) do
+    execution = execution_origin(state, source, version.protocol)
+    {_, :call, {_, _, [_query, params, options, _protocol]}} = frame.source.event
+
+    case {execution, Keyword.get(options, :mode, :transaction)} do
+      {%{descriptor: descriptor}, mode} when mode in [:transaction, :savepoint] ->
+        query = descriptor.query
+
+        bind =
+          msg_bind(
+            name_port: "",
+            name_stat: query.name,
+            param_formats: query.param_formats,
+            params: params,
+            result_formats: query.result_formats
+          )
+
+        tail =
+          case {mode, query.name} do
+            {:savepoint, _name} ->
+              [msg_query(statement: "RELEASE SAVEPOINT postgrex_query")]
+
+            {:transaction, ""} ->
+              [msg_close(type: :statement, name: ""), msg_sync()]
+
+            {:transaction, _name} ->
+              [msg_sync()]
+          end
+
+        expected = [bind, msg_execute(name_port: "", max_rows: 0) | tail]
+        origin = {:execute_messages, frame.source.index, descriptor.index, descriptor.path}
+        helper_copy(state, source, [2, 2, 1], actual, expected, origin)
+
+      _ ->
+        failure(state, source, :state_helper_send_origin)
+    end
+  end
 
   defp helper_timeout(state, source, actual) do
     callback =
@@ -525,10 +584,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp helper_types(state, source, %{protocol: %{sock: {:gen_tcp, port}}}, actual) do
-    execution =
-      state.decoders.executions
-      |> Enum.filter(&(&1.port == port and &1.pid == source.pid and &1.index < source.index))
-      |> List.last()
+    execution = execution_origin(state, source, %{sock: {:gen_tcp, port}})
 
     case execution do
       %{descriptor: descriptor} ->
@@ -542,6 +598,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp helper_types(state, source, _version, _actual),
     do: failure(state, source, :state_helper_type_origin)
+
+  defp execution_origin(state, source, %{sock: {:gen_tcp, port}}) do
+    state.decoders.executions
+    |> Enum.filter(&(&1.port == port and &1.pid == source.pid and &1.index < source.index))
+    |> List.last()
+  end
+
+  defp execution_origin(_state, _source, _protocol), do: nil
 
   defp helper_rows(state, source, path, actual, protocol) do
     case cursor_version(state, source, protocol) do

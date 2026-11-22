@@ -305,6 +305,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp cached_statement(:rows), do: {"SELECT $1::int4 AS connection_stream_probe", [17]}
   defp cached_statement(:cross_connection), do: cached_statement(:rows)
 
+  defp cached_statement(:error),
+    do: {"SELECT 17 / $1::int4 AS connection_stream_probe", [0]}
+
   defp cached_statement(:large_rows),
     do: {"SELECT $1::int4 AS connection_stream_probe, repeat('x', 131072)::text AS filler", [17]}
 
@@ -341,7 +344,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp cached_environment(protocol, _shape), do: protocol
 
   defp warm_cached(protocol, _query, _params, shape)
-       when shape in [:parameter, :notification],
+       when shape in [:parameter, :notification, :error],
        do: protocol
 
   defp warm_cached(protocol, query, params, _shape) do
@@ -357,11 +360,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     protocol =
       if corruption == :state_copy, do: %{protocol | null: :foreign_native_null}, else: protocol
 
-    {:ok, ^query, result, protocol} =
-      Postgrex.Protocol.handle_execute(query, params, [], protocol)
+    case Postgrex.Protocol.handle_execute(query, params, [], protocol) do
+      {:ok, ^query, result, protocol} ->
+        if shape == :notification, do: {:ok, _protocol} = Postgrex.Protocol.ping(protocol)
+        DBConnection.Query.decode(query, result, [])
 
-    if shape == :notification, do: {:ok, _protocol} = Postgrex.Protocol.ping(protocol)
-    DBConnection.Query.decode(query, result, [])
+      {:error, %Postgrex.Error{} = error, _protocol} ->
+        {:error, error}
+    end
   after
     :ok = module.close(socket)
   end

@@ -449,7 +449,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           :large_rows,
           :notice,
           :parameter,
-          :notification
+          :notification,
+          :error
         ] do
       captured = cached_decoders(nil, shape)
       %{decoders: decoders, origin: origin, events: events, streams: streams} = captured
@@ -536,6 +537,22 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              end)
 
       assert Enum.all?(rows, &(&1.descriptor == Map.take(origin, [:index, :path])))
+
+      if shape == :error do
+        ready_errors =
+          for %{
+                event:
+                  {_, :call,
+                   {Postgrex.Protocol, :error_ready, [_, _, %Postgrex.Error{} = error, _]}}
+              } <- events,
+              do: error
+
+        assert ready_errors != []
+        assert Enum.all?(ready_errors, &is_nil(&1.connection_id))
+        assert {:error, error} = captured.run.result
+        protocol = captured.historical |> Map.values() |> hd() |> Map.fetch!(:protocol)
+        assert error.connection_id === protocol.connection_id
+      end
 
       if shape == :cross_connection do
         [{port, connection}] = Map.to_list(streams.connections)
@@ -996,6 +1013,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     states = native_copy_states(captured)
     assert Enum.map(states.errors, & &1.rule) == [:state_helper_copy]
     assert hd(states.errors).index == corrupted.index
+
+    for mutant <- [:stream_buffer_copy, :stream_state_copy, :stream_helper_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+      expected = if mutant == :stream_helper_copy, do: [], else: [:state_helper_copy]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    assert Enum.map(native_copy_states(captured).errors, & &1.rule) == [:state_helper_copy]
+    assert native_copy_states(cached_decoders(nil)).errors == []
+    IO.puts("CONNECTION_SEND_MESSAGES_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
   @tag :connection_streams
@@ -1231,7 +1258,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp cached_decoders(corruption, shape \\ :rows) do
     %{run: run, history: history} = ConnectionNative.observe_cached(corruption, shape)
-    assert native_result(run) == {:ok, cached_rows(shape)}
+
+    if shape == :error do
+      assert {:error, %Postgrex.Error{postgres: %{code: :division_by_zero}}} = run.result
+    else
+      assert native_result(run) == {:ok, cached_rows(shape)}
+    end
     [origin] = history.history.descriptors
     query = origin.query
     framing = Wire.frames(history.chunks)
@@ -1256,7 +1288,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end)
 
     case shape do
-      shape when shape in [:rows, :cross_connection] ->
+      shape when shape in [:rows, :cross_connection, :error] ->
         assert catalog.parameter_types == [23]
         assert [{"connection_stream_probe", {:table_oid, 0}, 0, 23, 4, -1, 0}] = catalog.columns
         assert catalog.description == :rows
@@ -1296,6 +1328,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     %{
       decoders: decoders,
+      run: run,
       origin: origin,
       events: indexed,
       native: native,

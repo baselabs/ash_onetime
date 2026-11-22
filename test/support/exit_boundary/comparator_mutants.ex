@@ -510,7 +510,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/native_transport.ex",
-        original: "      _ -> failure(state, source, :native_active_mode)\n",
+        original: "      _ ->\n        failure(state, source, :native_active_mode)\n",
         mutated:
           "      _ -> active_delivery(source, %{mode: true, origin: :unchecked_active_mode}, state)\n"
       }

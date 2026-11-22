@@ -120,7 +120,8 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       when mode in [:once, true] or (is_integer(mode) and mode > 0) ->
         active_delivery(source, option, state)
 
-      _ -> failure(state, source, :native_active_mode)
+      _ ->
+        failure(state, source, :native_active_mode)
     end
   end
 

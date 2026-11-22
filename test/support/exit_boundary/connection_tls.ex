@@ -1,5 +1,6 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   @moduledoc false
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.NativeTransport
 
   # The SSL socket stays opaque. Match its public endpoint pair to the unique
@@ -413,6 +414,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     else
       actual = native_term(source.event, path)
       state = tls_exact(state, source, :tls_worker_state_copy, actual, expected)
+
+      state =
+        if actual !== expected do
+          [error | errors] = state.errors
+
+          differences =
+            if is_tuple(actual) and is_tuple(expected) and
+                 tuple_size(actual) == tuple_size(expected) do
+              for position <- 0..(tuple_size(expected) - 1),
+                  elem(actual, position) !== elem(expected, position),
+                  do: %{path: path ++ [position]}
+            else
+              []
+            end
+
+          error = Map.merge(error, %{path: path, origin: origin, differences: differences})
+          %{state | errors: [error | errors]}
+        else
+          state
+        end
+
       copy = %{index: source.index, path: path, origin: origin}
       Map.update!(state, :terms, &[copy | &1])
     end
@@ -482,6 +504,28 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           Map.get(elem(data, 10), :max_fragment_length, :undefined),
           elem(environment, 2)
         ]
+
+        if arguments !== expected_args do
+          for error <- Enum.reverse(state.errors) do
+            IO.puts(
+              "CONNECTION_TLS_PRIOR_SOURCE: " <>
+                Diagnostics.render(error)
+            )
+          end
+
+          for {{actual, expected}, position} <- Enum.with_index(Enum.zip(arguments, expected_args)),
+              actual !== expected do
+            IO.puts(
+              "CONNECTION_TLS_RECORD_INPUT_SOURCE: " <>
+                Diagnostics.render(%{
+                  index: source.index,
+                  mfa: source.mfa,
+                  path: [2, 2, position],
+                  origin: frame.input.origin
+                })
+            )
+          end
+        end
 
         {records, buffer} = expected = apply(:tls_record, :get_tls_records, expected_args)
 
