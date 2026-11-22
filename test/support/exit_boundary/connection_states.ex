@@ -2035,8 +2035,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
         statement =
           try do
-            protocol = %{context.version.protocol | types: types}
-            Postgrex.Types.reload_query(version, Enum.to_list(oids), protocol)
+            options = %{
+              types: types,
+              disable_composite_types: context.version.protocol.disable_composite_types
+            }
+
+            Postgrex.Types.reload_query(version, Enum.to_list(oids), options)
           after
             :ets.delete(elem(types, 1))
           end
