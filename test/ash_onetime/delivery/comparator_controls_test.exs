@@ -976,8 +976,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     [corrupted] =
       Enum.filter(captured.events, fn
         %{
-          event:
-            {_, :call, {Postgrex.Protocol, :recv_ready, [_, {:native_foreign_status, _}, _]}}
+          event: {_, :call, {Postgrex.Protocol, :recv_ready, [_, {:native_foreign_status, _}, _]}}
         } ->
           true
 
@@ -992,6 +991,17 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     states = native_copy_states(captured)
     assert Enum.map(states.errors, & &1.rule) == [:state_status_copy]
     assert hd(states.errors).index == corrupted.index
+
+    for mutant <- [:stream_buffer_copy, :stream_state_copy, :stream_helper_copy, :stream_status_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+      expected = if mutant == :stream_status_copy, do: [], else: [:state_status_copy]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    assert Enum.map(native_copy_states(captured).errors, & &1.rule) == [:state_status_copy]
+    assert native_copy_states(cached_decoders(nil)).errors == []
+
+    IO.puts("CONNECTION_STATUS_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
   @tag :connection_streams

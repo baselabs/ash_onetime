@@ -570,11 +570,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     else
       state = tls_exact(state, source, :tls_passive_option, options, [])
       specific = Map.put(elem(data, 7), :active_n_toggle, true)
+
       version = %{
         version
         | data: put_elem(data, 7, specific),
           origin: {:tls_passive, parent.source.index, parent.event.origin, version.origin}
       }
+
       {state, version}
     end
   end
@@ -602,7 +604,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         specific = elem(version.data, 7)
         expected = Map.fetch!(specific, :active_n)
         state = tls_exact(state, source, :tls_active_option_copy, mode, expected)
-        specific = specific |> Map.put(:active_n_toggle, false) |> Map.put(:socket_active, expected)
+
+        specific =
+          specific |> Map.put(:active_n_toggle, false) |> Map.put(:socket_active, expected)
 
         version = %{
           version

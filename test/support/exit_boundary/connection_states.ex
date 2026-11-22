@@ -53,6 +53,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   @copies [:msg_send, :msg_recv, :rows_recv, :redescribe]
   @owners @callbacks ++ @constructors ++ @scopes ++ @copies
   @last_state @callbacks ++ [:handle_prepare_execute]
+  @status_consumers [
+    :parse_describe_flush,
+    :close_parse_describe_flush,
+    :recv_ready,
+    :recv_strict_ready,
+    :handle_msg,
+    :ping_recv,
+    :recv_transaction,
+    :error_ready,
+    :error_flushed,
+    :rollback_flushed,
+    :reload_flushed
+  ]
   @cursor_buffers %{
     msg_recv: 2,
     rows_recv: 3,
@@ -87,6 +100,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       frames: %{},
       pending: %{},
       described: %{},
+      factories: %{},
       versions: Map.values(holders),
       copies: [],
       buffers: [],
@@ -132,7 +146,132 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     state = commit(source, state)
     state = holder_event(source, state)
     state = fixture_event(source, state)
+    state = factory_event(source, state)
     callback_event(source, state)
+  end
+
+  defp factory_event(
+         %{event: {pid, :return_from, {Postgrex.Protocol, function, 1}, value}} = source,
+         state
+       )
+       when function in [:notify, :mode] do
+    with %{source: callback} = frame <- status_callback(state, pid),
+         {:ok, options} <- status_options(frame),
+         %{source: %{event: {^pid, :call, {Postgrex.Protocol, ^function, [actual]}}}} <-
+           pair_returned(state, source) do
+      state = exact(state, source, :state_status_factory_input, actual, options)
+      state = factory_value(state, source, function, value, options)
+      put_in(state.factories[{callback.index, function}], %{value: value, index: source.index})
+    else
+      _ -> failure(state, source, :state_status_factory_origin)
+    end
+  end
+
+  defp factory_event(_source, state), do: state
+
+  defp factory_value(state, source, :mode, actual, options) do
+    expected = options[:mode] || :transaction
+    exact(state, source, :state_status_factory_value, actual, expected)
+  end
+
+  defp factory_value(state, source, :notify, actual, options) do
+    case options[:notify] do
+      callback when callback not in [nil, false] ->
+        exact(state, source, :state_status_factory_value, actual, callback)
+
+      _ ->
+        if is_function(actual, 2),
+          do: state,
+          else: failure(state, source, :state_status_factory_value)
+    end
+  end
+
+  defp status_callback(state, pid) do
+    Enum.find(Map.get(state.frames, pid, []), &(elem(&1.source.mfa, 1) in @last_state))
+  end
+
+  defp status_options(%{source: %{event: {_, :call, {_, :ping, [_]}}}}), do: {:ok, []}
+
+  defp status_options(%{source: %{event: {_, :call, {_, function, arguments}}}})
+       when function in @last_state do
+    case Enum.at(arguments, -2) do
+      options when is_list(options) -> {:ok, options}
+      _ -> :error
+    end
+  end
+
+  defp status_options(_frame), do: :error
+
+  defp status_input(state, source, function, arguments) when function in @status_consumers do
+    with %{source: callback} = frame <- status_callback(state, source.pid),
+         {:ok, options} <- status_options(frame),
+         %{value: notify, index: notify_index} <- state.factories[{callback.index, :notify}],
+         {:ok, mode} <- status_mode(state, frame, options) do
+      prepare =
+        if elem(callback.mfa, 1) == :handle_prepare,
+          do: Keyword.get(options, :postgrex_prepare, false),
+          else: false
+
+      expected = %{notify: notify, mode: mode, prepare: prepare}
+      actual = Enum.at(arguments, 1)
+      state = exact(state, source, :state_status_copy, actual, expected)
+      origin = {:callback_status, callback.index, notify_index}
+      term = %{index: source.index, path: [2, 2, 1], origin: origin}
+      Map.update!(state, :terms, &[term | &1])
+    else
+      _ -> failure(state, source, :state_status_origin)
+    end
+  end
+
+  defp status_input(state, _source, _function, _arguments), do: state
+
+  defp status_mode(_state, %{source: %{mfa: {_, function, _}}}, _options)
+       when function in [:ping, :handle_begin, :handle_commit, :handle_rollback, :handle_info],
+       do: {:ok, :transaction}
+
+  defp status_mode(
+         _state,
+         %{source: %{event: {_, :call, {_, :handle_execute, [%Postgrex.TextQuery{} | _]}}}},
+         _options
+       ),
+       do: {:ok, :transaction}
+
+  defp status_mode(
+         _state,
+         %{
+           input: %{postgres: {_, locked_ref}},
+           source: %{
+             event:
+               {_, :call,
+                {_, :handle_fetch, [_, %Postgrex.Cursor{ref: ref, mode: mode}, _, _]}}
+           }
+         },
+         _options
+       )
+       when ref == locked_ref,
+       do: {:ok, mode}
+
+  defp status_mode(
+         state,
+         %{source: %{event: {_, :call, {_, :handle_deallocate, [_, cursor, _, protocol]}}}} = frame,
+         options
+       ) do
+    case protocol.postgres do
+      {_, ref} when ref == cursor.ref -> factory_mode(state, frame, options)
+      _ -> {:ok, :transaction}
+    end
+  end
+
+  defp status_mode(state, frame, options), do: factory_mode(state, frame, options)
+
+  defp factory_mode(state, %{source: callback}, options) do
+    case state.factories[{callback.index, :mode}] do
+      %{value: mode} when mode in [:transaction, :savepoint] ->
+        if mode == (options[:mode] || :transaction), do: {:ok, mode}, else: :error
+
+      _ ->
+        :error
+    end
   end
 
   defp fixture_event(
@@ -255,6 +394,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     case input_version(protocol, frames, Map.get(state.lookups, pid), state.ports) do
       {:ok, expected} ->
+        state = status_input(state, source, function, arguments)
         state = buffer_input(state, source, function, arguments, expected)
         state = helper_input(state, source, function, arguments, expected)
 
