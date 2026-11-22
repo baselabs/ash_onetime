@@ -80,6 +80,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       versions: Map.values(holders),
       copies: [],
       buffers: [],
+      terms: [],
       buffer_values: %{},
       errors: [],
       pairs: native.pairs,
@@ -96,6 +97,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       versions: Enum.reverse(state.versions),
       copies: Enum.reverse(state.copies),
       buffers: Enum.reverse(state.buffers),
+      terms: Enum.reverse(state.terms),
       errors: Enum.reverse(state.errors)
     }
   end
@@ -244,6 +246,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     case input_version(protocol, frames, Map.get(state.lookups, pid), state.ports) do
       {:ok, expected} ->
         state = buffer_input(state, source, function, arguments, expected)
+        state = helper_input(state, source, function, arguments, expected)
 
         {state, protocol_input} =
           input_protocol(state, source, expected.protocol, function, arguments)
@@ -473,6 +476,123 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp buffer_return(state, _source, _frame, _result), do: state
 
+  defp helper_input(state, source, :rows_recv, [_protocol, types, rows | rest], version) do
+    state = helper_types(state, source, version, types)
+    state = helper_rows(state, source, [2, 2, 2], rows, version.protocol)
+
+    case rest do
+      [_buffer, more] -> helper_demand(state, source, more, version, :rows)
+      [_buffer] -> state
+    end
+  end
+
+  defp helper_input(state, source, :msg_recv, [_protocol, _timeout, _buffer, more], version),
+    do: helper_demand(state, source, more, version, :message)
+
+  defp helper_input(state, _source, _function, _arguments, _version), do: state
+
+  defp helper_types(state, source, %{protocol: %{sock: {:gen_tcp, port}}}, actual) do
+    execution =
+      state.decoders.executions
+      |> Enum.filter(&(&1.port == port and &1.pid == source.pid and &1.index < source.index))
+      |> List.last()
+
+    case execution do
+      %{descriptor: descriptor} ->
+        origin = {:query_descriptor, descriptor.index, descriptor.path, :result_types}
+        helper_copy(state, source, [2, 2, 1], actual, descriptor.query.result_types, origin)
+
+      nil ->
+        failure(state, source, :state_helper_type_origin)
+    end
+  end
+
+  defp helper_types(state, source, _version, _actual),
+    do: failure(state, source, :state_helper_type_origin)
+
+  defp helper_rows(state, source, path, actual, protocol) do
+    case cursor_version(state, source, protocol) do
+      %{index: index, port: port, cursor: cursor} ->
+        helper_copy(state, source, path, actual, cursor.rows, {:decoder_rows, port, index})
+
+      nil ->
+        failure(state, source, :state_helper_rows_origin)
+    end
+  end
+
+  defp helper_demand(state, source, actual, version, kind) do
+    instance = helper_decoder(state, source, version.protocol, kind)
+
+    case helper_required(instance, kind) do
+      {:ok, more} ->
+        %{returned: returned, port: port} = instance
+
+        reads =
+          Enum.filter(state.native.reads, fn read ->
+            read.port == port and read.returned.pid == source.pid and
+              read.returned.index > returned.index and read.returned.index < source.index
+          end)
+
+        remaining = more - Enum.sum(Enum.map(reads, &byte_size(&1.bytes)))
+        path = if kind == :rows, do: [2, 2, 4], else: [2, 2, 3]
+        origin = {:decoder_demand, returned.index, Enum.map(reads, & &1.returned.index)}
+        helper_copy(state, source, path, actual, remaining, origin)
+
+      :error ->
+        failure(state, source, :state_helper_demand_origin)
+    end
+  end
+
+  defp helper_required(%{expected: {:more, _buffer, _rows, more}}, :rows), do: {:ok, more}
+  defp helper_required(%{expected: {:more, more}}, :message), do: {:ok, more}
+  defp helper_required(_instance, _kind), do: :error
+
+  defp helper_decoder(state, source, %{sock: {:gen_tcp, port}}, kind) do
+    mfa =
+      if kind == :rows,
+        do: {Postgrex.Types, :decode_rows, 4},
+        else: {Postgrex.Protocol, :msg_decode, 1}
+
+    state.decoders.instances
+    |> Enum.filter(
+      &(&1.port == port and &1.returned.pid == source.pid and
+          &1.returned.index < source.index and &1.source.mfa == mfa)
+    )
+    |> List.last()
+  end
+
+  defp helper_decoder(_state, _source, _protocol, _kind), do: nil
+
+  defp helper_return(state, source, frame, {:ok, message, _buffer})
+       when elem(source.mfa, 1) == :msg_recv,
+       do: helper_message(state, source, frame, message)
+
+  defp helper_return(state, source, frame, {:ok, message, rows, _buffer})
+       when elem(source.mfa, 1) == :rows_recv do
+    state
+    |> helper_message(source, frame, message)
+    |> helper_rows(source, [3, 2], rows, frame.input)
+  end
+
+  defp helper_return(state, _source, _frame, _result), do: state
+
+  defp helper_message(state, source, frame, actual) do
+    case helper_decoder(state, source, frame.input, :message) do
+      %{expected: {:ok, message, _}, returned: returned}
+      when returned.index > frame.source.index ->
+        helper_copy(state, source, [3, 1], actual, message, {:decoder_message, returned.index})
+
+      _ ->
+        failure(state, source, :state_helper_message_origin)
+    end
+  end
+
+  defp helper_copy(state, source, path, actual, expected, origin) do
+    state = exact(state, source, :state_helper_copy, actual, expected)
+    copy = %{index: source.index, path: path, origin: origin}
+    Map.update!(state, :terms, &[copy | &1])
+  end
+
   defp send_buffer_origin(state, _source, version, false),
     do: {state, version.protocol.buffer, {:state_buffer, version.origin}}
 
@@ -489,6 +609,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp returned(state, source, frame, result, rest) do
     function = elem(source.mfa, 1)
     state = buffer_return(state, source, frame, result)
+    state = helper_return(state, source, frame, result)
     state = described(state, source, frame, result)
 
     case returned_protocol(function, result) do

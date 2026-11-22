@@ -533,6 +533,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {Postgrex.Protocol, :activate, 2},
         {Postgrex.Protocol, :recv_buffer, 1},
         {Postgrex.Types, :decode_rows, 4},
+        {:tls_sender, :connection, 3},
         {Splode, :filter_stacktrace, 2}
       ]
   end

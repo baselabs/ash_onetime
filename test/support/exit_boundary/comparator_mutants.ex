@@ -456,7 +456,19 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/connection_states.ex",
         original: "    state = exact(state, source, :state_buffer_copy, buffer, expected)\n",
-        mutated: "    _ = buffer\n    state = exact(state, source, :state_buffer_copy, expected, expected)\n"
+        mutated:
+          "    _ = buffer\n    state = exact(state, source, :state_buffer_copy, expected, expected)\n"
+      }
+    ]
+  end
+
+  def edits(:stream_helper_copy) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: "    state = exact(state, source, :state_helper_copy, actual, expected)\n",
+        mutated:
+          "    _ = actual\n    state = exact(state, source, :state_helper_copy, expected, expected)\n"
       }
     ]
   end

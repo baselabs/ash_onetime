@@ -17,6 +17,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       timeline: [],
       descriptors: Map.merge(historical_descriptors(historical), owner_descriptors(origins)),
       executing: %{},
+      executions: [],
       instances: [],
       replays: [],
       replay_sends: MapSet.new(),
@@ -33,6 +34,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       instances: Enum.reverse(state.instances),
       versions: Enum.reverse(state.versions),
       timeline: Enum.reverse(state.timeline),
+      executions: Enum.reverse(state.executions),
       protocol_copies: protocol_copies(indexed, historical),
       replays: Enum.reverse(state.replays),
       errors: Enum.reverse(state.errors)
@@ -227,6 +229,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     state
     |> put_in([:descriptors, query.ref], origin)
     |> put_in([:executing, port], origin)
+    |> execution_version(e, port, origin)
   end
 
   defp decoder_event(
@@ -253,10 +256,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       %{sock: {:gen_tcp, port}} ->
         state = put_in(state.ports[pid], port)
 
-        state =
-          if function == :handle_execute and Map.has_key?(state.cursors, port),
-            do: put_in(state.cursors[port].rows, []),
-            else: state
+        state = if function == :handle_execute, do: reset_rows(state, e, port), else: state
 
         state =
           if function == :handle_execute,
@@ -381,7 +381,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     case Map.fetch(state.descriptors, query.ref) do
       {:ok, origin} ->
         state = exact(state, e, :decoder_query_copy, query, origin.query)
-        put_in(state.executing[port], origin)
+        state
+        |> put_in([:executing, port], origin)
+        |> execution_version(e, port, origin)
 
       _ ->
         failure(state, e, :decoder_query_origin, false)
@@ -389,6 +391,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp executing(state, _e, _port, _query), do: state
+
+  defp execution_version(state, source, port, origin) do
+    version = %{index: source.index, pid: source.pid, port: port, descriptor: origin}
+    Map.update!(state, :executions, &[version | &1])
+  end
+
+  defp reset_rows(state, source, port) do
+    case Map.fetch(state.cursors, port) do
+      {:ok, cursor} ->
+        cursor = %{cursor | rows: []}
+        version = %{index: source.index, port: port, cursor: cursor, kind: :execution_start}
+
+        state
+        |> put_in([:cursors, port], cursor)
+        |> Map.update!(:timeline, &[version | &1])
+
+      :error ->
+        state
+    end
+  end
 
   defp decode(e, buffer, kind, state) do
     with {:ok, port} <- Map.fetch(state.ports, e.pid),

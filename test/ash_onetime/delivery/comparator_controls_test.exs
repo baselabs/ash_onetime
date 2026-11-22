@@ -471,7 +471,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         IO.puts("CONNECTION_HELPER_TERM_UNBOUND: " <> Diagnostics.render(copy))
       end
 
-      assert unbound_terms == [], "native helper messages, row accumulators and types need origins"
+      assert unbound_terms == [],
+             "native helper messages, row accumulators and types need origins"
 
       if shape == :large_rows do
         assert Enum.any?(decoders.versions, &is_list(&1.returned_buffer))
@@ -3307,7 +3308,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                "the actual preexisting TLS sender must be traced"
 
         assert Enum.any?(events, fn source ->
-                 source.pid == run.tls_binding.sender and source.mfa == {:tls_sender, :connection, 3}
+                 source.pid == run.tls_binding.sender and
+                   source.mfa == {:tls_sender, :connection, 3}
                end),
                "the actual TLS sender callback needs its own native frame origin"
 
