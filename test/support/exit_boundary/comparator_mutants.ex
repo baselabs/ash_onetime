@@ -496,11 +496,22 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_frame_ownership) do
+    [
+      %{
+        path: "test/support/exit_boundary/wire.ex",
+        original: "      if length(phases) == 1 do\n",
+        mutated: "      if phases != [] do\n"
+      }
+    ]
+  end
+
   def edits(:stream_tls_record_copy) do
     [
       %{
         path: "test/support/exit_boundary/connection_tls.ex",
-        original: "        state = tls_exact(state, source, :tls_record_copy, records, expected)\n",
+        original:
+          "        state = tls_exact(state, source, :tls_record_copy, records, expected)\n",
         mutated:
           "        _ = records\n        state = tls_exact(state, source, :tls_record_copy, expected, expected)\n"
       }
@@ -767,6 +778,26 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     changed = String.replace(call, ":infinity", "{:native_foreign_timeout, :infinity}")
     [{call, changed}, {receive_source, restored}]
+  end
+
+  defp postgrex_edits(:done_rows_copy) do
+    call = "    done(s, query, rows, command, nrows)\n"
+
+    changed =
+      "    done(s, query, {:native_foreign_done_rows, rows}, command, nrows)\n"
+
+    original = "  defp done(s, query, rows, command, nrows) do\n"
+
+    restored = """
+      defp done(s, query, copied_rows, command, nrows) do
+        rows =
+          case copied_rows do
+            {:native_foreign_done_rows, original} -> original
+            original -> original
+          end
+    """
+
+    [{call, changed}, {original, restored}]
   end
 
   def with_mutant(rule, callback) do

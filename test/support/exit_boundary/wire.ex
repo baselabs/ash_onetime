@@ -88,6 +88,8 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
       provenance: spans(stream.provenance, stream.offset, stop)
     }
 
+    {message, state} = frame_ownership(message, state)
+
     stream = %{
       stream
       | buffer: rest,
@@ -105,6 +107,29 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
   end
 
   defp extract_frames(stream, _direction, state), do: {stream, state}
+
+  defp frame_ownership(%{direction: :frontend} = message, state) do
+    phases = Enum.uniq(Enum.map(message.provenance, & &1.phase))
+
+    state =
+      if length(phases) == 1 do
+        state
+      else
+        error = %{
+          rule: :frame_ownership,
+          direction: message.direction,
+          offset: message.start,
+          actual: phases,
+          expected: :one_causal_frontend_origin
+        }
+
+        %{state | errors: [error | state.errors]}
+      end
+
+    {Map.put(message, :phase, List.first(phases)), state}
+  end
+
+  defp frame_ownership(message, state), do: {Map.put(message, :phase, :backend), state}
 
   def spans(spans, first, last) do
     for span <- spans,

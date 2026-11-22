@@ -218,7 +218,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
 
     protocol =
       Enum.reduce(added, connection.protocol, fn frame, protocol ->
-        ConnectionProtocol.push(protocol, Map.put(frame, :phase, chunk.phase))
+        ConnectionProtocol.push(protocol, frame)
       end)
 
     connection = %{connection | framing: framing, protocol: protocol}

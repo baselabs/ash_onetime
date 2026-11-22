@@ -106,6 +106,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       rejected = Wire.frames(crossed)
       assert Enum.map(rejected.errors, & &1.rule) == [:frame_ownership]
+
+      bypassed =
+        ComparatorMutants.with_mutant(:stream_frame_ownership, fn -> Wire.frames(crossed) end)
+
+      assert bypassed.errors == []
+      assert Enum.map(Wire.frames(crossed).errors, & &1.rule) == [:frame_ownership]
       assert Wire.frames([frontend]).errors == []
     end
   end
@@ -928,6 +934,32 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       captured.historical,
       {:initial, captured.initial}
     )
+  end
+
+  @tag :connection_streams
+  test "Connection streams: completed rows retain their earlier decoder origin" do
+    captured =
+      ComparatorMutants.with_postgrex_mutant(:done_rows_copy, fn -> cached_decoders(nil) end)
+
+    assert captured.native.errors == []
+    assert captured.decoders.errors == []
+
+    [corrupted] =
+      Enum.filter(captured.events, fn
+        %{
+          event:
+            {_, :call,
+             {Postgrex.Protocol, :done, [_, _, {:native_foreign_done_rows, _}, _, _]}}
+        } ->
+          true
+
+        _ ->
+          false
+      end)
+
+    states = native_copy_states(captured)
+    assert Enum.map(states.errors, & &1.rule) == [:state_helper_copy]
+    assert hd(states.errors).index == corrupted.index
   end
 
   @tag :connection_streams
@@ -3506,10 +3538,26 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
 
       assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
-      IO.puts(
-        "CONNECTION_TLS_FORWARD_COPY: owning RED; sole catcher; exact restore; fresh GREEN"
-      )
+      IO.puts("CONNECTION_TLS_FORWARD_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
     end
+  end
+
+  @tag :connection_streams
+  test "Connection streams: TLS ciphertext retains its actual native port program" do
+    run = ConnectionNative.observe_tls()
+    assert run.result == []
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    # This is the encrypted transport ledger only. These bytes never enter the
+    # PostgreSQL framing or association machine at the plaintext SSL boundary.
+    transport = NativeTransport.build(%{events: events})
+    assert transport.errors == []
+    assert transport.writes != []
+    assert transport.active != []
   end
 
   @tag :connection_streams
