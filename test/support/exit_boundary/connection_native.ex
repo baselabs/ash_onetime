@@ -226,6 +226,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       ExitBoundary.observe(
         fn ->
           protocol = connect(:named)
+          protocol = cached_environment(protocol, shape)
           {statement, arguments} = cached_statement(shape)
 
           query = %Postgrex.Query{
@@ -237,8 +238,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           {:ok, query, protocol} = Postgrex.Protocol.handle_prepare(query, [], protocol)
           params = DBConnection.Query.encode(query, arguments, [])
 
-          {:ok, ^query, _result, protocol} =
-            Postgrex.Protocol.handle_execute(query, params, [], protocol)
+          protocol = warm_cached(protocol, query, params, shape)
 
           %{sock: {module, socket}} = protocol
           describe = message(?D, <<?S, query.name::binary, 0>>)
@@ -267,7 +267,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           end
 
           send(observer, {tag, %{holder: self(), history: history, chunks: chunks}})
-          {history.protocol, query, params}
+          {history.protocol, query, params, shape}
         end,
         &execute_cached(&1, corruption),
         %{
@@ -298,15 +298,56 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp cached_statement(:none),
     do: {"SET application_name TO 'ash_onetime_native_nodata'", []}
 
-  defp execute_cached({%{sock: {module, socket}} = protocol, query, params}, corruption) do
+  defp cached_statement(:notice),
+    do: {"DO $$ BEGIN RAISE NOTICE 'native connection notice'; END $$", []}
+
+  defp cached_statement(:parameter),
+    do: {"SET application_name TO 'ash_onetime_native_observed'", []}
+
+  defp cached_statement(:notification),
+    do: {"NOTIFY ash_onetime_native_stream, 'native notification'", []}
+
+  defp cached_environment(protocol, :parameter) do
+    {:ok, _results, protocol} =
+      Postgrex.Protocol.handle_simple(
+        "SET application_name TO 'ash_onetime_native_prior'",
+        [],
+        protocol
+      )
+
+    protocol
+  end
+
+  defp cached_environment(protocol, :notification) do
+    {:ok, _results, protocol} =
+      Postgrex.Protocol.handle_simple("LISTEN ash_onetime_native_stream", [], protocol)
+
+    protocol
+  end
+
+  defp cached_environment(protocol, _shape), do: protocol
+
+  defp warm_cached(protocol, _query, _params, shape)
+       when shape in [:parameter, :notification],
+       do: protocol
+
+  defp warm_cached(protocol, query, params, _shape) do
+    {:ok, ^query, _result, protocol} =
+      Postgrex.Protocol.handle_execute(query, params, [], protocol)
+
+    protocol
+  end
+
+  defp execute_cached({%{sock: {module, socket}} = protocol, query, params, shape}, corruption) do
     query = if corruption == :query_copy, do: %{query | cache: :reference}, else: query
 
     protocol =
       if corruption == :state_copy, do: %{protocol | null: :foreign_native_null}, else: protocol
 
-    {:ok, ^query, result, _protocol} =
+    {:ok, ^query, result, protocol} =
       Postgrex.Protocol.handle_execute(query, params, [], protocol)
 
+    if shape == :notification, do: {:ok, _protocol} = Postgrex.Protocol.ping(protocol)
     DBConnection.Query.decode(query, result, [])
   after
     :ok = module.close(socket)

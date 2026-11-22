@@ -488,7 +488,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_tls.ex",
-        original: "      state = tls_exact(state, source, :tls_worker_state_copy, actual, expected)\n",
+        original:
+          "      state = tls_exact(state, source, :tls_worker_state_copy, actual, expected)\n",
         mutated:
           "      _ = actual\n      state = tls_exact(state, source, :tls_worker_state_copy, expected, expected)\n"
       }
@@ -536,7 +537,11 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end
   end
 
-  defp tls_sender_form({:function, annotation, :connection, 3, [first | rest]}, sites, :helper_state) do
+  defp tls_sender_form(
+         {:function, annotation, :connection, 3, [first | rest]},
+         sites,
+         :helper_state
+       ) do
     {:clause, clause_annotation, args, guards,
      [
        {:call, call_annotation, {:atom, atom_annotation, :send_application_data},
@@ -554,7 +559,11 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     {{:function, annotation, :connection, 3, [clause | rest]}, sites + 1}
   end
 
-  defp tls_sender_form({:function, annotation, :send_application_data, 4, [clause]}, sites, :helper_state) do
+  defp tls_sender_form(
+         {:function, annotation, :send_application_data, 4, [clause]},
+         sites,
+         :helper_state
+       ) do
     {:clause, clause_annotation, [data, from, name, pattern], guards, body} = clause
     {:match, _, {:record, _, :data, _}, {:var, _, :StateData0}} = pattern
     input = {:var, clause_annotation, :NativeTlsState}
@@ -574,23 +583,25 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     {{:function, annotation, :send_application_data, 4, [changed]}, sites + 1}
   end
 
-  defp tls_sender_form({:function, _, :send_application_data, 4, _} = form, sites, :constructed_state),
-    do: tls_constructed_call(form, sites)
+  defp tls_sender_form(
+         {:function, _, :send_application_data, 4, _} = form,
+         sites,
+         :constructed_state
+       ),
+       do: tls_constructed_call(form, sites)
 
-  defp tls_sender_form({:function, annotation, :send_or_buffer, 5, clauses}, sites, :constructed_state) do
+  defp tls_sender_form(
+         {:function, annotation, :send_or_buffer, 5, clauses},
+         sites,
+         :constructed_state
+       ) do
     changed =
-      Enum.map(clauses, fn {:clause, location, [transport, socket, bytes, from, pattern], [], body} ->
-        input = {:var, location, :NativeTlsConstructedInput}
-        restored = {:var, location, :NativeTlsConstructedOriginal}
-        tagged = {:tuple, location, [{:atom, location, :native_foreign_tls_constructed}, restored]}
+      Enum.map(clauses, fn {:clause, location, [transport, socket, bytes, from, pattern], guards,
+                            body} ->
+        tagged =
+          {:tuple, location, [{:atom, location, :native_foreign_tls_constructed}, pattern]}
 
-        cases = [
-          {:clause, location, [tagged], [], [restored]},
-          {:clause, location, [restored], [], [restored]}
-        ]
-
-        restore = {:match, location, pattern, {:case, location, input, cases}}
-        {:clause, location, [transport, socket, bytes, from, input], [], [restore | body]}
+        {:clause, location, [transport, socket, bytes, from, tagged], guards, body}
       end)
 
     {{:function, annotation, :send_or_buffer, 5, changed}, sites + length(clauses)}
@@ -604,6 +615,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
          sites
        ) do
     tagged = {:tuple, location, [{:atom, location, :native_foreign_tls_constructed}, data]}
+
     {{:call, location, {:atom, name_location, :send_or_buffer},
       [transport, socket, bytes, from, tagged]}, sites + 1}
   end

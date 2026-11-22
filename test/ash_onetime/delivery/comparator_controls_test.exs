@@ -420,7 +420,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :connection_streams
   test "Connection streams: cached decoder descriptors retain their native owner origin" do
-    for shape <- [:rows, :none, :cross_connection, :large_rows] do
+    for shape <- [:rows, :none, :cross_connection, :large_rows, :notice, :parameter, :notification] do
       captured = cached_decoders(nil, shape)
       %{decoders: decoders, origin: origin, events: events, streams: streams} = captured
 
@@ -514,6 +514,17 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert Enum.any?(connection.protocol.messages, fn message ->
                  message.direction == :frontend and message.tag == ?P
                end)
+      end
+
+      if shape in [:notice, :parameter, :notification] do
+        tag = %{notice: ?N, parameter: ?S, notification: ?A}[shape]
+
+        assert Enum.any?(streams.connections, fn {_port, connection} ->
+                 Enum.any?(connection.protocol.messages, fn message ->
+                   message.direction == :backend and message.tag == tag
+                 end)
+               end),
+               "the native observation must contain its unsolicited backend message"
       end
     end
   end
@@ -1134,7 +1145,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
         assert catalog.description == :rows
 
-      :none ->
+      shape when shape in [:none, :notice, :parameter, :notification] ->
         assert catalog.parameter_types == []
         assert catalog.columns == []
         assert catalog.description == :none
@@ -1168,7 +1179,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     }
   end
 
-  defp cached_rows(:none), do: nil
+  defp cached_rows(shape) when shape in [:none, :notice, :parameter, :notification], do: nil
   defp cached_rows(:large_rows), do: [[17, :binary.copy("x", 131_072)]]
   defp cached_rows(_shape), do: [[17]]
 
@@ -3175,7 +3186,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     require Logger
 
-    for report <- [%{capture: state}, marked_error] ++ tls_states do
+    reports = [%{capture: state}, marked_error] ++ Enum.map(tls_states, &%{native_state: &1})
+
+    for report <- reports do
       logged = ExUnit.CaptureLog.capture_log(fn -> Logger.error(fn -> report end) end)
       refute String.contains?(logged, marker)
       refute String.contains?(logged, "9876543219876")
@@ -3192,7 +3205,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     do: value |> Tuple.to_list() |> Enum.map(&diagnostic_sentinel(&1, marker)) |> List.to_tuple()
 
   defp diagnostic_sentinel(value, marker) when is_map(value),
-    do: Map.new(Map.to_list(value), fn {key, item} -> {key, diagnostic_sentinel(item, marker)} end)
+    do:
+      Map.new(Map.to_list(value), fn {key, item} -> {key, diagnostic_sentinel(item, marker)} end)
 
   defp diagnostic_sentinel([head | tail], marker),
     do: [diagnostic_sentinel(head, marker) | diagnostic_sentinel(tail, marker)]
@@ -3333,7 +3347,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :connection_streams
   test "Connection streams: native TLS constructed state needs its own guard" do
-    run = ComparatorMutants.with_tls_sender_mutant(:constructed_state, &ConnectionNative.observe_tls/0)
+    run =
+      ComparatorMutants.with_tls_sender_mutant(
+        :constructed_state,
+        &ConnectionNative.observe_tls/0
+      )
+
     assert run.result == []
 
     events =
@@ -3360,11 +3379,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert hd(native.errors).index == corrupted.index
 
     for mutant <- [:stream_tls_state_copy, :stream_buffer_copy, :stream_tls_worker_state_copy] do
-      checked = ComparatorMutants.with_mutant(mutant, fn ->
-        ConnectionTls.build(%{events: events}, run.tls_binding)
-      end)
+      checked =
+        ComparatorMutants.with_mutant(mutant, fn ->
+          ConnectionTls.build(%{events: events}, run.tls_binding)
+        end)
 
-      expected = if mutant == :stream_tls_worker_state_copy, do: [], else: [:tls_worker_state_copy]
+      expected =
+        if mutant == :stream_tls_worker_state_copy, do: [], else: [:tls_worker_state_copy]
+
       assert Enum.map(checked.errors, & &1.rule) == expected
     end
 
@@ -3379,7 +3401,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
 
     assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
-    IO.puts("CONNECTION_TLS_CONSTRUCTED_STATE: owning RED; sole catcher; exact restore; fresh GREEN")
+
+    IO.puts(
+      "CONNECTION_TLS_CONSTRUCTED_STATE: owning RED; sole catcher; exact restore; fresh GREEN"
+    )
   end
 
   @tag :connection_streams
