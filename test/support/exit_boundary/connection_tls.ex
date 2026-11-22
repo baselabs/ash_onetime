@@ -47,12 +47,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     session = :trace.session_create(:ash_onetime_tls_machine_history, self(), [])
 
     try do
-      :trace.function(
-        session,
-        {:gen_statem, :system_get_state, 1},
-        [{:_, [], [{:exception_trace}]}],
-        [:local]
-      )
+      for mfa <- [{:gen_statem, :system_get_state, 1}, {:gen_statem, :system_continue, 3}] do
+        :trace.function(session, mfa, [{:_, [], [{:exception_trace}]}], [:local])
+      end
 
       for pid <- pids do
         1 = :trace.process(session, pid, true, [:call, :strict_monotonic_timestamp])
@@ -89,7 +86,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       {:trace_ts, ^pid, :return_from, {:gen_statem, :system_get_state, 1}, {:ok, ^public_state},
        returned}
       when returned > stamp ->
-        %{params: params, state: state, origin: {:historical_tls_machine, pid, stamp}}
+        receive do
+          {:trace_ts, ^pid, :call,
+           {:gen_statem, :system_continue, [_parent, debug, {^params, ^state}]}, continued}
+          when continued > returned ->
+            %{
+              params: params,
+              state: state,
+              debug: debug,
+              origin: {:historical_tls_machine, pid, stamp},
+              debug_origin: {:historical_tls_debug, pid, continued}
+            }
+        after
+          5_000 -> raise "native TLS machine debug origin was not captured"
+        end
     after
       0 -> raise "native TLS machine public-state copy was not captured"
     end

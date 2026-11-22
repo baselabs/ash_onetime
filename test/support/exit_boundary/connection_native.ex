@@ -267,7 +267,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     run =
       ExitBoundary.observe(
         fn ->
-          protocol = connect(:named)
+          protocol = connect(:named, shape)
           protocol = cached_environment(protocol, shape)
           {statement, arguments} = cached_statement(shape)
 
@@ -306,7 +306,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
           history =
             if shape == :redescribe do
-              {:ok, _result, protocol} = Postgrex.Protocol.handle_close(query, [], history.protocol)
+              {:ok, _result, protocol} =
+                Postgrex.Protocol.handle_close(query, [], history.protocol)
 
               {:ok, _results, protocol} =
                 Postgrex.Protocol.handle_simple(
@@ -381,7 +382,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp cached_statement(:rows), do: {"SELECT $1::int4 AS connection_stream_probe", [17]}
   defp cached_statement(:cross_connection), do: cached_statement(:rows)
-  defp cached_statement(:redescribe), do: {"SELECT * FROM pg_temp.ash_onetime_native_description", []}
+  defp cached_statement(:strict), do: cached_statement(:rows)
+
+  defp cached_statement(:redescribe),
+    do: {"SELECT * FROM pg_temp.ash_onetime_native_description", []}
 
   defp cached_statement(:bind_error),
     do: {"SELECT 17 / $1::int4 AS connection_stream_probe", [0]}
@@ -470,9 +474,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     :ok = module.close(socket)
   end
 
-  defp connect(prepare \\ nil) do
+  defp connect(prepare \\ nil, shape \\ nil) do
     options = Keyword.put(Repo.config(), :types, Postgrex.DefaultTypes)
     options = if prepare, do: Keyword.put(options, :prepare, prepare), else: options
+    options = if shape == :strict, do: Keyword.put(options, :transactions, :strict), else: options
     {:ok, protocol} = Postgrex.Protocol.connect(options)
     {:ok, protocol} = Postgrex.Protocol.checkout(protocol)
     protocol

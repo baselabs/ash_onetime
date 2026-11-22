@@ -47,6 +47,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     msg_recv: [2],
     rows_recv: [3],
     redescribe: [5],
+    describe: [6],
+    recv_describe: [-1],
     recv_ready: [2],
     recv_strict_ready: [3],
     recv_transaction: [-1],
@@ -72,6 +74,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     {:handle_msg, 3} => [1, 2],
     {:ping_recv, 4} => [1],
     {:redescribe, 6} => [1, 2, 3, 4],
+    {:describe, 7} => [1, 2, 3, 4, 5],
+    {:describe_params, 3} => [1, 2],
+    {:describe_result, 5} => [1, 2, 3, 4],
+    {:recv_describe, 3} => [1],
+    {:recv_describe, 4} => [1, 2],
+    {:fetch_type_info, 2} => [0, 1],
+    {:fetch_type_info, 4} => [0, 1, 2, 3],
+    {:columns, 1} => [0],
     {:msg_send, 3} => [1],
     {:rows_recv, 4} => [1, 2],
     {:rows_recv, 5} => [1, 2, 4],
@@ -460,6 +470,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         :none,
         :cross_connection,
         :redescribe,
+        :strict,
         :large_rows,
         :notice,
         :parameter,
@@ -551,7 +562,22 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                  end)
              end)
 
-      assert Enum.all?(rows, &(&1.descriptor == Map.take(origin, [:index, :path])))
+      descriptor =
+        if shape == :redescribe do
+          source =
+            Enum.find(
+              events,
+              &(&1.mfa == {Postgrex.Protocol, :redescribe, 6} and
+                  elem(&1.event, 1) == :return_from)
+            )
+
+          assert source != nil
+          %{index: source.index, path: [3, 1]}
+        else
+          Map.take(origin, [:index, :path])
+        end
+
+      assert Enum.all?(rows, &(&1.descriptor == descriptor))
 
       if shape in [:bind_error, :execute_error] do
         expected = if shape == :bind_error, do: :bind, else: :execute
@@ -647,7 +673,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
               :rollback_flushed,
               :parse_describe_flush,
               :close_parse_describe_flush,
-              :redescribe
+              :redescribe,
+              :describe,
+              :describe_params,
+              :describe_result
             ] and
               is_tuple(result) do
     positions =
@@ -663,6 +692,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           [1]
 
         {:redescribe, {:ok, %Postgrex.Query{}, _protocol, _buffer}} ->
+          [1]
+
+        {:describe, {:ok, %Postgrex.Query{}, _protocol, _buffer}} ->
+          [1]
+
+        {function, {:ok, %Postgrex.Query{}}} when function in [:describe_params, :describe_result] ->
           [1]
 
         _ ->
@@ -1217,48 +1252,93 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     targets = %{{:done, 4} => [1, 3], {:done, 5} => [1, 3, 4]}
 
     for shape <- [:rows, :none] do
-      captured =
-        ComparatorMutants.with_postgrex_inputs(targets, fn -> cached_decoders(nil, shape) end)
-
-      assert captured.native.errors == []
-      assert captured.decoders.errors == []
-
-      corrupted =
-        for %{event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source <-
-              captured.events,
-            positions = Map.get(targets, {function, length(arguments)}, []),
-            position <- positions do
-          assert match?({:native_foreign_helper, _}, Enum.at(arguments, position))
-          {source.index, [2, 2, position]}
-        end
-
-      assert corrupted != []
-
-      for target <- Map.keys(targets) do
-        assert Enum.any?(
-                 captured.events,
-                 &(&1.mfa == {Postgrex.Protocol, elem(target, 0), elem(target, 1)})
-               )
-      end
-
-      states = native_copy_states(captured)
-
-      assert Enum.map(states.errors, & &1.rule) ==
-               List.duplicate(:state_helper_copy, length(corrupted))
-
-      assert Enum.map(states.errors, &{&1.index, &1.path}) == corrupted
-
-      for mutant <- [:stream_buffer_copy, :stream_helper_copy, :stream_error_copy] do
-        checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
-        expected = if mutant == :stream_helper_copy, do: [], else: states.errors
-        assert checked.errors == expected
-      end
-
-      assert native_copy_states(captured).errors == states.errors
-      assert native_copy_states(cached_decoders(nil, shape)).errors == []
+      assert_native_helper_inputs(targets, fn -> cached_decoders(nil, shape) end)
     end
 
     IO.puts("CONNECTION_COMPLETION_INPUTS: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  for {shape, targets} <- [
+        {:cross_connection, %{{:close_parse_describe_flush, 4} => [2, 3], {:msg_send, 3} => [1]}},
+        {:strict, %{{:recv_strict_ready, 4} => [2]}}
+      ] do
+    @tag :connection_streams
+    test "Connection streams: native #{shape} helper inputs retain their factories" do
+      shape = unquote(shape)
+      targets = unquote(Macro.escape(targets))
+      assert_native_helper_inputs(targets, fn -> cached_decoders(nil, shape) end)
+      IO.puts("CONNECTION_PREPARE_INPUTS: owning RED; sole catcher; exact restore; fresh GREEN")
+    end
+  end
+
+  defp assert_native_helper_inputs(targets, observe) do
+    captured = ComparatorMutants.with_postgrex_inputs(targets, observe)
+    assert captured.native.errors == []
+    assert captured.decoders.errors == []
+
+    corrupted =
+      for %{event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source <-
+            captured.events,
+          positions = Map.get(targets, {function, length(arguments)}, []),
+          position <- positions do
+        assert match?({:native_foreign_helper, _}, Enum.at(arguments, position))
+        {source.index, [2, 2, position]}
+      end
+
+    assert corrupted != []
+
+    for {function, arity} <- Map.keys(targets) do
+      assert Enum.any?(captured.events, &(&1.mfa == {Postgrex.Protocol, function, arity}))
+    end
+
+    states = native_copy_states(captured)
+
+    assert Enum.map(states.errors, & &1.rule) ==
+             List.duplicate(:state_helper_copy, length(corrupted))
+
+    assert Enum.map(states.errors, &{&1.index, &1.path}) == corrupted
+
+    for mutant <- [:stream_buffer_copy, :stream_helper_copy, :stream_error_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+      expected = if mutant == :stream_helper_copy, do: [], else: states.errors
+      assert checked.errors == expected
+    end
+
+    assert native_copy_states(captured).errors == states.errors
+    assert native_copy_states(observe.()).errors == []
+  end
+
+  @tag :connection_streams
+  test "Connection streams: notify factories retain their native code and empty environment" do
+    captured =
+      ComparatorMutants.with_postgrex_outputs(%{{:notify, 1} => %{kind: :factory}}, fn ->
+        cached_decoders(nil)
+      end)
+
+    corrupted =
+      for %{event: {_, :return_from, {Postgrex.Protocol, :notify, 1}, callback}} = source <-
+            captured.events do
+        assert is_function(callback, 2)
+        assert {:env, [original]} = Function.info(callback, :env)
+        assert is_function(original, 2)
+        source.index
+      end
+
+    assert corrupted != []
+    states = native_copy_states(captured)
+    assert Enum.map(states.errors, & &1.rule) ==
+             List.duplicate(:state_status_factory_value, length(corrupted))
+    assert Enum.map(states.errors, & &1.index) == corrupted
+
+    for mutant <- [:stream_factory_value, :stream_status_copy, :stream_helper_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+      expected = if mutant == :stream_factory_value, do: [], else: states.errors
+      assert checked.errors == expected
+    end
+
+    assert native_copy_states(captured).errors == states.errors
+    assert native_copy_states(cached_decoders(nil)).errors == []
+    IO.puts("CONNECTION_NOTIFY_FACTORY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
   @tag :connection_streams
@@ -1678,7 +1758,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end)
 
     case shape do
-      shape when shape in [:rows, :cross_connection, :bind_error, :execute_error] ->
+      shape when shape in [:rows, :cross_connection, :strict, :bind_error, :execute_error] ->
         assert catalog.parameter_types == [23]
         assert [{"connection_stream_probe", {:table_oid, 0}, 0, 23, 4, -1, 0}] = catalog.columns
         assert catalog.description == :rows

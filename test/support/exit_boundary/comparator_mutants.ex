@@ -773,6 +773,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   defp with_owner_mutant(module, required, transform, callback) do
+    loaded? = :code.is_loaded(module) != false
+    {:module, ^module} = :code.ensure_loaded(module)
+
+    if module == :gen_statem do
+      IO.puts(
+        "NATIVE_MACHINE_OWNER_READY: " <>
+          Diagnostics.render(%{loaded_before: loaded?, sticky: :code.is_sticky(module)})
+      )
+    end
+
     if module == :gen_statem, do: require_machine_idle!()
     {^module, original, path} = :code.get_object_code(module)
 
@@ -806,6 +816,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         if sticky?, do: true = :code.stick_mod(module)
         ^sticky? = :code.is_sticky(module)
       end
+
+      if module == :gen_statem,
+        do: IO.puts("NATIVE_MACHINE_OWNER_RESTORED: original bytes and sticky flag")
     end
   end
 
@@ -938,6 +951,33 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     do: Enum.map_reduce(form, sites, &postgrex_output_calls(&1, &2, targets))
 
   defp postgrex_output_calls(form, sites, _targets), do: {form, sites}
+
+  defp helper_output_case(expression, location, %{kind: :factory}, site, :corrupt) do
+    original = {:var, location, String.to_atom("AshOnetimeFactory#{site}")}
+    wildcard = {:var, location, :_}
+
+    function =
+      {:fun, location, {:clauses, [{:clause, location, [wildcard, wildcard], [], [original]}]}}
+
+    {:case, location, expression, [{:clause, location, [original], [], [function]}]}
+  end
+
+  defp helper_output_case(expression, location, %{kind: :factory}, site, :restore) do
+    copied = {:var, location, String.to_atom("AshOnetimeFactoryCopy#{site}")}
+    original = {:var, location, String.to_atom("AshOnetimeFactoryValue#{site}")}
+
+    info =
+      {:call, location,
+       {:remote, location, {:atom, location, :erlang}, {:atom, location, :fun_info}},
+       [copied, {:atom, location, :env}]}
+
+    environment =
+      {:tuple, location,
+       [{:atom, location, :env}, {:cons, location, original, {nil, location}}]}
+
+    restored = {:case, location, info, [{:clause, location, [environment], [], [original]}]}
+    {:case, location, expression, [{:clause, location, [copied], [], [restored]}]}
+  end
 
   defp helper_output_case(expression, location, target, site, operation) do
     fields =
