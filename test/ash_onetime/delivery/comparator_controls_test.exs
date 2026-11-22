@@ -455,9 +455,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_NATIVE_TLS_AVAILABLE=#{tls?}")
   end
 
-  @tag :connection_streams
-  test "Connection streams: cached decoder descriptors retain their native owner origin" do
-    for shape <- [
+  for shape <- [
           :rows,
           :none,
           :cross_connection,
@@ -468,6 +466,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           :bind_error,
           :execute_error
         ] do
+    @tag :connection_streams
+    test "Connection streams: cached decoder descriptors retain native origins for #{shape}" do
+      shape = unquote(shape)
       captured = cached_decoders(nil, shape)
       %{decoders: decoders, origin: origin, events: events, streams: streams} = captured
 
@@ -517,9 +518,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       for copy <- unbound_terms do
         IO.puts("CONNECTION_HELPER_TERM_UNBOUND: " <> Diagnostics.render(copy))
       end
-
-      assert unbound_terms == [],
-             "every captured helper argument needs its own status, query, error, metadata or value origin"
 
       if shape == :large_rows do
         assert Enum.any?(decoders.versions, &is_list(&1.returned_buffer))
@@ -598,6 +596,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                end),
                "the native observation must contain its unsolicited backend message"
       end
+
+      assert unbound_terms == [],
+             "every captured helper argument needs its own status, query, error, metadata or value origin"
     end
   end
 
@@ -1017,6 +1018,54 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: native transaction completions bind every tag and result" do
+    run = ConnectionNative.observe_transactions()
+    assert run.result == :ok
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    native = NativeTransport.build(%{events: events}, run.native_history)
+    assert native.errors == []
+    streams = ConnectionReads.build(native)
+    assert streams.errors == []
+    decoders = ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
+    assert decoders.errors == []
+
+    captured = %{
+      events: events,
+      native: native,
+      streams: streams,
+      decoders: decoders,
+      historical: run.native_history,
+      initial: run.initial_state
+    }
+
+    states = native_copy_states(captured)
+    assert states.errors == []
+
+    commands =
+      for %{event: {_, :return_from, {Postgrex.Protocol, :done, 2}, {result, _}}} <- events,
+          do: result.command
+
+    assert commands == [:begin, :commit, :begin, :rollback]
+    covered = MapSet.new(states.terms, &{&1.index, &1.path})
+
+    unbound =
+      Enum.reject(native_helper_terms(events), fn copy ->
+        MapSet.member?(covered, {copy.index, copy.path})
+      end)
+
+    for copy <- unbound do
+      IO.puts("CONNECTION_TRANSACTION_TERM_UNBOUND: " <> Diagnostics.render(copy))
+    end
+
+    assert unbound == [], "transaction tags and results need their own native origins"
+  end
+
+  @tag :connection_streams
   test "Connection streams: private status copies retain their callback origin" do
     captured =
       ComparatorMutants.with_postgrex_mutant(:status_copy, fn -> cached_decoders(nil) end)
@@ -1166,7 +1215,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert corrupted != []
       states = native_copy_states(captured)
-      assert Enum.map(states.errors, & &1.rule) == List.duplicate(:state_message_copy, length(corrupted))
+
+      assert Enum.map(states.errors, & &1.rule) ==
+               List.duplicate(:state_message_copy, length(corrupted))
+
       assert Enum.map(states.errors, &{&1.index, &1.path}) == corrupted
 
       for mutant <- [:stream_message_copy, :stream_helper_copy, :stream_error_copy] do
@@ -1182,15 +1234,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_UNSOLICITED_INPUTS: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
-  @tag :connection_streams
-  test "Connection streams: helper return constructors retain their earlier inputs" do
-    cases = [
+  for {shape, target, output} <- [
       {:rows, {:done, 5}, %{size: 2, position: 0, field: :num_rows}},
       {:cross_connection, {:redescribe, 6}, %{size: 4, position: 1, field: :columns}},
       {:bind_error, {:error_ready, 4}, %{size: 3, position: 1, field: :message}}
-    ]
-
-    for {shape, {function, arity} = target, output} <- cases do
+      ] do
+    @tag :connection_streams
+    test "Connection streams: #{elem(target, 0)}/#{elem(target, 1)} returns retain earlier inputs" do
+      shape = unquote(shape)
+      {function, arity} = target = unquote(Macro.escape(target))
+      output = unquote(Macro.escape(output))
       captured =
         ComparatorMutants.with_postgrex_outputs(%{target => output}, fn ->
           cached_decoders(nil, shape)
@@ -1222,9 +1275,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert native_copy_states(captured).errors == states.errors
       assert native_copy_states(cached_decoders(nil, shape)).errors == []
-    end
 
-    IO.puts("CONNECTION_HELPER_RETURNS: owning RED; sole catcher; exact restore; fresh GREEN")
+      IO.puts("CONNECTION_HELPER_RETURNS: owning RED; sole catcher; exact restore; fresh GREEN")
+    end
   end
 
   @tag :connection_streams
@@ -4077,7 +4130,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         function in [:reply_then_terminate, :do_reply_then_terminate, :terminate]
 
   defp native_argument_bound?(covered, index, path, value) do
-    MapSet.member?(covered, {index, path}) or native_argument_children?(covered, index, path, value)
+    MapSet.member?(covered, {index, path}) or
+      native_argument_children?(covered, index, path, value)
   end
 
   defp native_argument_children?(covered, index, path, value)
@@ -4152,6 +4206,65 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
       IO.puts("CONNECTION_TLS_MACHINE_COPY: owning RED; sole catcher; restore; fresh GREEN")
     end
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native machine temporary arguments retain their complete program" do
+    targets = %{
+      {:loop_state_callback, 11} => [1, 3, 5, 6, 7, 8, 9, 10],
+      {:loop_state_callback_result, 11} => [1, 3, 5, 6, 7, 8, 9, 10],
+      {:loop_actions_list, 12} => [1, 3, 5, 6, 7, 8, 9, 10, 11]
+    }
+
+    run = ComparatorMutants.with_machine_inputs(targets, &ConnectionNative.observe_tls/0)
+    assert run.result == []
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    corrupted =
+      for %{event: {_, :call, {:gen_statem, function, arguments}}} = source <- events,
+          positions = Map.get(targets, {function, length(arguments)}, []),
+          position <- positions do
+        assert match?({:native_foreign_helper, _}, Enum.at(arguments, position))
+        {source.index, [2, 2, position]}
+      end
+
+    assert corrupted != []
+
+    for {function, arity} <- Map.keys(targets) do
+      assert Enum.any?(events, &(&1.mfa == {:gen_statem, function, arity}))
+    end
+
+    native = ConnectionTls.build(%{events: events}, run.tls_binding)
+
+    assert Enum.map(native.errors, & &1.rule) ==
+             List.duplicate(:tls_machine_program_copy, length(corrupted))
+
+    assert Enum.map(native.errors, &{&1.index, &1.path}) == corrupted
+
+    for mutant <- [:stream_tls_machine_program, :stream_tls_machine_copy, :stream_tls_worker_state_copy] do
+      checked =
+        ComparatorMutants.with_mutant(mutant, fn ->
+          ConnectionTls.build(%{events: events}, run.tls_binding)
+        end)
+
+      expected = if mutant == :stream_tls_machine_program, do: [], else: native.errors
+      assert checked.errors == expected
+    end
+
+    assert ConnectionTls.build(%{events: events}, run.tls_binding).errors == native.errors
+    restored = ConnectionNative.observe_tls()
+
+    restored_events =
+      restored.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+    IO.puts("CONNECTION_MACHINE_PROGRAM: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
   for corruption <- [:reply_copy, :reply_value] do

@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Comparator
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
 
   def rules,
     do: [
@@ -505,6 +506,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_message_copy) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: "    state = exact(state, source, :state_message_copy, actual, expected)\n",
+        mutated:
+          "    _ = actual\n    state = exact(state, source, :state_message_copy, expected, expected)\n"
+      }
+    ]
+  end
+
   def edits(:stream_tls_callback_result) do
     [
       %{
@@ -678,9 +690,6 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   def with_gen_statem_mutant(rule, callback) do
-    if Enum.any?(Process.list(), &:erlang.check_process_code(&1, :gen_statem)),
-      do: raise("native machine mutation requires no preexisting gen_statem executor")
-
     with_owner_mutant(:gen_statem, 3, &machine_form(&1, &2, rule), callback)
   end
 
@@ -693,7 +702,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     with_owner_mutant(
       Postgrex.Protocol,
       required,
-      &postgrex_inputs_form(&1, &2, targets),
+      &owner_inputs_form(&1, &2, targets),
+      callback
+    )
+  end
+
+  def with_machine_inputs(targets, callback) do
+    required = fn sites -> sites > map_size(targets) end
+
+    with_owner_mutant(
+      :gen_statem,
+      required,
+      &owner_inputs_form(&1, &2, targets),
       callback
     )
   end
@@ -710,6 +730,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   defp with_owner_mutant(module, required, transform, callback) do
+    if module == :gen_statem, do: require_machine_idle!()
     {^module, original, path} = :code.get_object_code(module)
 
     {:ok, {^module, [abstract_code: {:raw_abstract_v1, forms}]}} =
@@ -721,10 +742,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     {forms, sites} = Enum.map_reduce(forms, 0, transform)
     valid? = if is_function(required, 1), do: required.(sites), else: sites == required
     unless valid?, do: raise("native mutant requires every pinned owner site")
+
     {:ok, ^module, mutant, ^original_warnings} =
       :compile.forms(forms, [:binary, :return, :debug_info])
 
     sticky? = :code.is_sticky(module)
+    if module == :gen_statem, do: require_machine_idle!()
 
     try do
       if sticky?, do: true = :code.unstick_mod(module)
@@ -743,8 +766,32 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end
   end
 
-  defp postgrex_inputs_form({:function, annotation, function, arity, clauses}, sites, targets) do
-    {clauses, sites} = postgrex_input_calls(clauses, sites, targets)
+  defp require_machine_idle! do
+    executors =
+      for pid <- Process.list(),
+          {:current_stacktrace, stack} <- [Process.info(pid, :current_stacktrace)],
+          mfa = :proc_lib.translate_initial_call(pid),
+          current_machine?(mfa, stack),
+          do: %{mfa: mfa}
+
+    for executor <- executors do
+      IO.puts("NATIVE_MACHINE_CURRENT_EXECUTOR: " <> Diagnostics.render(executor))
+    end
+
+    unless executors == [],
+      do: raise("native machine mutation requires no current gen_statem executor")
+  end
+
+  defp current_machine?({module, _function, _arity}, stack) do
+    attributes = :erlang.get_module_info(module, :attributes)
+    behaviours = Keyword.get_values(attributes, :behaviour) ++ Keyword.get_values(attributes, :behavior)
+
+    :gen_statem in List.flatten(behaviours) or
+      Enum.any?(stack, fn {module, _, _, _} -> module == :gen_statem end)
+  end
+
+  defp owner_inputs_form({:function, annotation, function, arity, clauses}, sites, targets) do
+    {clauses, sites} = owner_input_calls(clauses, sites, targets)
 
     case Map.fetch(targets, {function, arity}) do
       {:ok, positions} ->
@@ -761,9 +808,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end
   end
 
-  defp postgrex_inputs_form(form, sites, _targets), do: {form, sites}
+  defp owner_inputs_form(form, sites, _targets), do: {form, sites}
 
-  defp postgrex_input_calls(
+  defp owner_input_calls(
          {:call, location, {:atom, _, function} = name, arguments} = form,
          sites,
          targets
@@ -777,17 +824,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end
   end
 
-  defp postgrex_input_calls(form, sites, targets) when is_tuple(form) do
+  defp owner_input_calls(form, sites, targets) when is_tuple(form) do
     {elements, sites} =
-      form |> Tuple.to_list() |> Enum.map_reduce(sites, &postgrex_input_calls(&1, &2, targets))
+      form |> Tuple.to_list() |> Enum.map_reduce(sites, &owner_input_calls(&1, &2, targets))
 
     {List.to_tuple(elements), sites}
   end
 
-  defp postgrex_input_calls(form, sites, targets) when is_list(form),
-    do: Enum.map_reduce(form, sites, &postgrex_input_calls(&1, &2, targets))
+  defp owner_input_calls(form, sites, targets) when is_list(form),
+    do: Enum.map_reduce(form, sites, &owner_input_calls(&1, &2, targets))
 
-  defp postgrex_input_calls(form, sites, _targets), do: {form, sites}
+  defp owner_input_calls(form, sites, _targets), do: {form, sites}
 
   defp helper_arguments(arguments, positions, location) do
     Enum.reduce(positions, arguments, fn position, arguments ->
@@ -858,7 +905,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     pattern = if operation == :corrupt, do: value, else: marker
     replacement = if operation == :corrupt, do: marker, else: value
     record = Enum.fetch!(fields, target.position)
-    matched = {:match, location, {:map, location, [{:map_field_exact, location, key, pattern}]}, record}
+
+    matched =
+      {:match, location, {:map, location, [{:map_field_exact, location, key, pattern}]}, record}
+
     updated = {:map, location, record, [{:map_field_exact, location, key, replacement}]}
     input = {:tuple, location, List.replace_at(fields, target.position, matched)}
     output = {:tuple, location, List.replace_at(fields, target.position, updated)}

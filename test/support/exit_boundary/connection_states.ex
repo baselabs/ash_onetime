@@ -107,6 +107,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       buffers: [],
       terms: [],
       buffer_values: %{},
+      term_values: %{},
       errors: [],
       pairs: native.pairs,
       returns: Map.new(native.pairs, fn {_index, pair} -> {pair.returned.index, pair} end),
@@ -647,8 +648,46 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
-  defp helper_input(state, source, :done, [_protocol, _query, rows | _], version),
-    do: helper_rows(state, source, [2, 2, 2], rows, version.protocol)
+  defp helper_input(state, source, :done, [_protocol, query, rows, tag], version) do
+    state = helper_rows(state, source, [2, 2, 2], rows, version.protocol)
+
+    case {execution_origin(state, source, version.protocol), command_origin(state, source, version.protocol)} do
+      {%{descriptor: descriptor}, %{tag: expected, index: index}} ->
+        state
+        |> helper_copy(source, [2, 2, 1], query, descriptor.query, {:query_descriptor, descriptor.index, descriptor.path})
+        |> helper_copy(source, [2, 2, 3], tag, expected, {:command_tag, index})
+
+      _ ->
+        failure(state, source, :state_completion_origin)
+    end
+  end
+
+  defp helper_input(state, source, :done, [_protocol, query, rows, command, count], version) do
+    state = helper_rows(state, source, [2, 2, 2], rows, version.protocol)
+
+    case {execution_origin(state, source, version.protocol), command_origin(state, source, version.protocol)} do
+      {%{descriptor: descriptor}, %{tag: tag, index: index}} ->
+        {expected_command, expected_count} = command_tag(tag)
+
+        state
+        |> helper_copy(source, [2, 2, 1], query, descriptor.query, {:query_descriptor, descriptor.index, descriptor.path})
+        |> helper_copy(source, [2, 2, 3], command, expected_command, {:command, index})
+        |> helper_copy(source, [2, 2, 4], count, expected_count, {:command_count, index})
+
+      _ ->
+        failure(state, source, :state_completion_origin)
+    end
+  end
+
+  defp helper_input(state, source, :handle_msg, [_protocol, _status, actual], version) do
+    case native_message_instance(state, source, version.protocol) do
+      %{expected: {:ok, expected, _}, returned: returned} ->
+        message_copy(state, source, actual, expected, {:decoder_message, returned.index})
+
+      _ ->
+        failure(state, source, :state_message_origin)
+    end
+  end
 
   defp helper_input(state, source, function, [_protocol, _status, actual, _buffer], version)
        when function in [:error_ready, :error_flushed, :rollback_flushed] do
@@ -825,6 +864,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     |> helper_rows(source, [3, 2], rows, frame.input)
   end
 
+  defp helper_return(state, source, frame, {%Postgrex.Result{} = actual, _protocol})
+       when elem(source.mfa, 1) == :done do
+    case completion_result(state, source, frame) do
+      {:ok, expected, origin} -> helper_copy(state, source, [3, 0], actual, expected, origin)
+      :error -> failure(state, source, :state_completion_origin)
+    end
+  end
+
   defp helper_return(state, _source, _frame, _result), do: state
 
   defp helper_message(state, source, frame, actual) do
@@ -840,14 +887,119 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp helper_copy(state, source, path, actual, expected, origin) do
     state = exact(state, source, :state_helper_copy, actual, expected)
+    state = copy_error_path(state, source, path, :state_helper_copy)
     copy = %{index: source.index, path: path, origin: origin}
-    Map.update!(state, :terms, &[copy | &1])
+
+    state
+    |> Map.update!(:terms, &[copy | &1])
+    |> put_in([:term_values, {source.index, path}], %{value: expected, origin: origin})
   end
+
+  defp copy_error_path(%{errors: [%{index: index, rule: rule} = error | rest]} = state,
+         %{index: index}, path, rule) do
+    if Map.has_key?(error, :path),
+      do: state,
+      else: %{state | errors: [Map.put(error, :path, path) | rest]}
+  end
+
+  defp copy_error_path(state, _source, _path, _rule), do: state
+
+  defp completion_result(state, source, %{source: call, input: protocol}) do
+    values = fn position -> Map.fetch(state.term_values, {call.index, [2, 2, position]}) end
+
+    with {:ok, %{value: query}} <- values.(1),
+         {:ok, %{value: rows}} <- values.(2),
+         %{tag: tag, index: index} <- command_origin(state, source, protocol) do
+      {command, count} = command_tag(tag)
+      count = if is_nil(count) and command == :select, do: length(rows), else: count
+      rows = if is_nil(query.columns) and rows == [] and command != :copy, do: nil, else: rows
+
+      expected = %Postgrex.Result{
+        command: command,
+        num_rows: count || 0,
+        rows: rows,
+        columns: query.columns,
+        connection_id: protocol.connection_id,
+        messages: protocol.messages
+      }
+
+      {:ok, expected, {:completion_result, call.index, index}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp command_origin(state, source, protocol) do
+    first = callback_boundary(state, source)
+
+    state.decoders.instances
+    |> Enum.filter(fn instance ->
+      {:gen_tcp, instance.port} == protocol.sock and instance.returned.pid == source.pid and
+        instance.source.index > first and
+        instance.returned.index < source.index and
+        command_message?(instance.expected)
+    end)
+    |> List.last()
+    |> case do
+      %{expected: {:ok, {:msg_command_complete, tag}, _}, returned: returned} ->
+        %{tag: tag, index: returned.index}
+
+      %{expected: {:ok, {kind}, _}, returned: returned}
+      when kind in [:msg_empty_query, :msg_portal_suspend] ->
+        %{tag: nil, index: returned.index}
+
+      _ -> nil
+    end
+  end
+
+  defp command_message?({:ok, {:msg_command_complete, _}, _}), do: true
+  defp command_message?({:ok, {kind}, _}) when kind in [:msg_empty_query, :msg_portal_suspend], do: true
+  defp command_message?(_message), do: false
+
+  defp callback_boundary(state, source) do
+    case status_callback(state, source.pid) do
+      %{source: %{index: index}} -> index
+      _ -> source.index
+    end
+  end
+
+  defp command_tag(nil), do: {nil, nil}
+
+  defp command_tag("INSERT " <> tail) do
+    [_oid, count] = :binary.split(tail, " ")
+    {:insert, String.to_integer(count)}
+  end
+
+  for {prefix, command} <- [{"SELECT", :select}, {"UPDATE", :update}, {"DELETE", :delete},
+                            {"FETCH", :fetch}, {"MOVE", :move}, {"COPY", :copy}] do
+    defp command_tag(unquote(prefix) <> " " <> count),
+      do: {unquote(command), String.to_integer(count)}
+  end
+
+  defp command_tag(tag), do: command_name(tag, <<>>)
+  defp command_name(<<>>, name), do: {String.to_atom(name), nil}
+  defp command_name(<<?\s, tail::binary>>, name), do: command_name(tail, name <> "_")
+
+  defp command_name(<<head, tail::binary>>, name) when head in ?A..?Z,
+    do: command_name(tail, <<name::binary, head + 32>>)
+
+  defp command_name(_tail, name), do: {name |> String.trim_trailing("_") |> String.to_atom(), nil}
 
   defp error_copy(state, source, path, actual, expected, origin) do
     state = exact(state, source, :state_error_copy, actual, expected)
     copy = %{index: source.index, path: path, origin: origin}
     Map.update!(state, :terms, &[copy | &1])
+  end
+
+  defp message_copy(state, source, actual, expected, origin) do
+    state = exact(state, source, :state_message_copy, actual, expected)
+    path = [2, 2, 2]
+    state = copy_error_path(state, source, path, :state_message_copy)
+    copy = %{index: source.index, path: path, origin: origin}
+
+    state
+    |> Map.update!(:terms, &[copy | &1])
+    |> put_in([:term_values, {source.index, path}], %{value: expected, origin: origin})
   end
 
   defp send_buffer_origin(state, _source, version, false),
@@ -982,16 +1134,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     do: {state, %{frame.input | messages: []}}
 
   defp output_protocol(state, source, frame, :handle_msg, _result) do
-    {_, :call, {_, _, [_protocol, _status, message]}} = frame.source.event
-
-    state =
-      exact(
-        state,
-        source,
-        :state_message_copy,
-        message,
-        native_message(state, source, frame.input)
-      )
+    message = native_message(state, frame.source, frame.input)
 
     expected =
       case message do
@@ -1006,9 +1149,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
         msg_notify(channel: _channel, payload: _payload) ->
           frame.input
+
+        _ ->
+          :no_message_origin
       end
 
-    {state, expected}
+    if expected == :no_message_origin,
+      do: {failure(state, source, :state_message_origin), frame.input},
+      else: {state, expected}
   end
 
   defp output_protocol(state, _source, frame, :activate, _result) do

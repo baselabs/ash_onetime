@@ -320,6 +320,38 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
+  def observe_transactions do
+    observer = self()
+    tag = make_ref()
+
+    run =
+      ExitBoundary.observe(
+        fn ->
+          protocol = connect()
+          send(observer, {tag, %{self() => %{protocol: protocol}}})
+          protocol
+        end,
+        fn %{sock: {module, socket}} = protocol ->
+          try do
+            {:ok, %Postgrex.Result{}, protocol} = Postgrex.Protocol.handle_begin([], protocol)
+            {:ok, %Postgrex.Result{}, protocol} = Postgrex.Protocol.handle_commit([], protocol)
+            {:ok, %Postgrex.Result{}, protocol} = Postgrex.Protocol.handle_begin([], protocol)
+            {:ok, %Postgrex.Result{}, _protocol} = Postgrex.Protocol.handle_rollback([], protocol)
+            :ok
+          after
+            :ok = module.close(socket)
+          end
+        end,
+        %{host: [], callbacks: []}
+      )
+
+    receive do
+      {^tag, historical} -> Map.put(run, :native_history, historical)
+    after
+      0 -> raise "native transaction history was not captured"
+    end
+  end
+
   defp cached_statement(:rows), do: {"SELECT $1::int4 AS connection_stream_probe", [17]}
   defp cached_statement(:cross_connection), do: cached_statement(:rows)
 
