@@ -550,6 +550,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_tls_reply_copy) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original:
+          "            state = tls_exact(state, source, :tls_reply_copy, arguments, [from, reply])\n",
+        mutated:
+          "            _ = arguments\n            state = tls_exact(state, source, :tls_reply_copy, [from, reply], [from, reply])\n"
+      }
+    ]
+  end
+
   def edits(:stream_service_completion) do
     [
       %{

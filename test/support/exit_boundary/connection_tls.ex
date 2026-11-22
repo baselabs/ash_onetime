@@ -26,6 +26,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     children = :supervisor.which_children(supervisor)
     {:receiver, ^owner, :worker, _modules} = List.keyfind(children, :receiver, 0)
     {:sender, sender, :worker, [:tls_sender]} = List.keyfind(children, :sender, 0)
+    {states, machines} = machine_states([owner, sender])
 
     %{
       socket: socket,
@@ -36,9 +37,62 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       supervisor: supervisor,
       sender: sender,
       transport: %{port: port, active: active, owner: owner},
-      states: %{owner => :sys.get_state(owner), sender => :sys.get_state(sender)},
+      states: states,
+      machines: machines,
       processes: process_origins([owner, sender, supervisor])
     }
+  end
+
+  defp machine_states(pids) do
+    session = :trace.session_create(:ash_onetime_tls_machine_history, self(), [])
+
+    try do
+      :trace.function(
+        session,
+        {:gen_statem, :system_get_state, 1},
+        [{:_, [], [{:exception_trace}]}],
+        [:local]
+      )
+
+      for pid <- pids do
+        1 = :trace.process(session, pid, true, [:call, :strict_monotonic_timestamp])
+      end
+
+      states = Map.new(pids, &{&1, :sys.get_state(&1)})
+      fence = :trace.delivered(session, :all)
+
+      receive do
+        {:trace_delivered, :all, ^fence} -> :ok
+      after
+        5_000 -> raise "native TLS machine history fence did not arrive"
+      end
+
+      machines = Map.new(pids, &{&1, machine_origin(&1, Map.fetch!(states, &1))})
+      {states, machines}
+    after
+      :trace.session_destroy(session)
+    end
+  end
+
+  defp machine_origin(pid, public_state) do
+    {params, state, stamp} =
+      receive do
+        {:trace_ts, ^pid, :call, {:gen_statem, :system_get_state, [{params, state}]}, stamp} ->
+          {params, state, stamp}
+      after
+        0 -> raise "native TLS machine origin was not captured"
+      end
+
+    ^public_state = elem(state, 1)
+
+    receive do
+      {:trace_ts, ^pid, :return_from, {:gen_statem, :system_get_state, 1}, {:ok, ^public_state},
+       returned}
+      when returned > stamp ->
+        %{params: params, state: state, origin: {:historical_tls_machine, pid, stamp}}
+    after
+      0 -> raise "native TLS machine public-state copy was not captured"
+    end
   end
 
   defp process_origins(pids) do
@@ -200,6 +254,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       terms: [],
       errors: [],
       pairs: pairs,
+      transport: transport,
       events: events,
       records: %{},
       returns: Map.new(pairs, fn {index, pair} -> {pair.returned.index, index} end),
@@ -568,6 +623,35 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp result_data_path({:no_record, _}), do: [1]
   defp result_data_path({:data, _, _, _, _}), do: []
   defp result_data_path(_result), do: nil
+
+  defp record_call(state, source, :tls_sender, :send_reply, arguments) do
+    frame = List.first(Map.get(state.frames, source.pid, []))
+    family = state.owners[source.pid].family
+
+    case {frame, Map.get(state.messages, source.pid)} do
+      {%{source: parent}, %{value: {{:call, from}, {:application_data, _data}}} = message} ->
+        writes =
+          Enum.filter(state.transport.writes, fn write ->
+            write.port == family.port and write.source.pid == source.pid and
+              write.source.index > parent.index and write.returned.index < source.index
+          end)
+
+        case writes do
+          [write] ->
+            {_, :return_from, {:gen_tcp, :send, 2}, reply} = write.returned.event
+            state = tls_exact(state, source, :tls_reply_copy, arguments, [from, reply])
+            origin = {:tls_reply, message.origin, write.returned.index}
+            copy = %{index: source.index, path: [2, 2], origin: origin}
+            Map.update!(state, :terms, &[copy | &1])
+
+          _ ->
+            tls_failure(state, source, :tls_reply_origin)
+        end
+
+      _ ->
+        tls_failure(state, source, :tls_reply_origin)
+    end
+  end
 
   defp record_call(state, source, module, :encode_data, arguments)
        when module in [:tls_record, :tls_record_1_3] do

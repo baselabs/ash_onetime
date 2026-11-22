@@ -111,7 +111,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     run =
       ExitBoundary.observe(
         fn ->
-          protocol = connect_tls()
+          protocol = connect_tls(corruption)
           {:ssl, socket} = protocol.sock
           binding = ConnectionTls.bind(socket)
           if corruption == :fragmented, do: :ok = :inet.setopts(binding.port, buffer: 1024)
@@ -174,6 +174,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp execute_tls(protocol, corruption),
     do: execute(protocol, :single, if(corruption == :byte, do: :byte))
+
+  defp connect_tls(:fragmented) do
+    previous = Application.fetch_env(:ssl, :internal_active_n)
+    :ok = Application.put_env(:ssl, :internal_active_n, 2)
+
+    try do
+      connect_tls()
+    after
+      case previous do
+        {:ok, value} -> Application.put_env(:ssl, :internal_active_n, value)
+        :error -> Application.delete_env(:ssl, :internal_active_n)
+      end
+    end
+  end
+
+  defp connect_tls(_corruption), do: connect_tls()
 
   defp connect_tls do
     options =

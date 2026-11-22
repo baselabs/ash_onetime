@@ -3699,6 +3699,29 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       native = ConnectionTls.build(%{events: events}, run.tls_binding)
       assert Enum.map(native.errors, & &1.rule) == [:tls_reply_copy]
+
+      for mutant <- [:stream_tls_state_copy, :stream_tls_forward_copy, :stream_tls_reply_copy] do
+        bypassed =
+          ComparatorMutants.with_mutant(mutant, fn ->
+            ConnectionTls.build(%{events: events}, run.tls_binding)
+          end)
+
+        expected = if mutant == :stream_tls_reply_copy, do: [], else: [:tls_reply_copy]
+        assert Enum.map(bypassed.errors, & &1.rule) == expected
+      end
+
+      assert Enum.map(ConnectionTls.build(%{events: events}, run.tls_binding).errors, & &1.rule) ==
+               [:tls_reply_copy]
+
+      restored = ConnectionNative.observe_tls()
+
+      restored_events =
+        restored.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+      assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+      IO.puts("CONNECTION_TLS_REPLY_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
     end
   end
 
@@ -3768,9 +3791,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert transport.errors == []
 
     assert Enum.any?(transport.options, fn option ->
-             is_integer(option.mode) and option.mode > 0
+             option.mode == 2
            end),
            "real fragmented TLS must replenish its native active count"
+
+    assert transport.passive != [], "the fragmented fixture must actually cross passive transitions"
 
     tls = ConnectionTls.build(%{events: events}, run.tls_binding)
 
