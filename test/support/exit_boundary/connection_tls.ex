@@ -388,7 +388,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp machine_queue(state, source, :loop_t0q, _arguments) do
     root = state.machine_states[source.pid]
-    cursor = Map.get(state.machine_zero, source.pid, %{timers: elem(root.state, 3), events: elem(root.state, 4)})
+
+    cursor =
+      Map.get(state.machine_zero, source.pid, %{
+        timers: elem(root.state, 3),
+        events: elem(root.state, 4)
+      })
+
     state = machine_term(state, source, [2, 2, 3], cursor.timers, root.origin)
     state = machine_term(state, source, [2, 2, 4], cursor.events, root.origin)
     machine_zero(state, source, root, cursor)
@@ -475,18 +481,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     version = state.owners[source.pid].version
     hibernate = state.machine_queues[source.pid].hibernate
     expected = root.state |> put_elem(1, {version.name, version.data}) |> put_elem(5, hibernate)
-    put_in(state.machine_states[source.pid], %{root | state: expected, origin: callback.source.index})
+
+    put_in(state.machine_states[source.pid], %{
+      root
+      | state: expected,
+        origin: callback.source.index
+    })
   end
 
   defp transition_result({:next_state, name, data}, _name, _data), do: {:ok, name, data, []}
+
   defp transition_result({:next_state, name, data, actions}, _name, _data),
     do: {:ok, name, data, List.wrap(actions)}
+
   defp transition_result({:keep_state, data}, name, _data), do: {:ok, name, data, []}
+
   defp transition_result({:keep_state, data, actions}, name, _data),
     do: {:ok, name, data, List.wrap(actions)}
+
   defp transition_result(:keep_state_and_data, name, data), do: {:ok, name, data, []}
+
   defp transition_result({:keep_state_and_data, actions}, name, data),
     do: {:ok, name, data, List.wrap(actions)}
+
   defp transition_result(_result, _name, _data), do: :error
 
   defp transition_actions(old, queue, name, data, actions) do
@@ -511,40 +528,70 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp transition_action(:hibernate, state), do: %{state | hibernate: true}
+
   defp transition_action({:hibernate, value}, state) when is_boolean(value),
     do: %{state | hibernate: value}
+
   defp transition_action(:postpone, state), do: %{state | postpone: true}
+
   defp transition_action({:postpone, value}, state) when is_boolean(value),
     do: %{state | postpone: value}
+
   defp transition_action({:reply, _from, _reply}, state), do: state
+
   defp transition_action({:next_event, type, content}, state),
     do: %{state | next: state.next ++ [{type, content}]}
+
   defp transition_action({type, time, message}, state),
     do: %{state | timeouts: [{type, time, message, []} | state.timeouts]}
+
   defp transition_action({type, time, message, options}, state),
     do: %{state | timeouts: [{type, time, message, List.wrap(options)} | state.timeouts]}
+
   defp transition_action({type, :cancel}, state),
     do: %{state | timeouts: [{type, :infinity, :undefined, []} | state.timeouts]}
+
   defp transition_action(value, state) when is_integer(value) or value == :infinity,
     do: %{state | timeouts: [{:timeout, value, value, []} | state.timeouts]}
+
   defp transition_action(action, state), do: %{state | unknown: [action | state.unknown]}
 
   defp commit_transition(state, source, callback, root, transition) do
     state = tls_exact(state, source, :tls_machine_action_origin, transition.unknown, [])
     pairs = machine_timer_pairs(state, source, callback.source.index)
     timers = elem(root.state, 3)
-    context = %{state: state, source: source, pairs: pairs, timers: timers, zero: [], seen: MapSet.new()}
-    context = if transition.changed?, do: cancel_machine_timer(context, :state_timeout), else: context
+
+    context = %{
+      state: state,
+      source: source,
+      pairs: pairs,
+      timers: timers,
+      zero: [],
+      seen: MapSet.new()
+    }
+
+    context =
+      if transition.changed?, do: cancel_machine_timer(context, :state_timeout), else: context
+
     context = cancel_machine_timer(context, :timeout)
     context = Enum.reduce(transition.timeouts, context, &machine_timeout/2)
     state = tls_exact(context.state, source, :tls_machine_timer_program, context.pairs, [])
     expected = put_elem(transition.state, 3, context.timers)
     expected = put_elem(expected, 4, elem(root.state, 4) ++ context.zero)
-    queue = %{events: transition.events, hibernate: transition.hibernate,
-              origin: callback.source.index, fresh?: transition.events != []}
+
+    queue = %{
+      events: transition.events,
+      hibernate: transition.hibernate,
+      origin: callback.source.index,
+      fresh?: transition.events != []
+    }
 
     state
-    |> put_in([:machine_states, source.pid], %{root | state: expected, origin: callback.source.index})
+    |> put_in([:machine_states, source.pid], %{
+      root
+      | state: expected,
+        origin: callback.source.index
+    })
     |> put_in([:machine_queues, source.pid], queue)
   end
 
@@ -554,8 +601,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     |> Enum.filter(fn pair ->
       pair.source.pid == source.pid and pair.source.index > first and
         pair.returned.index < source.index and
-        pair.source.mfa in [{:erlang, :start_timer, 4}, {:erlang, :cancel_timer, 1},
-                           {:erlang, :make_ref, 0}]
+        pair.source.mfa in [
+          {:erlang, :start_timer, 4},
+          {:erlang, :cancel_timer, 1},
+          {:erlang, :make_ref, 0}
+        ]
     end)
     |> Enum.sort_by(& &1.source.index)
   end
@@ -608,10 +658,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     {_, :call, {module, actual_function, actual}} = pair.source.event
     {_, :return_from, _, result} = pair.returned.event
     expected = {:erlang, function, arguments}
-    state = tls_exact(context.state, pair.source, :tls_machine_timer_program,
-                      {module, actual_function, actual}, expected)
-    valid? = if function == :cancel_timer, do: result == false or (is_integer(result) and result >= 0),
-             else: is_reference(result)
+
+    state =
+      tls_exact(
+        context.state,
+        pair.source,
+        :tls_machine_timer_program,
+        {module, actual_function, actual},
+        expected
+      )
+
+    valid? =
+      if function == :cancel_timer,
+        do: result == false or (is_integer(result) and result >= 0),
+        else: is_reference(result)
+
     state = tls_exact(state, pair.returned, :tls_machine_timer_program, valid?, true)
     {result, %{context | state: state, pairs: rest}}
   end
@@ -685,7 +746,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp machine_message(state, pid, {:timeout, ref, type} = message, origin) when is_reference(ref) do
+  defp machine_message(state, pid, {:timeout, ref, type} = message, origin)
+       when is_reference(ref) do
     root = state.machine_states[pid]
     timers = elem(root.state, 3)
 
@@ -1299,9 +1361,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             else: state
 
         state = put_in(state.frames[source.pid], rest)
+
         state =
           if rest == [],
-            do: put_in(state.machine_callbacks[source.pid], %{source: source, result: result, fresh?: true}),
+            do:
+              put_in(state.machine_callbacks[source.pid], %{
+                source: source,
+                result: result,
+                fresh?: true
+              }),
             else: state
 
         advance_worker(state, source, version, rest)
@@ -1319,18 +1387,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          actual
        ) do
     timeout = elem(elem(version.data, 1), 11)
-    actions = []
 
     expected =
-      case {version.name, timeout, actions} do
-        {:connection, timeout, actions} when timeout != :infinity ->
-          {:next_state, :connection, version.data, [{:timeout, timeout, :hibernate} | actions]}
-
-        {name, _, []} ->
-          {:next_state, name, version.data}
-
-        {name, _, actions} ->
-          {:next_state, name, version.data, actions}
+      if version.name == :connection and timeout != :infinity do
+        {:next_state, :connection, version.data, [{:timeout, timeout, :hibernate}]}
+      else
+        {:next_state, version.name, version.data}
       end
 
     tls_exact(state, source, :tls_callback_result, actual, expected)
