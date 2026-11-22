@@ -1386,9 +1386,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  defp native_query_factory do
-    run = ConnectionNative.observe_query_factory()
-    assert run.result == :ok
+  defp native_query_factory(shape \\ :rows) do
+    run = ConnectionNative.observe_query_factory(shape)
+    assert run.result == if(shape == :prepare_error, do: :prepare_error, else: :ok)
 
     events =
       run.events
@@ -1408,6 +1408,32 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       historical: run.native_history,
       initial: run.initial_state
     }
+  end
+
+  for shape <- [:rows, :none, :prepare_error] do
+    @tag :connection_streams
+    test "Connection streams: fresh native #{shape} preparation binds every helper return coordinate" do
+      captured = native_query_factory(unquote(shape))
+      assert captured.native.errors == []
+      assert captured.streams.errors == []
+      assert captured.decoders.errors == []
+      states = native_copy_states(captured)
+      assert states.errors == []
+
+      for {copies, covered} <- [
+            {native_helper_buffers(captured.events), states.buffers},
+            {native_helper_terms(captured.events), states.terms}
+          ] do
+        coordinates = MapSet.new(covered, &{&1.index, &1.path})
+        unbound = Enum.reject(copies, &MapSet.member?(coordinates, {&1.index, &1.path}))
+
+        for copy <- unbound do
+          IO.puts("CONNECTION_PREPARATION_COORDINATE_UNBOUND: " <> Diagnostics.render(copy))
+        end
+
+        assert unbound == [], "every fresh preparation helper coordinate needs its own origin"
+      end
+    end
   end
 
   for {function, arity, size, position} <- [{:describe, 7, 4, 3}, {:recv_describe, 4, 7, 6}] do
@@ -1456,6 +1482,60 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       IO.puts(
         "CONNECTION_QUERY_BUFFER_RETURN: owning RED; sole catcher; exact restore; fresh GREEN"
       )
+    end
+  end
+
+  for {function, arity, size, position} <- [
+        {:recv_describe, 4, 7, 1},
+        {:recv_describe, 4, 7, 2},
+        {:recv_describe, 4, 7, 3},
+        {:recv_describe, 4, 7, 4},
+        {:fetch_type_info, 4, 2, 1},
+        {:columns, 1, 3, 0},
+        {:columns, 1, 3, 1},
+        {:columns, 1, 3, 2}
+      ] do
+    @tag :connection_streams
+    test "Connection streams: native #{function} return field #{position} retains its own origin" do
+      function = unquote(function)
+      arity = unquote(arity)
+      size = unquote(size)
+      position = unquote(position)
+      target = %{kind: :element, size: size, position: position}
+
+      captured =
+        ComparatorMutants.with_postgrex_outputs(
+          %{{function, arity} => target},
+          &native_query_factory/0
+        )
+
+      assert captured.native.errors == []
+      assert captured.decoders.errors == []
+
+      corrupted =
+        for %{event: {_, :return_from, {Postgrex.Protocol, ^function, ^arity}, result}} = source <-
+              captured.events,
+            is_tuple(result) and tuple_size(result) == size,
+            match?({:native_foreign_return, _}, elem(result, position)),
+            do: {source.index, [3, position]}
+
+      assert corrupted != []
+      states = native_copy_states(captured)
+
+      assert Enum.map(states.errors, & &1.rule) ==
+               List.duplicate(:state_helper_copy, length(corrupted))
+
+      assert Enum.map(states.errors, &{&1.index, &1.path}) == corrupted
+
+      for mutant <- [:stream_buffer_copy, :stream_helper_copy, :stream_status_copy] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+        expected = if mutant == :stream_helper_copy, do: [], else: states.errors
+        assert checked.errors == expected
+      end
+
+      assert native_copy_states(captured).errors == states.errors
+      assert native_copy_states(native_query_factory()).errors == []
+      IO.puts("CONNECTION_QUERY_METADATA_RETURN: owning RED; sole catcher; restore; fresh GREEN")
     end
   end
 
@@ -4468,9 +4548,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert :ok == ComparatorMutants.machine_program_control(targets)
   end
 
-  @tag :connection_streams
-  test "Connection streams: native machine and direct TLS reply values retain their origins" do
-    assert :ok == ComparatorMutants.machine_reply_control()
+  for mode <- [nil, :fragmented] do
+    @tag :connection_streams
+    test "Connection streams: native #{mode} machine and direct TLS reply values retain their origins" do
+      assert :ok == ComparatorMutants.machine_reply_control(unquote(mode))
+    end
   end
 
   for corruption <- [:reply_copy, :reply_value] do

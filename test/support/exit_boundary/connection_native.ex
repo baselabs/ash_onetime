@@ -348,7 +348,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  def observe_query_factory do
+  def observe_query_factory(shape \\ :rows) do
     observer = self()
     tag = make_ref()
 
@@ -362,15 +362,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         fn %{sock: {module, socket}} = protocol ->
           query = %Postgrex.Query{
             name: "native_query_factory",
-            statement: "SELECT $1::int4 AS connection_stream_probe",
+            statement: query_factory_statement(shape),
             cache: :statement
           }
 
           try do
-            {:ok, %Postgrex.Query{}, %Postgrex.Protocol{}} =
-              Postgrex.Protocol.handle_prepare(query, [], protocol)
+            case Postgrex.Protocol.handle_prepare(query, [], protocol) do
+              {:ok, %Postgrex.Query{}, %Postgrex.Protocol{}} when shape in [:rows, :none] ->
+                :ok
 
-            :ok
+              {:error, %Postgrex.Error{postgres: %{code: :syntax_error}}, %Postgrex.Protocol{}}
+              when shape == :prepare_error ->
+                :prepare_error
+            end
           after
             :ok = module.close(socket)
           end
@@ -384,6 +388,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       0 -> raise "native query factory history was not captured"
     end
   end
+
+  defp query_factory_statement(:rows), do: "SELECT $1::int4 AS connection_stream_probe"
+  defp query_factory_statement(:none), do: "SET application_name TO 'ash_onetime_native_prepare'"
+  defp query_factory_statement(:prepare_error), do: "SELECT ("
 
   def observe_transactions do
     observer = self()

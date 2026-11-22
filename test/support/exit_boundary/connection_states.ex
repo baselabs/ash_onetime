@@ -251,17 +251,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
               :no_type_origin
           end
 
-        if expected == :no_type_origin,
-          do: failure(state, source, :state_type_factory_origin),
-          else:
-            helper_copy(
-              state,
-              source,
-              [3],
-              actual,
-              expected,
-              {:type_factory_result, first, progress.origins}
-            )
+        origin = {:type_factory_result, first, progress.origins}
+
+        case {actual, expected} do
+          {_, :no_type_origin} ->
+            failure(state, source, :state_type_factory_origin)
+
+          {{tag, payload}, {expected_tag, expected_payload}} ->
+            state
+            |> helper_copy(source, [3, 0], tag, expected_tag, origin)
+            |> helper_copy(source, [3, 1], payload, expected_payload, origin)
+
+          _ ->
+            helper_copy(state, source, [3], actual, expected, origin)
+        end
 
       :error ->
         failure(state, source, :state_type_factory_origin)
@@ -295,7 +298,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     with %{source: call} <- pair_returned(state, source),
          {:ok, input} <- Map.fetch(state.decoders.query_inputs, call.index) do
       expected = {input.result_oids, input.columns, input.result_mods}
-      helper_copy(state, source, [3], actual, expected, {:column_factory, input.origin})
+      origin = {:column_factory, input.origin}
+
+      if is_tuple(actual) and tuple_size(actual) == 3 do
+        Enum.reduce(0..2, state, fn position, state ->
+          helper_copy(
+            state,
+            source,
+            [3, position],
+            elem(actual, position),
+            elem(expected, position),
+            origin
+          )
+        end)
+      else
+        helper_copy(state, source, [3], actual, expected, origin)
+      end
     else
       _ -> failure(state, source, :state_helper_query_origin)
     end
@@ -363,30 +381,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp factory_value(state, source, function, actual, options) do
     expected = factory_expected(state, function, options)
-    actual = factory_observed(actual, expected)
-    factory_diagnostic(source, actual, expected)
+    actual = factory_observed(state, actual, expected)
     exact(state, source, :state_status_factory_value, actual, expected)
   end
-
-  # Report only which independent checks differ. Closure environments and
-  # protocol state must never enter hosted diagnostics.
-  defp factory_diagnostic(
-         source,
-         {:compiled_notify, actual, environment},
-         {:compiled_notify, expected, expected_environment}
-       ) when actual != expected or environment != expected_environment do
-    fields = [:module, :name, :arity, :new_uniq, :index]
-
-    equal =
-      fields
-      |> Enum.with_index()
-      |> Map.new(fn {field, index} -> {field, elem(actual, index) === elem(expected, index)} end)
-      |> Map.put(:environment, environment === expected_environment)
-
-    IO.puts("NATIVE_FACTORY_IDENTITY_EQUAL: " <> inspect(%{index: source.index, fields: equal}))
-  end
-
-  defp factory_diagnostic(_source, _actual, _expected), do: :ok
 
   defp factory_expected(_state, :mode, options), do: options[:mode] || :transaction
 
@@ -395,13 +392,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       {:compiled_notify, Map.fetch!(state.decoders.factory_identities, :notify), []}
   end
 
-  defp factory_observed(actual, {:compiled_notify, _identity, _environment})
+  defp factory_observed(state, actual, {:compiled_notify, _identity, _environment})
        when is_function(actual) do
-    info = Map.new(Function.info(actual))
-    {:compiled_notify, {info.module, info.name, info.arity, info.new_uniq, info.index}, info.env}
+    Map.get(state.decoders.factory_observations, actual, :missing_observed_factory)
   end
 
-  defp factory_observed(actual, _expected), do: actual
+  defp factory_observed(_state, actual, _expected), do: actual
 
   defp status_callback(state, pid) do
     Enum.find(Map.get(state.frames, pid, []), &(elem(&1.source.mfa, 1) in @last_state))
@@ -434,7 +430,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
       actual =
         if is_map(actual) and Map.has_key?(actual, :notify),
-          do: Map.update!(actual, :notify, &factory_observed(&1, notify)),
+          do: Map.update!(actual, :notify, &factory_observed(state, &1, notify)),
           else: actual
 
       state = exact(state, source, :state_status_copy, actual, expected)

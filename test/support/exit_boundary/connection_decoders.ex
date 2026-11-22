@@ -27,6 +27,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       factory_identities: %{
         notify: Compiled.identity(Postgrex.Protocol, :"-notify/1-fun-0-", 2)
       },
+      factory_observations: factory_observations(indexed.events),
       instances: [],
       replays: [],
       replay_sends: MapSet.new(),
@@ -47,10 +48,35 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       query_inputs: state.query_inputs,
       query_outputs: state.query_outputs,
       factory_identities: state.factory_identities,
+      factory_observations: state.factory_observations,
       protocol_copies: protocol_copies(indexed, historical),
       replays: Enum.reverse(state.replays),
       errors: Enum.reverse(state.errors)
     }
+  end
+
+  # A local fun's name becomes [] after its code is unloaded. Freeze observed
+  # metadata while the native owner is installed; expected identities still
+  # come independently from that owner's object code and declared environment.
+  defp factory_observations(events) do
+    events
+    |> Enum.flat_map(fn
+      %{event: {_, :return_from, {Postgrex.Protocol, :notify, 1}, callback}}
+      when is_function(callback) ->
+        [callback]
+
+      %{event: {_, :call, {Postgrex.Protocol, _, [_, %{notify: callback} | _]}}}
+      when is_function(callback) ->
+        [callback]
+
+      _ ->
+        []
+    end)
+    |> Map.new(fn callback ->
+      info = Map.new(Function.info(callback))
+      identity = {info.module, info.name, info.arity, info.new_uniq, info.index}
+      {callback, {:compiled_notify, identity, info.env}}
+    end)
   end
 
   # A census of native coordinates, not a qualification or a projection. Each

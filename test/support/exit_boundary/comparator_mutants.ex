@@ -738,8 +738,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     with_machine_peer(:assert_machine_program, [targets])
   end
 
-  def machine_reply_control do
-    with_machine_peer(:assert_machine_reply, [])
+  def machine_reply_control(mode \\ nil) do
+    with_machine_peer(:assert_machine_reply, [mode])
   end
 
   # OTP's own peer I/O server avoids the parent VM's user_drv/group machines.
@@ -899,7 +899,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     :ok
   end
 
-  def assert_machine_reply do
+  def assert_machine_reply(mode) do
     targets = %{{:reply, 2} => [0, 1]}
 
     run =
@@ -908,7 +908,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
           :ssl_gen_statem,
           &(&1 > 1),
           &remote_reply_form/2,
-          &ConnectionNative.observe_tls/0
+          fn -> ConnectionNative.observe_tls(mode) end
         )
       end)
 
@@ -930,11 +930,11 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     assert corrupted != []
 
     assert Enum.any?(corrupted, fn source ->
-      Enum.any?(source.stack, fn
-        {:ssl_gen_statem, _, _} -> true
-        _ -> false
-      end)
-    end)
+             Enum.any?(source.stack, fn
+               {:ssl_gen_statem, _, _} -> true
+               _ -> false
+             end)
+           end)
 
     coordinates =
       for source <- corrupted, position <- [0, 1], do: {source.index, [2, 2, position]}
@@ -959,7 +959,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end
 
     assert ConnectionTls.build(%{events: events}, run.tls_binding).errors == native.errors
-    restored = ConnectionNative.observe_tls()
+    restored = ConnectionNative.observe_tls(mode)
 
     restored_events =
       restored.events

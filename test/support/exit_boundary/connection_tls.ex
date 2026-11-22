@@ -421,17 +421,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp receiver_reply(state, source) do
-    with [%{source: %{mfa: {:ssl_gen_statem, :read_application_data, 2}}, input: version} | _] <-
-           Map.get(state.frames, source.pid, []),
-         %{fragments: fragments, remaining: []} <- state.parsed[source.pid],
+    with [frame | _] <- Map.get(state.frames, source.pid, []),
+         {:ok, version, plaintext} <- receiver_buffer(state, source.pid, frame),
          {:socket_options, :binary, packet, _max_packet, 0, false} <- elem(version.data, 5),
          true <- packet in [0, :raw],
          recv <- elem(version.data, 9),
          from <- elem(recv, 1),
          required <- elem(recv, 2),
-         true <- from != :undefined and is_integer(required) and required >= 0 do
-      {front, _size, rear} = elem(version.data, 12)
-      {front, rear, bytes} = queued_binary(front, [IO.iodata_to_binary(fragments) | rear])
+         true <- from != :undefined and is_integer(required) and required >= 0,
+         {front, size, rear} <- elem(version.data, 12),
+         true <- size + byte_size(plaintext) > 0 do
+      {front, rear, bytes} = queued_binary(front, [plaintext | rear])
       count = if required == 0, do: byte_size(bytes), else: required
       available = IO.iodata_to_binary([bytes, front, Enum.reverse(rear)])
 
@@ -442,6 +442,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       _ -> :error
     end
   end
+
+  defp receiver_buffer(
+         state,
+         pid,
+         %{source: %{mfa: {:ssl_gen_statem, :read_application_data, 2}}, input: version}
+       ) do
+    case state.parsed[pid] do
+      %{fragments: fragments, remaining: []} ->
+        {:ok, version, IO.iodata_to_binary(fragments)}
+
+      _ ->
+        :error
+    end
+  end
+
+  # passive_receive/3 calls the private four-argument reader directly. It
+  # consumes the independently modeled queue without adding decrypted bytes.
+  defp receiver_buffer(
+         _state,
+         _pid,
+         %{source: %{mfa: {:ssl_gen_statem, :passive_receive, 3}}, input: version}
+       ),
+       do: {:ok, version, <<>>}
+
+  defp receiver_buffer(_state, _pid, _frame), do: :error
 
   defp program_before(state, source, :loop_event, _context) do
     queue = state.machine_queues[source.pid]
