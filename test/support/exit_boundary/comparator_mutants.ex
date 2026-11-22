@@ -2,6 +2,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Comparator
   alias AshOnetime.Test.ExitBoundary.Diagnostics
+  alias AshOnetime.Test.ExitBoundary.ConnectionNative
+  alias AshOnetime.Test.ExitBoundary.ConnectionTls
+  import ExUnit.Assertions
 
   def rules,
     do: [
@@ -495,6 +498,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_factory_value) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: "    exact(state, source, :state_status_factory_value, actual, expected)\n",
+        mutated:
+          "    _ = actual\n    exact(state, source, :state_status_factory_value, expected, expected)\n"
+      }
+    ]
+  end
+
   def edits(:stream_error_copy) do
     [
       %{
@@ -576,6 +590,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         original: "    state = tls_exact(state, source, :tls_machine_copy, actual, expected)\n",
         mutated:
           "    _ = actual\n    state = tls_exact(state, source, :tls_machine_copy, expected, expected)\n"
+      }
+    ]
+  end
+
+  def edits(:stream_tls_machine_program) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original: "    state = tls_exact(state, source, :tls_machine_program_copy, actual, expected)\n",
+        mutated:
+          "    _ = actual\n    state = tls_exact(state, source, :tls_machine_program_copy, expected, expected)\n"
       }
     ]
   end
@@ -689,8 +714,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     with_owner_mutant(:tls_sender, required, &tls_sender_form(&1, &2, rule), callback)
   end
 
-  def with_gen_statem_mutant(rule, callback) do
-    with_machine_peer(:machine_mutation, [rule, callback])
+  def machine_copy_control(rule, position) do
+    with_machine_peer(:assert_machine_copy, [rule, position])
   end
 
   def with_tls_connection_mutant(rule, callback),
@@ -707,8 +732,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     )
   end
 
-  def with_machine_inputs(targets, callback) do
-    with_machine_peer(:machine_input_mutation, [targets, callback])
+  def machine_program_control(targets) do
+    with_machine_peer(:assert_machine_program, [targets])
   end
 
   # OTP's own peer I/O server avoids the parent VM's user_drv/group machines.
@@ -746,11 +771,129 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     })
   end
 
-  def machine_mutation(rule, callback) do
+  # Crypto NIF resources in captured SSL state belong to this VM. Keep both
+  # the real capture and every assertion here; only the :ok verdict crosses
+  # the peer boundary, after exact native and comparator restoration.
+  def assert_machine_copy(corruption, position) do
+    run =
+      machine_mutation(corruption, &ConnectionNative.observe_tls/0)
+
+    assert run.result == []
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    corrupted =
+      Enum.filter(events, fn
+        %{event: {_, :call, {:gen_statem, :loop_event, arguments}}} ->
+          match?({:native_foreign_machine, _}, Enum.at(arguments, position))
+
+        _ ->
+          false
+      end)
+
+    assert corrupted != []
+    native = ConnectionTls.build(%{events: events}, run.tls_binding)
+
+    assert Enum.map(native.errors, & &1.rule) ==
+             List.duplicate(:tls_machine_copy, length(corrupted))
+
+    assert Enum.map(native.errors, & &1.index) == Enum.map(corrupted, & &1.index)
+
+    for mutant <- [:stream_tls_worker_state_copy, :stream_tls_machine_copy] do
+      checked =
+        with_mutant(mutant, fn ->
+          ConnectionTls.build(%{events: events}, run.tls_binding)
+        end)
+
+      expected =
+        if mutant == :stream_tls_machine_copy,
+          do: [],
+          else: List.duplicate(:tls_machine_copy, length(corrupted))
+
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    assert Enum.map(ConnectionTls.build(%{events: events}, run.tls_binding).errors, & &1.index) ==
+             Enum.map(corrupted, & &1.index)
+
+    restored = ConnectionNative.observe_tls()
+
+    restored_events =
+      restored.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+    IO.puts("CONNECTION_TLS_MACHINE_COPY: owning RED; sole catcher; restore; fresh GREEN")
+    :ok
+  end
+
+  def assert_machine_program(targets) do
+    run = machine_input_mutation(targets, &ConnectionNative.observe_tls/0)
+    assert run.result == []
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    corrupted =
+      for %{event: {_, :call, {:gen_statem, function, arguments}}} = source <- events,
+          positions = Map.get(targets, {function, length(arguments)}, []),
+          position <- positions do
+        assert match?({:native_foreign_helper, _}, Enum.at(arguments, position))
+        {source.index, [2, 2, position]}
+      end
+
+    assert corrupted != []
+
+    for {function, arity} <- Map.keys(targets) do
+      assert Enum.any?(events, &(&1.mfa == {:gen_statem, function, arity}))
+    end
+
+    native = ConnectionTls.build(%{events: events}, run.tls_binding)
+
+    assert Enum.map(native.errors, & &1.rule) ==
+             List.duplicate(:tls_machine_program_copy, length(corrupted))
+
+    assert Enum.map(native.errors, &{&1.index, &1.path}) == corrupted
+
+    for mutant <- [
+          :stream_tls_machine_program,
+          :stream_tls_machine_copy,
+          :stream_tls_worker_state_copy
+        ] do
+      checked =
+        with_mutant(mutant, fn ->
+          ConnectionTls.build(%{events: events}, run.tls_binding)
+        end)
+
+      expected = if mutant == :stream_tls_machine_program, do: [], else: native.errors
+      assert checked.errors == expected
+    end
+
+    assert ConnectionTls.build(%{events: events}, run.tls_binding).errors == native.errors
+    restored = ConnectionNative.observe_tls()
+
+    restored_events =
+      restored.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+    IO.puts("CONNECTION_MACHINE_PROGRAM: owning RED; sole catcher; exact restore; fresh GREEN")
+
+    :ok
+  end
+
+  defp machine_mutation(rule, callback) do
     with_owner_mutant(:gen_statem, 3, &machine_form(&1, &2, rule), callback)
   end
 
-  def machine_input_mutation(targets, callback) do
+  defp machine_input_mutation(targets, callback) do
     required = fn sites -> sites > map_size(targets) end
 
     with_owner_mutant(
@@ -856,7 +999,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         copied =
           Enum.map(clauses, fn {:clause, location, arguments, guards, body} ->
             arguments = helper_arguments(arguments, positions, location)
-            {:clause, location, arguments, guards, body}
+            hygienic_input_clause({:clause, location, arguments, guards, body})
           end)
 
         {{:function, annotation, function, arity, copied ++ clauses}, sites + length(copied)}
@@ -865,6 +1008,33 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         {{:function, annotation, function, arity, clauses}, sites}
     end
   end
+
+  # A duplicated Elixir clause must not duplicate its inherited Erlang
+  # underscore-match warnings. Rename only repeated named underscore variables
+  # in the copy; preserve the original clause and exact warning equality.
+  defp hygienic_input_clause(clause) do
+    counts = input_variables(clause, %{})
+    rename_input_variables(clause, counts)
+  end
+
+  defp input_variables({:var, _, name}, counts), do: Map.update(counts, name, 1, &(&1 + 1))
+  defp input_variables(form, counts) when is_tuple(form),
+    do: form |> Tuple.to_list() |> Enum.reduce(counts, &input_variables/2)
+  defp input_variables(form, counts) when is_list(form),
+    do: Enum.reduce(form, counts, &input_variables/2)
+  defp input_variables(_form, counts), do: counts
+
+  defp rename_input_variables({:var, location, name} = form, counts) do
+    if name != :_ and String.starts_with?(Atom.to_string(name), "_") and counts[name] > 1,
+      do: {:var, location, String.to_atom("AshOnetimeInput" <> Atom.to_string(name))},
+      else: form
+  end
+
+  defp rename_input_variables(form, counts) when is_tuple(form),
+    do: form |> Tuple.to_list() |> Enum.map(&rename_input_variables(&1, counts)) |> List.to_tuple()
+  defp rename_input_variables(form, counts) when is_list(form),
+    do: Enum.map(form, &rename_input_variables(&1, counts))
+  defp rename_input_variables(form, _counts), do: form
 
   defp owner_inputs_form(form, sites, _targets), do: {form, sites}
 
@@ -972,8 +1142,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
        [copied, {:atom, location, :env}]}
 
     environment =
-      {:tuple, location,
-       [{:atom, location, :env}, {:cons, location, original, {nil, location}}]}
+      {:tuple, location, [{:atom, location, :env}, {:cons, location, original, {nil, location}}]}
 
     restored = {:case, location, info, [{:clause, location, [environment], [], [original]}]}
     {:case, location, expression, [{:clause, location, [copied], [], [restored]}]}

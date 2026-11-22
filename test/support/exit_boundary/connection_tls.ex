@@ -240,11 +240,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     :loop_actions,
     :loop_actions_list,
     :loop_actions_reply,
+    :loop_actions_next_event,
+    :loop_state_enter,
+    :loop_state_change,
     :loop_state_transition,
     :loop_keep_state,
     :loop_next_events,
     :loop_timeouts,
-    :loop_timeouts_cancel
+    :loop_timeouts_cancel,
+    :loop_timeouts_register,
+    :loop_timeouts_update
   ]
 
   # Native sys:get_state roots precede observation. Gen_statem retains its old
@@ -270,6 +275,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       machine_states: Map.new(owners, fn {pid, owner} -> {pid, owner.family.machines[pid]} end),
       machine_callbacks: %{},
       machine_zero: %{},
+      machine_programs: %{},
+      machine_received: %{},
       messages: %{},
       encoded: %{},
       parsed: %{},
@@ -333,7 +340,465 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       |> loop_next_copy(source, function, version, next)
       |> loop_result_copy(source, function, arguments, next)
 
-    if function == :loop_msg, do: loop_message(state, source, arguments), else: state
+    state = if function == :loop_msg, do: loop_message(state, source, arguments), else: state
+    machine_program(state, source, function, arguments)
+  end
+
+  # Temporary registers belong to the program that constructs them. The cursor
+  # advances from the earlier message, callback return and native timer returns;
+  # no checked helper argument is used to advance it.
+  defp machine_program(state, source, function, arguments)
+       when function in @loop_state_functions or
+              function in [:reply_then_terminate, :do_reply_then_terminate, :terminate] do
+    root = state.owners[source.pid].family.machines[source.pid]
+    debug_position = if function in @loop_state_functions, do: 1, else: 4
+
+    state =
+      program_term(state, source, [2, 2, debug_position], root.debug, root.debug_origin)
+
+    context = Map.get(state.machine_programs, source.pid)
+    {state, context} = program_before(state, source, function, context)
+
+    case program_fields(function, length(arguments), context, state, source) do
+      {:ok, fields} ->
+        state =
+          Enum.reduce(fields, state, fn {path, expected}, state ->
+            program_term(state, source, [2, 2 | List.wrap(path)], expected, context.origin)
+          end)
+
+        state = program_callback_result(state, source, function, context)
+        {state, context} = program_after(state, source, function, length(arguments), context)
+        put_in(state.machine_programs[source.pid], context)
+
+      :error ->
+        tls_failure(state, source, :tls_machine_program_origin)
+    end
+  end
+
+  defp machine_program(state, source, :reply, [from, reply]) do
+    case Map.get(state.machine_programs, source.pid) do
+      %{reply: {expected_from, expected_reply}} = context ->
+        state
+        |> program_term(source, [2, 2, 0], expected_from, context.origin)
+        |> program_term(source, [2, 2, 1], expected_reply, context.origin)
+
+      _ ->
+        _ = {from, reply}
+        tls_failure(state, source, :tls_machine_program_reply_origin)
+    end
+  end
+
+  defp machine_program(state, _source, _function, _arguments), do: state
+
+  defp program_before(state, source, :loop_event, _context) do
+    queue = state.machine_queues[source.pid]
+    {state, program_context(state, source, queue.events, queue.hibernate, queue.origin)}
+  end
+
+  defp program_before(state, source, :loop_msg, nil),
+    do: {state, program_context(state, source, [], false, source.index)}
+
+  defp program_before(state, source, :loop_state_callback_result, context) when is_map(context) do
+    case state.machine_callbacks[source.pid] do
+      %{source: callback, result: result} ->
+        {state, %{context | result: result, timer_index: callback.index, origin: callback.index}}
+
+      _ ->
+        {tls_failure(state, source, :tls_machine_program_callback_origin), context}
+    end
+  end
+
+  defp program_before(state, source, function, context)
+       when function in [:loop_next_events, :loop_timeouts] and is_map(context) do
+    {state, context} = program_cancellations(state, source, context)
+    program_pending_timer(state, source, context)
+  end
+
+  defp program_before(state, source, :loop_timeouts_register, context) when is_map(context) do
+    case context.timeout_ref do
+      nil ->
+        {type, time, _message, options} = context.timeout
+        function = if time == 0, do: :make_ref, else: :start_timer
+        arguments = if time == 0, do: [], else: [time, source.pid, type, options]
+        {state, ref, context} = program_timer_return(state, source, context, function, arguments)
+        zero = if time == 0, do: [{type, ref} | context.zero], else: context.zero
+        {state, %{context | timeout_ref: ref, zero: zero}}
+
+      _ref ->
+        {state, context}
+    end
+  end
+
+  defp program_before(state, _source, _function, context), do: {state, context}
+
+  defp program_context(state, source, events, hibernate, origin) do
+    root = state.machine_states[source.pid]
+
+    %{
+      origin: origin,
+      q: events,
+      events: [],
+      data: elem(root.state, 1),
+      callback_event: List.first(events),
+      next: [],
+      hibernate: hibernate,
+      timeouts: [],
+      postpone: false,
+      call_enter: false,
+      state_call: true,
+      actions: [],
+      action: nil,
+      reply: nil,
+      result: nil,
+      timers: elem(root.state, 3),
+      postponed: elem(root.state, 2),
+      seen: %{},
+      zero: [],
+      timeout: nil,
+      timeout_ref: nil,
+      timer_index: source.index,
+      pending_timer: nil,
+      cancels: [],
+      stop: nil,
+      replies: []
+    }
+  end
+
+
+  defp program_fields(function, arity, _context, _state, _source)
+       when {function, arity} in [
+         {:loop, 3}, {:loop_hibernate, 3}, {:loop_wakeup, 3}, {:loop_msg, 4},
+         {:loop_msg_event, 4}, {:loop_msg_event, 5}, {:loop_event, 5}, {:loop_t0q, 5}
+       ],
+       do: {:ok, []}
+
+  defp program_fields(:loop_state_callback, 7, context, _state, _source) when is_map(context),
+    do: {:ok, [{3, context.q}, {[4, 0], elem(context.data, 0)}, {5, context.callback_event}, {6, context.hibernate}]}
+
+  defp program_fields(function, 11, context, _state, _source)
+       when function in [:loop_state_callback, :loop_state_callback_result] and is_map(context) do
+    fields = program_prefix(context, context.q, context.postpone)
+    fields = fields ++ [{9, context.state_call}]
+    if function == :loop_state_callback,
+      do: {:ok, fields ++ [{10, context.callback_event}]},
+      else: {:ok, fields}
+  end
+
+  defp program_fields(:loop_actions, 10, context, _state, _source) when is_map(context),
+    do: {:ok, program_prefix(context, context.q, context.postpone) ++ [{9, context.call_enter}]}
+
+  defp program_fields(function, arity, context, _state, _source)
+       when function in [:loop_actions, :loop_actions_list, :loop_actions_reply, :loop_actions_next_event] and
+              arity in [12, 13, 14] and is_map(context) do
+    base = program_prefix(context, context.q, context.postpone) ++
+      [{9, context.call_enter}, {10, context.state_call}, {11, context.actions}]
+
+    fields =
+      case {function, arity} do
+        {:loop_actions_list, 13} -> base ++ [{12, context.action}]
+        {:loop_actions_reply, 14} ->
+          {from, reply} = context.reply
+          base ++ [{12, from}, {13, reply}]
+        {:loop_actions_next_event, 14} ->
+          {:next_event, type, content} = context.action
+          base ++ [{12, type}, {13, content}]
+        {function, 12} when function in [:loop_actions, :loop_actions_list] -> base
+        _ -> []
+      end
+
+    if fields == [], do: :error, else: {:ok, fields}
+  end
+
+  defp program_fields(function, arity, context, _state, _source)
+       when function in [:loop_state_enter, :loop_state_transition, :loop_keep_state, :loop_state_change] and
+              arity in [8, 9] and is_map(context) do
+    events = if function in [:loop_state_enter, :loop_state_transition], do: context.q, else: context.events
+    final = if function in [:loop_state_enter, :loop_state_transition], do: context.postpone, else: context.postponed
+    fields = program_prefix(context, events, final)
+    if arity == 8, do: {:ok, Enum.reject(fields, fn {path, _} -> path == 8 end)}, else: {:ok, fields}
+  end
+
+  defp program_fields(:loop_next_events, 10, context, _state, _source) when is_map(context),
+    do: {:ok, program_prefix(context, context.events, context.postponed) ++ [{9, context.timers}]}
+
+  defp program_fields(function, arity, context, _state, _source)
+       when function in [:loop_timeouts, :loop_timeouts_register, :loop_timeouts_cancel, :loop_timeouts_update] and
+              is_map(context) do
+    base = program_prefix(context, context.events, context.postponed) ++
+      [{9, context.timers}, {10, context.seen}, {11, context.zero}]
+
+    extra =
+      case {function, arity, context.timeout} do
+        {:loop_timeouts, 12, _} -> []
+        {:loop_timeouts, 16, {type, time, message, options}} -> [{12, type}, {13, time}, {14, message}, {15, options}]
+        {:loop_timeouts_register, 17, {type, time, message, options}} ->
+          [{12, type}, {13, time}, {14, message}, {15, options}, {16, context.timeout_ref}]
+        {:loop_timeouts_register, 15, {type, _time, message, _options}} ->
+          [{12, type}, {13, context.timeout_ref}, {14, message}]
+        {:loop_timeouts_cancel, 13, {type, _, _, _}} -> [{12, type}]
+        {:loop_timeouts_update, 14, {type, _, message, _}} -> [{12, type}, {13, message}]
+        _ -> :error
+      end
+
+    if extra == :error, do: :error, else: {:ok, base ++ extra}
+  end
+
+  defp program_fields(:loop_done, 5, context, _state, _source) when is_map(context),
+    do: {:ok, [{3, context.events}, {4, context.next}]}
+
+  defp program_fields(:loop_done, 4, context, _state, _source) when is_map(context),
+    do: {:ok, [{3, context.q}]}
+
+  defp program_fields(function, arity, context, state, source)
+       when function in [:reply_then_terminate, :do_reply_then_terminate, :terminate] and is_map(context) do
+    case program_stop(state, source, context) do
+      {:ok, class, reason, stack, replies, q} ->
+        fields = [{0, class}, {1, reason}, {2, stack}, {6, q}]
+        if arity == 8, do: {:ok, fields ++ [{7, replies}]}, else: {:ok, fields}
+      :error -> :error
+    end
+  end
+
+  defp program_fields(_function, _arity, _context, _state, _source), do: :error
+
+  defp program_prefix(context, events, postponed),
+    do: [{3, events}, {[4, 0], elem(context.data, 0)}, {5, context.next}, {6, context.hibernate}, {7, context.timeouts}, {8, postponed}]
+
+  defp program_callback_result(state, source, :loop_state_callback_result, context) do
+    actual = native_term(source.event, [2, 2, 10])
+
+    case {actual, context.result, result_data_path(context.result)} do
+      {actual, expected, [data]} when is_tuple(actual) and is_tuple(expected) and
+          tuple_size(actual) == tuple_size(expected) and elem(actual, 0) == elem(expected, 0) ->
+        Enum.reduce(0..(tuple_size(expected) - 1), state, fn
+          ^data, state -> state
+          position, state -> program_term(state, source, [2, 2, 10, position], elem(expected, position), context.origin)
+        end)
+      _ -> program_term(state, source, [2, 2, 10], context.result, context.origin)
+    end
+  end
+
+  defp program_callback_result(state, _source, _function, _context), do: state
+
+  defp program_after(state, source, :loop_state_callback_result, _arity, context) do
+    {name, data} = context.data
+
+    case transition_result(context.result, name, data) do
+      {:ok, next_name, next_data, _actions} ->
+        repeat? = elem_if_tuple(context.result, 0) in [:repeat_state, :repeat_state_and_data] or
+          context.result == :repeat_state_and_data
+        context = %{context | data: {next_name, next_data}, actions: program_actions(context.result),
+          call_enter: repeat? or next_name !== name}
+        {state, context}
+      :error ->
+        case context.result do
+          {:stop_and_reply, reason, replies, next_data} ->
+            {state, %{context | data: {name, next_data}, stop: {:exit, reason}, replies: replies}}
+          {:stop_and_reply, reason, replies} ->
+            {state, %{context | stop: {:exit, reason}, replies: replies}}
+          {:stop, reason, next_data} ->
+            {state, %{context | data: {name, next_data}, stop: {:exit, reason}}}
+          {:stop, reason} -> {state, %{context | stop: {:exit, reason}}}
+          :stop -> {state, %{context | stop: {:exit, :normal}}}
+          _ -> {tls_failure(state, source, :tls_machine_program_result_origin), context}
+        end
+    end
+  end
+
+  defp program_after(state, source, :loop_state_enter, _arity, context) do
+    previous = state.machine_states[source.pid].state |> elem(1) |> elem(0)
+    {state, %{context | state_call: false, callback_event: {:enter, previous}}}
+  end
+
+  defp program_after(state, _source, :loop_actions, 12, context),
+    do: {state, %{context | actions: native_list(context.actions)}}
+
+  defp program_after(state, source, :loop_msg, _arity, context) do
+    parent = elem(state.owners[source.pid].family.machines[source.pid].params, 3)
+
+    case state.machine_received[source.pid] do
+      %{value: {:EXIT, ^parent, reason}, origin: origin} ->
+        {state, %{context | stop: {:exit, reason}, q: [], origin: origin}}
+      _ -> {state, context}
+    end
+  end
+
+  defp program_after(state, source, :loop_actions_list, 12, %{actions: [action | rest]} = context) do
+    context = %{context | actions: rest, action: action}
+    case action do
+      :hibernate -> {state, %{context | hibernate: true}}
+      {:hibernate, value} when is_boolean(value) -> {state, %{context | hibernate: value}}
+      :postpone -> {state, %{context | postpone: true}}
+      {:postpone, value} when is_boolean(value) -> {state, %{context | postpone: value}}
+      {:reply, from, reply} -> {state, %{context | reply: {from, reply}}}
+      {:next_event, _type, _content} -> {state, context}
+      _ ->
+        if timeout_action(action) == :error,
+          do: {tls_failure(state, source, :tls_machine_program_action_origin), context},
+          else: {state, context}
+    end
+  end
+
+  defp program_after(state, source, :loop_actions_list, 13, context) do
+    case timeout_action(context.action) do
+      {:ok, timeout} -> {state, %{context | timeouts: [timeout | context.timeouts]}}
+      :error -> {tls_failure(state, source, :tls_machine_program_timeout_origin), context}
+    end
+  end
+
+  defp program_after(state, _source, :loop_actions_next_event, 14, context) do
+    {:next_event, type, content} = context.action
+    {state, %{context | next: [{type, content} | context.next]}}
+  end
+
+  defp program_after(state, source, :loop_state_transition, 9, context) do
+    [event | events] = context.q
+    root = state.machine_states[source.pid]
+    postponed = if context.postpone, do: [event | elem(root.state, 2)], else: elem(root.state, 2)
+    {state, %{context | events: events, postponed: postponed}}
+  end
+
+  defp program_after(state, _source, :loop_keep_state, 9, context),
+    do: {state, %{context | cancels: [:timeout]}}
+
+  defp program_after(state, _source, :loop_state_change, 9, context),
+    do: {state, %{context | events: Enum.reverse(context.postponed) ++ context.events, postponed: []}}
+
+  defp program_after(state, _source, :loop_state_change, 8, context),
+    do: {state, %{context | cancels: [:state_timeout, :timeout]}}
+
+  defp program_after(state, _source, :loop_timeouts, 12, %{timeouts: [timeout | rest]} = context) do
+    type = elem(timeout, 0)
+    context = %{context | timeouts: rest}
+    if Map.has_key?(context.seen, type),
+      do: {state, context},
+      else: {state, %{context | timeout: timeout_tuple(timeout), timeout_ref: nil}}
+  end
+
+  defp program_after(state, _source, :loop_timeouts_register, 15, context),
+    do: {state, %{context | pending_timer: :register}}
+
+  defp program_after(state, _source, :loop_timeouts_cancel, 13, context),
+    do: {state, %{context | pending_timer: :cancel}}
+
+  defp program_after(state, _source, :loop_timeouts_update, 14, context),
+    do: {state, %{context | pending_timer: :update}}
+
+  defp program_after(state, _source, :loop_done, 5, context),
+    do: {state, %{context | q: Enum.reverse(context.next) ++ context.events}}
+
+  defp program_after(state, _source, :reply_then_terminate, 8, context),
+    do: {state, %{context | replies: native_list(context.replies)}}
+
+  defp program_after(state, _source, :do_reply_then_terminate, 8, %{replies: [{:reply, from, reply} | rest]} = context),
+    do: {state, %{context | reply: {from, reply}, replies: rest}}
+
+  defp program_after(state, _source, _function, _arity, context), do: {state, context}
+
+  defp timeout_action({type, time, message, options}) do
+    options = native_list(options)
+    case Enum.reduce_while(options, false, fn
+      {:abs, value}, _ when is_boolean(value) -> {:cont, value}
+      _, _ -> {:halt, :error}
+    end) do
+      true -> {:ok, {type, time, message, options}}
+      false -> {:ok, {type, time, message}}
+      :error -> :error
+    end
+  end
+
+  defp timeout_action({type, time, message}), do: {:ok, {type, time, message}}
+  defp timeout_action({type, :cancel}), do: {:ok, {type, :infinity, :undefined}}
+  defp timeout_action(time) when is_integer(time) or time == :infinity,
+    do: {:ok, {:timeout, time, time}}
+  defp timeout_action(_action), do: :error
+
+  defp timeout_tuple({type, time, message}), do: {type, time, message, []}
+  defp timeout_tuple(timeout), do: timeout
+  defp program_actions({:next_state, _name, _data, actions}), do: actions
+  defp program_actions({tag, _data, actions}) when tag in [:keep_state, :repeat_state], do: actions
+  defp program_actions({tag, actions}) when tag in [:keep_state_and_data, :repeat_state_and_data], do: actions
+  defp program_actions(_result), do: []
+  defp native_list(value) when is_list(value), do: value
+  defp native_list(value), do: [value]
+  defp elem_if_tuple(value, position) when is_tuple(value), do: elem(value, position)
+  defp elem_if_tuple(_value, _position), do: nil
+
+  defp program_cancellations(state, source, context) do
+    Enum.reduce(context.cancels, {state, %{context | cancels: []}}, fn type, {state, context} ->
+      program_cancel_timer(state, source, context, type)
+    end)
+  end
+
+  defp program_cancel_timer(state, source, context, type) do
+    case context.timers[type] do
+      {ref, _message} ->
+        {state, result, context} = program_timer_return(state, source, context, :cancel_timer, [ref])
+        timers = Map.delete(context.timers, type)
+        timers = if result == false, do: Map.put(timers, ref, []), else: timers
+        {state, %{context | timers: timers}}
+      nil -> {state, context}
+    end
+  end
+
+  defp program_pending_timer(state, _source, %{pending_timer: nil} = context), do: {state, context}
+
+  defp program_pending_timer(state, source, context) do
+    {type, _time, message, _options} = context.timeout
+    {state, context} =
+      case context.pending_timer do
+        :cancel -> program_cancel_timer(state, source, context, type)
+        :register ->
+          {state, context} = program_cancel_timer(state, source, context, type)
+          {state, %{context | timers: Map.put(context.timers, type, {context.timeout_ref, message})}}
+        :update ->
+          case context.timers[type] do
+            {ref, _old} -> {state, %{context | timers: Map.put(context.timers, type, {ref, message})}}
+            nil ->
+              {state, ref, context} = program_timer_return(state, source, context, :make_ref, [])
+              {state, %{context | timers: Map.put(context.timers, type, {ref, message}), zero: [{type, ref} | context.zero]}}
+          end
+      end
+    {state, %{context | seen: Map.put(context.seen, type, true), pending_timer: nil}}
+  end
+
+  defp program_timer_return(state, source, context, function, arguments) do
+    case machine_timer_pairs(state, source, context.timer_index) do
+      [pair | _] ->
+        {_, :return_from, _, result} = pair.returned.event
+        state = tls_exact(state, pair.source, :tls_machine_timer_program, pair.source.event,
+          {source.pid, :call, {:erlang, function, arguments}})
+        {state, result, %{context | timer_index: pair.returned.index}}
+      [] ->
+        {tls_failure(state, source, :tls_machine_program_timer_origin), :missing_native_timer, context}
+    end
+  end
+
+  defp program_stop(state, source, context) do
+    stack =
+      state.pairs
+      |> Map.values()
+      |> Enum.filter(fn pair ->
+        pair.source.pid == source.pid and pair.source.index > context.origin and
+          pair.returned.index < source.index and
+          pair.source.event == {source.pid, :call, {:erlang, :process_info, [source.pid, :current_stacktrace]}}
+      end)
+      |> Enum.max_by(& &1.returned.index, fn -> nil end)
+
+    case {context.stop, stack} do
+      {{class, reason}, %{returned: %{event: {_, :return_from, _, {:current_stacktrace, frames}}}}} ->
+        {:ok, class, reason, frames, context.replies, context.q}
+      _ -> :error
+    end
+  end
+
+  defp program_term(state, source, path, expected, origin) do
+    actual = native_term(source.event, path)
+    state = tls_exact(state, source, :tls_machine_program_copy, actual, expected)
+    state = tls_error_path(state, source, path, :tls_machine_program_copy)
+
+    copy = %{index: source.index, path: path, origin: origin}
+    Map.update!(state, :terms, &[copy | &1])
   end
 
   defp machine_metadata(state, source, function, arguments, version) do
@@ -445,17 +910,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     actual = native_term(source.event, path)
     state = tls_exact(state, source, :tls_machine_copy, actual, expected)
 
-    state =
-      if actual === expected do
-        state
-      else
-        [error | rest] = state.errors
-        %{state | errors: [Map.put(error, :path, path) | rest]}
-      end
+    state = tls_error_path(state, source, path, :tls_machine_copy)
 
     copy = %{index: source.index, path: path, origin: origin}
     Map.update!(state, :terms, &[copy | &1])
   end
+
+  defp tls_error_path(%{errors: [%{index: index, rule: rule} = error | rest]} = state,
+         %{index: index}, path, rule) do
+    if Map.has_key?(error, :path),
+      do: state,
+      else: %{state | errors: [Map.put(error, :path, path) | rest]}
+  end
+
+  defp tls_error_path(state, _source, _path, _rule), do: state
 
   defp machine_commit(state, source, function)
        when function in [:loop_done, :reply_then_terminate, :do_reply_then_terminate, :terminate] do
@@ -502,17 +970,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp transition_result({:next_state, name, data}, _name, _data), do: {:ok, name, data, []}
 
   defp transition_result({:next_state, name, data, actions}, _name, _data),
-    do: {:ok, name, data, List.wrap(actions)}
+    do: {:ok, name, data, native_list(actions)}
 
   defp transition_result({:keep_state, data}, name, _data), do: {:ok, name, data, []}
 
   defp transition_result({:keep_state, data, actions}, name, _data),
-    do: {:ok, name, data, List.wrap(actions)}
+    do: {:ok, name, data, native_list(actions)}
 
   defp transition_result(:keep_state_and_data, name, data), do: {:ok, name, data, []}
 
   defp transition_result({:keep_state_and_data, actions}, name, data),
-    do: {:ok, name, data, List.wrap(actions)}
+    do: {:ok, name, data, native_list(actions)}
+
+  defp transition_result({:repeat_state, data}, name, _data), do: {:ok, name, data, []}
+  defp transition_result({:repeat_state, data, actions}, name, _data),
+    do: {:ok, name, data, native_list(actions)}
+  defp transition_result(:repeat_state_and_data, name, data), do: {:ok, name, data, []}
+  defp transition_result({:repeat_state_and_data, actions}, name, data),
+    do: {:ok, name, data, native_list(actions)}
 
   defp transition_result(_result, _name, _data), do: :error
 
@@ -555,8 +1030,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp transition_action({type, time, message}, state),
     do: %{state | timeouts: [{type, time, message, []} | state.timeouts]}
 
-  defp transition_action({type, time, message, options}, state),
-    do: %{state | timeouts: [{type, time, message, List.wrap(options)} | state.timeouts]}
+  defp transition_action({type, time, message, options} = action, state) do
+    case timeout_action({type, time, message, options}) do
+      {:ok, timeout} -> %{state | timeouts: [timeout_tuple(timeout) | state.timeouts]}
+      :error -> %{state | unknown: [action | state.unknown]}
+    end
+  end
 
   defp transition_action({type, :cancel}, state),
     do: %{state | timeouts: [{type, :infinity, :undefined, []} | state.timeouts]}
@@ -706,12 +1185,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp loop_next_copy(state, source, function, version, next) do
+    expected =
+      case state.machine_programs[source.pid] do
+        %{data: {_name, data}} -> data
+        _ -> if function in [:loop_state_callback, :loop_state_callback_result], do: version.data, else: next.data
+      end
+
     cond do
       function in [:loop_state_callback, :loop_state_callback_result] ->
-        worker_copy(state, source, [2, 2, 4, 1], version.data, version.origin)
+        worker_copy(state, source, [2, 2, 4, 1], expected, version.origin)
 
       function in @loop_next_functions ->
-        worker_copy(state, source, [2, 2, 4, 1], next.data, next.origin)
+        worker_copy(state, source, [2, 2, 4, 1], expected, next.origin)
 
       true ->
         state
@@ -748,6 +1233,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       when origin.index < source.index ->
         state = put_in(state.received[source.pid], remaining)
         state = tls_exact(state, source, :tls_event_copy, Enum.at(arguments, 3), message)
+        state = put_in(state.machine_received[source.pid], %{value: message, origin: origin.index})
+        term = %{index: source.index, path: [2, 2, 3], origin: {:tls_message, origin.index}}
+        state = Map.update!(state, :terms, &[term | &1])
 
         machine_message(state, source.pid, message, origin.index)
 
