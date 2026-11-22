@@ -1325,12 +1325,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   defp assert_native_helper_inputs(targets, observe, module \\ Postgrex.Protocol) do
-    captured =
-      case module do
-        Postgrex.Protocol -> ComparatorMutants.with_postgrex_inputs(targets, observe)
-        Postgrex.Types -> ComparatorMutants.with_postgrex_type_inputs(targets, observe)
-      end
-
+    captured = ComparatorMutants.with_postgrex_inputs(targets, observe, module)
     assert captured.native.errors == []
     assert captured.decoders.errors == []
 
@@ -1629,6 +1624,24 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       %{{:fetch, 2} => [0, 1]},
       fn -> native_query_factory(:domain_reload) end,
       Postgrex.Types
+    )
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native type owner and catalog inputs retain their sources" do
+    assert_native_helper_inputs(
+      %{{:owner, 1} => [0], {:build_type_info, 1} => [0]},
+      fn -> native_query_factory(:domain_reload) end,
+      Postgrex.Types
+    )
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native type lock request retains the catalog owner" do
+    assert_native_helper_inputs(
+      %{{:fetch, 1} => [0]},
+      fn -> native_query_factory(:domain_reload) end,
+      Postgrex.TypeServer
     )
   end
 

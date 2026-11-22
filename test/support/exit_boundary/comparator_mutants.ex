@@ -724,7 +724,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   def with_tls_connection_mutant(rule, callback),
     do: with_owner_mutant(:tls_gen_connection, 1, &receiver_form(&1, &2, rule), callback)
 
-  def with_postgrex_inputs(targets, callback) do
+  def with_postgrex_inputs(targets, callback, module \\ Postgrex.Protocol)
+
+  def with_postgrex_inputs(targets, callback, Postgrex.Protocol) do
     required = fn sites -> sites > map_size(targets) end
 
     with_owner_mutant(
@@ -735,14 +737,14 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     )
   end
 
-  def with_postgrex_type_inputs(targets, callback) do
+  def with_postgrex_inputs(targets, callback, module) do
     with_owner_mutant(
       Postgrex.Protocol,
       &(&1 > 0),
-      &remote_inputs_form(&1, &2, Postgrex.Types, targets),
+      &remote_inputs_form(&1, &2, module, targets),
       fn ->
         with_owner_mutant(
-          Postgrex.Types,
+          module,
           &(&1 >= map_size(targets)),
           &owner_inputs_form(&1, &2, targets),
           callback

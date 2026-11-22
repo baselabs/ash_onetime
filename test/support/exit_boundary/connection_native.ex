@@ -423,15 +423,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
             :ok = module.close(socket)
           end
         end,
-        %{
-          host: [],
-          callbacks: [],
-          frames: [
-            {Postgrex.Protocol, :reload_spawn, 5},
-            {Postgrex.Protocol, :reload_init, 5},
-            {Postgrex.TypeServer, :fetch, 1}
-          ]
-        }
+        %{host: [], callbacks: []}
       )
 
     receive do
