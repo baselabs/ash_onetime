@@ -110,9 +110,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  defp holder_fields(
-         {:conn, owner, Postgrex.Protocol, protocol, lock, clock, deadline, status}
-       ) do
+  defp holder_fields({:conn, owner, Postgrex.Protocol, protocol, lock, clock, deadline, status}) do
     {:gen_tcp, port} = protocol.sock
     {:connected, port_owner} = Port.info(port, :connected)
 

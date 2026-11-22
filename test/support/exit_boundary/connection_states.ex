@@ -125,9 +125,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     ports = for {_holder, version} <- holders, into: %{}, do: {version.protocol.sock, version}
 
+    rows =
+      for {holder,
+           %{
+             owner: owner,
+             protocol: protocol,
+             lock: lock,
+             clock: clock,
+             deadline: deadline,
+             status: status
+           }} <- historical,
+          into: %{},
+          do: {holder, {:conn, owner, Postgrex.Protocol, protocol, lock, clock, deadline, status}}
+
     initial = %{
       holders: holders,
       ports: ports,
+      rows: rows,
+      commits:
+        for {holder, row} <- rows,
+            do: %{holder: holder, index: -1, origin: {:historical, holder}, row: row},
       lookups: %{},
       completed: %{},
       frames: %{},
@@ -161,6 +178,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     state = unbound_copies(state, indexed)
 
     %{
+      commits: Enum.reverse(state.commits),
       versions: Enum.reverse(state.versions),
       copies: Enum.reverse(state.copies),
       buffers: Enum.reverse(state.buffers),
@@ -186,6 +204,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp event(source, state) do
+    state = committed_row(source, state)
     state = commit(source, state)
     state = holder_event(source, state)
     state = fixture_event(source, state)
@@ -193,6 +212,56 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     state = factory_event(source, state)
     state = type_service_event(source, state)
     callback_event(source, state)
+  end
+
+  # Callback returns can be valid temporary versions without ever reaching ETS.
+  # A committed row changes only at a successful native mutation's own return.
+  # Preserve all seven fields together, including writes without a Protocol.
+  defp committed_row(%{event: {_, :return_from, {:ets, function, _}, true}} = source, state)
+       when function in [:insert, :insert_new, :update_element, :delete] do
+    case pair_returned(state, source) do
+      %{source: %{event: {_, :call, {:ets, ^function, arguments}}} = call} ->
+        case {function, arguments} do
+          {function, [holder, {:conn, _, Postgrex.Protocol, %Postgrex.Protocol{}, _, _, _, _} = row]}
+          when function in [:insert, :insert_new] ->
+            retain_row(state, holder, row, source.index, call.index)
+
+          {:update_element, [holder, :conn, updates]} ->
+            case Map.fetch(state.rows, holder) do
+              {:ok, row} ->
+                updates = if is_list(updates), do: updates, else: [updates]
+
+                row =
+                  Enum.reduce(updates, row, fn {field, value}, row ->
+                    put_elem(row, field - 1, value)
+                  end)
+
+                retain_row(state, holder, row, source.index, call.index)
+
+              :error ->
+                state
+            end
+
+          {:delete, [holder]} ->
+            if Map.has_key?(state.rows, holder),
+              do: retain_row(state, holder, nil, source.index, call.index),
+              else: state
+
+          _ ->
+            state
+        end
+
+      _ ->
+        state
+    end
+  end
+
+  defp committed_row(_source, state), do: state
+
+  defp retain_row(state, holder, row, index, origin) do
+    rows = if is_nil(row), do: Map.delete(state.rows, holder), else: Map.put(state.rows, holder, row)
+    commit = %{holder: holder, index: index, origin: origin, row: row}
+    %{state | rows: rows, commits: [commit | state.commits]}
   end
 
   # The true table-owner BIF identifies shared services without making them
