@@ -55,6 +55,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   ]
   @scopes [
     :handle_prepare_execute,
+    :reload_describe_result,
     :recv_transaction,
     :error_ready,
     :error_flushed,
@@ -95,6 +96,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     redescribe: 5,
     describe: 6,
     recv_describe: -1,
+    reload_describe_result: 3,
     recv_ready: 2,
     recv_strict_ready: 3,
     recv_transaction: -1,
@@ -292,7 +294,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp type_context(state, source) do
     frame =
       Enum.find(Map.get(state.frames, source.pid, []), fn frame ->
-        elem(frame.source.mfa, 1) in [:describe_params, :describe_result]
+        elem(frame.source.mfa, 1) in [
+          :describe_params,
+          :describe_result,
+          :reload_describe_result
+        ]
       end)
 
     with %{source: owner} <- frame,
@@ -350,6 +356,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp type_oids(:describe_params, input), do: input.param_oids
   defp type_oids(:describe_result, input), do: input.result_oids
+  defp type_oids(:reload_describe_result, input), do: input.result_oids
 
   defp type_arguments(Postgrex.Types, 2, input, %{remaining: [oid | _]}),
     do: [oid, input.types]
@@ -1198,7 +1205,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp buffer_return(state, source, frame, result)
-       when elem(source.mfa, 1) in [:msg_recv, :rows_recv, :redescribe, :describe, :recv_describe] and
+       when elem(source.mfa, 1) in [
+              :msg_recv,
+              :rows_recv,
+              :redescribe,
+              :describe,
+              :recv_describe,
+              :reload_describe_result
+            ] and
               is_tuple(result) do
     if elem(result, 0) in [:ok, :reload, :error] do
       position = tuple_size(result) - 1
@@ -1236,6 +1250,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     case tail do
       [more] -> helper_demand(state, source, more, version, :message)
       [] -> state
+    end
+  end
+
+  defp helper_input(
+         state,
+         source,
+         :reload_describe_result,
+         [_protocol, param_oids, result_oids, _buffer],
+         _version
+       ) do
+    with {:ok, input} <- current_query_description(state, source),
+         %{source: owner} <- describe_frame(state, source.pid) do
+      missing = missing_type_origins(state, source.pid, owner.index, source.index)
+      origin = {:parameter_type_reload, owner.index, input.origin}
+
+      state
+      |> helper_copy(source, [2, 2, 1], param_oids, missing, origin)
+      |> helper_copy(source, [2, 2, 2], result_oids, input.result_oids, origin)
+    else
+      _ -> failure(state, source, :state_helper_query_origin)
     end
   end
 
@@ -2087,6 +2121,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp helper_decoder(_state, _source, _protocol, _kind), do: nil
 
+  defp helper_return(state, source, _frame, {tag, actual, _protocol, _buffer})
+       when elem(source.mfa, 1) == :reload_describe_result do
+    case describe_frame(state, source.pid) do
+      %{source: owner} ->
+        expected = missing_type_origins(state, source.pid, owner.index, source.index)
+        origin = {:description_type_reload, owner.index}
+
+        state
+        |> helper_copy(source, [3, 0], tag, :reload, origin)
+        |> helper_copy(source, [3, 1], actual, expected, origin)
+
+      _ ->
+        failure(state, source, :state_helper_query_origin)
+    end
+  end
+
   defp helper_return(state, source, frame, {:ok, message, _buffer})
        when elem(source.mfa, 1) == :msg_recv,
        do: helper_message(state, source, frame, message)
@@ -2206,6 +2256,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       _ ->
         failure(state, source, :state_query_origin)
     end
+  end
+
+  defp describe_frame(state, pid) do
+    Enum.find(Map.get(state.frames, pid, []), fn frame ->
+      frame.source.mfa == {Postgrex.Protocol, :describe, 7}
+    end)
   end
 
   defp current_query_description(state, source) do
@@ -2488,8 +2544,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp returned_protocol(:redescribe, {_, _, %Postgrex.Protocol{} = protocol, _}),
     do: {:ok, protocol, [3, 2]}
 
-  defp returned_protocol(:describe, {_, _, %Postgrex.Protocol{} = protocol, _}),
-    do: {:ok, protocol, [3, 2]}
+  defp returned_protocol(function, {_, _, %Postgrex.Protocol{} = protocol, _})
+       when function in [:describe, :reload_describe_result],
+       do: {:ok, protocol, [3, 2]}
 
   defp returned_protocol(:recv_describe, {:ok, _, _, _, _, %Postgrex.Protocol{} = protocol, _}),
     do: {:ok, protocol, [3, 5]}

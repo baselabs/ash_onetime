@@ -1977,7 +1977,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     {_, :send, message, _} = reply.event
 
     receipts =
-      for %{event: {^pid, :receive, {^tag, _value}}} = received <- Map.get(events, {pid, :receive}, []),
+      for %{event: {^pid, :receive, {^tag, _value}}} = received <-
+            Map.get(events, {pid, :receive}, []),
           received.index > reply.index and received.index < returned.index,
           do: received
 
@@ -2641,7 +2642,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp sender_copies(events, pairs, binding) do
-    parents = Map.get(pair_occurrences(pairs), {binding.sender, {:tls_sender, :connection, 3}}, [])
+    parents =
+      Map.get(pair_occurrences(pairs), {binding.sender, {:tls_sender, :connection, 3}}, [])
 
     Enum.reduce(events, %{terms: [], errors: []}, fn
       %{event: {pid, :call, {:tls_sender, :send_application_data, arguments}}} = source, state

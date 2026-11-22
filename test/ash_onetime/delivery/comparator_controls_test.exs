@@ -49,6 +49,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     redescribe: [5],
     describe: [6],
     recv_describe: [-1],
+    reload_describe_result: [3],
     recv_ready: [2],
     recv_strict_ready: [3],
     recv_transaction: [-1],
@@ -90,6 +91,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     {:describe, 7} => [1, 2, 3, 4, 5],
     {:describe_params, 3} => [1, 2],
     {:describe_result, 5} => [1, 2, 3, 4],
+    {:reload_describe_result, 4} => [1, 2],
     {:recv_describe, 3} => [1],
     {:recv_describe, 4} => [1, 2],
     {:fetch_type_info, 2} => [0, 1],
@@ -659,7 +661,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
          %{index: index, event: {_, :return_from, {Postgrex.Protocol, function, _}, result}} =
            source
        )
-       when function in [:msg_recv, :rows_recv, :redescribe, :describe, :recv_describe] and
+       when function in [
+              :msg_recv,
+              :rows_recv,
+              :redescribe,
+              :describe,
+              :recv_describe,
+              :reload_describe_result
+            ] and
               is_tuple(result) do
     if elem(result, 0) in [:ok, :reload, :error],
       do: [%{index: index, mfa: source.mfa, path: [3, tuple_size(result) - 1]}],
@@ -700,6 +709,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
               :describe,
               :describe_params,
               :describe_result,
+              :reload_describe_result,
               :recv_describe,
               :fetch_type_info,
               :columns
@@ -730,6 +740,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp native_helper_return_positions(:fetch_type_info, {tag, _})
        when tag in [:ok, :reload, :error],
        do: [1]
+
+  defp native_helper_return_positions(:reload_describe_result, {:reload, _, _, _}), do: [0, 1]
 
   defp native_helper_return_positions(:columns, {_, _, _}), do: [0, 1, 2]
   defp native_helper_return_positions(:done, {%Postgrex.Result{}, %Postgrex.Protocol{}}), do: [0]
@@ -1593,6 +1605,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: parameter reload inputs retain both type origins" do
+    assert_native_helper_inputs(%{{:reload_describe_result, 4} => [1, 2]}, fn ->
+      native_query_factory(:domain_reload)
+    end)
+  end
+
+  @tag :connection_streams
   test "Connection streams: savepoint tags retain the active transaction receive origin" do
     targets = %{{:recv_transaction, 4} => [2], {:done, 2} => [1]}
 
@@ -1881,7 +1900,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert_native_caller_census(run)
   end
 
-  for {function, arity, size, position} <- [{:describe, 7, 4, 3}, {:recv_describe, 4, 7, 6}] do
+  for {function, arity, size, position} <- [
+        {:describe, 7, 4, 3},
+        {:recv_describe, 4, 7, 6},
+        {:reload_describe_result, 4, 4, 3}
+      ] do
     @tag :connection_streams
     test "Connection streams: native #{function} return buffers retain decoder origins" do
       function = unquote(function)
@@ -1894,7 +1917,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         ComparatorMutants.with_owner_outputs(
           Postgrex.Protocol,
           %{{function, arity} => target},
-          &native_query_factory/0
+          fn -> native_return_factory(function) end
         )
 
       assert captured.native.errors == []
@@ -1923,7 +1946,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
 
       assert native_copy_states(captured).errors == states.errors
-      assert native_copy_states(native_query_factory()).errors == []
+      assert native_copy_states(native_return_factory(function)).errors == []
 
       IO.puts(
         "CONNECTION_QUERY_BUFFER_RETURN: owning RED; sole catcher; exact restore; fresh GREEN"
@@ -1937,6 +1960,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         {:recv_describe, 4, 7, 3},
         {:recv_describe, 4, 7, 4},
         {:fetch_type_info, 4, 2, 1},
+        {:reload_describe_result, 4, 4, 0},
+        {:reload_describe_result, 4, 4, 1},
         {:columns, 1, 3, 0},
         {:columns, 1, 3, 1},
         {:columns, 1, 3, 2}
@@ -1959,7 +1984,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         ComparatorMutants.with_owner_outputs(
           Postgrex.Protocol,
           %{{function, arity} => target},
-          &native_query_factory/0
+          fn -> native_return_factory(function) end
         )
 
       assert captured.native.errors == []
@@ -1987,10 +2012,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
 
       assert native_copy_states(captured).errors == states.errors
-      assert native_copy_states(native_query_factory()).errors == []
+      assert native_copy_states(native_return_factory(function)).errors == []
       IO.puts("CONNECTION_QUERY_METADATA_RETURN: owning RED; sole catcher; restore; fresh GREEN")
     end
   end
+
+  defp native_return_factory(:reload_describe_result), do: native_query_factory(:domain_reload)
+  defp native_return_factory(_function), do: native_query_factory()
 
   @tag :connection_streams
   test "Connection streams: notify factories retain their native code and empty environment" do

@@ -535,6 +535,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {Postgrex.Protocol, :describe, 7},
         {Postgrex.Protocol, :describe_params, 3},
         {Postgrex.Protocol, :describe_result, 5},
+        {Postgrex.Protocol, :reload_describe_result, 4},
         {Postgrex.Protocol, :recv_describe, :_},
         {Postgrex.Protocol, :fetch_type_info, :_},
         {Postgrex.Protocol, :columns, 1},

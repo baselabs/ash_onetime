@@ -237,6 +237,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
               :describe,
               :describe_params,
               :describe_result,
+              :reload_describe_result,
               :redescribe,
               :recv_describe,
               :columns
