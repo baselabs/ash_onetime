@@ -994,8 +994,10 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     stop = event_bound(events, outer.returned.index, true, first, tuple_size(events))
 
     if first < stop do
-      for position <- first..(stop - 1), event = elem(events, position), predicate.(event),
-        do: event
+      for position <- first..(stop - 1),
+          event = elem(events, position),
+          predicate.(event),
+          do: event
     else
       []
     end

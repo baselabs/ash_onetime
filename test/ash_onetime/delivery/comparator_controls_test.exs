@@ -1756,7 +1756,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         {Postgrex.TypeServer, :update, 3, nil, nil, :domain_reload}
       ] do
     @tag :connection_streams
-    test "Connection streams: #{module}.#{function}/#{arity} return #{position} binds its native source" do
+    test "Connection streams: #{module}.#{function}/#{arity} #{shape} return #{position} binds its native source" do
       module = unquote(module)
       function = unquote(function)
       arity = unquote(arity)

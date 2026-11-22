@@ -1189,7 +1189,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   defp remote_outputs_form(
-         {:call, location, {:remote, _, {:atom, _, module}, {:atom, _, function}}, arguments} = form,
+         {:call, location, {:remote, _, {:atom, _, module}, {:atom, _, function}}, arguments} =
+           form,
          sites,
          module,
          targets
@@ -1205,7 +1206,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   defp remote_outputs_form(form, sites, module, targets) when is_tuple(form) do
     {values, sites} =
-      form |> Tuple.to_list() |> Enum.map_reduce(sites, &remote_outputs_form(&1, &2, module, targets))
+      form
+      |> Tuple.to_list()
+      |> Enum.map_reduce(sites, &remote_outputs_form(&1, &2, module, targets))
 
     {List.to_tuple(values), sites}
   end

@@ -1061,12 +1061,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp missing_type_origins(state, pid, first, last) do
-    for {_index, %{source: call, returned: returned}} <- state.pairs,
+    for {_index, %{source: call, returned: returned} = pair} <- state.pairs,
         call.pid == pid and call.index > first and returned.index < last,
         call.mfa == {Postgrex.Types, :fetch, 2},
-        {_, :return_from, _, {:error, nil, _}} <- [returned.event],
+        {:ok, {:error, nil, _}, _origins} <- [native_type_outcome(state, pair)],
         into: MapSet.new(),
         do: native_type_key(state, call, returned)
+  end
+
+  defp native_type_outcome(state, %{source: call, returned: returned} = pair) do
+    with {:ok, types} <- native_type_state(state, call) do
+      oid = native_type_key(state, call, returned)
+      ConnectionTypes.fetch(state.pairs, pair, oid, types)
+    end
   end
 
   defp native_type_key(state, call, returned) do
@@ -1953,10 +1960,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     if complete? do
       missing =
-        for {_index, %{source: call, returned: returned}} <- state.pairs,
+        for {_index, %{source: call, returned: returned} = pair} <- state.pairs,
             call.pid == source.pid and call.mfa == {Postgrex.Types, :fetch, 2},
             returned.index < source.index,
-            {_, :return_from, _, {:error, nil, _}} <- [returned.event],
+            {:ok, {:error, nil, _}, _origins} <- [native_type_outcome(state, pair)],
             into: MapSet.new(),
             do: native_type_key(state, call, returned)
 
