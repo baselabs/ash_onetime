@@ -1458,8 +1458,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     decoded =
       chunks
-      |> Enum.map(fn "NATIVE_RECORD_GZIP_CHUNK: " <> chunk -> chunk end)
-      |> Enum.join()
+      |> Enum.map_join(fn "NATIVE_RECORD_GZIP_CHUNK: " <> chunk -> chunk end)
       |> Base.decode64!()
       |> :zlib.gunzip()
 
