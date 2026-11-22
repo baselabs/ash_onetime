@@ -3654,6 +3654,31 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: counted passive notifications need their own native origin" do
+    for corruption <- [nil, :passive_source] do
+      run = ConnectionNative.observe(:active_counted, corruption)
+      assert run.result == :ok
+
+      events =
+        run.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+      native = NativeTransport.build(%{events: events}, run.native_history)
+      expected = if corruption, do: [:native_passive_source], else: []
+      assert Enum.map(native.errors, & &1.actual) == expected
+      assert Map.get(native, :passive, []) != [], "NATIVE_PASSIVE_ORIGIN_WITNESS"
+
+      for notification <- native.passive do
+        assert notification.source.index < notification.received.index
+        assert notification.origin < notification.source.index
+        assert notification.source.index in notification.indexes
+        assert notification.received.index in notification.indexes
+      end
+    end
+  end
+
+  @tag :connection_streams
   test "Connection streams: fragmented TLS binds active counts and worker transitions" do
     run = ConnectionNative.observe_tls(:fragmented)
     assert run.result == []

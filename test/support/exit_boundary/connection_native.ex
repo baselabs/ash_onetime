@@ -402,13 +402,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   end
 
   defp execute(%{sock: {module, socket}}, mode, corruption)
-       when mode in [:active, :historical_active] and
-              corruption in [nil, :unbound_active_control] do
+       when mode in [:active, :historical_active, :active_counted] and
+              corruption in [nil, :unbound_active_control, :passive_source] do
     if mode == :active, do: :ok = :inet.setopts(socket, active: :once)
+    if mode == :active_counted, do: :ok = :inet.setopts(socket, active: 1)
     :ok = module.send(socket, query(17))
 
     receive do
       {:tcp, ^socket, bytes} ->
+        if mode == :active_counted, do: passive_notification(socket, corruption)
         :ok = :inet.setopts(socket, active: false)
 
         if corruption == :unbound_active_control do
@@ -471,6 +473,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     :ok
   after
     :ok = module.close(socket)
+  end
+
+  defp passive_notification(socket, corruption) do
+    receive do
+      {:tcp_passive, ^socket} -> :ok
+    after
+      15_000 -> raise "native counted socket did not become passive"
+    end
+
+    if corruption == :passive_source do
+      send(self(), {:tcp_passive, socket})
+
+      receive do
+        {:tcp_passive, ^socket} -> :ok
+      after
+        0 -> raise "native foreign passive notification was not received"
+      end
+    end
   end
 
   defp option_load(socket, root) do

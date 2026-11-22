@@ -123,7 +123,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       transport: transport,
       terms: Enum.reverse(helper.terms) ++ Enum.reverse(workers.terms),
       errors:
-        Enum.reverse(state.errors) ++ transport.errors ++ Enum.reverse(helper.errors) ++
+        Enum.reverse(state.errors) ++
+          transport.errors ++
+          Enum.reverse(helper.errors) ++
           Enum.reverse(workers.errors)
     }
   end
@@ -331,8 +333,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     |> Map.values()
     |> Enum.flat_map(fn
       %{
-        source:
-          %{event: {pid, :call, {module, :call, [target, request | _]}}} = source,
+        source: %{event: {pid, :call, {module, :call, [target, request | _]}}} = source,
         returned: %{event: {_, :return_from, _, result}} = returned
       }
       when module in [:gen_statem, :gen_server] and is_pid(target) ->
