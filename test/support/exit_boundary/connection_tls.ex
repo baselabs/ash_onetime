@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Compiled
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.NativeTransport
 
   # Local formatter metadata must be frozen while a native owner mutant is
@@ -181,9 +182,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   # Encrypted port data never enters the framing or protocol association machine.
   # This ledger grants no event allowance; native interior/copy qualification and
   # the main comparator's consumption remain separate obligations.
-  def build(indexed, binding) do
+  def build(indexed, binding, profile \\ nil) do
     families = Map.get(binding, :families, [binding])
-    transport = NativeTransport.build(indexed, %{}, Enum.map(families, & &1.transport))
+
+    transport =
+      profile_component(profile, :native_transport, fn ->
+        NativeTransport.build(indexed, %{}, Enum.map(families, & &1.transport))
+      end)
+
     pairs = transport.pairs
 
     state =
@@ -204,8 +210,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           state
       end)
 
-    helper = sender_copies(indexed.events, pairs, binding)
-    workers = worker_states(indexed.events, pairs, binding, helper.terms, transport)
+    helper =
+      profile_component(profile, :sender_copies, fn ->
+        sender_copies(indexed.events, pairs, binding)
+      end)
+
+    workers =
+      profile_component(profile, :worker_states, fn ->
+        worker_states(indexed.events, pairs, binding, helper.terms, transport, profile)
+      end)
 
     %{
       pairs: pairs,
@@ -221,6 +234,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           Enum.reverse(helper.errors) ++
           Enum.reverse(workers.errors)
     }
+  end
+
+  # Temporary component probe for native fragmented-reply validation. Only
+  # fixed phase/mode names and elapsed durations leave the owning process.
+  defp profile_component(nil, _component, callback), do: callback.()
+
+  defp profile_component(profile, component, callback) do
+    started = System.monotonic_time(:microsecond)
+    value = callback.()
+    elapsed = System.monotonic_time(:microsecond) - started
+
+    IO.puts(
+      "NATIVE_TLS_COMPONENT: " <>
+        Diagnostics.render(Map.merge(profile, %{component: component, length: elapsed}))
+    )
+
+    value
   end
 
   @worker_inputs %{
@@ -288,7 +318,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   # Native sys:get_state roots precede observation. Gen_statem retains its old
   # StateData while a callback's next StateData is carried separately; only
   # loop_done (or the stopping branch) commits that independently built version.
-  defp worker_states(events, pairs, binding, covered, transport) do
+  defp worker_states(events, pairs, binding, covered, transport, profile) do
     families = Map.get(binding, :families, [binding])
 
     owners =
@@ -347,12 +377,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     initial = initial |> Map.put(:receipts, receipts) |> Map.put(:machine_debug, debug)
 
     state =
-      Enum.reduce(events, initial, fn source, state ->
-        if Map.has_key?(owners, source.pid), do: worker_event(source, state), else: state
+      profile_component(profile, :worker_events, fn ->
+        Enum.reduce(events, initial, fn source, state ->
+          if Map.has_key?(owners, source.pid), do: worker_event(source, state), else: state
+        end)
       end)
 
-    Enum.reduce(state.debug_required, state, fn {_pid, source}, state ->
-      tls_failure(state, source, :tls_machine_debug_required)
+    profile_component(profile, :worker_debug_completion, fn ->
+      Enum.reduce(state.debug_required, state, fn {_pid, source}, state ->
+        tls_failure(state, source, :tls_machine_debug_required)
+      end)
     end)
   end
 

@@ -156,7 +156,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
   defp backend(%{tag: ?E} = frame, %{pending: [operation | _]} = state) do
     # Extended protocol discards commands through Sync after an error. A simple
     # query instead remains pending through its own ReadyForQuery.
-    pending = error_tail(state.pending)
+    pending = if operation.kind == :simple, do: state.pending, else: error_tail(state.pending)
     state = %{state | pending: pending, failed?: operation.kind != :simple}
     emit(state, frame, {:exact_payload, ?E, frame.payload}, operation.context, operation)
   end
@@ -247,7 +247,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
 
   defp save_description(state, :simple, _context), do: state
 
-  defp error_tail([%{kind: kind} | _] = pending) when kind in [:simple, :sync], do: pending
+  # After an extended-query failure PostgreSQL skips every frontend message
+  # until Sync, including a queued simple Query. Its raw frame remains emitted;
+  # it owns no backend reply. A simple-query error keeps its own ReadyForQuery.
+  defp error_tail([%{kind: :sync} | _] = pending), do: pending
   defp error_tail([_ | rest]), do: error_tail(rest)
   defp error_tail([]), do: []
 

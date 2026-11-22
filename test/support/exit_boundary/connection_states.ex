@@ -2704,6 +2704,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       else: {state, frame.current}
   end
 
+  defp output_protocol(state, source, frame, function, {:disconnect, _, _})
+       when function in [:describe, :redescribe, :reload_describe_result] do
+    # These three native type-error branches install the already consumed
+    # lexical buffer. Their success/reload branches preserve the input state.
+    {buffer, _origin} = helper_buffer_origin(state, source, frame.owner, frame)
+    {state, %{frame.input | buffer: buffer}}
+  end
+
   defp output_protocol(state, _source, frame, :redescribe, _result), do: {state, frame.input}
 
   defp output_protocol(state, _source, frame, :handle_prepare, _result) do

@@ -687,6 +687,27 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_error_sync) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_protocol.ex",
+        original: "  defp error_tail([%{kind: :sync} | _] = pending), do: pending\n",
+        mutated:
+          "  defp error_tail([%{kind: kind} | _] = pending) when kind in [:simple, :sync], do: pending\n"
+      }
+    ]
+  end
+
+  def edits(:stream_decoder_program) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_decoders.ex",
+        original: "  defp decoder_program_equal?(actual, expected), do: actual === expected\n",
+        mutated: "  defp decoder_program_equal?(_actual, _expected), do: true\n"
+      }
+    ]
+  end
+
   def edits(:stream_service_completion) do
     [
       %{
@@ -929,7 +950,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     targets = %{{:reply, 2} => [0, 1]}
 
     run =
-      machine_reply_phase(:native_capture, fn ->
+      machine_reply_phase(mode, :native_capture, fn ->
         with_owner_mutant(:gen_statem, &(&1 > 1), &owner_inputs_form(&1, &2, targets), fn ->
           with_owner_mutant(
             :ssl_gen_statem,
@@ -968,8 +989,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       for source <- corrupted, position <- [0, 1], do: {source.index, [2, 2, position]}
 
     native =
-      machine_reply_phase(:validation, fn ->
-        ConnectionTls.build(%{events: events}, run.tls_binding)
+      machine_reply_phase(mode, :validation, fn ->
+        ConnectionTls.build(%{events: events}, run.tls_binding, %{mode: mode, phase: :validation})
       end)
 
     assert Enum.map(native.errors, & &1.rule) ==
@@ -982,19 +1003,22 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
           :stream_tls_machine_copy,
           :stream_tls_worker_state_copy
         ] do
-      checked = machine_reply_checked(mutant, events, run.tls_binding)
+      checked = machine_reply_checked(mutant, events, run.tls_binding, mode)
 
       expected = if mutant == :stream_tls_machine_program, do: [], else: native.errors
       assert checked.errors == expected
     end
 
     rechecked =
-      machine_reply_phase(:restored_validation, fn ->
-        ConnectionTls.build(%{events: events}, run.tls_binding)
+      machine_reply_phase(mode, :restored_validation, fn ->
+        ConnectionTls.build(%{events: events}, run.tls_binding, %{
+          mode: mode,
+          phase: :restored_validation
+        })
       end)
 
     assert rechecked.errors == native.errors
-    restored = machine_reply_phase(:fresh_native, fn -> ConnectionNative.observe_tls(mode) end)
+    restored = machine_reply_phase(mode, :fresh_native, fn -> ConnectionNative.observe_tls(mode) end)
 
     restored_events =
       restored.events
@@ -1002,8 +1026,11 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
 
     fresh =
-      machine_reply_phase(:fresh_validation, fn ->
-        ConnectionTls.build(%{events: restored_events}, restored.tls_binding)
+      machine_reply_phase(mode, :fresh_validation, fn ->
+        ConnectionTls.build(%{events: restored_events}, restored.tls_binding, %{
+          mode: mode,
+          phase: :fresh_validation
+        })
       end)
 
     assert fresh.errors == []
@@ -1013,21 +1040,27 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   # Temporary phase probe for the hosted fragmented-peer timeout. Native
   # captures and every validation/restoration assertion remain unchanged.
-  defp machine_reply_checked(mutant, events, binding) do
-    machine_reply_phase({:mutant, mutant}, fn ->
-      with_mutant(mutant, fn -> ConnectionTls.build(%{events: events}, binding) end)
+  defp machine_reply_checked(mutant, events, binding, mode) do
+    machine_reply_phase(mode, {:mutant, mutant}, fn ->
+      with_mutant(mutant, fn ->
+        ConnectionTls.build(%{events: events}, binding, %{mode: mode, phase: mutant})
+      end)
     end)
   end
 
-  defp machine_reply_phase(phase, callback) do
-    IO.puts("NATIVE_MACHINE_REPLY_PHASE: " <> Diagnostics.render(%{phase: phase, status: :start}))
+  defp machine_reply_phase(mode, phase, callback) do
+    IO.puts(
+      "NATIVE_MACHINE_REPLY_PHASE: " <>
+        Diagnostics.render(%{mode: mode, phase: phase, status: :start})
+    )
+
     started = System.monotonic_time(:millisecond)
     value = callback.()
     elapsed = System.monotonic_time(:millisecond) - started
 
     IO.puts(
       "NATIVE_MACHINE_REPLY_PHASE: " <>
-        Diagnostics.render(%{phase: phase, status: :done, length: elapsed})
+        Diagnostics.render(%{mode: mode, phase: phase, status: :done, length: elapsed})
     )
 
     value

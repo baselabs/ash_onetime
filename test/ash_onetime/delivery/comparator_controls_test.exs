@@ -1610,6 +1610,31 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         )
 
       assert_query_factory_path(captured, unquote(shape))
+
+      if unquote(shape) == :prepare_error and unquote(postgrex_prepare) and
+           unquote(mode) == :savepoint do
+        broken =
+          ComparatorMutants.with_mutant(:stream_error_sync, fn ->
+            ConnectionReads.build(captured.native)
+          end)
+
+        assert Enum.map(broken.errors, & &1.rule) == [
+                 :protocol_association,
+                 :protocol_association,
+                 :protocol_incomplete
+               ]
+
+        assert ConnectionReads.build(captured.native).errors == []
+
+        fresh =
+          native_query_factory(:prepare_error, unquote(prepare),
+            postgrex_prepare: true,
+            mode: :savepoint
+          )
+
+        assert fresh.streams.errors == []
+      end
+
       assert_native_caller_census(captured.run)
     end
   end
@@ -1738,6 +1763,33 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                List.duplicate(:decoder_program, length(duplicated))
 
       assert Enum.map(captured.decoders.errors, & &1.index) == Enum.sort(duplicated)
+
+      # Rebuild from these same raw events and genuine native facts. Disabling
+      # only the program obligation must admit precisely this extra execution.
+      for mutant <- [:stream_decoder_program, :stream_buffer_copy, :stream_helper_copy] do
+        checked =
+          ComparatorMutants.with_mutant(mutant, fn ->
+            ConnectionDecoders.build(
+              %{events: captured.events},
+              captured.native,
+              captured.streams,
+              captured.native.historical
+            )
+          end)
+
+        expected = if mutant == :stream_decoder_program, do: [], else: captured.decoders.errors
+        assert checked.errors == expected
+      end
+
+      restored =
+        ConnectionDecoders.build(
+          %{events: captured.events},
+          captured.native,
+          captured.streams,
+          captured.native.historical
+        )
+
+      assert restored.errors == captured.decoders.errors
       assert native_decoder_program(kind).decoders.errors == []
     end
   end

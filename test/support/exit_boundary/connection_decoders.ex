@@ -29,6 +29,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       },
       factory_observations: historical_factories(historical, indexed.events),
       instances: [],
+      programs: [],
+      native: native,
       replays: [],
       replay_sends: MapSet.new(),
       replay_receives: MapSet.new(),
@@ -39,9 +41,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     }
 
     state = Enum.reduce(indexed.events, initial, &event(&1, &2, replies))
+    state = decoder_programs(state)
 
     %{
       instances: Enum.reverse(state.instances),
+      programs: Enum.reverse(state.programs),
       versions: Enum.reverse(state.versions),
       timeline: Enum.reverse(state.timeline),
       executions: Enum.reverse(state.executions),
@@ -56,6 +60,305 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       errors: Enum.reverse(state.errors)
     }
   end
+
+  # Every direct event stays in this index, including arrivals and events that
+  # do not belong to a decoder. A return carries its own frame on the captured
+  # stack; remove exactly that frame when locating its caller's direct program.
+  # The index changes neither the capture nor the whole-observation comparison.
+  defp decoder_programs(state) do
+    direct =
+      Enum.group_by(state.events, fn source ->
+        stack =
+          case source.event do
+            {_, tag, mfa, _} when tag in [:return_from, :exception_from] ->
+              case source.stack do
+                [^mfa | stack] -> stack
+                stack -> stack
+              end
+
+            _ ->
+              source.stack
+          end
+
+        {source.pid, stack}
+      end)
+
+    context = %{
+      state: state,
+      direct: direct,
+      instances: Map.new(state.instances, &{&1.source.index, &1})
+    }
+
+    pairs =
+      state.pairs
+      |> Map.values()
+      |> Enum.filter(fn pair ->
+        pair.source.mfa in [
+          {Postgrex.Protocol, :msg_recv, 3},
+          {Postgrex.Protocol, :msg_recv, 4},
+          {Postgrex.Protocol, :rows_recv, 4},
+          {Postgrex.Protocol, :rows_recv, 5}
+        ]
+      end)
+      |> Enum.sort_by(& &1.source.index, :desc)
+
+    # Inner calls start later. Build each semantic result once, then use that
+    # result in its callers without recursively walking the same program again.
+    plans =
+      Enum.reduce(pairs, %{}, fn pair, plans ->
+        events = decoder_direct(context, pair)
+
+        {expected, terminal, origins} =
+          decoder_branch(Map.put(context, :plans, plans), pair, events)
+
+        program = %{
+          source: pair.source,
+          returned: pair.returned,
+          events: events,
+          origins: origins,
+          expected: {expected, terminal}
+        }
+
+        Map.put(plans, pair.source.index, program)
+      end)
+
+    pairs
+    |> Enum.reverse()
+    |> Enum.reduce(state, fn pair, state ->
+      program = Map.fetch!(plans, pair.source.index)
+      actual = {Enum.map(program.events, &program_event/1), program_terminal(pair.returned.event)}
+      state = %{state | programs: [program | state.programs]}
+
+      if decoder_program_equal?(actual, program.expected),
+        do: state,
+        else: failure(state, pair.source, :decoder_program, false)
+    end)
+  end
+
+  defp decoder_program_equal?(actual, expected), do: actual === expected
+
+  defp decoder_direct(context, pair) do
+    context.direct
+    |> Map.get({pair.source.pid, [pair.source.mfa | pair.source.stack]}, [])
+    |> Enum.filter(&(&1.index > pair.source.index and &1.index < pair.returned.index))
+  end
+
+  # The control program uses independently decoded leaf results and actual
+  # native receive returns. State/helper ledgers own the qualified coordinates
+  # of each call and return; those checks remain necessary and are not repeated
+  # here. This proof owns the full direct event sequence and terminal variant.
+  defp decoder_branch(context, %{source: source} = pair, events) do
+    case source.event do
+      {_, :call, {Postgrex.Protocol, :msg_recv, [_, _, _]}} ->
+        # The State ledger qualifies this branch's buffer argument. Use the
+        # native receipt or leaf origin to retain the same program when a
+        # source-copy control corrupts that argument before the callee restores
+        # it; the State guard must remain its sole catcher.
+        if direct_call(events, {Postgrex.Protocol, :msg_decode, 1}),
+          do: leaf_program(context, pair, events, {Postgrex.Protocol, :msg_decode, 1}),
+          else: active_program(context, pair, events)
+
+      {_, :call, {Postgrex.Protocol, :rows_recv, [_, _, _, _]}} ->
+        leaf_program(context, pair, events, {Postgrex.Types, :decode_rows, 4})
+
+      {_, :call, {Postgrex.Protocol, function, _}} ->
+        continuation_program(context, pair, events, function)
+    end
+  end
+
+  defp leaf_program(context, _pair, events, mfa) do
+    with %{index: index} <- direct_call(events, mfa),
+         %{expected: result} <- context.instances[index] do
+      prefix = program_call(mfa)
+
+      case {mfa, result} do
+        {{Postgrex.Protocol, :msg_decode, 1}, {:ok, _, _}} ->
+          {prefix, {:return_from, :ok, 3}, [index]}
+
+        {{Postgrex.Protocol, :msg_decode, 1}, {:more, _}} ->
+          child_program(context, events, {Postgrex.Protocol, :msg_recv, 4}, prefix, [index])
+
+        {{Postgrex.Types, :decode_rows, 4}, {:ok, _, _}} ->
+          # rows_msg/3 is an untraced pure bridge: exactly one msg_recv/3,
+          # then the row accumulator accompanies that message in the return.
+          {program, terminal, origins} =
+            child_program(context, events, {Postgrex.Protocol, :msg_recv, 3}, prefix, [index])
+
+          terminal =
+            case terminal do
+              {:return_from, :ok, 3} -> {:return_from, :ok, 4}
+              other -> other
+            end
+
+          {program, terminal, origins}
+
+        {{Postgrex.Types, :decode_rows, 4}, {:more, _, _, _}} ->
+          child_program(context, events, {Postgrex.Protocol, :rows_recv, 5}, prefix, [index])
+      end
+    else
+      _ -> {[:missing_decoder_origin], :missing_decoder_origin, []}
+    end
+  end
+
+  defp continuation_program(context, pair, events, function) do
+    {_, :call, {_, _, [protocol | _]}} = pair.source.event
+    {module, _socket} = protocol.sock
+    mfa = {module, :recv, 3}
+
+    with %{index: index} <- direct_call(events, mfa),
+         %{returned: %{event: {_, :return_from, ^mfa, result}}} <-
+           context.state.pairs[index] do
+      prefix = program_call(mfa)
+
+      case result do
+        {:ok, data} ->
+          kind = if function == :msg_recv, do: :message, else: :rows
+
+          case program_demand(context, pair.source, kind) do
+            {:ok, more, origins} ->
+              arity =
+                case {function, byte_size(data) < more} do
+                  {:msg_recv, true} -> 4
+                  {:msg_recv, false} -> 3
+                  {:rows_recv, true} -> 5
+                  {:rows_recv, false} -> 4
+                end
+
+              child_program(
+                context,
+                events,
+                {Postgrex.Protocol, function, arity},
+                prefix,
+                [index | origins]
+              )
+
+            :error ->
+              {prefix, :missing_decoder_demand, [index]}
+          end
+
+        {:error, _reason} ->
+          {prefix, {:return_from, :disconnect, 3}, [index]}
+      end
+    else
+      _ -> {[:missing_native_receive], :missing_native_receive, []}
+    end
+  end
+
+  defp program_demand(context, source, kind) do
+    mfa =
+      if kind == :message,
+        do: {Postgrex.Protocol, :msg_decode, 1},
+        else: {Postgrex.Types, :decode_rows, 4}
+
+    instance =
+      context.state.instances
+      |> Enum.filter(fn instance ->
+        instance.source.pid == source.pid and instance.source.mfa == mfa and
+          instance.returned.index < source.index
+      end)
+      |> Enum.max_by(& &1.returned.index, fn -> nil end)
+
+    with %{expected: expected} <- instance,
+         {:more, more} <- program_remaining(expected) do
+      reads =
+        Enum.filter(context.state.native.reads, fn read ->
+          read.port == instance.port and read.returned.pid == source.pid and
+            read.returned.index > instance.returned.index and read.returned.index < source.index
+        end)
+
+      {:ok, more - Enum.sum(Enum.map(reads, &byte_size(&1.bytes))),
+       [instance.returned.index | Enum.map(reads, & &1.returned.index)]}
+    else
+      _ -> :error
+    end
+  end
+
+  defp program_remaining({:more, more}), do: {:more, more}
+  defp program_remaining({:more, _, _, more}), do: {:more, more}
+  defp program_remaining(_result), do: :error
+
+  defp active_program(context, pair, events) do
+    {_, :call, {_, _, [protocol, _, _]}} = pair.source.event
+    {module, socket} = protocol.sock
+    tag = if module == :gen_tcp, do: :tcp, else: :ssl
+
+    case Enum.find(events, &(elem(&1.event, 1) == :receive)) do
+      %{event: {_, :receive, {^tag, ^socket, _}}, index: index} = received ->
+        deliveries = context.state.native.active ++ context.state.replays
+
+        bound? =
+          Enum.any?(deliveries, fn delivery ->
+            source = Map.get(delivery, :received, Map.get(delivery, :returned))
+            source.index == index and source.event === received.event
+          end)
+
+        if bound? do
+          child_program(
+            context,
+            events,
+            {Postgrex.Protocol, :msg_recv, 3},
+            [program_event(received)],
+            [index]
+          )
+        else
+          {[:missing_active_origin], :missing_active_origin, []}
+        end
+
+      %{event: {_, :receive, message}} = received ->
+        closed = if tag == :tcp, do: :tcp_closed, else: :ssl_closed
+        error = if tag == :tcp, do: :tcp_error, else: :ssl_error
+
+        case message do
+          {^closed, ^socket} ->
+            {[program_event(received)], {:return_from, :disconnect, 3}, [received.index]}
+
+          {^error, ^socket, _reason} ->
+            {[program_event(received)], {:return_from, :disconnect, 3}, [received.index]}
+
+          :timeout ->
+            {[program_event(received)], {:return_from, :disconnect, 3}, [received.index]}
+
+          _ ->
+            {[:unexpected_active_message], :unexpected_active_message, []}
+        end
+
+      nil ->
+        {[], {:return_from, :disconnect, 3}, []}
+    end
+  end
+
+  defp child_program(context, events, mfa, prefix, origins) do
+    case direct_call(events, mfa) do
+      %{index: index} ->
+        case context.plans[index] do
+          %{expected: {_, terminal}, origins: child_origins} ->
+            {prefix ++ program_call(mfa), terminal, origins ++ [index | child_origins]}
+
+          nil ->
+            {prefix ++ program_call(mfa), :missing_decoder_child, origins}
+        end
+
+      nil ->
+        {prefix ++ program_call(mfa), :missing_decoder_child, origins}
+    end
+  end
+
+  defp direct_call(events, mfa),
+    do: Enum.find(events, &(&1.mfa == mfa and elem(&1.event, 1) == :call))
+
+  defp program_call(mfa), do: [{:call, mfa}, {:return_from, mfa}]
+  defp program_event(%{event: {_, :call, _}, mfa: mfa}), do: {:call, mfa}
+
+  defp program_event(%{event: {_, tag, mfa, _}})
+       when tag in [:return_from, :exception_from],
+       do: {tag, mfa}
+
+  defp program_event(source), do: source.event
+
+  defp program_terminal({_, :return_from, _, result}) when is_tuple(result),
+    do: {:return_from, elem(result, 0), tuple_size(result)}
+
+  defp program_terminal(event), do: event
 
   # A local fun's name becomes [] after its code is unloaded. Freeze observed
   # metadata while the native owner is installed; expected identities still
