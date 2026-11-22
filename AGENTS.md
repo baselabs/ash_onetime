@@ -28,7 +28,7 @@ The lock and `.tool-versions` pin development releases; published ranges preserv
   longer job is split into jobs, never given a looser limit.
 - **Caches.** Every job restores Mix caches through `.github/actions/mix-cache`; only the `Cache warmer`
   workflow on the default branch saves them.
-- **Landing.** CI runs the full suite on a candidate branch before `main` moves. A work branch lands whole: merge `origin/main` into it, push it so `Work` runs on that head, then run `kimosabe-land --sha <head>`, so that `main` moves to the branch's own commit. `--pick` copies commits and leaves the branch unmerged, so it is only for a commit that is not on a branch.
+- **Landing.** CI runs the full suite on a candidate branch before `main` moves. A work branch lands whole: merge `origin/main` into it, push it so `Work` runs on that head, then run the landing tool with `--sha <head>`, so that `main` moves to the branch's own commit. `--pick` copies commits and leaves the branch unmerged, so it is only for a commit that is not on a branch.
 
 ## CI/CD and releases
 
@@ -38,7 +38,7 @@ in `baselabs/docs/ci.md` of the infra repository, read from its default branch
 (`git -C ~/Developer/infra fetch -q origin && git -C ~/Developer/infra show origin/main:baselabs/docs/ci.md`).
 Re-read it whenever you touch a workflow, a Dockerfile, a release script or a secret.
 
-- **Your part ends at the default branch.** Land only through `kimosabe-land`. Never release,
+- **Your part ends at the default branch.** Land only through the landing tool. Never release,
   deploy, publish, tag a version, dispatch a workflow, push an image by hand, or handle a
   release, publish or CI key. When something should go out, send infra-1 one message: the
   repository, the full commit, what goes out and anything it needs.
@@ -73,9 +73,8 @@ Re-read it whenever you touch a workflow, a Dockerfile, a release script or a se
   `.github/`, a Dockerfile, a release script or anything that touches a secret, send infra-1 the
   branch and head and wait for its review. Take any CI/CD, runner, box or key problem to
   infra-1, never around it.
-- **The box.** This repository is public and never uses the build box or its runners. Wherever
-  the box is used: gate on `kimosabe-remote where` and your own routed run, never on `doctor`;
-  never list process arguments (no `ps` with `args` or `-f`, no `/proc/*/cmdline`; use
+- **The box.** This repository is public and never uses the build box or its runners. Never list
+  process arguments (no `ps` with `args` or `-f`, no `/proc/*/cmdline`; use
   `ps -eo pid,etimes,pcpu,comm`). A secret never appears on a command line, in a log or in a
   message; report an exposed one to infra-1 by where it sits, never by its value. Nothing that
   compiles or tests runs on the owner's workstation.
