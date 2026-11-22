@@ -473,6 +473,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_tls_state_copy) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original: "    state = tls_exact(state, source, :tls_state_copy, actual, expected)\n",
+        mutated:
+          "    _ = actual\n    state = tls_exact(state, source, :tls_state_copy, expected, expected)\n"
+      }
+    ]
+  end
+
   def edits(:stream_service_completion) do
     [
       %{
@@ -492,6 +503,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   def with_tls_sender_mutant(callback) do
     module = :tls_sender
     {^module, original, path} = :code.get_object_code(module)
+
     {:ok, {^module, [abstract_code: {:raw_abstract_v1, forms}]}} =
       :beam_lib.chunks(original, [:abstract_code])
 
@@ -512,12 +524,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   defp tls_sender_form({:function, annotation, :connection, 3, [first | rest]}, sites) do
     {:clause, clause_annotation, args, guards,
-     [{:call, call_annotation, {:atom, atom_annotation, :send_application_data},
-       [data, from, {:atom, _, :connection} = name, {:var, _, :StateData} = state]}]} = first
+     [
+       {:call, call_annotation, {:atom, atom_annotation, :send_application_data},
+        [data, from, {:atom, _, :connection} = name, {:var, _, :StateData} = state]}
+     ]} = first
 
-    changed = {:tuple, call_annotation, [{:atom, call_annotation, :native_foreign_tls_state}, state]}
-    call = {:call, call_annotation, {:atom, atom_annotation, :send_application_data},
-            [data, from, name, changed]}
+    changed =
+      {:tuple, call_annotation, [{:atom, call_annotation, :native_foreign_tls_state}, state]}
+
+    call =
+      {:call, call_annotation, {:atom, atom_annotation, :send_application_data},
+       [data, from, name, changed]}
+
     clause = {:clause, clause_annotation, args, guards, [call]}
     {{:function, annotation, :connection, 3, [clause | rest]}, sites + 1}
   end
@@ -527,12 +545,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     {:match, _, {:record, _, :data, _}, {:var, _, :StateData0}} = pattern
     input = {:var, clause_annotation, :NativeTlsState}
     restored = {:var, clause_annotation, :NativeTlsRestored}
-    tagged = {:tuple, clause_annotation,
-              [{:atom, clause_annotation, :native_foreign_tls_state}, restored]}
+
+    tagged =
+      {:tuple, clause_annotation,
+       [{:atom, clause_annotation, :native_foreign_tls_state}, restored]}
+
     cases = [
       {:clause, clause_annotation, [tagged], [], [restored]},
       {:clause, clause_annotation, [restored], [], [restored]}
     ]
+
     restore = {:match, clause_annotation, pattern, {:case, clause_annotation, input, cases}}
     changed = {:clause, clause_annotation, [data, from, name, input], guards, [restore | body]}
     {{:function, annotation, :send_application_data, 4, [changed]}, sites + 1}

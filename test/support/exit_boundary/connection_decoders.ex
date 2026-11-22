@@ -381,6 +381,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     case Map.fetch(state.descriptors, query.ref) do
       {:ok, origin} ->
         state = exact(state, e, :decoder_query_copy, query, origin.query)
+
         state
         |> put_in([:executing, port], origin)
         |> execution_version(e, port, origin)

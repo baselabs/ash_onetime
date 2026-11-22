@@ -3264,9 +3264,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     [corrupted] =
       Enum.filter(events, fn
-        %{event: {_, :call, {:tls_sender, :send_application_data,
-          [_data, _from, :connection, {:native_foreign_tls_state, _state}]}}} -> true
-        _ -> false
+        %{
+          event:
+            {_, :call,
+             {:tls_sender, :send_application_data,
+              [_data, _from, :connection, {:native_foreign_tls_state, _state}]}}
+        } ->
+          true
+
+        _ ->
+          false
       end)
 
     assert corrupted.pid == run.tls_binding.sender
@@ -3279,6 +3286,29 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     native = ConnectionTls.build(%{events: events}, run.tls_binding)
     assert Enum.map(native.errors, & &1.rule) == [:tls_state_copy]
     assert hd(native.errors).index == corrupted.index
+
+    for mutant <- [:stream_tls_workers, :stream_buffer_copy, :stream_tls_state_copy] do
+      checked =
+        ComparatorMutants.with_mutant(mutant, fn ->
+          ConnectionTls.build(%{events: events}, run.tls_binding)
+        end)
+
+      expected = if mutant == :stream_tls_state_copy, do: [], else: [:tls_state_copy]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    assert Enum.map(ConnectionTls.build(%{events: events}, run.tls_binding).errors, & &1.rule) ==
+             [:tls_state_copy]
+
+    restored = ConnectionNative.observe_tls()
+
+    restored_events =
+      restored.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+    IO.puts("CONNECTION_TLS_STATE_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
   @tag :connection_streams

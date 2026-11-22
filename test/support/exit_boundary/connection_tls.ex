@@ -105,14 +105,74 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           state
       end)
 
+    helper = sender_copies(indexed.events, pairs, binding)
+
     %{
       pairs: pairs,
       writes: Enum.reverse(state.writes),
       reads: Enum.reverse(state.reads),
       active: [],
       historical: %{},
-      errors: Enum.reverse(state.errors)
+      terms: Enum.reverse(helper.terms),
+      errors: Enum.reverse(state.errors) ++ Enum.reverse(helper.errors)
     }
+  end
+
+  defp sender_copies(events, pairs, binding) do
+    Enum.reduce(events, %{terms: [], errors: []}, fn
+      %{event: {pid, :call, {:tls_sender, :send_application_data, arguments}}} = source, state
+      when pid == binding.sender ->
+        sender_copy(state, source, arguments, pairs)
+
+      _source, state ->
+        state
+    end)
+  end
+
+  defp sender_copy(state, source, [data, from, :connection, actual], pairs) do
+    parent =
+      pairs
+      |> Map.values()
+      |> Enum.filter(fn pair ->
+        pair.source.pid == source.pid and pair.source.mfa == {:tls_sender, :connection, 3} and
+          pair.source.index < source.index and pair.returned.index > source.index
+      end)
+      |> Enum.max_by(& &1.source.index, fn -> nil end)
+
+    case parent do
+      %{source: %{event: {_, :call, {_, _, [{:call, expected_from},
+        {:application_data, expected_data}, expected]}}} = origin} ->
+        state
+        |> tls_copy(source, [2, 2, 0], data, expected_data, origin.index)
+        |> tls_copy(source, [2, 2, 1], from, expected_from, origin.index)
+        |> tls_copy(source, [2, 2, 3], actual, expected, origin.index)
+
+      _ ->
+        tls_failure(state, source, :tls_state_origin)
+    end
+  end
+
+  defp sender_copy(state, source, _arguments, _pairs),
+    do: tls_failure(state, source, :tls_state_origin)
+
+  defp tls_copy(state, source, path, actual, expected, origin) do
+    state = tls_exact(state, source, :tls_state_copy, actual, expected)
+    copy = %{index: source.index, path: path, origin: {:tls_callback, origin}}
+    Map.update!(state, :terms, &[copy | &1])
+  end
+
+  defp tls_exact(state, _source, _rule, actual, expected) when actual === expected, do: state
+  defp tls_exact(state, source, rule, _actual, _expected), do: tls_failure(state, source, rule)
+
+  defp tls_failure(state, source, rule) do
+    error = %{
+      index: source.index,
+      at: Map.take(source, [:mfa, :role, :stack]),
+      rule: rule,
+      actual: false,
+      expected: true
+    }
+    Map.update!(state, :errors, &[error | &1])
   end
 
   defp write(state, source, port, bytes) do
