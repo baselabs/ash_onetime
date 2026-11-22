@@ -487,10 +487,39 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
-  defp helper_input(state, source, :msg_recv, [_protocol, _timeout, _buffer, more], version),
-    do: helper_demand(state, source, more, version, :message)
+  defp helper_input(state, source, :msg_recv, [_protocol, timeout, _buffer | tail], version) do
+    state = helper_timeout(state, source, timeout)
+
+    case tail do
+      [more] -> helper_demand(state, source, more, version, :message)
+      [] -> state
+    end
+  end
 
   defp helper_input(state, _source, _function, _arguments, _version), do: state
+
+  defp helper_timeout(state, source, actual) do
+    callback =
+      Enum.find(Map.get(state.frames, source.pid, []), fn frame ->
+        elem(frame.source.mfa, 1) in @last_state
+      end)
+
+    case callback do
+      %{source: %{mfa: {Postgrex.Protocol, function, _}}, owner: version} ->
+        {expected, expression} =
+          case function do
+            :ping -> {version.protocol.ping_timeout, :ping_timeout}
+            :handle_info -> {version.protocol.timeout, :timeout}
+            _query_callback -> {:infinity, :query_receive_timeout}
+          end
+
+        origin = {:callback_timeout, version.origin, expression}
+        helper_copy(state, source, [2, 2, 1], actual, expected, origin)
+
+      nil ->
+        failure(state, source, :state_helper_timeout_origin)
+    end
+  end
 
   defp helper_types(state, source, %{protocol: %{sock: {:gen_tcp, port}}}, actual) do
     execution =

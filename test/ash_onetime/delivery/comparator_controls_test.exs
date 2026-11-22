@@ -901,7 +901,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert Enum.map(native_copy_states(captured).errors, & &1.rule) == [:state_helper_copy]
     assert native_copy_states(cached_decoders(nil)).errors == []
-    IO.puts("CONNECTION_HELPER_TIMEOUT_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
+
+    IO.puts(
+      "CONNECTION_HELPER_TIMEOUT_COPY: owning RED; sole catcher; exact restore; fresh GREEN"
+    )
   end
 
   defp native_copy_states(captured) do
@@ -3447,6 +3450,22 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts(
       "CONNECTION_TLS_CONSTRUCTED_STATE: owning RED; sole catcher; exact restore; fresh GREEN"
     )
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native TLS forwarding retains record and reply copies" do
+    for {control, rule} <- [record_copy: :tls_record_copy, from_copy: :tls_event_copy] do
+      run = ComparatorMutants.with_tls_sender_mutant(control, &ConnectionNative.observe_tls/0)
+      assert run.result == []
+
+      events =
+        run.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+      native = ConnectionTls.build(%{events: events}, run.tls_binding)
+      assert Enum.map(native.errors, & &1.rule) == [rule]
+    end
   end
 
   @tag :connection_streams

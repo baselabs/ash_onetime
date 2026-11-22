@@ -586,22 +586,20 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   defp tls_sender_form(
          {:function, _, :send_application_data, 4, _} = form,
          sites,
-         :constructed_state
-       ),
-       do: tls_constructed_call(form, sites)
+         rule
+       )
+       when rule in [:constructed_state, :record_copy, :from_copy],
+       do: tls_constructed_call(form, sites, rule)
 
   defp tls_sender_form(
          {:function, annotation, :send_or_buffer, 5, clauses},
          sites,
-         :constructed_state
-       ) do
+         rule
+       )
+       when rule in [:constructed_state, :record_copy, :from_copy] do
     changed =
-      Enum.map(clauses, fn {:clause, location, [transport, socket, bytes, from, pattern], guards,
-                            body} ->
-        tagged =
-          {:tuple, location, [{:atom, location, :native_foreign_tls_constructed}, pattern]}
-
-        {:clause, location, [transport, socket, bytes, from, tagged], guards, body}
+      Enum.map(clauses, fn {:clause, location, arguments, guards, body} ->
+        {:clause, location, tls_forward_argument(arguments, location, rule), guards, body}
       end)
 
     {{:function, annotation, :send_or_buffer, 5, changed}, sites + length(clauses)}
@@ -610,25 +608,38 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   defp tls_sender_form(form, sites, _rule), do: {form, sites}
 
   defp tls_constructed_call(
-         {:call, location, {:atom, name_location, :send_or_buffer},
-          [transport, socket, bytes, from, data]},
-         sites
+         {:call, location, {:atom, name_location, :send_or_buffer}, arguments},
+         sites,
+         rule
        ) do
-    tagged = {:tuple, location, [{:atom, location, :native_foreign_tls_constructed}, data]}
-
     {{:call, location, {:atom, name_location, :send_or_buffer},
-      [transport, socket, bytes, from, tagged]}, sites + 1}
+      tls_forward_argument(arguments, location, rule)}, sites + 1}
   end
 
-  defp tls_constructed_call(form, sites) when is_tuple(form) do
-    {elements, sites} = form |> Tuple.to_list() |> Enum.map_reduce(sites, &tls_constructed_call/2)
+  defp tls_constructed_call(form, sites, rule) when is_tuple(form) do
+    {elements, sites} =
+      form |> Tuple.to_list() |> Enum.map_reduce(sites, &tls_constructed_call(&1, &2, rule))
+
     {List.to_tuple(elements), sites}
   end
 
-  defp tls_constructed_call(form, sites) when is_list(form),
-    do: Enum.map_reduce(form, sites, &tls_constructed_call/2)
+  defp tls_constructed_call(form, sites, rule) when is_list(form),
+    do: Enum.map_reduce(form, sites, &tls_constructed_call(&1, &2, rule))
 
-  defp tls_constructed_call(form, sites), do: {form, sites}
+  defp tls_constructed_call(form, sites, _rule), do: {form, sites}
+
+  defp tls_forward_argument(arguments, location, rule) do
+    {position, tag} =
+      case rule do
+        :constructed_state -> {4, :native_foreign_tls_constructed}
+        :record_copy -> {2, :native_foreign_tls_records}
+        :from_copy -> {3, :native_foreign_tls_from}
+      end
+
+    List.update_at(arguments, position, fn argument ->
+      {:tuple, location, [{:atom, location, tag}, argument]}
+    end)
+  end
 
   # Run the actual Postgrex owner with one private copy changed. Socket calls,
   # server traffic, descriptors and captures remain native. The source file and
