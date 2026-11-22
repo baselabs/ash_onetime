@@ -516,6 +516,56 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_tls_callback_input) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original:
+          "    |> tls_exact(source, :tls_callback_input, name, version.name)\n    |> tls_exact(source, :tls_callback_input, actions, [])\n",
+        mutated:
+          "    |> tls_exact(source, :tls_callback_input, name, name)\n    |> tls_exact(source, :tls_callback_input, actions, actions)\n"
+      }
+    ]
+  end
+
+  def edits(:stream_tls_active_option) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original: "        state = tls_exact(state, source, :tls_active_option_copy, mode, expected)\n",
+        mutated:
+          "        _ = mode\n        state = tls_exact(state, source, :tls_active_option_copy, expected, expected)\n"
+      }
+    ]
+  end
+
+  def edits(:stream_tls_passive_option) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original: "      state = tls_exact(state, source, :tls_passive_option, length(options), 1)\n",
+        mutated: "      state = tls_exact(state, source, :tls_passive_option, 1, 1)\n"
+      },
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original: "      state = tls_exact(state, source, :tls_passive_option, options, [])\n",
+        mutated:
+          "      _ = options\n      state = tls_exact(state, source, :tls_passive_option, [], [])\n"
+      }
+    ]
+  end
+
+  def edits(:stream_tls_machine_copy) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original: "    state = tls_exact(state, source, :tls_machine_copy, actual, expected)\n",
+        mutated:
+          "    _ = actual\n    state = tls_exact(state, source, :tls_machine_copy, expected, expected)\n"
+      }
+    ]
+  end
+
   def edits(:stream_tls_state_copy) do
     [
       %{
@@ -618,6 +668,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       case rule do
         :helper_state -> 2
         rule when rule in [:reply_copy, :reply_value] -> 7
+        rule when rule in [:hibernate_name, :hibernate_actions] -> 5
         _ -> 3
       end
 
@@ -630,6 +681,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     with_owner_mutant(:gen_statem, 3, &machine_form(&1, &2, rule), callback)
   end
+
+  def with_tls_connection_mutant(rule, callback),
+    do: with_owner_mutant(:tls_gen_connection, 1, &receiver_form(&1, &2, rule), callback)
 
   defp with_owner_mutant(module, required, transform, callback) do
     {^module, original, path} = :code.get_object_code(module)
@@ -677,6 +731,56 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   defp machine_form(form, sites, _rule), do: {form, sites}
 
+  defp receiver_form({:function, annotation, function, arity, clauses}, sites, rule)
+       when (function == :do_activate_socket and rule == :active_option) or
+              (function == :handle_info and rule == :passive_option) do
+    {clauses, sites} = receiver_copy(clauses, sites, rule)
+    {{:function, annotation, function, arity, clauses}, sites}
+  end
+
+  defp receiver_form(form, sites, _rule), do: {form, sites}
+
+  defp receiver_copy(
+         {:call, location,
+          {:remote, remote, {:atom, _, :tls_socket} = module, {:atom, _, :setopts} = name},
+          [transport, socket,
+           {:cons, list_location,
+            {:tuple, tuple_location, [{:atom, _, :active} = active, {:var, _, :N} = count]},
+            {nil, _} = tail}]},
+         sites,
+         :active_option
+       ) do
+    incremented = {:op, location, :+, count, {:integer, location, 1}}
+    options = {:cons, list_location, {:tuple, tuple_location, [active, incremented]}, tail}
+    {{:call, location, {:remote, remote, module, name}, [transport, socket, options]}, sites + 1}
+  end
+
+  defp receiver_copy(
+         {:clause, location, [{:atom, _, false}], guards,
+          [{:match, _, {:var, _, :State}, _} = constructed,
+           {:call, _, {:atom, _, :next_event}, _} = next]},
+         sites,
+         :passive_option
+       ) do
+    activate =
+      {:call, location, {:atom, location, :do_activate_socket},
+       [{:var, location, :PS0}, {:var, location, :StatEnv}]}
+
+    {{:clause, location, [{:atom, location, false}], guards, [activate, constructed, next]}, sites + 1}
+  end
+
+  defp receiver_copy(form, sites, rule) when is_tuple(form) do
+    {elements, sites} =
+      form |> Tuple.to_list() |> Enum.map_reduce(sites, &receiver_copy(&1, &2, rule))
+
+    {List.to_tuple(elements), sites}
+  end
+
+  defp receiver_copy(form, sites, rule) when is_list(form),
+    do: Enum.map_reduce(form, sites, &receiver_copy(&1, &2, rule))
+
+  defp receiver_copy(form, sites, _rule), do: {form, sites}
+
   defp machine_argument(:params), do: 0
   defp machine_argument(:queue), do: 3
   defp machine_argument(:hibernate), do: 4
@@ -705,6 +809,29 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     do: Enum.map_reduce(form, sites, &machine_call(&1, &2, rule))
 
   defp machine_call(form, sites, _rule), do: {form, sites}
+
+  defp tls_sender_form(
+         {:function, _, :send_application_data, 4, _} = form,
+         sites,
+         rule
+       )
+       when rule in [:hibernate_name, :hibernate_actions],
+       do: hibernate_call(form, sites, rule)
+
+  defp tls_sender_form(
+         {:function, annotation, :hibernate_after, 3, clauses},
+         sites,
+         rule
+       )
+       when rule in [:hibernate_name, :hibernate_actions] do
+    copied =
+      Enum.map(clauses, fn {:clause, location, arguments, guards, body} ->
+        arguments = hibernate_argument(arguments, location, rule)
+        {:clause, location, arguments, guards, body}
+      end)
+
+    {{:function, annotation, :hibernate_after, 3, copied ++ clauses}, sites + length(clauses)}
+  end
 
   defp tls_sender_form(
          {:function, annotation, :hibernate_after, 3, clauses},
@@ -837,6 +964,35 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   defp tls_sender_form(form, sites, _rule), do: {form, sites}
+
+  defp hibernate_call(
+         {:call, location, {:atom, name_location, :hibernate_after}, arguments},
+         sites,
+         rule
+       ) do
+    arguments = hibernate_argument(arguments, location, rule)
+    {{:call, location, {:atom, name_location, :hibernate_after}, arguments}, sites + 1}
+  end
+
+  defp hibernate_call(form, sites, rule) when is_tuple(form) do
+    {elements, sites} =
+      form |> Tuple.to_list() |> Enum.map_reduce(sites, &hibernate_call(&1, &2, rule))
+
+    {List.to_tuple(elements), sites}
+  end
+
+  defp hibernate_call(form, sites, rule) when is_list(form),
+    do: Enum.map_reduce(form, sites, &hibernate_call(&1, &2, rule))
+
+  defp hibernate_call(form, sites, _rule), do: {form, sites}
+
+  defp hibernate_argument(arguments, location, rule) do
+    position = if rule == :hibernate_name, do: 0, else: 2
+
+    List.update_at(arguments, position, fn original ->
+      {:tuple, location, [{:atom, location, :native_foreign_hibernate}, original]}
+    end)
+  end
 
   defp tls_constructed_call(
          {:call, location, {:atom, name_location, :send_reply}, arguments},

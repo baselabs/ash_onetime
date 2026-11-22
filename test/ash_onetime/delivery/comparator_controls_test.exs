@@ -3718,6 +3718,60 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     )
   end
 
+  for {corruption, position} <- [hibernate_name: 0, hibernate_actions: 2] do
+    @tag :connection_streams
+    test "Connection streams: native TLS constructor #{corruption} keeps its earlier input" do
+      corruption = unquote(corruption)
+      position = unquote(position)
+
+      run =
+        ComparatorMutants.with_tls_sender_mutant(corruption, &ConnectionNative.observe_tls/0)
+
+      assert run.result == []
+
+      events =
+        run.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+      [corrupted] =
+        Enum.filter(events, fn
+          %{event: {_, :call, {:tls_sender, :hibernate_after, arguments}}} ->
+            match?({:native_foreign_hibernate, _}, Enum.at(arguments, position))
+
+          _ ->
+            false
+        end)
+
+      native = ConnectionTls.build(%{events: events}, run.tls_binding)
+      assert Enum.map(native.errors, & &1.rule) == [:tls_callback_input]
+      assert hd(native.errors).index == corrupted.index
+
+      for mutant <- [:stream_tls_callback_input, :stream_tls_callback_result] do
+        checked =
+          ComparatorMutants.with_mutant(mutant, fn ->
+            ConnectionTls.build(%{events: events}, run.tls_binding)
+          end)
+
+        expected = if mutant == :stream_tls_callback_input, do: [], else: [:tls_callback_input]
+        assert Enum.map(checked.errors, & &1.rule) == expected
+      end
+
+      assert Enum.map(ConnectionTls.build(%{events: events}, run.tls_binding).errors, & &1.rule) ==
+               [:tls_callback_input]
+
+      restored = ConnectionNative.observe_tls()
+
+      restored_events =
+        restored.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+      assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+      IO.puts("CONNECTION_TLS_CALLBACK_INPUT: owning RED; sole catcher; restore; fresh GREEN")
+    end
+  end
+
   @tag :connection_streams
   test "Connection streams: native TLS forwarding retains record and reply copies" do
     for {control, rule, owner} <- [
@@ -3845,7 +3899,35 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert Enum.map(native.errors, & &1.rule) ==
                List.duplicate(:tls_machine_copy, length(corrupted))
+
       assert Enum.map(native.errors, & &1.index) == Enum.map(corrupted, & &1.index)
+
+      for mutant <- [:stream_tls_worker_state_copy, :stream_tls_machine_copy] do
+        checked =
+          ComparatorMutants.with_mutant(mutant, fn ->
+            ConnectionTls.build(%{events: events}, run.tls_binding)
+          end)
+
+        expected =
+          if mutant == :stream_tls_machine_copy,
+            do: [],
+            else: List.duplicate(:tls_machine_copy, length(corrupted))
+
+        assert Enum.map(checked.errors, & &1.rule) == expected
+      end
+
+      assert Enum.map(ConnectionTls.build(%{events: events}, run.tls_binding).errors, & &1.index) ==
+               Enum.map(corrupted, & &1.index)
+
+      restored = ConnectionNative.observe_tls()
+
+      restored_events =
+        restored.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+      assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+      IO.puts("CONNECTION_TLS_MACHINE_COPY: owning RED; sole catcher; restore; fresh GREEN")
     end
   end
 
@@ -3980,6 +4062,83 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
 
     assert tls.errors == []
+  end
+
+  for {corruption, rule, owner} <- [
+        {:active_option, :tls_active_option_copy, :stream_tls_active_option},
+        {:passive_option, :tls_passive_option, :stream_tls_passive_option}
+      ] do
+    @tag :connection_streams
+    test "Connection streams: native TLS #{corruption} is independently enforced" do
+      corruption = unquote(corruption)
+      rule = unquote(rule)
+      owner = unquote(owner)
+
+      run =
+        ComparatorMutants.with_tls_connection_mutant(corruption, fn ->
+          ConnectionNative.observe_tls(:fragmented)
+        end)
+
+      assert run.result == []
+
+      events =
+        run.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+      native = ConnectionTls.build(%{events: events}, run.tls_binding)
+      expected = tls_option_corruptions(events, native, run.tls_binding, corruption)
+      assert expected != []
+      assert Enum.map(native.errors, & &1.rule) == List.duplicate(rule, length(expected))
+      assert Enum.map(native.errors, & &1.index) == expected
+
+      for mutant <- [:stream_tls_worker_state_copy, owner] do
+        checked =
+          ComparatorMutants.with_mutant(mutant, fn ->
+            ConnectionTls.build(%{events: events}, run.tls_binding)
+          end)
+
+        errors = if mutant == owner, do: [], else: List.duplicate(rule, length(expected))
+        assert Enum.map(checked.errors, & &1.rule) == errors
+      end
+
+      assert Enum.map(ConnectionTls.build(%{events: events}, run.tls_binding).errors, & &1.index) ==
+               expected
+
+      restored = ConnectionNative.observe_tls(:fragmented)
+
+      restored_events =
+        restored.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+      assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+      IO.puts("CONNECTION_TLS_OPTION: owning RED; sole catcher; restore; fresh GREEN")
+    end
+  end
+
+  defp tls_option_corruptions(_events, native, binding, :active_option) do
+    for option <- native.transport.options,
+        option.port == binding.port and option.source.pid == binding.owner and option.mode == 3,
+        do: option.returned.index
+  end
+
+  defp tls_option_corruptions(events, native, binding, :passive_option) do
+    for %{
+          event:
+            {pid, :call,
+             {:tls_gen_connection, :gen_info, [{:tcp_passive, port}, :connection, data]}}
+        } = source <- events,
+        pid == binding.owner and port == binding.port,
+        elem(elem(data, 9), 1) == :undefined or elem(elem(data, 11), 3) != [],
+        pair = Map.fetch!(native.pairs, source.index) do
+      Enum.find_value(events, fn event ->
+        if event.pid == pid and event.index > source.index and
+             event.index < pair.returned.index and
+             event.mfa == {:tls_gen_connection, :next_event, 3},
+          do: event.index
+      end)
+    end
   end
 
   @tag :connection_streams

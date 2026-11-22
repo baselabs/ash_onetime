@@ -203,6 +203,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   }
   @loop_state_functions [
     :loop,
+    :loop_hibernate,
+    :loop_wakeup,
     :loop_msg,
     :loop_msg_event,
     :loop_event,
@@ -211,11 +213,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     :loop_actions,
     :loop_actions_list,
     :loop_actions_reply,
+    :loop_actions_next_event,
+    :loop_state_enter,
+    :loop_state_change,
     :loop_state_transition,
     :loop_keep_state,
     :loop_next_events,
     :loop_timeouts,
     :loop_timeouts_cancel,
+    :loop_timeouts_register,
+    :loop_timeouts_update,
+    :loop_t0q,
     :loop_done
   ]
   @loop_next_functions [
@@ -248,6 +256,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       pending: %{},
       frames: %{},
       received: %{},
+      machine_queues: %{},
+      machine_states: Map.new(owners, fn {pid, owner} -> {pid, owner.family.machines[pid]} end),
+      machine_callbacks: %{},
+      machine_zero: %{},
       messages: %{},
       encoded: %{},
       parsed: %{},
@@ -300,16 +312,313 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp loop_copy(state, source, function, arguments) do
     state = loop_commit(state, source.pid, function)
+    state = machine_commit(state, source, function)
     version = state.owners[source.pid].version
     next = Map.get(state.pending, source.pid, version)
 
     state =
       state
+      |> machine_metadata(source, function, arguments, version)
       |> loop_current_copy(source, function, version)
       |> loop_next_copy(source, function, version, next)
       |> loop_result_copy(source, function, arguments, next)
 
     if function == :loop_msg, do: loop_message(state, source, arguments), else: state
+  end
+
+  defp machine_metadata(state, source, function, arguments, version) do
+    root = state.owners[source.pid].family.machines[source.pid]
+
+    state =
+      cond do
+        function in @loop_state_functions ->
+          state
+          |> machine_term(source, [2, 2, 0], root.params, root.origin)
+          |> machine_state(source, 2, version)
+
+        function in [:reply_then_terminate, :do_reply_then_terminate, :terminate] ->
+          state
+          |> machine_term(source, [2, 2, 3], root.params, root.origin)
+          |> machine_state(source, 5, version)
+
+        true ->
+          state
+      end
+
+    machine_queue(state, source, function, arguments)
+  end
+
+  defp machine_state(state, source, position, version) do
+    root = state.machine_states[source.pid]
+    state = machine_term(state, source, [2, 2, position, 1, 0], version.name, version.origin)
+
+    Enum.reduce([0, 2, 3, 4, 5], state, fn field, state ->
+      machine_term(state, source, [2, 2, position, field], elem(root.state, field), root.origin)
+    end)
+  end
+
+  defp machine_queue(state, source, :loop_msg_event, arguments) do
+    case Map.get(state.messages, source.pid) do
+      %{value: event, origin: origin} = message when origin < source.index ->
+        hibernate = Map.get(message, :hibernate, false)
+        state = machine_term(state, source, [2, 2, 3], event, {:tls_message, origin})
+        state = machine_term(state, source, [2, 2, 4], hibernate, {:tls_message, origin})
+        queue = %{events: [event], hibernate: hibernate, origin: origin, fresh?: true}
+        put_in(state.machine_queues[source.pid], queue)
+
+      _ ->
+        _ = arguments
+        tls_failure(state, source, :tls_machine_queue_origin)
+    end
+  end
+
+  defp machine_queue(state, source, :loop_event, _arguments) do
+    case Map.get(state.machine_queues, source.pid) do
+      %{events: events, hibernate: hibernate, origin: origin, fresh?: true} = queue ->
+        state
+        |> machine_term(source, [2, 2, 3], events, {:tls_queue, origin})
+        |> machine_term(source, [2, 2, 4], hibernate, {:tls_queue, origin})
+        |> put_in([:machine_queues, source.pid], %{queue | fresh?: false})
+        |> put_in([:messages, source.pid], %{value: hd(events), origin: origin})
+
+      _ ->
+        tls_failure(state, source, :tls_machine_queue_origin)
+    end
+  end
+
+  defp machine_queue(state, source, :loop_t0q, _arguments) do
+    root = state.machine_states[source.pid]
+    cursor = Map.get(state.machine_zero, source.pid, %{timers: elem(root.state, 3), events: elem(root.state, 4)})
+    state = machine_term(state, source, [2, 2, 3], cursor.timers, root.origin)
+    state = machine_term(state, source, [2, 2, 4], cursor.events, root.origin)
+    machine_zero(state, source, root, cursor)
+  end
+
+  defp machine_queue(state, _source, _function, _arguments), do: state
+
+  defp machine_zero(state, source, root, %{events: []} = cursor) do
+    expected = root.state |> put_elem(3, cursor.timers) |> put_elem(4, [])
+
+    state
+    |> put_in([:machine_states, source.pid], %{root | state: expected, origin: source.index})
+    |> Map.update!(:machine_zero, &Map.delete(&1, source.pid))
+  end
+
+  defp machine_zero(state, source, root, %{events: [{type, ref} | rest]} = cursor) do
+    case Map.get(cursor.timers, type) do
+      {^ref, message} ->
+        expected = root.state |> put_elem(3, Map.delete(cursor.timers, type)) |> put_elem(4, rest)
+        event = %{value: {type, message}, origin: source.index, hibernate: elem(root.state, 5)}
+
+        state
+        |> put_in([:machine_states, source.pid], %{root | state: expected, origin: source.index})
+        |> put_in([:messages, source.pid], event)
+        |> Map.update!(:machine_zero, &Map.delete(&1, source.pid))
+
+      _ ->
+        if Map.has_key?(cursor.timers, ref) do
+          cursor = %{cursor | timers: Map.delete(cursor.timers, ref), events: rest}
+          put_in(state.machine_zero[source.pid], cursor)
+        else
+          tls_failure(state, source, :tls_machine_zero_origin)
+        end
+    end
+  end
+
+  defp machine_term(state, source, path, expected, origin) do
+    actual = native_term(source.event, path)
+    state = tls_exact(state, source, :tls_machine_copy, actual, expected)
+
+    state =
+      if actual === expected do
+        state
+      else
+        [error | rest] = state.errors
+        %{state | errors: [Map.put(error, :path, path) | rest]}
+      end
+
+    copy = %{index: source.index, path: path, origin: origin}
+    Map.update!(state, :terms, &[copy | &1])
+  end
+
+  defp machine_commit(state, source, function)
+       when function in [:loop_done, :reply_then_terminate, :do_reply_then_terminate, :terminate] do
+    case Map.get(state.machine_callbacks, source.pid) do
+      %{fresh?: true} = callback ->
+        state = put_in(state.machine_callbacks[source.pid], %{callback | fresh?: false})
+        commit_callback(state, source, function, callback)
+
+      _ ->
+        state
+    end
+  end
+
+  defp machine_commit(state, _source, _function), do: state
+
+  defp commit_callback(state, source, :loop_done, callback) do
+    root = state.machine_states[source.pid]
+    queue = state.machine_queues[source.pid]
+    {name, data} = elem(root.state, 1)
+
+    case transition_result(callback.result, name, data) do
+      {:ok, next_name, next_data, actions} ->
+        transition = transition_actions(root.state, queue, next_name, next_data, actions)
+        commit_transition(state, source, callback, root, transition)
+
+      :error ->
+        tls_failure(state, source, :tls_machine_result_origin)
+    end
+  end
+
+  defp commit_callback(state, source, _function, callback) do
+    root = state.machine_states[source.pid]
+    version = state.owners[source.pid].version
+    hibernate = state.machine_queues[source.pid].hibernate
+    expected = root.state |> put_elem(1, {version.name, version.data}) |> put_elem(5, hibernate)
+    put_in(state.machine_states[source.pid], %{root | state: expected, origin: callback.source.index})
+  end
+
+  defp transition_result({:next_state, name, data}, _name, _data), do: {:ok, name, data, []}
+  defp transition_result({:next_state, name, data, actions}, _name, _data),
+    do: {:ok, name, data, List.wrap(actions)}
+  defp transition_result({:keep_state, data}, name, _data), do: {:ok, name, data, []}
+  defp transition_result({:keep_state, data, actions}, name, _data),
+    do: {:ok, name, data, List.wrap(actions)}
+  defp transition_result(:keep_state_and_data, name, data), do: {:ok, name, data, []}
+  defp transition_result({:keep_state_and_data, actions}, name, data),
+    do: {:ok, name, data, List.wrap(actions)}
+  defp transition_result(_result, _name, _data), do: :error
+
+  defp transition_actions(old, queue, name, data, actions) do
+    initial = %{
+      state: put_elem(old, 1, {name, data}),
+      hibernate: queue.hibernate,
+      postpone: false,
+      next: [],
+      timeouts: [],
+      unknown: []
+    }
+
+    transition = Enum.reduce(actions, initial, &transition_action/2)
+    [event | rest] = queue.events
+    postponed = if transition.postpone, do: [event | elem(old, 2)], else: elem(old, 2)
+    changed? = name !== elem(elem(old, 1), 0)
+    events = if changed?, do: Enum.reverse(postponed) ++ rest, else: rest
+    postponed = if changed?, do: [], else: postponed
+    next = transition.state |> put_elem(2, postponed) |> put_elem(5, transition.hibernate)
+
+    Map.merge(transition, %{state: next, events: transition.next ++ events, changed?: changed?})
+  end
+
+  defp transition_action(:hibernate, state), do: %{state | hibernate: true}
+  defp transition_action({:hibernate, value}, state) when is_boolean(value),
+    do: %{state | hibernate: value}
+  defp transition_action(:postpone, state), do: %{state | postpone: true}
+  defp transition_action({:postpone, value}, state) when is_boolean(value),
+    do: %{state | postpone: value}
+  defp transition_action({:reply, _from, _reply}, state), do: state
+  defp transition_action({:next_event, type, content}, state),
+    do: %{state | next: state.next ++ [{type, content}]}
+  defp transition_action({type, time, message}, state),
+    do: %{state | timeouts: [{type, time, message, []} | state.timeouts]}
+  defp transition_action({type, time, message, options}, state),
+    do: %{state | timeouts: [{type, time, message, List.wrap(options)} | state.timeouts]}
+  defp transition_action({type, :cancel}, state),
+    do: %{state | timeouts: [{type, :infinity, :undefined, []} | state.timeouts]}
+  defp transition_action(value, state) when is_integer(value) or value == :infinity,
+    do: %{state | timeouts: [{:timeout, value, value, []} | state.timeouts]}
+  defp transition_action(action, state), do: %{state | unknown: [action | state.unknown]}
+
+  defp commit_transition(state, source, callback, root, transition) do
+    state = tls_exact(state, source, :tls_machine_action_origin, transition.unknown, [])
+    pairs = machine_timer_pairs(state, source, callback.source.index)
+    timers = elem(root.state, 3)
+    context = %{state: state, source: source, pairs: pairs, timers: timers, zero: [], seen: MapSet.new()}
+    context = if transition.changed?, do: cancel_machine_timer(context, :state_timeout), else: context
+    context = cancel_machine_timer(context, :timeout)
+    context = Enum.reduce(transition.timeouts, context, &machine_timeout/2)
+    state = tls_exact(context.state, source, :tls_machine_timer_program, context.pairs, [])
+    expected = put_elem(transition.state, 3, context.timers)
+    expected = put_elem(expected, 4, elem(root.state, 4) ++ context.zero)
+    queue = %{events: transition.events, hibernate: transition.hibernate,
+              origin: callback.source.index, fresh?: transition.events != []}
+
+    state
+    |> put_in([:machine_states, source.pid], %{root | state: expected, origin: callback.source.index})
+    |> put_in([:machine_queues, source.pid], queue)
+  end
+
+  defp machine_timer_pairs(state, source, first) do
+    state.pairs
+    |> Map.values()
+    |> Enum.filter(fn pair ->
+      pair.source.pid == source.pid and pair.source.index > first and
+        pair.returned.index < source.index and
+        pair.source.mfa in [{:erlang, :start_timer, 4}, {:erlang, :cancel_timer, 1},
+                           {:erlang, :make_ref, 0}]
+    end)
+    |> Enum.sort_by(& &1.source.index)
+  end
+
+  defp cancel_machine_timer(context, type) do
+    case Map.get(context.timers, type) do
+      {ref, _message} ->
+        {result, context} = machine_timer_call(context, :cancel_timer, [ref])
+        timers = Map.delete(context.timers, type)
+        timers = if result == false, do: Map.put(timers, ref, []), else: timers
+        %{context | timers: timers}
+
+      nil ->
+        context
+    end
+  end
+
+  defp machine_timeout({type, time, message, options}, context) do
+    if MapSet.member?(context.seen, type) do
+      context
+    else
+      context = %{context | seen: MapSet.put(context.seen, type)}
+      install_machine_timeout(context, type, time, message, options)
+    end
+  end
+
+  defp install_machine_timeout(context, type, :infinity, _message, _options),
+    do: cancel_machine_timer(context, type)
+
+  defp install_machine_timeout(context, type, :update, message, _options) do
+    case Map.get(context.timers, type) do
+      {ref, _old} -> %{context | timers: Map.put(context.timers, type, {ref, message})}
+      nil -> install_machine_timeout(context, type, 0, message, [])
+    end
+  end
+
+  defp install_machine_timeout(context, type, time, message, options) do
+    {ref, context} =
+      if time == 0,
+        do: machine_timer_call(context, :make_ref, []),
+        else: machine_timer_call(context, :start_timer, [time, context.source.pid, type, options])
+
+    context = cancel_machine_timer(context, type)
+    timers = Map.put(context.timers, type, {ref, message})
+    zero = if time == 0, do: [{type, ref} | context.zero], else: context.zero
+    %{context | timers: timers, zero: zero}
+  end
+
+  defp machine_timer_call(%{pairs: [pair | rest]} = context, function, arguments) do
+    {_, :call, {module, actual_function, actual}} = pair.source.event
+    {_, :return_from, _, result} = pair.returned.event
+    expected = {:erlang, function, arguments}
+    state = tls_exact(context.state, pair.source, :tls_machine_timer_program,
+                      {module, actual_function, actual}, expected)
+    valid? = if function == :cancel_timer, do: result == false or (is_integer(result) and result >= 0),
+             else: is_reference(result)
+    state = tls_exact(state, pair.returned, :tls_machine_timer_program, valid?, true)
+    {result, %{context | state: state, pairs: rest}}
+  end
+
+  defp machine_timer_call(context, _function, _arguments) do
+    state = tls_failure(context.state, context.source, :tls_machine_timer_origin)
+    {:missing_native_timer, %{context | state: state}}
   end
 
   defp loop_current_copy(state, source, function, version) do
@@ -369,15 +678,43 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         state = put_in(state.received[source.pid], remaining)
         state = tls_exact(state, source, :tls_event_copy, Enum.at(arguments, 3), message)
 
-        put_in(state.messages[source.pid], %{
-          value: callback_message(message),
-          origin: origin.index
-        })
+        machine_message(state, source.pid, message, origin.index)
 
       _ ->
         tls_failure(state, source, :tls_event_origin)
     end
   end
+
+  defp machine_message(state, pid, {:timeout, ref, type} = message, origin) when is_reference(ref) do
+    root = state.machine_states[pid]
+    timers = elem(root.state, 3)
+
+    case Map.get(timers, type) do
+      {^ref, content} ->
+        expected = put_elem(root.state, 3, Map.delete(timers, type))
+
+        state
+        |> put_in([:machine_states, pid], %{root | state: expected, origin: origin})
+        |> put_in([:messages, pid], %{value: {type, content}, origin: origin})
+
+      _ ->
+        if Map.has_key?(timers, ref) do
+          expected = put_elem(root.state, 3, Map.delete(timers, ref))
+
+          state
+          |> put_in([:machine_states, pid], %{root | state: expected, origin: origin})
+          |> Map.update!(:messages, &Map.delete(&1, pid))
+        else
+          machine_message(state, pid, {:info, message}, origin, :converted)
+        end
+    end
+  end
+
+  defp machine_message(state, pid, message, origin),
+    do: machine_message(state, pid, callback_message(message), origin, :converted)
+
+  defp machine_message(state, pid, event, origin, :converted),
+    do: put_in(state.messages[pid], %{value: event, origin: origin})
 
   # Receive tracing records mailbox arrivals. Selective native helpers consume
   # only their independently bound receipts; every other arrival stays FIFO for
@@ -511,6 +848,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     |> tls_exact(source, :tls_callback_input, name, version.name)
     |> tls_exact(source, :tls_callback_input, actions, [])
   end
+
+  defp hibernate_input(
+         state,
+         %{mfa: {:tls_sender, :hibernate_after, 3}} = source,
+         _arguments,
+         _frames,
+         _version
+       ),
+       do: tls_failure(state, source, :tls_callback_input_origin)
 
   defp hibernate_input(state, _source, _arguments, _frames, _version), do: state
 
@@ -953,6 +1299,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             else: state
 
         state = put_in(state.frames[source.pid], rest)
+        state =
+          if rest == [],
+            do: put_in(state.machine_callbacks[source.pid], %{source: source, result: result, fresh?: true}),
+            else: state
+
         advance_worker(state, source, version, rest)
 
       _ ->
@@ -963,11 +1314,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp callback_result(
          state,
          %{mfa: {:tls_sender, :hibernate_after, 3}} = source,
-         %{arguments: [_name, _data, actions]},
+         _frame,
          version,
          actual
        ) do
     timeout = elem(elem(version.data, 1), 11)
+    actions = []
 
     expected =
       case {version.name, timeout, actions} do
