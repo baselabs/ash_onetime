@@ -1035,7 +1035,18 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       states = native_copy_states(captured)
       assert Enum.map(states.errors, & &1.rule) == [:state_error_copy]
       assert hd(states.errors).index == corrupted.index
+
+      for mutant <- [:stream_buffer_copy, :stream_helper_copy, :stream_error_copy] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+        expected = if mutant == :stream_error_copy, do: [], else: [:state_error_copy]
+        assert Enum.map(checked.errors, & &1.rule) == expected
+      end
+
+      assert Enum.map(native_copy_states(captured).errors, & &1.rule) == [:state_error_copy]
+      assert native_copy_states(cached_decoders(nil, shape)).errors == []
     end
+
+    IO.puts("CONNECTION_ERROR_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
   @tag :connection_streams
@@ -3620,6 +3631,29 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     native = ConnectionTls.build(%{events: events}, run.tls_binding)
     assert Enum.map(native.errors, & &1.rule) == [:tls_callback_result]
     assert hd(native.errors).index == hd(corrupted).index
+
+    for mutant <- [:stream_tls_state_copy, :stream_tls_reply_copy, :stream_tls_callback_result] do
+      checked =
+        ComparatorMutants.with_mutant(mutant, fn ->
+          ConnectionTls.build(%{events: events}, run.tls_binding)
+        end)
+
+      expected = if mutant == :stream_tls_callback_result, do: [], else: [:tls_callback_result]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    assert Enum.map(ConnectionTls.build(%{events: events}, run.tls_binding).errors, & &1.rule) ==
+             [:tls_callback_result]
+
+    restored = ConnectionNative.observe_tls()
+
+    restored_events =
+      restored.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+    IO.puts("CONNECTION_TLS_CALLBACK_RESULT: owning RED; sole catcher; restore; fresh GREEN")
   end
 
   @tag :connection_streams
@@ -3778,6 +3812,40 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert is_map(elem(state, 3))
       assert is_list(elem(state, 4))
       assert is_boolean(elem(state, 5))
+    end
+  end
+
+  for {corruption, position} <- [params: 0, queue: 3, hibernate: 4] do
+    @tag :connection_streams
+    test "Connection streams: native TLS machine #{corruption} copies retain their origins" do
+      corruption = unquote(corruption)
+      position = unquote(position)
+
+      run =
+        ComparatorMutants.with_gen_statem_mutant(corruption, &ConnectionNative.observe_tls/0)
+
+      assert run.result == []
+
+      events =
+        run.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+      corrupted =
+        Enum.filter(events, fn
+          %{event: {_, :call, {:gen_statem, :loop_event, arguments}}} ->
+            match?({:native_foreign_machine, _}, Enum.at(arguments, position))
+
+          _ ->
+            false
+        end)
+
+      assert corrupted != []
+      native = ConnectionTls.build(%{events: events}, run.tls_binding)
+
+      assert Enum.map(native.errors, & &1.rule) ==
+               List.duplicate(:tls_machine_copy, length(corrupted))
+      assert Enum.map(native.errors, & &1.index) == Enum.map(corrupted, & &1.index)
     end
   end
 

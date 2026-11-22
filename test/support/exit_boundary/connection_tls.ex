@@ -494,10 +494,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     frames = Map.get(state.frames, source.pid, [])
     {state, version} = worker_input(state, source, arguments, frames)
     state = worker_copy(state, source, [2, 2, position], version.data, version.origin)
+    state = hibernate_input(state, source, arguments, frames, version)
     frame = %{source: source, input: version, current: version, arguments: arguments}
     frame = Map.put(frame, :event, Map.get(state.messages, source.pid))
     put_in(state.frames[source.pid], [frame | frames])
   end
+
+  defp hibernate_input(
+         state,
+         %{mfa: {:tls_sender, :hibernate_after, 3}} = source,
+         [name, _data, actions],
+         [%{source: %{mfa: {:tls_sender, :send_application_data, 4}}} | _],
+         version
+       ) do
+    state
+    |> tls_exact(source, :tls_callback_input, name, version.name)
+    |> tls_exact(source, :tls_callback_input, actions, [])
+  end
+
+  defp hibernate_input(state, _source, _arguments, _frames, _version), do: state
 
   defp worker_input(state, source, arguments, []) do
     version = state.owners[source.pid].version
@@ -929,6 +944,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case Map.get(state.frames, source.pid, []) do
       [%{source: %{mfa: mfa}} = frame | rest] when mfa == source.mfa ->
         {state, version} = worker_output(state, source, frame)
+        state = callback_result(state, source, frame, version, result)
         path = result_data_path(result)
 
         state =
@@ -943,6 +959,32 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         state
     end
   end
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_sender, :hibernate_after, 3}} = source,
+         %{arguments: [_name, _data, actions]},
+         version,
+         actual
+       ) do
+    timeout = elem(elem(version.data, 1), 11)
+
+    expected =
+      case {version.name, timeout, actions} do
+        {:connection, timeout, actions} when timeout != :infinity ->
+          {:next_state, :connection, version.data, [{:timeout, timeout, :hibernate} | actions]}
+
+        {name, _, []} ->
+          {:next_state, name, version.data}
+
+        {name, _, actions} ->
+          {:next_state, name, version.data, actions}
+      end
+
+    tls_exact(state, source, :tls_callback_result, actual, expected)
+  end
+
+  defp callback_result(state, _source, _frame, _version, _actual), do: state
 
   defp advance_worker(state, source, version, []) do
     version = %{version | origin: {:tls_callback_return, source.index}}

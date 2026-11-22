@@ -494,6 +494,28 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_error_copy) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: "    state = exact(state, source, :state_error_copy, actual, expected)\n",
+        mutated:
+          "    _ = actual\n    state = exact(state, source, :state_error_copy, expected, expected)\n"
+      }
+    ]
+  end
+
+  def edits(:stream_tls_callback_result) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original: "    tls_exact(state, source, :tls_callback_result, actual, expected)\n",
+        mutated:
+          "    _ = actual\n    tls_exact(state, source, :tls_callback_result, expected, expected)\n"
+      }
+    ]
+  end
+
   def edits(:stream_tls_state_copy) do
     [
       %{
@@ -592,14 +614,6 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   def with_tls_sender_mutant(callback), do: with_tls_sender_mutant(:helper_state, callback)
 
   def with_tls_sender_mutant(rule, callback) do
-    module = :tls_sender
-    {^module, original, path} = :code.get_object_code(module)
-
-    {:ok, {^module, [abstract_code: {:raw_abstract_v1, forms}]}} =
-      :beam_lib.chunks(original, [:abstract_code])
-
-    {forms, sites} = Enum.map_reduce(forms, 0, &tls_sender_form(&1, &2, rule))
-
     required =
       case rule do
         :helper_state -> 2
@@ -607,7 +621,24 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         _ -> 3
       end
 
-    unless sites == required, do: raise("TLS sender mutant requires every pinned owner site")
+    with_owner_mutant(:tls_sender, required, &tls_sender_form(&1, &2, rule), callback)
+  end
+
+  def with_gen_statem_mutant(rule, callback) do
+    if Enum.any?(Process.list(), &:erlang.check_process_code(&1, :gen_statem)),
+      do: raise("native machine mutation requires no preexisting gen_statem executor")
+
+    with_owner_mutant(:gen_statem, 3, &machine_form(&1, &2, rule), callback)
+  end
+
+  defp with_owner_mutant(module, required, transform, callback) do
+    {^module, original, path} = :code.get_object_code(module)
+
+    {:ok, {^module, [abstract_code: {:raw_abstract_v1, forms}]}} =
+      :beam_lib.chunks(original, [:abstract_code])
+
+    {forms, sites} = Enum.map_reduce(forms, 0, transform)
+    unless sites == required, do: raise("native mutant requires every pinned owner site")
     {:ok, ^module, mutant, []} = :compile.forms(forms, [:binary, :return, :debug_info])
 
     try do
@@ -621,6 +652,60 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end
   end
 
+  defp machine_form({:function, annotation, :loop_msg_event, 5, clauses}, sites, rule) do
+    {clauses, sites} = machine_call(clauses, sites, rule)
+    {{:function, annotation, :loop_msg_event, 5, clauses}, sites}
+  end
+
+  defp machine_form({:function, annotation, :loop_event, 5, [clause]}, sites, rule) do
+    {:clause, location, arguments, guards, body} = clause
+    position = machine_argument(rule)
+    input = {:var, location, :NativeMachineInput}
+    restored = {:var, location, :NativeMachineRestored}
+    tagged = {:tuple, location, [{:atom, location, :native_foreign_machine}, restored]}
+
+    cases = [
+      {:clause, location, [tagged], [], [restored]},
+      {:clause, location, [restored], [], [restored]}
+    ]
+
+    restore = {:match, location, Enum.at(arguments, position), {:case, location, input, cases}}
+    arguments = List.replace_at(arguments, position, input)
+    changed = {:clause, location, arguments, guards, [restore | body]}
+    {{:function, annotation, :loop_event, 5, [changed]}, sites + 1}
+  end
+
+  defp machine_form(form, sites, _rule), do: {form, sites}
+
+  defp machine_argument(:params), do: 0
+  defp machine_argument(:queue), do: 3
+  defp machine_argument(:hibernate), do: 4
+
+  defp machine_call(
+         {:call, location, {:atom, name_location, :loop_event}, arguments},
+         sites,
+         rule
+       ) do
+    arguments =
+      List.update_at(arguments, machine_argument(rule), fn original ->
+        {:tuple, location, [{:atom, location, :native_foreign_machine}, original]}
+      end)
+
+    {{:call, location, {:atom, name_location, :loop_event}, arguments}, sites + 1}
+  end
+
+  defp machine_call(form, sites, rule) when is_tuple(form) do
+    {elements, sites} =
+      form |> Tuple.to_list() |> Enum.map_reduce(sites, &machine_call(&1, &2, rule))
+
+    {List.to_tuple(elements), sites}
+  end
+
+  defp machine_call(form, sites, rule) when is_list(form),
+    do: Enum.map_reduce(form, sites, &machine_call(&1, &2, rule))
+
+  defp machine_call(form, sites, _rule), do: {form, sites}
+
   defp tls_sender_form(
          {:function, annotation, :hibernate_after, 3, clauses},
          sites,
@@ -632,7 +717,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
         actions =
           case tail do
-            [] -> {:nil, tuple_location}
+            [] -> {nil, tuple_location}
             [actions] -> actions
           end
 

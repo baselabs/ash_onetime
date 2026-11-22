@@ -8,6 +8,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       msg_parameter: 1,
       msg_notice: 1,
       msg_notify: 1,
+      msg_error: 1,
       msg_bind: 1,
       msg_execute: 1,
       msg_close: 1,
@@ -649,6 +650,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp helper_input(state, source, :done, [_protocol, _query, rows | _], version),
     do: helper_rows(state, source, [2, 2, 2], rows, version.protocol)
 
+  defp helper_input(state, source, function, [_protocol, _status, actual, _buffer], version)
+       when function in [:error_ready, :error_flushed, :rollback_flushed] do
+    case native_message_instance(state, source, version.protocol) do
+      %{expected: {:ok, msg_error(fields: fields), _}, returned: %{index: index}} ->
+        expected = Postgrex.Error.exception(postgres: fields)
+        origin = {:server_error, index}
+        error_copy(state, source, [2, 2, 2], actual, expected, origin)
+
+      _ ->
+        failure(state, source, :state_error_origin)
+    end
+  end
+
   defp helper_input(state, source, :msg_send, [_protocol, messages, _buffer], version) do
     case List.first(Map.get(state.frames, source.pid, [])) do
       %{source: %{mfa: {Postgrex.Protocol, function, 4}}} = frame
@@ -826,6 +840,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp helper_copy(state, source, path, actual, expected, origin) do
     state = exact(state, source, :state_helper_copy, actual, expected)
+    copy = %{index: source.index, path: path, origin: origin}
+    Map.update!(state, :terms, &[copy | &1])
+  end
+
+  defp error_copy(state, source, path, actual, expected, origin) do
+    state = exact(state, source, :state_error_copy, actual, expected)
     copy = %{index: source.index, path: path, origin: origin}
     Map.update!(state, :terms, &[copy | &1])
   end
@@ -1082,16 +1102,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp native_message(state, source, protocol) do
+    case native_message_instance(state, source, protocol) do
+      %{expected: {:ok, message, _rest}} -> message
+      _ -> :no_native_message
+    end
+  end
+
+  defp native_message_instance(state, source, protocol) do
     state.decoders.instances
     |> Enum.filter(
       &({:gen_tcp, &1.port} == protocol.sock and &1.returned.pid == source.pid and
           &1.returned.index < source.index)
     )
     |> List.last()
-    |> case do
-      %{expected: {:ok, message, _rest}} -> message
-      _ -> :no_native_message
-    end
   end
 
   defp cursor_version(state, source, %{sock: {:gen_tcp, port}}) do
