@@ -549,9 +549,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/connection_tls.ex",
         original:
-          "    |> tls_exact(source, :tls_callback_input, name, version.name)\n    |> tls_exact(source, :tls_callback_input, actions, [])\n",
+          "  defp hibernate_input(\n         state,\n         %{mfa: {:tls_sender, :hibernate_after, 3}} = source,\n         [name, _data, actions],\n         [%{source: %{mfa: {:tls_sender, :send_application_data, 4}}} | _],\n         version\n       ) do\n    state\n    |> tls_exact(source, :tls_callback_input, name, version.name)\n    |> tls_exact(source, :tls_callback_input, actions, [])\n  end\n\n",
         mutated:
-          "    |> tls_exact(source, :tls_callback_input, name, name)\n    |> tls_exact(source, :tls_callback_input, actions, actions)\n"
+          "  defp hibernate_input(\n         state,\n         %{mfa: {:tls_sender, :hibernate_after, 3}} = source,\n         [name, _data, actions],\n         [%{source: %{mfa: {:tls_sender, :send_application_data, 4}}} | _],\n         _version\n       ) do\n    state\n    |> tls_exact(source, :tls_callback_input, name, name)\n    |> tls_exact(source, :tls_callback_input, actions, actions)\n  end\n\n"
       }
     ]
   end
@@ -1276,6 +1276,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     wildcard = {:var, location, :_}
     more = {:tuple, location, [{:atom, location, :more}, wildcard]}
     empty = {:op, location, :"=:=", hd(inputs), {:bin, location, []}}
+
     [
       {:clause, location, [more], [[empty]], [call]},
       {:clause, location, [value], [], [value]}
@@ -1287,11 +1288,13 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     rows = {:var, location, :AshOnetimeDecoderRows}
     wildcard = {:var, location, :_}
     more = {:tuple, location, [{:atom, location, :more}, buffer, rows, wildcard]}
+
     unchanged = [
       {:op, location, :"=:=", hd(inputs), {:bin, location, []}},
       {:op, location, :"=:=", hd(inputs), buffer},
       {:op, location, :"=:=", Enum.at(inputs, 2), rows}
     ]
+
     [
       {:clause, location, [more], [unchanged], [call]},
       {:clause, location, [value], [], [value]}
@@ -1303,15 +1306,22 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     case Map.fetch(targets, {function, arity}) do
       {:ok, positions} ->
-        inputs = for position <- 0..(arity - 1),
-          do: {:var, annotation, String.to_atom("AshOnetimeHelperInput#{position}")}
+        inputs =
+          for position <- 0..(arity - 1),
+              do: {:var, annotation, String.to_atom("AshOnetimeHelperInput#{position}")}
 
-        values = inputs |> Enum.with_index() |> Enum.map(fn {input, position} ->
-          if position in positions, do: unwrapped_input(input, position, annotation), else: input
-        end)
+        values =
+          inputs
+          |> Enum.with_index()
+          |> Enum.map(fn {input, position} ->
+            if position in positions,
+              do: unwrapped_input(input, position, annotation),
+              else: input
+          end)
 
-        cases = for {:clause, location, arguments, guards, body} <- clauses,
-          do: {:clause, location, [{:tuple, location, arguments}], guards, body}
+        cases =
+          for {:clause, location, arguments, guards, body} <- clauses,
+              do: {:clause, location, [{:tuple, location, arguments}], guards, body}
 
         # Keep every native body once, in its original order and with its original
         # variables. Pure entry unwrapping adds neither a traced call nor a copied
@@ -1330,10 +1340,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   defp unwrapped_input(input, position, location) do
     value = {:var, location, String.to_atom("AshOnetimeHelperValue#{position}")}
     wrapped = {:tuple, location, [{:atom, location, :native_foreign_helper}, value]}
+
     clauses = [
       {:clause, location, [wrapped], [], [value]},
       {:clause, location, [value], [], [value]}
     ]
+
     {:case, location, input, clauses}
   end
 

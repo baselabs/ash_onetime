@@ -545,7 +545,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         IO.puts("CONNECTION_HELPER_TERM_UNBOUND: " <> Diagnostics.render(copy))
       end
 
-      if shape == :large_rows do
+      if unquote(shape == :large_rows) do
         assert Enum.any?(decoders.versions, &is_list(&1.returned_buffer))
 
         assert Enum.any?(states.buffers, fn
@@ -563,7 +563,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       rows =
         Enum.filter(decoders.instances, &(&1.source.mfa == {Postgrex.Types, :decode_rows, 4}))
 
-      if shape == :bind_error, do: assert(rows == []), else: assert(rows != [])
+      if unquote(shape == :bind_error), do: assert(rows == []), else: assert(rows != [])
       assert length(decoders.versions) == length(decoders.instances)
 
       assert Enum.all?(decoders.versions, fn version ->
@@ -577,7 +577,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              end)
 
       descriptor =
-        if shape == :redescribe do
+        if unquote(shape == :redescribe) do
           source =
             Enum.find(
               events,
@@ -593,8 +593,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert Enum.all?(rows, &(&1.descriptor == descriptor))
 
-      if shape in [:bind_error, :execute_error] do
-        expected = if shape == :bind_error, do: :bind, else: :execute
+      if unquote(shape in [:bind_error, :execute_error]) do
+        expected = if unquote(shape == :bind_error), do: :bind, else: :execute
 
         assert Enum.any?(streams.connections, fn {_port, connection} ->
                  Enum.any?(connection.protocol.messages, fn
@@ -618,7 +618,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert error.connection_id === protocol.connection_id
       end
 
-      if shape == :cross_connection do
+      if unquote(shape == :cross_connection) do
         [{port, connection}] = Map.to_list(streams.connections)
         assert port != origin.port
 
@@ -627,7 +627,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                end)
       end
 
-      if shape in [:notice, :parameter, :notification] do
+      if unquote(shape in [:notice, :parameter, :notification]) do
         tag = %{notice: ?N, parameter: ?S, notification: ?A}[shape]
 
         assert Enum.any?(streams.connections, fn {_port, connection} ->
@@ -1146,37 +1146,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       mutation = unquote(mutation)
       targets = %{{:done, 2} => [1], {:recv_transaction, 4} => [2]}
 
-      captured =
-        case mutation do
-          :inputs ->
-            ComparatorMutants.with_postgrex_inputs(targets, &native_transactions/0)
-
-          :result ->
-            ComparatorMutants.with_owner_outputs(
-              Postgrex.Protocol,
-              %{{:done, 2} => %{size: 2, position: 0, field: :num_rows}},
-              &native_transactions/0
-            )
-        end
+      captured = native_transaction_corruption(mutation, targets)
 
       corrupted =
-        Enum.flat_map(captured.events, fn source ->
-          case source.event do
-            {_, :call, {Postgrex.Protocol, function, arguments}} when mutation == :inputs ->
-              for position <- Map.get(targets, {function, length(arguments)}, []) do
-                assert match?({:native_foreign_helper, _}, Enum.at(arguments, position))
-                {source.index, [2, 2, position]}
-              end
-
-            {_, :return_from, {Postgrex.Protocol, :done, 2}, {result, _protocol}}
-            when mutation == :result ->
-              assert match?({:native_foreign_return, _}, result.num_rows)
-              [{source.index, [3, 0]}]
-
-            _ ->
-              []
-          end
-        end)
+        Enum.flat_map(captured.events, &transaction_corrupted_coordinates(&1, mutation, targets))
 
       assert corrupted != []
       states = native_copy_states(captured)
@@ -1197,6 +1170,39 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       IO.puts("CONNECTION_TRANSACTION_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
     end
   end
+
+  defp native_transaction_corruption(:inputs, targets),
+    do: ComparatorMutants.with_postgrex_inputs(targets, &native_transactions/0)
+
+  defp native_transaction_corruption(:result, _targets) do
+    ComparatorMutants.with_owner_outputs(
+      Postgrex.Protocol,
+      %{{:done, 2} => %{size: 2, position: 0, field: :num_rows}},
+      &native_transactions/0
+    )
+  end
+
+  defp transaction_corrupted_coordinates(
+         %{event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source,
+         :inputs,
+         targets
+       ) do
+    for position <- Map.get(targets, {function, length(arguments)}, []) do
+      assert match?({:native_foreign_helper, _}, Enum.at(arguments, position))
+      {source.index, [2, 2, position]}
+    end
+  end
+
+  defp transaction_corrupted_coordinates(
+         %{event: {_, :return_from, {Postgrex.Protocol, :done, 2}, {result, _protocol}}} = source,
+         :result,
+         _targets
+       ) do
+    assert match?({:native_foreign_return, _}, result.num_rows)
+    [{source.index, [3, 0]}]
+  end
+
+  defp transaction_corrupted_coordinates(_source, _mutation, _targets), do: []
 
   @tag :connection_streams
   test "Connection streams: private status copies retain their callback origin" do
@@ -1539,20 +1545,31 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   for {prepare, mode, targets} <- [
         {:named, :transaction,
-         %{{:close_parse_describe, 3} => [2], {:parse_describe, 3} => [2],
-           {:reload_ready, 5} => [2, 3], {:reload_closed, 5} => [2, 3]}},
+         %{
+           {:close_parse_describe, 3} => [2],
+           {:parse_describe, 3} => [2],
+           {:reload_ready, 5} => [2, 3],
+           {:reload_closed, 5} => [2, 3]
+         }},
         {:unnamed, :transaction,
          %{{:parse_describe_close, 3} => [2], {:reload_closed, 5} => [2, 3]}},
         {:named, :savepoint,
-         %{{:close_parse_describe, 3} => [2], {:parse_describe, 3} => [2],
-           {:reload_transaction, 5} => [2, 3], {:reload_closed, 5} => [2, 3]}}
+         %{
+           {:close_parse_describe, 3} => [2],
+           {:parse_describe, 3} => [2],
+           {:reload_transaction, 5} => [2, 3],
+           {:reload_closed, 5} => [2, 3]
+         }}
       ] do
     @tag :connection_streams
     test "Connection streams: prepared reload #{prepare}/#{mode} inputs retain their origins" do
       targets = unquote(Macro.escape(targets))
+
       assert_native_helper_inputs(targets, fn ->
         native_query_factory(:composite_reload, unquote(prepare),
-          postgrex_prepare: true, mode: unquote(mode))
+          postgrex_prepare: true,
+          mode: unquote(mode)
+        )
       end)
     end
   end
@@ -1560,6 +1577,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @tag :connection_streams
   test "Connection streams: savepoint tags retain the active transaction receive origin" do
     targets = %{{:recv_transaction, 4} => [2], {:done, 2} => [1]}
+
     assert_native_helper_inputs(targets, fn ->
       native_query_factory(:composite_reload, :named, mode: :savepoint)
     end)
@@ -1592,7 +1610,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                   instance.source.stack == [owner.mfa | owner.stack]
               end),
             length(children) == 2,
-            Enum.all?(children, &(elem(&1.expected, 0) == :more and &1.start == &1.stop and &1.input == <<>>)),
+            Enum.all?(
+              children,
+              &(elem(&1.expected, 0) == :more and &1.start == &1.stop and &1.input == <<>>)
+            ),
             do: owner.index
 
       assert duplicated != [], "the loaded native program must repeat a no-progress decoder"
@@ -1610,12 +1631,18 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   defp native_decoder_program(:message), do: native_query_factory(:rows)
+
   defp native_decoder_program(:rows) do
     # Execute on an already bound cursor enters rows_recv directly with the
     # preceding ReadyForQuery's empty buffer, before its first real socket read.
     run = ConnectionNative.observe_cursor()
     assert run.result == [[1], [2], [3]]
-    events = run.events |> Enum.with_index() |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
     native = NativeTransport.build(%{events: events}, run.native_history)
     streams = ConnectionReads.build(native)
     decoders = ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
@@ -1671,10 +1698,18 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   defp assert_query_factory_path(captured, shape)
-       when shape in [:enum_reload, :composite_reload, :domain_reload, :domain_array_reload,
-                      :composite_domain_reload, :composite_domain_array_reload,
-                      :nested_composite_domain_reload, :nested_composite_array_domain_reload,
-                      :array_composite_domain_reload, :array_nested_composite_array_domain_reload] do
+       when shape in [
+              :enum_reload,
+              :composite_reload,
+              :domain_reload,
+              :domain_array_reload,
+              :composite_domain_reload,
+              :composite_domain_array_reload,
+              :nested_composite_domain_reload,
+              :nested_composite_array_domain_reload,
+              :array_composite_domain_reload,
+              :array_nested_composite_array_domain_reload
+            ] do
     assert captured.run.result == :ok
 
     for mfa <- [{Postgrex.Protocol, :reload_spawn, 5}, {Postgrex.Protocol, :reload_init, 5}] do
@@ -1899,7 +1934,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         kind: :element,
         size: size,
         position: position,
-        total?: function == :fetch_type_info
+        total?: unquote(function == :fetch_type_info)
       }
 
       captured =

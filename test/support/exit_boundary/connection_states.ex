@@ -972,6 +972,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
        when function in @owners do
     argument =
       if function in @last_state and function != :ping, do: length(arguments) - 1, else: 0
+
     protocol = Enum.at(arguments, argument)
     frames = Map.get(state.frames, pid, [])
 
@@ -1399,9 +1400,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          {_, :call, {_, _, [query | _]}} <- callback.event,
          %Postgrex.Query{} <- query do
       state =
-        helper_copy(state, source, [2, 2, 2], actual_query, query, {:callback_query, callback.index})
+        helper_copy(
+          state,
+          source,
+          [2, 2, 2],
+          actual_query,
+          query,
+          {:callback_query, callback.index}
+        )
 
-      comment = if {Postgrex.Protocol, :reload_spawn, 5} in source.stack, do: nil, else: options[:comment]
+      comment =
+        if {Postgrex.Protocol, :reload_spawn, 5} in source.stack, do: nil, else: options[:comment]
+
       prepare_comment(state, source, rest, comment, callback.index)
     else
       _ -> failure(state, source, :state_helper_query_origin)
@@ -1512,7 +1522,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          %{source: %{mfa: {Postgrex.Protocol, :ping, arity}} = callback},
          _version,
          messages
-       ) when arity in [1, 2] do
+       )
+       when arity in [1, 2] do
     helper_copy(state, source, [2, 2, 1], messages, msg_sync(), {:ping_sync, callback.index})
   end
 
@@ -1572,7 +1583,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          %{source: %{mfa: {Postgrex.Protocol, function, 5}} = owner},
          _version,
          messages
-       ) when function in [:reload_flushed, :reload_ready, :reload_transaction] do
+       )
+       when function in [:reload_flushed, :reload_ready, :reload_transaction] do
     context = Map.fetch!(state.reload_spawns, source.pid)
     close = msg_close(type: :statement, name: context.query.name)
 
@@ -1631,7 +1643,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp reload_query_messages(state, source, actual, context) do
-
     parameters =
       for {_index, %{source: call, returned: returned}} <- state.pairs,
           call.pid == source.pid and call.index > context.source.index and
@@ -1880,6 +1891,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       ]
 
       messages = prepare_head(function, status.mode, query.name) ++ messages
+
       helper_copy(
         state,
         source,

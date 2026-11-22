@@ -282,6 +282,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     :loop_timeouts_update
   ]
 
+  defp pair_occurrences(pairs),
+    do: pairs |> Map.values() |> Enum.group_by(&{&1.source.pid, &1.source.mfa})
+
   # Native sys:get_state roots precede observation. Gen_statem retains its old
   # StateData while a callback's next StateData is carried separately; only
   # loop_done (or the stopping branch) commits that independently built version.
@@ -319,6 +322,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       terms: [],
       errors: [],
       pairs: pairs,
+      pair_index: pair_occurrences(pairs),
       transport: transport,
       events: events,
       records: %{},
@@ -1346,8 +1350,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp program_stop(state, source, context) do
     stack =
-      state.pairs
-      |> Map.values()
+      state.pair_index
+      |> Map.get({source.pid, {:erlang, :process_info, 2}}, [])
       |> Enum.filter(fn pair ->
         pair.source.pid == source.pid and pair.source.index > context.origin and
           pair.returned.index < source.index and
@@ -1670,8 +1674,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp machine_timer_pairs(state, source, first) do
-    state.pairs
-    |> Map.values()
+    [
+      {:erlang, :start_timer, 4},
+      {:erlang, :cancel_timer, 1},
+      {:erlang, :make_ref, 0}
+    ]
+    |> Enum.flat_map(&Map.get(state.pair_index, {source.pid, &1}, []))
     |> Enum.filter(fn pair ->
       pair.source.pid == source.pid and pair.source.index > first and
         pair.returned.index < source.index and
@@ -1873,6 +1881,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   # only their independently bound receipts; every other arrival stays FIFO for
   # loop_msg. Receipt selection never grants an observation allowance.
   defp call_receipts(events, pairs) do
+    occurrences = pair_occurrences(pairs)
+    arrivals = Enum.group_by(events, &{&1.pid, elem(&1.event, 1)})
+
     pairs
     |> Map.values()
     |> Enum.flat_map(fn
@@ -1881,7 +1892,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         returned: %{event: {_, :return_from, _, result}} = returned
       }
       when module in [:gen_statem, :gen_server] and is_pid(target) ->
-        call_receipt(events, pairs, source, returned, pid, target, request, result)
+        call_receipt(arrivals, occurrences, source, returned, pid, target, request, result)
 
       _ ->
         []
@@ -1891,7 +1902,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp call_receipt(events, pairs, source, returned, pid, target, request, result) do
     requests =
-      Enum.filter(events, fn
+      Enum.filter(Map.get(events, {pid, :send}, []), fn
         %{event: {^pid, :send, {:"$gen_call", {^pid, _tag}, ^request}, ^target}} = sent ->
           sent.index > source.index and sent.index < returned.index
 
@@ -1913,12 +1924,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp call_monitor?(pairs, source, sent, pid, target, tag) do
-    Enum.any?(pairs, fn
-      {_,
-       %{
-         source: %{event: {^pid, :call, {:erlang, :monitor, arguments}}} = monitor,
-         returned: %{event: {_, :return_from, _, ref}} = returned
-       }}
+    candidates =
+      Map.get(pairs, {pid, {:erlang, :monitor, 2}}, []) ++
+        Map.get(pairs, {pid, {:erlang, :monitor, 3}}, [])
+
+    Enum.any?(candidates, fn
+      %{
+        source: %{event: {^pid, :call, {:erlang, :monitor, arguments}}} = monitor,
+        returned: %{event: {_, :return_from, _, ref}} = returned
+      }
       when is_reference(ref) ->
         expected =
           case tag do
@@ -1942,7 +1956,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       end
 
     replies =
-      Enum.filter(events, fn
+      Enum.filter(Map.get(events, {target, :send}, []), fn
         %{event: {^target, :send, {^tag, _reply}, ^destination}} = reply ->
           reply.index > sent.index and reply.index < returned.index
 
@@ -1963,7 +1977,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     {_, :send, message, _} = reply.event
 
     receipts =
-      for %{event: {^pid, :receive, {^tag, _value}}} = received <- events,
+      for %{event: {^pid, :receive, {^tag, _value}}} = received <- Map.get(events, {pid, :receive}, []),
           received.index > reply.index and received.index < returned.index,
           do: received
 
@@ -2370,7 +2384,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         socket = state.owners[source.pid].family.socket
 
         writes =
-          Enum.filter(Map.values(state.pairs), fn pair ->
+          Enum.filter(Map.get(state.pair_index, {caller, {:ssl, :send, 2}}, []), fn pair ->
             pair.source.pid == caller and pair.source.mfa == {:ssl, :send, 2} and
               pair.source.index < source.index and pair.returned.index > source.index
           end)
@@ -2627,10 +2641,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp sender_copies(events, pairs, binding) do
+    parents = Map.get(pair_occurrences(pairs), {binding.sender, {:tls_sender, :connection, 3}}, [])
+
     Enum.reduce(events, %{terms: [], errors: []}, fn
       %{event: {pid, :call, {:tls_sender, :send_application_data, arguments}}} = source, state
       when pid == binding.sender ->
-        sender_copy(state, source, arguments, pairs)
+        sender_copy(state, source, arguments, parents)
 
       _source, state ->
         state
@@ -2640,7 +2656,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp sender_copy(state, source, [data, from, :connection, actual], pairs) do
     parent =
       pairs
-      |> Map.values()
       |> Enum.filter(fn pair ->
         pair.source.pid == source.pid and pair.source.mfa == {:tls_sender, :connection, 3} and
           pair.source.index < source.index and pair.returned.index > source.index
