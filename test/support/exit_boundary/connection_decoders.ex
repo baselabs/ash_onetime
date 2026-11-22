@@ -72,6 +72,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       _ ->
         []
     end)
+    |> Enum.filter(&(Function.info(&1, :type) == {:type, :local}))
     |> Map.new(fn callback ->
       info = Map.new(Function.info(callback))
       identity = {info.module, info.name, info.arity, info.new_uniq, info.index}
@@ -601,7 +602,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
          %{event: {pid, :call, {Postgrex.Protocol, function, args}}} = e,
          state
        )
-       when function in [:msg_recv, :rows_recv, :handle_prepare, :handle_execute] do
+       when function in [
+              :msg_recv,
+              :rows_recv,
+              :handle_prepare,
+              :handle_execute,
+              :handle_declare,
+              :handle_fetch
+            ] do
     protocol = List.last(args)
     protocol = if function in [:msg_recv, :rows_recv], do: hd(args), else: protocol
 
@@ -609,10 +617,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       %{sock: {:gen_tcp, port}} ->
         state = put_in(state.ports[pid], port)
 
-        state = if function == :handle_execute, do: reset_rows(state, e, port), else: state
+        starts_rows? = function in [:handle_execute, :handle_fetch]
+        state = if starts_rows?, do: reset_rows(state, e, port), else: state
 
         state =
-          if function == :handle_execute,
+          if starts_rows?,
             do: executing(state, e, port, hd(args)),
             else: state
 

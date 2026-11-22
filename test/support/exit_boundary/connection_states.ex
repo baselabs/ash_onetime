@@ -1078,6 +1078,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       when function in [:parse_describe_flush, :close_parse_describe_flush] ->
         prepare_messages(state, source, frame, messages)
 
+      %{source: %{mfa: {Postgrex.Protocol, :error_flushed, 4}} = owner} ->
+        helper_copy(state, source, [2, 2, 1], messages, [msg_sync()], {:error_sync, owner.index})
+
+      %{source: %{mfa: {Postgrex.Protocol, :rollback_flushed, 4}} = owner} ->
+        statement = "ROLLBACK TO SAVEPOINT postgrex_query;RELEASE SAVEPOINT postgrex_query"
+        expected = [msg_sync(), msg_query(statement: statement)]
+        helper_copy(state, source, [2, 2, 1], messages, expected, {:error_rollback, owner.index})
+
       _ ->
         state
     end
@@ -1385,7 +1393,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp helper_return(state, source, frame, {:error, actual, _protocol})
-       when elem(source.mfa, 1) == :error_ready do
+       when elem(source.mfa, 1) in [:error_ready, :error_flushed, :rollback_flushed] do
     case Map.fetch(state.term_values, {frame.source.index, [2, 2, 2]}) do
       {:ok, %{value: %Postgrex.Error{} = error, origin: origin}} ->
         expected = %{error | connection_id: frame.input.connection_id}

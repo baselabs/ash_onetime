@@ -1408,10 +1408,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     }
   end
 
-  for shape <- [:rows, :none, :prepare_error, :external_notify] do
+  for shape <- [
+        :rows,
+        :none,
+        :prepare_error,
+        :external_notify,
+        :enum_reload,
+        :composite_reload,
+        :unsupported_type
+      ] do
     @tag :connection_streams
     test "Connection streams: fresh native #{shape} preparation binds every helper return coordinate" do
       captured = native_query_factory(unquote(shape))
+      assert_query_factory_path(captured, unquote(shape))
       assert captured.native.errors == []
       assert captured.streams.errors == []
       assert captured.decoders.errors == []
@@ -1431,6 +1440,99 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
         assert unbound == [], "every fresh preparation helper coordinate needs its own origin"
       end
+    end
+  end
+
+  defp assert_query_factory_path(captured, shape)
+       when shape in [:enum_reload, :composite_reload] do
+    assert captured.run.result == :ok
+
+    for mfa <- [{Postgrex.Protocol, :reload_spawn, 5}, {Postgrex.Protocol, :reload_init, 5}] do
+      assert Enum.any?(captured.events, &(&1.mfa == mfa and elem(&1.event, 1) == :call))
+    end
+
+    assert Enum.any?(captured.events, fn
+             %{event: {_, :return_from, {Postgrex.Types, :fetch, 2}, {:error, nil, _}}} -> true
+             _ -> false
+           end)
+  end
+
+  defp assert_query_factory_path(captured, :unsupported_type) do
+    assert captured.run.result == :unsupported_type
+
+    assert Enum.any?(captured.events, fn
+             %{
+               event:
+                 {_, :return_from, {Postgrex.Types, :fetch, 2},
+                  {:error, %Postgrex.TypeInfo{}, _}}
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+  end
+
+  defp assert_query_factory_path(captured, :prepare_error),
+    do: assert(captured.run.result == :prepare_error)
+
+  defp assert_query_factory_path(captured, _shape), do: assert(captured.run.result == :ok)
+
+  @tag :connection_streams
+  test "Connection streams: native prepare cache hits, reprepare and invalidation retain origins" do
+    run = ConnectionNative.observe_prepare_cycle()
+    assert {first, cached, reparsed, renewed} = run.result
+    assert is_reference(first) and is_reference(renewed)
+    assert first == cached and first == reparsed
+    assert first != renewed
+    assert_native_caller_census(run)
+  end
+
+  defp assert_native_caller_census(run) do
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    native = NativeTransport.build(%{events: events}, run.native_history)
+    assert native.errors == []
+    streams = ConnectionReads.build(native)
+    assert streams.errors == []
+    decoders = ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
+
+    for error <- decoders.errors do
+      IO.puts("CONNECTION_CALLER_DECODER: " <> Diagnostics.render(error))
+    end
+
+    assert decoders.errors == []
+
+    states =
+      ConnectionStates.build(
+        %{events: events},
+        native,
+        decoders,
+        run.native_history,
+        {:initial, run.initial_state}
+      )
+
+    for error <- states.errors do
+      IO.puts("CONNECTION_CALLER_STATE: " <> Diagnostics.render(error))
+    end
+
+    assert states.errors == []
+
+    for {copies, covered} <- [
+          {native_helper_buffers(events), states.buffers},
+          {native_helper_terms(events), states.terms}
+        ] do
+      coordinates = MapSet.new(covered, &{&1.index, &1.path})
+      unbound = Enum.reject(copies, &MapSet.member?(coordinates, {&1.index, &1.path}))
+
+      for copy <- unbound do
+        IO.puts("CONNECTION_CALLER_COORDINATE_UNBOUND: " <> Diagnostics.render(copy))
+      end
+
+      assert unbound == [], "every native caller helper coordinate needs its own origin"
     end
   end
 
@@ -1456,42 +1558,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              end)
     end
 
-    native = NativeTransport.build(%{events: events}, run.native_history)
-    assert native.errors == []
-    streams = ConnectionReads.build(native)
-    assert streams.errors == []
-    decoders = ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
-
-    for error <- decoders.errors do
-      IO.puts("CONNECTION_CURSOR_DECODER: " <> Diagnostics.render(error))
-    end
-
-    assert decoders.errors == []
-
-    states =
-      ConnectionStates.build(
-        %{events: events},
-        native,
-        decoders,
-        run.native_history,
-        {:initial, run.initial_state}
-      )
-
-    for error <- states.errors do
-      IO.puts("CONNECTION_CURSOR_STATE: " <> Diagnostics.render(error))
-    end
-
-    assert states.errors == []
-    covered = MapSet.new(states.terms, &{&1.index, &1.path})
-
-    unbound =
-      Enum.reject(native_helper_terms(events), &MapSet.member?(covered, {&1.index, &1.path}))
-
-    for copy <- unbound do
-      IO.puts("CONNECTION_CURSOR_COORDINATE_UNBOUND: " <> Diagnostics.render(copy))
-    end
-
-    assert unbound == [], "every cursor helper coordinate needs its own origin"
+    assert_native_caller_census(run)
   end
 
   for {function, arity, size, position} <- [{:describe, 7, 4, 3}, {:recv_describe, 4, 7, 6}] do
@@ -1559,7 +1626,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       arity = unquote(arity)
       size = unquote(size)
       position = unquote(position)
-      target = %{kind: :element, size: size, position: position}
+      target = %{
+        kind: :element,
+        size: size,
+        position: position,
+        total?: function == :fetch_type_info
+      }
 
       captured =
         ComparatorMutants.with_postgrex_outputs(
@@ -4527,50 +4599,59 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert NativeTransport.build(%{events: events}, %{}, [run.tls_binding.transport]).errors == []
   end
 
-  @tag :connection_streams
-  test "Connection streams: TLS machine roots retain queue and timer metadata" do
-    run = ConnectionNative.observe_tls()
-    assert run.result == []
-    machines = Map.get(run.tls_binding, :machines)
-    assert is_map(machines), "TLS_MACHINE_HISTORY_ORIGIN_WITNESS"
-    assert Enum.sort(Map.keys(machines)) == Enum.sort(Map.keys(run.tls_binding.states))
+  for mode <- [nil, :debug] do
+    @tag :connection_streams
+    test "Connection streams: TLS #{mode} machine roots retain queue and timer metadata" do
+      run = ConnectionNative.observe_tls(unquote(mode))
+      assert run.result == []
+      machines = Map.get(run.tls_binding, :machines)
+      assert is_map(machines), "TLS_MACHINE_HISTORY_ORIGIN_WITNESS"
+      assert Enum.sort(Map.keys(machines)) == Enum.sort(Map.keys(run.tls_binding.states))
 
-    for {pid, %{params: params, state: state}} <- machines do
-      assert tuple_size(params) == 7
-      assert elem(params, 0) == :params
-      assert tuple_size(state) == 6
-      assert elem(state, 0) == :state
-      assert elem(state, 1) === Map.fetch!(run.tls_binding.states, pid)
-      assert is_list(elem(state, 2))
-      assert is_map(elem(state, 3))
-      assert is_list(elem(state, 4))
-      assert is_boolean(elem(state, 5))
+      assert_machine_debug(machines, unquote(mode))
+
+      for {pid, %{params: params, state: state}} <- machines do
+        assert tuple_size(params) == 7
+        assert elem(params, 0) == :params
+        assert tuple_size(state) == 6
+        assert elem(state, 0) == :state
+        assert elem(state, 1) === Map.fetch!(run.tls_binding.states, pid)
+        assert is_list(elem(state, 2))
+        assert is_map(elem(state, 3))
+        assert is_list(elem(state, 4))
+        assert is_boolean(elem(state, 5))
+      end
+
+      events =
+        run.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+      native = ConnectionTls.build(%{events: events}, run.tls_binding)
+      assert native.errors == []
+      covered = MapSet.new(native.terms, &{&1.index, &1.path})
+
+      unbound =
+        for %{event: {pid, :call, {:gen_statem, function, arguments}}} = source <- events,
+            Map.has_key?(machines, pid),
+            machine_program_function?(function),
+            {argument, position} <- Enum.with_index(arguments),
+            path = [2, 2, position],
+            not native_argument_bound?(covered, source.index, path, argument),
+            do: %{index: source.index, mfa: source.mfa, path: path}
+
+      for copy <- unbound do
+        IO.puts("CONNECTION_MACHINE_ARGUMENT_UNBOUND: " <> Diagnostics.render(copy))
+      end
+
+      assert unbound == [], "every native machine temporary argument needs its own program origin"
     end
-
-    events =
-      run.events
-      |> Enum.with_index()
-      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
-
-    native = ConnectionTls.build(%{events: events}, run.tls_binding)
-    assert native.errors == []
-    covered = MapSet.new(native.terms, &{&1.index, &1.path})
-
-    unbound =
-      for %{event: {pid, :call, {:gen_statem, function, arguments}}} = source <- events,
-          Map.has_key?(machines, pid),
-          machine_program_function?(function),
-          {argument, position} <- Enum.with_index(arguments),
-          path = [2, 2, position],
-          not native_argument_bound?(covered, source.index, path, argument),
-          do: %{index: source.index, mfa: source.mfa, path: path}
-
-    for copy <- unbound do
-      IO.puts("CONNECTION_MACHINE_ARGUMENT_UNBOUND: " <> Diagnostics.render(copy))
-    end
-
-    assert unbound == [], "every native machine temporary argument needs its own program origin"
   end
+
+  defp assert_machine_debug(machines, :debug),
+    do: assert(Enum.all?(machines, fn {_pid, machine} -> machine.debug != [] end))
+
+  defp assert_machine_debug(_machines, _mode), do: :ok
 
   defp machine_program_function?(function),
     do:
@@ -4607,6 +4688,28 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       {:loop_state_callback, 11} => [1, 3, 5, 6, 7, 8, 9, 10],
       {:loop_state_callback_result, 11} => [1, 3, 5, 6, 7, 8, 9, 10],
       {:loop_actions_list, 12} => [1, 3, 5, 6, 7, 8, 9, 10, 11]
+    }
+
+    assert :ok == ComparatorMutants.machine_program_control(targets)
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native machine termination retains class, reason, stack and replies" do
+    targets = %{
+      {:reply_then_terminate, 8} => [0, 1, 2, 4, 6, 7],
+      {:do_reply_then_terminate, 8} => [0, 1, 2, 4, 6, 7],
+      {:terminate, 7} => [0, 1, 2, 4, 6]
+    }
+
+    assert :ok == ComparatorMutants.machine_program_control(targets)
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native machine timeout arguments retain their action program" do
+    targets = %{
+      {:loop_timeouts, 12} => [1, 3, 5, 6, 7, 8, 9, 10, 11],
+      {:loop_timeouts, 16} => [1, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      {:loop_timeouts_cancel, 13} => [1, 3, 5, 6, 7, 8, 9, 10, 11, 12]
     }
 
     assert :ok == ComparatorMutants.machine_program_control(targets)

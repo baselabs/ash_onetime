@@ -1044,15 +1044,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     {:ok, ^module, mutant, mutant_warnings} =
       :compile.forms(forms, [:binary, :return, :debug_info])
 
-    if mutant_warnings !== original_warnings do
-      for {file, warnings} <- mutant_warnings,
-          baseline = List.keyfind(original_warnings, file, 0, {file, []}) |> elem(1),
-          warning <- warnings -- baseline do
-        IO.puts("NATIVE_OWNER_ADDED_WARNING: " <> Diagnostics.render(warning))
-      end
-    end
-
-    ^original_warnings = mutant_warnings
+    owner_warnings!(original_warnings, mutant_warnings)
 
     sticky? = :code.is_sticky(module)
     require_owner_idle!(module)
@@ -1086,6 +1078,19 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   defp owner_ready(_module, _loaded?), do: :ok
+
+  defp owner_warnings!(original, actual) do
+    if actual !== original do
+      for {file, warnings} <- actual,
+          baseline = List.keyfind(original, file, 0, {file, []}) |> elem(1),
+          warning <- warnings -- baseline do
+        IO.puts("NATIVE_OWNER_ADDED_WARNING: " <> Diagnostics.render(warning))
+      end
+    end
+
+    ^original = actual
+  end
+
   defp require_owner_idle!(:gen_statem), do: require_machine_idle!()
   defp require_owner_idle!(_module), do: :ok
 
@@ -1286,13 +1291,23 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     output =
       if operation == :corrupt, do: List.replace_at(fields, target.position, marker), else: fields
 
-    other = {:var, location, String.to_atom("AshOnetimeElementOther#{site}")}
+    if Map.get(target, :total?, false) do
+      # Every normal return in this pinned codomain has this tuple size. A
+      # catch-all is unreachable after Core folding; bind the whole result.
+      {:block, location,
+       [
+         {:match, location, {:tuple, location, input}, expression},
+         {:tuple, location, output}
+       ]}
+    else
+      other = {:var, location, String.to_atom("AshOnetimeElementOther#{site}")}
 
-    {:case, location, expression,
-     [
-       {:clause, location, [{:tuple, location, input}], [], [{:tuple, location, output}]},
-       {:clause, location, [other], [], [other]}
-     ]}
+      {:case, location, expression,
+       [
+         {:clause, location, [{:tuple, location, input}], [], [{:tuple, location, output}]},
+         {:clause, location, [other], [], [other]}
+       ]}
+    end
   end
 
   defp helper_output_case(expression, location, %{kind: :factory}, site, :corrupt) do

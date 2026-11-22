@@ -114,6 +114,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           protocol = connect_tls(corruption)
           {:ssl, socket} = protocol.sock
           binding = ConnectionTls.bind(socket)
+          binding = tls_debug(binding, corruption)
           if corruption == :fragmented, do: :ok = :inet.setopts(binding.port, buffer: 1024)
           {binding, checked, other} = tls_families(binding, corruption)
           send(observer, {tag, binding})
@@ -156,14 +157,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
+  defp tls_debug(binding, :debug) do
+    for pid <- [binding.owner, binding.sender], do: :ok = :sys.log(pid, true)
+    ConnectionTls.bind(binding.socket)
+  end
+
+  defp tls_debug(binding, _corruption), do: binding
+
   defp tls_families(binding, corruption) when corruption in [:binding, :workers] do
     other = connect_tls()
     other_binding = ConnectionTls.bind(elem(other.sock, 1))
 
     checked =
       case corruption do
-        :binding -> %{other_binding | socket: binding.socket}
-        :workers -> %{binding | supervisor: other_binding.supervisor, sender: other_binding.sender}
+        :binding ->
+          %{other_binding | socket: binding.socket}
+
+        :workers ->
+          %{binding | supervisor: other_binding.supervisor, sender: other_binding.sender}
       end
 
     {Map.put(binding, :families, [binding, other_binding]), checked, other}
@@ -353,7 +364,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     run =
       ExitBoundary.observe(
         fn ->
-          protocol = connect(:named)
+          protocol = query_factory_environment(connect(:named), shape)
           send(observer, {tag, %{self() => %{protocol: protocol}}})
           protocol
         end,
@@ -367,18 +378,30 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           try do
             case Postgrex.Protocol.handle_prepare(query, query_factory_options(shape), protocol) do
               {:ok, %Postgrex.Query{}, %Postgrex.Protocol{}}
-              when shape in [:rows, :none, :external_notify] ->
+              when shape in [:rows, :none, :external_notify, :enum_reload, :composite_reload] ->
                 :ok
 
               {:error, %Postgrex.Error{postgres: %{code: :syntax_error}}, %Postgrex.Protocol{}}
               when shape == :prepare_error ->
                 :prepare_error
+
+              {:error, %Postgrex.QueryError{}, %Postgrex.Protocol{}}
+              when shape == :unsupported_type ->
+                :unsupported_type
             end
           after
             :ok = module.close(socket)
           end
         end,
-        %{host: [], callbacks: []}
+        %{
+          host: [],
+          callbacks: [],
+          frames: [
+            {Postgrex.Protocol, :reload_spawn, 5},
+            {Postgrex.Protocol, :reload_init, 5},
+            {Postgrex.TypeServer, :fetch, 1}
+          ]
+        }
       )
 
     receive do
@@ -393,10 +416,86 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp query_factory_statement(:none), do: "SET application_name TO 'ash_onetime_native_prepare'"
   defp query_factory_statement(:prepare_error), do: "SELECT ("
 
+  defp query_factory_statement(:enum_reload),
+    do: "SELECT 'native'::pg_temp.ash_onetime_native_enum AS connection_stream_probe"
+
+  defp query_factory_statement(:composite_reload),
+    do: "SELECT ROW(17, 'native')::pg_temp.ash_onetime_native_composite AS connection_stream_probe"
+
+  defp query_factory_statement(:unsupported_type),
+    do: "SELECT NULL::pg_node_tree AS connection_stream_probe"
+
+  defp query_factory_environment(protocol, :enum_reload) do
+    {:ok, _, protocol} =
+      Postgrex.Protocol.handle_simple(
+        "CREATE TYPE pg_temp.ash_onetime_native_enum AS ENUM ('native')",
+        [],
+        protocol
+      )
+
+    protocol
+  end
+
+  defp query_factory_environment(protocol, :composite_reload) do
+    {:ok, _, protocol} =
+      Postgrex.Protocol.handle_simple(
+        "CREATE TYPE pg_temp.ash_onetime_native_composite AS (number int4, label text)",
+        [],
+        protocol
+      )
+
+    protocol
+  end
+
+  defp query_factory_environment(protocol, _shape), do: protocol
+
   defp query_factory_options(:external_notify), do: [notify: &__MODULE__.ignore_notification/2]
   defp query_factory_options(_shape), do: []
 
   def ignore_notification(_channel, _payload), do: :ok
+
+  def observe_prepare_cycle do
+    observer = self()
+    tag = make_ref()
+
+    run =
+      ExitBoundary.observe(
+        fn ->
+          protocol = connect(:named)
+          send(observer, {tag, %{self() => %{protocol: protocol}}})
+          protocol
+        end,
+        fn %{sock: {module, socket}} = protocol ->
+          query = %Postgrex.Query{
+            name: "native_prepare_cycle",
+            statement: query_factory_statement(:rows),
+            cache: :statement
+          }
+
+          options = [postgrex_prepare: true]
+
+          try do
+            {:ok, first, protocol} = Postgrex.Protocol.handle_prepare(query, options, protocol)
+            {:ok, cached, protocol} = Postgrex.Protocol.handle_prepare(query, options, protocol)
+            {:ok, reparsed, protocol} = Postgrex.Protocol.handle_prepare(first, options, protocol)
+            {:ok, %Postgrex.Result{}, protocol} =
+              Postgrex.Protocol.handle_close(first, [], protocol)
+
+            {:ok, renewed, _protocol} = Postgrex.Protocol.handle_prepare(query, options, protocol)
+            {first.ref, cached.ref, reparsed.ref, renewed.ref}
+          after
+            :ok = module.close(socket)
+          end
+        end,
+        %{host: [], callbacks: []}
+      )
+
+    receive do
+      {^tag, historical} -> Map.put(run, :native_history, historical)
+    after
+      0 -> raise "native prepare-cycle history was not captured"
+    end
+  end
 
   def observe_cursor do
     observer = self()
@@ -435,7 +534,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
             {:ok, %Postgrex.Result{}, protocol} =
               Postgrex.Protocol.handle_deallocate(query, cursor, [], protocol)
 
-            {:ok, %Postgrex.Result{}, protocol} = Postgrex.Protocol.handle_close(query, [], protocol)
+            {:ok, %Postgrex.Result{}, protocol} =
+              Postgrex.Protocol.handle_close(query, [], protocol)
+
             {:ok, %Postgrex.Result{}, _protocol} = Postgrex.Protocol.handle_commit([], protocol)
 
             DBConnection.Query.decode(query, first, []).rows ++
