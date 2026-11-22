@@ -1,7 +1,6 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Root
-  alias AshOnetime.Test.ExitBoundary.Compiled
 
   import Postgrex.Messages,
     only: [
@@ -174,7 +173,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
            pair_returned(state, source) do
       state = exact(state, source, :state_status_factory_input, actual, options)
       state = factory_value(state, source, function, value, options)
-      put_in(state.factories[{callback.index, function}], %{value: factory_expected(function, options), index: source.index})
+
+      put_in(state.factories[{callback.index, function}], %{
+        value: factory_expected(state, function, options),
+        index: source.index
+      })
     else
       _ -> failure(state, source, :state_status_factory_origin)
     end
@@ -189,12 +192,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
         expected =
           case {module, length(arguments), progress.remaining} do
-            {Postgrex.Types, 2, [oid | _]} -> [oid, input.types]
-            {Postgrex.Protocol, 2, _} -> [input.oids, input.types]
-            {Postgrex.Protocol, 3, _} -> [input.oids, input.types, []]
+            {Postgrex.Types, 2, [oid | _]} ->
+              [oid, input.types]
+
+            {Postgrex.Protocol, 2, _} ->
+              [input.oids, input.types]
+
+            {Postgrex.Protocol, 3, _} ->
+              [input.oids, input.types, []]
+
             {Postgrex.Protocol, 4, _} ->
               [progress.remaining, input.types, progress.infos, progress.reloads]
-            _ -> :no_type_origin
+
+            _ ->
+              :no_type_origin
           end
 
         if expected == :no_type_origin do
@@ -202,46 +213,85 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         else
           Enum.with_index(expected)
           |> Enum.reduce(state, fn {value, position}, state ->
-            helper_copy(state, source, [2, 2, position], Enum.at(arguments, position), value,
-              {:type_factory, first, progress.origins})
+            helper_copy(
+              state,
+              source,
+              [2, 2, position],
+              Enum.at(arguments, position),
+              value,
+              {:type_factory, first, progress.origins}
+            )
           end)
         end
 
-      :error -> failure(state, source, :state_type_factory_origin)
+      :error ->
+        failure(state, source, :state_type_factory_origin)
     end
   end
 
-  defp factory_event(%{event: {_, :return_from, {Postgrex.Protocol, :fetch_type_info, _}, actual}} = source, state) do
+  defp factory_event(
+         %{event: {_, :return_from, {Postgrex.Protocol, :fetch_type_info, _}, actual}} = source,
+         state
+       ) do
     case type_context(state, source) do
       {:ok, input, first} ->
         progress = type_progress(state, source, input, first)
+
         expected =
           case progress.error do
             {%Postgrex.TypeInfo{} = info, module} ->
               {:error, Postgrex.QueryError.exception(Postgrex.Utils.type_msg(info, module))}
+
             nil ->
               if MapSet.size(progress.reloads) == 0,
                 do: {:ok, Enum.reverse(progress.infos)},
                 else: {:reload, progress.reloads}
-            :invalid -> :no_type_origin
+
+            :invalid ->
+              :no_type_origin
           end
 
         if expected == :no_type_origin,
           do: failure(state, source, :state_type_factory_origin),
-          else: helper_copy(state, source, [3], actual, expected, {:type_factory_result, first, progress.origins})
+          else:
+            helper_copy(
+              state,
+              source,
+              [3],
+              actual,
+              expected,
+              {:type_factory_result, first, progress.origins}
+            )
 
-      :error -> failure(state, source, :state_type_factory_origin)
+      :error ->
+        failure(state, source, :state_type_factory_origin)
     end
   end
 
-  defp factory_event(%{event: {_, :call, {Postgrex.Protocol, :columns, [actual]}}} = source, state) do
+  defp factory_event(
+         %{event: {_, :call, {Postgrex.Protocol, :columns, [actual]}}} = source,
+         state
+       ) do
     case Map.fetch(state.decoders.query_inputs, source.index) do
-      {:ok, input} -> helper_copy(state, source, [2, 2, 0], actual, input.fields, {:row_description, input.origin})
-      :error -> failure(state, source, :state_helper_query_origin)
+      {:ok, input} ->
+        helper_copy(
+          state,
+          source,
+          [2, 2, 0],
+          actual,
+          input.fields,
+          {:row_description, input.origin}
+        )
+
+      :error ->
+        failure(state, source, :state_helper_query_origin)
     end
   end
 
-  defp factory_event(%{event: {_, :return_from, {Postgrex.Protocol, :columns, 1}, actual}} = source, state) do
+  defp factory_event(
+         %{event: {_, :return_from, {Postgrex.Protocol, :columns, 1}, actual}} = source,
+         state
+       ) do
     with %{source: call} <- pair_returned(state, source),
          {:ok, input} <- Map.fetch(state.decoders.query_inputs, call.index) do
       expected = {input.result_oids, input.columns, input.result_mods}
@@ -254,19 +304,28 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp factory_event(_source, state), do: state
 
   defp type_context(state, source) do
-    frame = Enum.find(Map.get(state.frames, source.pid, []), fn frame ->
-      elem(frame.source.mfa, 1) in [:describe_params, :describe_result]
-    end)
+    frame =
+      Enum.find(Map.get(state.frames, source.pid, []), fn frame ->
+        elem(frame.source.mfa, 1) in [:describe_params, :describe_result]
+      end)
 
     case frame do
       %{source: owner} ->
         case Map.fetch(state.decoders.query_inputs, owner.index) do
           {:ok, input} ->
-            oids = if elem(owner.mfa, 1) == :describe_params, do: input.param_oids, else: input.result_oids
+            oids =
+              if elem(owner.mfa, 1) == :describe_params,
+                do: input.param_oids,
+                else: input.result_oids
+
             {:ok, %{oids: oids, types: input.types}, owner.index}
-          :error -> :error
+
+          :error ->
+            :error
         end
-      nil -> :error
+
+      nil ->
+        :error
     end
   end
 
@@ -275,35 +334,44 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     state.pairs
     |> Map.values()
-    |> Enum.filter(&(&1.source.pid == source.pid and &1.source.index > first and
-        &1.returned.index < source.index and &1.source.mfa == {Postgrex.Types, :fetch, 2}))
+    |> Enum.filter(
+      &(&1.source.pid == source.pid and &1.source.index > first and
+          &1.returned.index < source.index and &1.source.mfa == {Postgrex.Types, :fetch, 2})
+    )
     |> Enum.sort_by(& &1.source.index)
     |> Enum.reduce(initial, fn pair, progress ->
       case {progress.remaining, pair.returned.event} do
         {[oid | remaining], {_, :return_from, _, result}} ->
-          progress = %{progress | remaining: remaining, origins: progress.origins ++ [pair.returned.index]}
+          progress = %{
+            progress
+            | remaining: remaining,
+              origins: progress.origins ++ [pair.returned.index]
+          }
+
           case result do
             {:ok, info} -> %{progress | infos: [info | progress.infos]}
             {:error, nil, _module} -> %{progress | reloads: MapSet.put(progress.reloads, oid)}
             {:error, %Postgrex.TypeInfo{} = info, module} -> %{progress | error: {info, module}}
             _ -> %{progress | error: :invalid}
           end
-        _ -> %{progress | error: :invalid}
+
+        _ ->
+          %{progress | error: :invalid}
       end
     end)
   end
 
   defp factory_value(state, source, function, actual, options) do
-    expected = factory_expected(function, options)
+    expected = factory_expected(state, function, options)
     actual = factory_observed(actual, expected)
     exact(state, source, :state_status_factory_value, actual, expected)
   end
 
-  defp factory_expected(:mode, options), do: options[:mode] || :transaction
+  defp factory_expected(_state, :mode, options), do: options[:mode] || :transaction
 
-  defp factory_expected(:notify, options) do
+  defp factory_expected(state, :notify, options) do
     options[:notify] ||
-      {:compiled_notify, Compiled.identity(Postgrex.Protocol, :"-notify/1-fun-0-", 2), []}
+      {:compiled_notify, Map.fetch!(state.decoders.factory_identities, :notify), []}
   end
 
   defp factory_observed(actual, {:compiled_notify, _identity, _environment})
@@ -808,29 +876,67 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
        when function in [:describe, :describe_params, :describe_result, :redescribe] do
     case Map.fetch(state.decoders.query_inputs, source.index) do
       {:ok, input} ->
-        fields = case function do
-          :describe -> [query: input.query, param_oids: input.param_oids, result_oids: input.result_oids,
-            result_mods: input.result_mods, columns: input.columns]
-          :describe_params -> [query: input.query, param_oids: input.param_oids]
-          _ -> [query: input.query, result_oids: input.result_oids,
-            result_mods: input.result_mods, columns: input.columns]
-        end
+        fields =
+          case function do
+            :describe ->
+              [
+                query: input.query,
+                param_oids: input.param_oids,
+                result_oids: input.result_oids,
+                result_mods: input.result_mods,
+                columns: input.columns
+              ]
+
+            :describe_params ->
+              [query: input.query, param_oids: input.param_oids]
+
+            _ ->
+              [
+                query: input.query,
+                result_oids: input.result_oids,
+                result_mods: input.result_mods,
+                columns: input.columns
+              ]
+          end
 
         fields
         |> Enum.with_index(1)
         |> Enum.reduce(state, fn {{field, expected}, position}, state ->
-          helper_copy(state, source, [2, 2, position], Enum.at(arguments, position), expected,
-            {:query_constructor_input, input.root, input.origin, field})
+          helper_copy(
+            state,
+            source,
+            [2, 2, position],
+            Enum.at(arguments, position),
+            expected,
+            {:query_constructor_input, input.root, input.origin, field}
+          )
         end)
 
-      :error -> failure(state, source, :state_helper_query_origin)
+      :error ->
+        failure(state, source, :state_helper_query_origin)
     end
   end
 
-  defp helper_input(state, source, :recv_describe, [_protocol, _status, actual, _buffer], _version) do
+  defp helper_input(
+         state,
+         source,
+         :recv_describe,
+         [_protocol, _status, actual, _buffer],
+         _version
+       ) do
     case current_query_description(state, source) do
-      {:ok, input} -> helper_copy(state, source, [2, 2, 2], actual, input.param_oids, {:parameter_description, input.origin})
-      :error -> failure(state, source, :state_helper_query_origin)
+      {:ok, input} ->
+        helper_copy(
+          state,
+          source,
+          [2, 2, 2],
+          actual,
+          input.param_oids,
+          {:parameter_description, input.origin}
+        )
+
+      :error ->
+        failure(state, source, :state_helper_query_origin)
     end
   end
 
@@ -1207,8 +1313,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp helper_return(state, source, frame, result)
-       when elem(source.mfa, 1) in [:describe_params, :describe_result, :describe, :redescribe,
-         :parse_describe_flush, :close_parse_describe_flush, :handle_prepare] do
+       when elem(source.mfa, 1) in [
+              :describe_params,
+              :describe_result,
+              :describe,
+              :redescribe,
+              :parse_describe_flush,
+              :close_parse_describe_flush,
+              :handle_prepare
+            ] do
     case result do
       {:ok, actual} -> query_result_copy(state, source, frame, actual)
       {:ok, actual, _protocol} -> query_result_copy(state, source, frame, actual)
@@ -1217,7 +1330,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
-  defp helper_return(state, source, _frame, {:ok, param_oids, result_oids, result_mods, columns, _protocol, _buffer})
+  defp helper_return(
+         state,
+         source,
+         _frame,
+         {:ok, param_oids, result_oids, result_mods, columns, _protocol, _buffer}
+       )
        when elem(source.mfa, 1) == :recv_describe do
     case current_query_description(state, source) do
       {:ok, input} ->
@@ -1225,9 +1343,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         |> Enum.zip([input.param_oids, input.result_oids, input.result_mods, input.columns])
         |> Enum.with_index(1)
         |> Enum.reduce(state, fn {{actual, expected}, position}, state ->
-          helper_copy(state, source, [3, position], actual, expected, {:query_description, input.origin})
+          helper_copy(
+            state,
+            source,
+            [3, position],
+            actual,
+            expected,
+            {:query_description, input.origin}
+          )
         end)
-      :error -> failure(state, source, :state_helper_query_origin)
+
+      :error ->
+        failure(state, source, :state_helper_query_origin)
     end
   end
 
@@ -1257,15 +1384,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp helper_return(state, _source, _frame, _result), do: state
 
   defp query_result_copy(state, source, frame, actual) do
-    expected = case state.decoders.query_outputs[source.index] do
-      %{query: query} -> query
-      nil -> query_origin(state, frame)
-    end
+    expected =
+      case state.decoders.query_outputs[source.index] do
+        %{query: query} -> query
+        nil -> query_origin(state, frame)
+      end
 
     case expected do
       %Postgrex.Query{} ->
-        helper_copy(state, source, [3, 1], actual, expected, {:query_constructor, frame.source.index})
-      _ -> failure(state, source, :state_query_origin)
+        helper_copy(
+          state,
+          source,
+          [3, 1],
+          actual,
+          expected,
+          {:query_constructor, frame.source.index}
+        )
+
+      _ ->
+        failure(state, source, :state_query_origin)
     end
   end
 
@@ -1681,7 +1818,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       case state.decoders.query_outputs[source.index] do
         %{query: expected} ->
           put_in(state.described[frame.input.sock], %{query: expected, index: source.index})
-        nil -> failure(state, source, :state_query_origin)
+
+        nil ->
+          failure(state, source, :state_query_origin)
       end
     else
       state
@@ -1698,8 +1837,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       _ ->
         case state.term_values[{frame.source.index, [2, 2, 2]}] do
           %{value: %Postgrex.Query{ref: ref, types: types} = query}
-          when is_reference(ref) and types === frame.input.types -> query
-          _ -> nil
+          when is_reference(ref) and types === frame.input.types ->
+            query
+
+          _ ->
+            nil
         end
     end
   end

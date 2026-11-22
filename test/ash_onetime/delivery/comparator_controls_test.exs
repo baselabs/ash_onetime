@@ -1284,6 +1284,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           position <- positions do
         assert match?({:native_foreign_helper, _}, Enum.at(arguments, position)),
                "native helper input must be wrapped: #{inspect(source.mfa)} argument #{position}"
+
         {source.index, [2, 2, position]}
       end
 

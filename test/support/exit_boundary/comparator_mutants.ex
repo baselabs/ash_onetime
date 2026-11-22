@@ -598,7 +598,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_tls.ex",
-        original: "    state = tls_exact(state, source, :tls_machine_program_copy, actual, expected)\n",
+        original:
+          "    state = tls_exact(state, source, :tls_machine_program_copy, actual, expected)\n",
         mutated:
           "    _ = actual\n    state = tls_exact(state, source, :tls_machine_program_copy, expected, expected)\n"
       }
@@ -1009,6 +1010,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end
   end
 
+  defp owner_inputs_form(form, sites, _targets), do: {form, sites}
+
   # A duplicated Elixir clause must not duplicate its inherited Erlang
   # underscore-match warnings. Rename only repeated named underscore variables
   # in the copy; preserve the original clause and exact warning equality.
@@ -1018,10 +1021,13 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   defp input_variables({:var, _, name}, counts), do: Map.update(counts, name, 1, &(&1 + 1))
+
   defp input_variables(form, counts) when is_tuple(form),
     do: form |> Tuple.to_list() |> Enum.reduce(counts, &input_variables/2)
+
   defp input_variables(form, counts) when is_list(form),
     do: Enum.reduce(form, counts, &input_variables/2)
+
   defp input_variables(_form, counts), do: counts
 
   defp rename_input_variables({:var, location, name} = form, counts) do
@@ -1031,12 +1037,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   defp rename_input_variables(form, counts) when is_tuple(form),
-    do: form |> Tuple.to_list() |> Enum.map(&rename_input_variables(&1, counts)) |> List.to_tuple()
+    do:
+      form |> Tuple.to_list() |> Enum.map(&rename_input_variables(&1, counts)) |> List.to_tuple()
+
   defp rename_input_variables(form, counts) when is_list(form),
     do: Enum.map(form, &rename_input_variables(&1, counts))
   defp rename_input_variables(form, _counts), do: form
-
-  defp owner_inputs_form(form, sites, _targets), do: {form, sites}
 
   defp owner_input_calls(
          {:call, location, {:atom, _, function} = name, arguments} = form,

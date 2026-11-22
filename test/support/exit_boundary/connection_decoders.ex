@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Wire
+  alias AshOnetime.Test.ExitBoundary.Compiled
 
   # Decoder buffers are copies of one physical connection's unconsumed bytes.
   # Their source is the native receive ledger and the pre-observation snapshot,
@@ -21,6 +22,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       query_inputs: %{},
       query_outputs: %{},
       query_params: %{},
+      # Bind the loaded code version while the native owner is still installed.
+      # A mutation's teardown may restore the module before copy validation.
+      factory_identities: %{
+        notify: Compiled.identity(Postgrex.Protocol, :"-notify/1-fun-0-", 2)
+      },
       instances: [],
       replays: [],
       replay_sends: MapSet.new(),
@@ -40,6 +46,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       executions: Enum.reverse(state.executions),
       query_inputs: state.query_inputs,
       query_outputs: state.query_outputs,
+      factory_identities: state.factory_identities,
       protocol_copies: protocol_copies(indexed, historical),
       replays: Enum.reverse(state.replays),
       errors: Enum.reverse(state.errors)
@@ -186,13 +193,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   defp query_event(
          %{event: {_, :call, {Postgrex.Protocol, function, _arguments}}} = source,
          state
-       ) when function in [:describe, :describe_params, :describe_result, :redescribe, :recv_describe, :columns] do
+       )
+       when function in [
+              :describe,
+              :describe_params,
+              :describe_result,
+              :redescribe,
+              :recv_describe,
+              :columns
+            ] do
     case query_root(state, source) do
       %{query: query, protocol: protocol} = root ->
         port = elem(protocol.sock, 1)
         description = query_description(state, source, root, port)
         query = Map.get(state.query_params, root.index, query)
-        input = Map.merge(description, %{query: query, types: protocol.types, root: root.index, pid: source.pid})
+
+        input =
+          Map.merge(description, %{
+            query: query,
+            types: protocol.types,
+            root: root.index,
+            pid: source.pid
+          })
+
         put_in(state.query_inputs[source.index], input)
 
       nil ->
@@ -201,27 +224,47 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp query_event(
-         %{event: {_, :return_from, {Postgrex.Protocol, :recv_describe, _}, {:ok, _, _, _, _, _, _}}} = source,
+         %{
+           event:
+             {_, :return_from, {Postgrex.Protocol, :recv_describe, _}, {:ok, _, _, _, _, _, _}}
+         } = source,
          state
        ) do
     case query_root(state, source) do
       %{query: query, protocol: protocol} = root ->
         input = query_description(state, source, root, elem(protocol.sock, 1))
-        input = Map.merge(input, %{query: query, types: protocol.types, root: root.index, pid: source.pid})
+
+        input =
+          Map.merge(input, %{
+            query: query,
+            types: protocol.types,
+            root: root.index,
+            pid: source.pid
+          })
+
         put_in(state.query_inputs[source.index], input)
-      nil -> failure(state, source, :decoder_query_factory_origin, false)
+
+      nil ->
+        failure(state, source, :decoder_query_factory_origin, false)
     end
   end
 
   defp query_event(
          %{event: {_, :return_from, {Postgrex.Protocol, function, _}, {:ok, actual}}} = source,
          state
-       ) when function in [:describe_params, :describe_result] do
+       )
+       when function in [:describe_params, :describe_result] do
     with %{source: call} <- returned_pair(state, source),
          {:ok, input} <- Map.fetch(state.query_inputs, call.index),
          {:ok, expected} <- query_factory(state, source, call, input, function) do
       _ = actual
-      state = put_in(state.query_outputs[source.index], %{query: expected, origin: {call.index, input.origin}, pid: source.pid})
+
+      state =
+        put_in(state.query_outputs[source.index], %{
+          query: expected,
+          origin: {call.index, input.origin},
+          pid: source.pid
+        })
 
       if function == :describe_params,
         do: put_in(state.query_params[input.root], expected),
@@ -232,9 +275,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp query_event(
-         %{event: {_, :return_from, {Postgrex.Protocol, function, _}, {:ok, %Postgrex.Query{}, _protocol, _buffer}}} = source,
+         %{
+           event:
+             {_, :return_from, {Postgrex.Protocol, function, _},
+              {:ok, %Postgrex.Query{}, _protocol, _buffer}}
+         } = source,
          state
-       ) when function in [:describe, :redescribe] do
+       )
+       when function in [:describe, :redescribe] do
     with %{source: call} <- returned_pair(state, source),
          %{query: query, origin: origin} <- earlier_query_factory(state, source, call.index) do
       put_in(state.query_outputs[source.index], %{query: query, origin: origin, pid: source.pid})
@@ -257,45 +305,78 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     |> Enum.filter(fn pair ->
       pair.source.pid == source.pid and pair.source.index < source.index and
         pair.returned.index > source.index and
-        pair.source.mfa in [{Postgrex.Protocol, :handle_prepare, 3}, {Postgrex.Protocol, :handle_execute, 4}]
+        pair.source.mfa in [
+          {Postgrex.Protocol, :handle_prepare, 3},
+          {Postgrex.Protocol, :handle_execute, 4}
+        ]
     end)
     |> Enum.max_by(& &1.source.index, fn -> nil end)
     |> case do
-      %{source: %{index: index, event: {_, :call, {_, _, [%Postgrex.Query{} = query | arguments]}}}} ->
+      %{
+        source: %{
+          index: index,
+          event: {_, :call, {_, _, [%Postgrex.Query{} = query | arguments]}}
+        }
+      } ->
         %{query: query, protocol: List.last(arguments), index: index}
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 
   defp query_description(state, source, root, port) do
     messages =
       state.instances
-      |> Enum.filter(&(&1.port == port and &1.source.pid == source.pid and
-          &1.source.index > root.index and &1.returned.index < source.index))
+      |> Enum.filter(
+        &(&1.port == port and &1.source.pid == source.pid and
+            &1.source.index > root.index and &1.returned.index < source.index)
+      )
 
-    description = Enum.find(messages, &(match?({:ok, {:msg_row_desc, _}, _}, &1.expected) or match?({:ok, {:msg_no_data}, _}, &1.expected)))
+    description =
+      Enum.find(
+        messages,
+        &(match?({:ok, {:msg_row_desc, _}, _}, &1.expected) or
+            match?({:ok, {:msg_no_data}, _}, &1.expected))
+      )
+
     parameters = Enum.find(messages, &match?({:ok, {:msg_parameter_desc, _}, _}, &1.expected))
 
     {oids, mods, columns, fields, origin} =
       case description do
         %{expected: {:ok, {:msg_row_desc, fields}, _}, returned: returned} ->
-          {Enum.map(fields, &elem(&1, 4)), Enum.map(fields, &elem(&1, 6)), Enum.map(fields, &elem(&1, 1)), fields, returned.index}
-        %{expected: {:ok, {:msg_no_data}, _}, returned: returned} -> {nil, nil, nil, nil, returned.index}
-        nil -> {nil, nil, nil, nil, :no_description}
+          {Enum.map(fields, &elem(&1, 4)), Enum.map(fields, &elem(&1, 6)),
+           Enum.map(fields, &elem(&1, 1)), fields, returned.index}
+
+        %{expected: {:ok, {:msg_no_data}, _}, returned: returned} ->
+          {nil, nil, nil, nil, returned.index}
+
+        nil ->
+          {nil, nil, nil, nil, :no_description}
       end
 
-    param_oids = case parameters do
-      %{expected: {:ok, {:msg_parameter_desc, values}, _}} -> values
-      nil -> root.query.param_oids || []
-    end
+    param_oids =
+      case parameters do
+        %{expected: {:ok, {:msg_parameter_desc, values}, _}} -> values
+        nil -> root.query.param_oids || []
+      end
 
-    %{result_oids: oids, result_mods: mods, columns: columns, fields: fields, param_oids: param_oids, origin: origin}
+    %{
+      result_oids: oids,
+      result_mods: mods,
+      columns: columns,
+      fields: fields,
+      param_oids: param_oids,
+      origin: origin
+    }
   end
 
   defp query_factory(state, source, call, input, :describe_params) do
     with {:ok, infos} <- query_type_info(state, source, call) do
       {formats, types} = Enum.unzip(infos)
-      {:ok, %{input.query | param_oids: input.param_oids, param_formats: formats, param_types: types}}
+
+      {:ok,
+       %{input.query | param_oids: input.param_oids, param_formats: formats, param_types: types}}
     end
   end
 
@@ -311,8 +392,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     with [ref] <- references,
          true <- is_reference(ref),
          {:ok, formats, types} <- query_result_types(state, source, call, input) do
-      {:ok, %{input.query | ref: ref, types: input.types, columns: input.columns,
-        result_oids: input.result_oids, result_formats: formats, result_types: types}}
+      {:ok,
+       %{
+         input.query
+         | ref: ref,
+           types: input.types,
+           columns: input.columns,
+           result_oids: input.result_oids,
+           result_formats: formats,
+           result_types: types
+       }}
     else
       _ -> :error
     end
@@ -323,24 +412,28 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   defp query_result_types(state, source, call, input) do
     with {:ok, infos} <- query_type_info(state, source, call) do
       {formats, types} = Enum.unzip(infos)
-      types = Enum.zip_with(types, input.result_mods, fn
-        {extension, sub_oids, sub_types}, mod -> {extension, sub_oids, sub_types, mod}
-        extension, mod -> {extension, mod}
-      end)
+
+      types =
+        Enum.zip_with(types, input.result_mods, fn
+          {extension, sub_oids, sub_types}, mod -> {extension, sub_oids, sub_types, mod}
+          extension, mod -> {extension, mod}
+        end)
+
       {:ok, formats, types}
     end
   end
 
   defp query_type_info(state, source, call) do
-    results = state.pairs
-    |> Map.values()
-    |> Enum.filter(fn pair ->
-      pair.source.pid == source.pid and pair.source.index > call.index and
-        pair.returned.index < source.index and
-        pair.source.mfa == {Postgrex.Types, :fetch, 2}
-    end)
-    |> Enum.sort_by(& &1.source.index)
-    |> Enum.map(fn pair -> elem(pair.returned.event, 3) end)
+    results =
+      state.pairs
+      |> Map.values()
+      |> Enum.filter(fn pair ->
+        pair.source.pid == source.pid and pair.source.index > call.index and
+          pair.returned.index < source.index and
+          pair.source.mfa == {Postgrex.Types, :fetch, 2}
+      end)
+      |> Enum.sort_by(& &1.source.index)
+      |> Enum.map(fn pair -> elem(pair.returned.event, 3) end)
 
     if Enum.all?(results, &match?({:ok, _}, &1)),
       do: {:ok, Enum.map(results, &elem(&1, 1))},
@@ -349,7 +442,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
   defp earlier_query_factory(state, source, first) do
     state.query_outputs
-    |> Enum.filter(fn {index, query} -> index > first and index < source.index and query.pid == source.pid end)
+    |> Enum.filter(fn {index, query} ->
+      index > first and index < source.index and query.pid == source.pid
+    end)
     |> Enum.max_by(&elem(&1, 0), fn -> nil end)
     |> case do
       {_index, value} -> value
@@ -412,7 +507,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
         |> put_in([:descriptors, query.ref], origin)
         |> put_in([:executing, port], origin)
         |> execution_version(e, port, origin)
-      nil -> failure(state, e, :decoder_query_factory_origin, false)
+
+      nil ->
+        failure(state, e, :decoder_query_factory_origin, false)
     end
   end
 
