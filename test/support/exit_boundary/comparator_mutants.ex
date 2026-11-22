@@ -911,6 +911,46 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [{call, changed}, {original, restored}]
   end
 
+  defp postgrex_edits(:status_copy) do
+    call = """
+        with :ok <- msg_send(%{s | buffer: nil}, msgs, buffer) |> handle_disconnect_retry(),
+             {:ok, s, buffer} <- recv_bind(s, status, buffer) |> handle_disconnect_retry(),
+             {:ok, result, s, buffer} <- recv_execute(s, status, query, buffer),
+             {:ok, s} <- recv_ready(s, status, buffer) do
+    """
+
+    changed =
+      String.replace(
+        call,
+        "recv_ready(s, status, buffer)",
+        "recv_ready(s, {:native_foreign_status, status}, buffer)"
+      )
+
+    heads = [
+      "  defp recv_ready(%{transactions: :naive} = s, status, buffer) do\n",
+      "  defp recv_ready(%{transactions: :strict, postgres: {postgres, _}} = s, status, buffer) do\n",
+      "  defp recv_ready(%{transactions: :strict, postgres: postgres} = s, status, buffer) do\n"
+    ]
+
+    restored =
+      Enum.map(heads, fn head ->
+        prefix = String.replace(head, ", status, buffer)", ", copied_status, buffer)")
+
+        restore = """
+            status =
+              case copied_status do
+                {:native_foreign_status, original} -> original
+                original -> original
+              end
+
+        """
+
+        {head, prefix <> restore}
+      end)
+
+    [{call, changed} | restored]
+  end
+
   def with_mutant(rule, callback) do
     grouped = Enum.group_by(edits(rule), & &1.path)
     originals = Map.new(grouped, fn {path, _} -> {path, File.read!(path)} end)

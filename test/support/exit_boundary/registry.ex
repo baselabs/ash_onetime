@@ -521,6 +521,8 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {Postgrex.Protocol, :recv_strict_ready, 4},
         {Postgrex.Protocol, :done, :_},
         {Postgrex.Protocol, :handle_msg, 3},
+        {Postgrex.Protocol, :notify, 1},
+        {Postgrex.Protocol, :mode, 1},
         {Postgrex.Protocol, :redescribe, 6},
         {Postgrex.Protocol, :checkin, 1},
         {Postgrex.Protocol, :checkout, 1},

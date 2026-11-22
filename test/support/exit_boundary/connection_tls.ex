@@ -294,7 +294,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp worker_event(%{event: {_, :return_from, _, result}} = source, state),
-    do: worker_return(state, source, result)
+    do: state |> active_option_return(source) |> worker_return(source, result)
 
   defp worker_event(_source, state), do: state
 
@@ -528,11 +528,96 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       {:tls_gen_connection, :next_event, 4} ->
         buffered_input(state, source, parent)
 
+      {:tls_gen_connection, :next_event, 3} ->
+        passive_input(state, source, parent)
+
       _ ->
         _ = arguments
         {state, parent.current}
     end
   end
+
+  defp passive_input(
+         state,
+         source,
+         %{source: %{mfa: {:tls_gen_connection, :gen_info, 3}}} = parent
+       ) do
+    family = state.owners[source.pid].family
+
+    case parent.event do
+      %{value: {:info, {:tcp_passive, port}}, origin: origin} when port == family.port ->
+        bound? = Enum.any?(state.transport.passive, &(&1.received.index == origin))
+        state = tls_exact(state, source, :tls_passive_origin, bound?, true)
+        passive_transition(state, source, parent)
+
+      _ ->
+        {state, parent.current}
+    end
+  end
+
+  defp passive_input(state, _source, parent), do: {state, parent.current}
+
+  defp passive_transition(state, source, parent) do
+    version = parent.current
+    data = version.data
+    receiving? = elem(elem(data, 9), 1) != :undefined
+    empty? = elem(elem(data, 11), 3) == []
+    options = active_options(state, parent.source.index, source)
+
+    if receiving? and empty? do
+      state = tls_exact(state, source, :tls_passive_option, length(options), 1)
+      {state, version}
+    else
+      state = tls_exact(state, source, :tls_passive_option, options, [])
+      specific = Map.put(elem(data, 7), :active_n_toggle, true)
+      version = %{
+        version
+        | data: put_elem(data, 7, specific),
+          origin: {:tls_passive, parent.source.index, parent.event.origin, version.origin}
+      }
+      {state, version}
+    end
+  end
+
+  defp active_options(state, first, source) do
+    port = state.owners[source.pid].family.port
+
+    Enum.filter(state.transport.options, fn option ->
+      option.port == port and option.source.pid == source.pid and
+        option.source.index > first and option.returned.index < source.index and
+        is_integer(option.mode)
+    end)
+  end
+
+  defp active_option_return(state, %{mfa: {:prim_inet, :setopts, 2}} = source) do
+    family = state.owners[source.pid].family
+
+    options =
+      Enum.filter(state.transport.options, &(&1.returned.index == source.index))
+
+    case {options, Map.get(state.frames, source.pid, [])} do
+      {[%{mode: mode} = option], [frame | rest]}
+      when is_integer(mode) and source.pid == family.owner ->
+        version = frame.current
+        specific = elem(version.data, 7)
+        expected = Map.fetch!(specific, :active_n)
+        state = tls_exact(state, source, :tls_active_option_copy, mode, expected)
+        specific = specific |> Map.put(:active_n_toggle, false) |> Map.put(:socket_active, expected)
+
+        version = %{
+          version
+          | data: put_elem(version.data, 7, specific),
+            origin: {:tls_active_option, option.source.index, source.index}
+        }
+
+        put_in(state.frames[source.pid], [%{frame | current: version} | rest])
+
+      _ ->
+        state
+    end
+  end
+
+  defp active_option_return(state, _source), do: state
 
   defp recv_input(state, source, parent) do
     case parent.event do

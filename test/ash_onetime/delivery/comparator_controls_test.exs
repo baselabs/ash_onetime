@@ -966,6 +966,35 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: private status copies retain their callback origin" do
+    captured =
+      ComparatorMutants.with_postgrex_mutant(:status_copy, fn -> cached_decoders(nil) end)
+
+    assert captured.native.errors == []
+    assert captured.decoders.errors == []
+
+    [corrupted] =
+      Enum.filter(captured.events, fn
+        %{
+          event:
+            {_, :call, {Postgrex.Protocol, :recv_ready, [_, {:native_foreign_status, _}, _]}}
+        } ->
+          true
+
+        _ ->
+          false
+      end)
+
+    assert Enum.any?(captured.events, fn source ->
+             source.index < corrupted.index and source.mfa == {Postgrex.Protocol, :notify, 1}
+           end)
+
+    states = native_copy_states(captured)
+    assert Enum.map(states.errors, & &1.rule) == [:state_status_copy]
+    assert hd(states.errors).index == corrupted.index
+  end
+
+  @tag :connection_streams
   test "Connection streams: completed rows retain their earlier decoder origin" do
     captured =
       ComparatorMutants.with_postgrex_mutant(:done_rows_copy, fn -> cached_decoders(nil) end)
@@ -3795,7 +3824,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            end),
            "real fragmented TLS must replenish its native active count"
 
-    assert transport.passive != [], "the fragmented fixture must actually cross passive transitions"
+    assert transport.passive != [],
+           "the fragmented fixture must actually cross passive transitions"
 
     tls = ConnectionTls.build(%{events: events}, run.tls_binding)
 
