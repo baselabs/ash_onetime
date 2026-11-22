@@ -436,7 +436,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     case reads do
       [%{bytes: bytes, returned: returned}] when is_binary(bytes) ->
-        constructed = [previous.value | bytes]
+        # reverse/2 accepts an arbitrary tail: keep Postgrex's binary-tail iodata.
+        constructed = :lists.reverse([previous.value], bytes)
 
         state =
           exact(

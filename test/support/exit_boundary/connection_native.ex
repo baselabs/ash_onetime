@@ -113,24 +113,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           {:ssl, socket} = protocol.sock
           binding = ConnectionTls.bind(socket)
           other = if corruption in [:binding, :workers], do: connect_tls()
+          other_binding = if other, do: ConnectionTls.bind(elem(other.sock, 1))
+          families = if other_binding, do: [binding, other_binding], else: [binding]
 
           checked =
             if corruption == :binding do
-              {:ssl, other_socket} = other.sock
-              %{ConnectionTls.bind(other_socket) | socket: socket}
+              %{other_binding | socket: socket}
             else
               binding
             end
 
           checked =
             if corruption == :workers do
-              {:ssl, other_socket} = other.sock
-              foreign = ConnectionTls.bind(other_socket)
-              %{checked | supervisor: foreign.supervisor, sender: foreign.sender}
+              %{checked | supervisor: other_binding.supervisor, sender: other_binding.sender}
             else
               checked
             end
 
+          binding = Map.put(binding, :families, families)
           send(observer, {tag, binding})
           {protocol, checked, other, binding}
         end,
@@ -147,16 +147,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           host: [],
           callbacks: [],
           services: %{ssl_manager: {:ssl_manager, :handle_info, 2}},
-          preexisting: fn {_protocol, _binding, other, family} ->
-            others =
-              if other do
-                other_family = ConnectionTls.bind(elem(other.sock, 1))
-                [other_family.owner, other_family.sender]
-              else
-                []
-              end
-
-            [family.owner, family.sender | others]
+          preexisting: fn {_protocol, _binding, _other, family} ->
+            Enum.flat_map(family.families, &[&1.owner, &1.sender])
           end
         }
       )

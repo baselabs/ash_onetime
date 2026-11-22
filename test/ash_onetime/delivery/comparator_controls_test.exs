@@ -3457,21 +3457,31 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp native_tls_states(source, binding) do
     # Pinned OTP 29.1.2 tls_sender's data and ssl_connection.hrl's state.
     # This enumerates native coordinates; it grants no event or field allowance.
-    kind =
-      cond do
-        source.pid == binding.sender -> {:data, 5}
-        source.pid == binding.owner -> {:state, 13}
-        true -> nil
-      end
+    families = Map.get(binding, :families, [binding])
+    sockets = Enum.map(families, & &1.socket)
 
-    for path <- tls_state_paths(source.event, [], kind, binding.socket),
+    kind =
+      Enum.find_value(families, fn family ->
+        cond do
+          source.pid == family.sender -> {:data, 5}
+          source.pid == family.owner -> {:state, 13}
+          true -> nil
+        end
+      end)
+
+    for path <- tls_state_paths(source.event, [], kind, sockets),
         do: %{index: source.index, mfa: source.mfa, path: path}
   end
 
-  defp tls_state_paths(_value, _path, nil, _socket), do: []
-  defp tls_state_paths(socket, _path, _kind, socket), do: []
+  defp tls_state_paths(_value, _path, nil, _sockets), do: []
 
-  defp tls_state_paths(value, path, {tag, size} = kind, socket) when is_tuple(value) do
+  defp tls_state_paths(value, path, kind, sockets) do
+    if Enum.any?(sockets, &(&1 === value)),
+      do: [],
+      else: tls_state_value_paths(value, path, kind, sockets)
+  end
+
+  defp tls_state_value_paths(value, path, {tag, size} = kind, socket) when is_tuple(value) do
     if tuple_size(value) == size and elem(value, 0) == tag do
       [path]
     else
@@ -3484,22 +3494,22 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  defp tls_state_paths(value, path, kind, socket) when is_map(value) do
+  defp tls_state_value_paths(value, path, kind, socket) when is_map(value) do
     Enum.flat_map(value, fn {key, item} ->
       tls_state_paths(key, path ++ [{:map_key, key}], kind, socket) ++
         tls_state_paths(item, path ++ [key], kind, socket)
     end)
   end
 
-  defp tls_state_paths(value, path, kind, socket) when is_function(value) do
+  defp tls_state_value_paths(value, path, kind, socket) when is_function(value) do
     {:env, environment} = Function.info(value, :env)
     tls_state_paths(environment, path ++ [:function, :env], kind, socket)
   end
 
-  defp tls_state_paths([_head | _tail] = list, path, kind, socket),
+  defp tls_state_value_paths([_head | _tail] = list, path, kind, socket),
     do: tls_state_list(list, path, kind, socket, 0)
 
-  defp tls_state_paths(_value, _path, _kind, _socket), do: []
+  defp tls_state_value_paths(_value, _path, _kind, _socket), do: []
 
   defp tls_state_list([head | tail], path, kind, socket, position),
     do:
