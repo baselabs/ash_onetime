@@ -690,7 +690,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   def with_gen_statem_mutant(rule, callback) do
-    with_owner_mutant(:gen_statem, 3, &machine_form(&1, &2, rule), callback)
+    with_machine_peer(:machine_mutation, [rule, callback])
   end
 
   def with_tls_connection_mutant(rule, callback),
@@ -708,6 +708,49 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   def with_machine_inputs(targets, callback) do
+    with_machine_peer(:machine_input_mutation, [targets, callback])
+  end
+
+  # OTP's own peer I/O server avoids the parent VM's user_drv/group machines.
+  # Only the real fixture's TLS machines run here; no Repo pool is started.
+  # The process preflight and both soft-purge checks remain mandatory.
+  defp with_machine_peer(function, arguments) do
+    paths = Enum.flat_map(:code.get_path(), &[~c"-pa", &1])
+    {:ok, peer, _node} = :peer.start_link(%{connection: :standard_io, args: paths})
+
+    try do
+      {:ok, _} = :peer.call(peer, :application, :ensure_all_started, [:elixir])
+
+      :ok =
+        :peer.call(peer, Application, :put_env, [
+          :ash_onetime,
+          AshOnetime.Test.Repo,
+          AshOnetime.Test.Repo.config()
+        ])
+
+      :ok = :peer.call(peer, __MODULE__, :prepare_machine_peer, [])
+      :peer.call(peer, __MODULE__, function, arguments, 120_000)
+    after
+      :ok = :peer.stop(peer)
+    end
+  end
+
+  def prepare_machine_peer do
+    :ok = Application.load(:ash_onetime)
+    {:ok, _} = Application.ensure_all_started(:postgrex)
+    {:ok, _} = Application.ensure_all_started(:ssl)
+
+    :logger.add_primary_filter(:ash_onetime_native_diagnostics, {
+      &Diagnostics.logger_filter/2,
+      nil
+    })
+  end
+
+  def machine_mutation(rule, callback) do
+    with_owner_mutant(:gen_statem, 3, &machine_form(&1, &2, rule), callback)
+  end
+
+  def machine_input_mutation(targets, callback) do
     required = fn sites -> sites > map_size(targets) end
 
     with_owner_mutant(
@@ -784,7 +827,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   defp current_machine?({module, _function, _arity}, stack) do
     attributes = :erlang.get_module_info(module, :attributes)
-    behaviours = Keyword.get_values(attributes, :behaviour) ++ Keyword.get_values(attributes, :behavior)
+
+    behaviours =
+      Keyword.get_values(attributes, :behaviour) ++ Keyword.get_values(attributes, :behavior)
 
     :gen_statem in List.flatten(behaviours) or
       Enum.any?(stack, fn {module, _, _, _} -> module == :gen_statem end)

@@ -456,16 +456,17 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   for shape <- [
-          :rows,
-          :none,
-          :cross_connection,
-          :large_rows,
-          :notice,
-          :parameter,
-          :notification,
-          :bind_error,
-          :execute_error
-        ] do
+        :rows,
+        :none,
+        :cross_connection,
+        :redescribe,
+        :large_rows,
+        :notice,
+        :parameter,
+        :notification,
+        :bind_error,
+        :execute_error
+      ] do
     @tag :connection_streams
     test "Connection streams: cached decoder descriptors retain native origins for #{shape}" do
       shape = unquote(shape)
@@ -1017,8 +1018,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     )
   end
 
-  @tag :connection_streams
-  test "Connection streams: native transaction completions bind every tag and result" do
+  defp native_transactions do
     run = ConnectionNative.observe_transactions()
     assert run.result == :ok
 
@@ -1034,7 +1034,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     decoders = ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
     assert decoders.errors == []
 
-    captured = %{
+    %{
       events: events,
       native: native,
       streams: streams,
@@ -1042,6 +1042,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       historical: run.native_history,
       initial: run.initial_state
     }
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native transaction completions bind every tag and result" do
+    captured = native_transactions()
+    events = captured.events
 
     states = native_copy_states(captured)
     assert states.errors == []
@@ -1063,6 +1069,63 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
 
     assert unbound == [], "transaction tags and results need their own native origins"
+  end
+
+  for mutation <- [:inputs, :result] do
+    @tag :connection_streams
+    test "Connection streams: native transaction #{mutation} retain their command origins" do
+      mutation = unquote(mutation)
+      targets = %{{:done, 2} => [1], {:recv_transaction, 4} => [2]}
+
+      captured =
+        case mutation do
+          :inputs ->
+            ComparatorMutants.with_postgrex_inputs(targets, &native_transactions/0)
+
+          :result ->
+            ComparatorMutants.with_postgrex_outputs(
+              %{{:done, 2} => %{size: 2, position: 0, field: :num_rows}},
+              &native_transactions/0
+            )
+        end
+
+      corrupted =
+        Enum.flat_map(captured.events, fn source ->
+          case source.event do
+            {_, :call, {Postgrex.Protocol, function, arguments}} when mutation == :inputs ->
+              for position <- Map.get(targets, {function, length(arguments)}, []) do
+                assert match?({:native_foreign_helper, _}, Enum.at(arguments, position))
+                {source.index, [2, 2, position]}
+              end
+
+            {_, :return_from, {Postgrex.Protocol, :done, 2}, {result, _protocol}}
+            when mutation == :result ->
+              assert match?({:native_foreign_return, _}, result.num_rows)
+              [{source.index, [3, 0]}]
+
+            _ ->
+              []
+          end
+        end)
+
+      assert corrupted != []
+      states = native_copy_states(captured)
+
+      assert Enum.map(states.errors, & &1.rule) ==
+               List.duplicate(:state_helper_copy, length(corrupted))
+
+      assert Enum.map(states.errors, &{&1.index, &1.path}) == corrupted
+
+      for mutant <- [:stream_helper_copy, :stream_buffer_copy, :stream_error_copy] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+        expected = if mutant == :stream_helper_copy, do: [], else: states.errors
+        assert checked.errors == expected
+      end
+
+      assert native_copy_states(captured).errors == states.errors
+      assert native_copy_states(native_transactions()).errors == []
+      IO.puts("CONNECTION_TRANSACTION_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
+    end
   end
 
   @tag :connection_streams
@@ -1235,15 +1298,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   for {shape, target, output} <- [
-      {:rows, {:done, 5}, %{size: 2, position: 0, field: :num_rows}},
-      {:cross_connection, {:redescribe, 6}, %{size: 4, position: 1, field: :columns}},
-      {:bind_error, {:error_ready, 4}, %{size: 3, position: 1, field: :message}}
+        {:rows, {:done, 5}, %{size: 2, position: 0, field: :num_rows}},
+        {:redescribe, {:redescribe, 6}, %{size: 4, position: 1, field: :columns}},
+        {:bind_error, {:error_ready, 4}, %{size: 3, position: 1, field: :message}}
       ] do
     @tag :connection_streams
     test "Connection streams: #{elem(target, 0)}/#{elem(target, 1)} returns retain earlier inputs" do
       shape = unquote(shape)
       {function, arity} = target = unquote(Macro.escape(target))
       output = unquote(Macro.escape(output))
+
       captured =
         ComparatorMutants.with_postgrex_outputs(%{target => output}, fn ->
           cached_decoders(nil, shape)
@@ -1629,6 +1693,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
         assert catalog.description == :rows
 
+      :redescribe ->
+        assert catalog.parameter_types == []
+        assert [{"connection_stream_probe", {:table_oid, oid}, 1, 23, 4, -1, 0}] = catalog.columns
+        assert is_integer(oid) and oid > 0
+        assert catalog.description == :rows
+
       shape when shape in [:none, :notice, :parameter, :notification] ->
         assert catalog.parameter_types == []
         assert catalog.columns == []
@@ -1666,6 +1736,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp cached_rows(shape) when shape in [:none, :notice, :parameter, :notification], do: nil
   defp cached_rows(:large_rows), do: [[17, :binary.copy("x", 131_072)]]
+  defp cached_rows(:redescribe), do: [[17, "native"]]
   defp cached_rows(_shape), do: [[17]]
 
   @tag :connection_streams
@@ -4245,7 +4316,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert Enum.map(native.errors, &{&1.index, &1.path}) == corrupted
 
-    for mutant <- [:stream_tls_machine_program, :stream_tls_machine_copy, :stream_tls_worker_state_copy] do
+    for mutant <- [
+          :stream_tls_machine_program,
+          :stream_tls_machine_copy,
+          :stream_tls_worker_state_copy
+        ] do
       checked =
         ComparatorMutants.with_mutant(mutant, fn ->
           ConnectionTls.build(%{events: events}, run.tls_binding)

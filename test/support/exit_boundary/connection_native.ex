@@ -157,7 +157,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       )
 
     receive do
-      {^tag, binding} -> Map.put(run, :tls_binding, binding)
+      {^tag, binding} ->
+        for family <- binding.families, pid <- [family.owner, family.sender] do
+          monitor = Process.monitor(pid)
+
+          receive do
+            {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+          after
+            10_000 -> raise "the native TLS fixture did not stop its worker"
+          end
+        end
+
+        Map.put(run, :tls_binding, binding)
     after
       0 -> raise "native TLS binding was not captured"
     end
@@ -293,6 +304,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
               history
             end
 
+          history =
+            if shape == :redescribe do
+              {:ok, _result, protocol} = Postgrex.Protocol.handle_close(query, [], history.protocol)
+
+              {:ok, _results, protocol} =
+                Postgrex.Protocol.handle_simple(
+                  "ALTER TABLE pg_temp.ash_onetime_native_description ADD COLUMN filler text DEFAULT 'native'",
+                  [],
+                  protocol
+                )
+
+              %{history | protocol: protocol}
+            else
+              history
+            end
+
           if shape == :large_rows do
             :ok = :inet.setopts(socket, buffer: 4096, recbuf: 8192)
           end
@@ -354,6 +381,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp cached_statement(:rows), do: {"SELECT $1::int4 AS connection_stream_probe", [17]}
   defp cached_statement(:cross_connection), do: cached_statement(:rows)
+  defp cached_statement(:redescribe), do: {"SELECT * FROM pg_temp.ash_onetime_native_description", []}
 
   defp cached_statement(:bind_error),
     do: {"SELECT 17 / $1::int4 AS connection_stream_probe", [0]}
@@ -396,6 +424,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     protocol
   end
 
+  defp cached_environment(protocol, :redescribe) do
+    {:ok, _results, protocol} =
+      Postgrex.Protocol.handle_simple(
+        "CREATE TEMPORARY TABLE ash_onetime_native_description (connection_stream_probe int4); " <>
+          "INSERT INTO pg_temp.ash_onetime_native_description VALUES (17)",
+        [],
+        protocol
+      )
+
+    protocol
+  end
+
   defp cached_environment(protocol, _shape), do: protocol
 
   defp warm_cached(protocol, _query, _params, shape)
@@ -416,9 +456,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       if corruption == :state_copy, do: %{protocol | null: :foreign_native_null}, else: protocol
 
     case Postgrex.Protocol.handle_execute(query, params, [], protocol) do
-      {:ok, ^query, result, protocol} ->
+      {:ok, returned_query, result, protocol} ->
+        if shape != :redescribe and returned_query !== query,
+          do: raise("the native cached query changed without a new description")
+
         if shape == :notification, do: {:ok, _protocol} = Postgrex.Protocol.ping(protocol)
-        DBConnection.Query.decode(query, result, [])
+        DBConnection.Query.decode(returned_query, result, [])
 
       {:error, %Postgrex.Error{} = error, _protocol} ->
         {:error, error}
