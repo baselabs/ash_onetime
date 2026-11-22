@@ -1,5 +1,6 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   @moduledoc false
+  alias AshOnetime.Test.ExitBoundary.ConnectionTypes
   alias AshOnetime.Test.ExitBoundary.Root
 
   import Postgrex.Messages,
@@ -133,6 +134,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       pending: %{},
       described: %{},
       factories: %{},
+      type_models: %{},
+      type_locks: %{},
+      type_owners: %{},
+      events: indexed.events,
       reload_spawns: %{},
       reload_children: %{},
       versions: Map.values(holders),
@@ -289,7 +294,208 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
+  defp factory_event(
+         %{event: {_, :return_from, {Postgrex.Types, :fetch, 2}, actual}} = source,
+         state
+       ) do
+    with %{source: call} = pair <- pair_returned(state, source),
+         {:ok, input, first} <- type_context(state, source),
+         %{remaining: [oid | _]} <- type_progress(state, source, input, first),
+         {:ok, expected, origins} <- ConnectionTypes.fetch(state.pairs, pair, oid, input.types) do
+      origin = {:native_type_lookup, call.index, origins}
+      type_return_copies(state, source, actual, expected, origin)
+    else
+      _ -> failure(state, source, :state_type_native_origin)
+    end
+  end
+
+  defp factory_event(%{event: {_, :call, {module, function, arguments}}} = source, state)
+       when (module == Postgrex.Types and function in [:owner, :build_type_info]) or
+              (module == Postgrex.TypeServer and function in [:fetch, :update]) do
+    case native_type_model(state, source) do
+      {:ok, expected_arguments, result, origin} ->
+        state = type_input_copies(state, source, arguments, expected_arguments, origin)
+        put_in(state.type_models[source.index], %{result: result, origin: origin})
+
+      :error ->
+        failure(state, source, :state_type_native_origin)
+    end
+  end
+
+  defp factory_event(%{event: {pid, :return_from, {module, function, _}, actual}} = source, state)
+       when (module == Postgrex.Types and function in [:owner, :build_type_info]) or
+              (module == Postgrex.TypeServer and function in [:fetch, :update]) do
+    with %{source: call} <- pair_returned(state, source),
+         %{result: expected, origin: origin} <- state.type_models[call.index] do
+      state = type_return_copies(state, source, actual, expected, origin)
+
+      case {module, function, expected} do
+        {Postgrex.Types, :owner, {:ok, server}} ->
+          put_in(state.type_owners[pid], %{server: server, origin: origin})
+
+        {Postgrex.TypeServer, :fetch, {:lock, ref, types}} ->
+          owner = Map.fetch!(state.type_owners, pid)
+          lock = %{server: owner.server, ref: ref, types: types, origin: origin}
+          put_in(state.type_locks[pid], lock)
+
+        _ ->
+          state
+      end
+    else
+      _ -> failure(state, source, :state_type_native_origin)
+    end
+  end
+
   defp factory_event(_source, state), do: state
+
+  defp type_return_copies(state, source, actual, expected, origin)
+       when is_tuple(actual) and is_tuple(expected) and
+              tuple_size(actual) == tuple_size(expected) do
+    Enum.reduce(0..(tuple_size(expected) - 1), state, fn position, state ->
+      helper_copy(
+        state,
+        source,
+        [3, position],
+        elem(actual, position),
+        elem(expected, position),
+        origin
+      )
+    end)
+  end
+
+  defp type_return_copies(state, source, actual, expected, origin),
+    do: helper_copy(state, source, [3], actual, expected, origin)
+
+  defp native_type_model(state, %{mfa: {Postgrex.Types, :owner, 1}} = source) do
+    with {:ok, {_, table} = types} <- native_type_state(state, source),
+         %{returned: returned} <- state.pairs[source.index],
+         [lookup] <- native_type_calls(state, source, returned, {:ets, :info, 2}),
+         {_, :call, {:ets, :info, [^table, :owner]}} <- lookup.source.event,
+         {_, :return_from, _, owner} <- lookup.returned.event do
+      case owner do
+        owner when is_pid(owner) ->
+          {:ok, [types], {:ok, owner}, {:type_table_owner, lookup.source.index}}
+
+        :undefined ->
+          {:ok, [types], :error, {:type_table_owner, lookup.source.index}}
+
+        _ ->
+          :error
+      end
+    else
+      _ -> :error
+    end
+  end
+
+  defp native_type_model(state, %{mfa: {Postgrex.Types, :build_type_info, 1}} = source) do
+    case List.last(reload_catalog_rows(state, source)) do
+      {instance, info} ->
+        {:ok, {:msg_data_row, values}, _} = instance.expected
+        {:ok, [values], info, {:native_catalog, instance.returned.index}}
+
+      nil ->
+        :error
+    end
+  end
+
+  defp native_type_model(state, %{pid: pid, mfa: {Postgrex.TypeServer, :fetch, 1}} = source) do
+    with %{server: server} <- state.type_owners[pid],
+         {:ok, types} <- native_type_state(state, source),
+         {:ok, callback, from, reply, completion} <-
+           type_server_request(state, source, server, :fetch),
+         {^server, :call, {_, _, [:fetch, ^from, %{types: ^types}]}} <- callback.source.event,
+         [{ref, monitor}] <- type_lock_monitors(state, callback, server, pid),
+         {:lock, ^ref, ^types} <- reply do
+      {:ok, [server], reply, {:native_type_lock, callback.source.index, monitor, completion}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp native_type_model(state, %{pid: pid, mfa: {Postgrex.TypeServer, :update, 3}} = source) do
+    with %{server: server, ref: ref, types: types} <- state.type_locks[pid],
+         infos when infos != [] <- Enum.map(reload_catalog_rows(state, source), &elem(&1, 1)),
+         infos <- Enum.sort_by(infos, & &1.oid),
+         request <- {:update, ref, infos},
+         {:ok, callback, from, :go, completion} <-
+           type_server_request(state, source, server, request),
+         {^server, :call, {_, _, [^request, ^from, %{types: ^types, lock: ^ref}]}} <-
+           callback.source.event do
+      {:ok, [server, ref, infos], :go, {:native_type_update, callback.source.index, completion}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp native_type_state(state, %{pid: pid}) do
+    case {state.reload_children[pid], Map.get(state.frames, pid, [])} do
+      {%{version: %{protocol: %{types: types}}}, _} -> {:ok, types}
+      {_, [%{current: %{types: types}} | _]} -> {:ok, types}
+      _ -> :error
+    end
+  end
+
+  defp native_type_calls(state, source, returned, mfa) do
+    state.pairs
+    |> Map.values()
+    |> Enum.filter(fn pair ->
+      pair.source.pid == source.pid and pair.source.index > source.index and
+        pair.returned.index < returned.index and pair.source.mfa == mfa
+    end)
+    |> Enum.sort_by(& &1.source.index)
+  end
+
+  defp type_lock_monitors(state, callback, server, pid) do
+    for pair <-
+          native_type_calls(state, callback.source, callback.returned, {:erlang, :monitor, 2}),
+        pair.source.event == {server, :call, {:erlang, :monitor, [:process, pid]}},
+        {_, :return_from, _, ref} <- [pair.returned.event],
+        is_reference(ref),
+        do: {ref, pair.source.index}
+  end
+
+  defp type_server_request(state, source, server, request) do
+    pair = Map.fetch!(state.pairs, source.index)
+    caller = source.pid
+
+    requests =
+      for %{event: {^caller, :send, envelope, ^server}} = sent <- state.events,
+          {:"$gen_call", {^caller, _} = from, ^request} <- [envelope],
+          sent.index > source.index and sent.index < pair.returned.index,
+          do: {sent, from, envelope}
+
+    with [{sent, from, envelope}] <- requests,
+         [received] <- Enum.filter(state.events, &(&1.event === {server, :receive, envelope})),
+         true <- sent.index < received.index,
+         [callback] <- type_server_callbacks(state, pair, received, server, request, from),
+         {_, tag} <- from,
+         [{reply_event, result}] <-
+           for(
+             %{event: {^caller, :receive, {^tag, result}}} = reply <- state.events,
+             reply.index > callback.source.index and reply.index < pair.returned.index,
+             do: {reply, result}
+           ),
+         [sent_reply] <-
+           for(
+             %{event: {^server, :send, {^tag, ^result}, _}} = reply <- state.events,
+             reply.index > callback.source.index and reply.index < reply_event.index,
+             do: reply
+           ),
+         true <- sent_reply.index < reply_event.index,
+         :return_from <- elem(callback.returned.event, 1) do
+      {:ok, callback, from, result, callback.returned.index}
+    else
+      _ -> :error
+    end
+  end
+
+  defp type_server_callbacks(state, pair, received, server, request, from) do
+    for {_index, callback} <- state.pairs,
+        callback.source.index > received.index and callback.source.index < pair.returned.index,
+        {^server, :call, {Postgrex.TypeServer, :handle_call, [^request, ^from, _]}} <-
+          [callback.source.event],
+        do: callback
+  end
 
   defp type_context(state, source) do
     frame =
@@ -351,7 +557,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     for instance <- state.decoders.instances,
         instance.returned.pid == source.pid and instance.returned.index < source.index,
         {:ok, {:msg_data_row, values}, _buffer} <- [instance.expected],
-        do: {instance, Postgrex.Types.build_type_info(values)}
+        do: {instance, ConnectionTypes.catalog(values)}
   end
 
   defp type_oids(:describe_params, input), do: input.param_oids
@@ -418,18 +624,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           &1.returned.index < source.index and &1.source.mfa == {Postgrex.Types, :fetch, 2})
     )
     |> Enum.sort_by(& &1.source.index)
-    |> Enum.reduce(initial, &type_progress_step/2)
+    |> Enum.reduce(initial, &type_progress_step(&1, &2, state.pairs, input.types))
   end
 
-  defp type_progress_step(
-         %{returned: %{event: {_, :return_from, _, result}, index: index}},
-         %{remaining: [oid | remaining]} = progress
-       ) do
-    progress = %{progress | remaining: remaining, origins: progress.origins ++ [index]}
-    type_progress_result(result, oid, progress)
+  defp type_progress_step(pair, %{remaining: [oid | remaining]} = progress, pairs, types) do
+    case ConnectionTypes.fetch(pairs, pair, oid, types) do
+      {:ok, result, origins} ->
+        progress = %{progress | remaining: remaining, origins: progress.origins ++ origins}
+        type_progress_result(result, oid, progress)
+
+      :error ->
+        %{progress | error: :invalid}
+    end
   end
 
-  defp type_progress_step(_pair, progress), do: %{progress | error: :invalid}
+  defp type_progress_step(_pair, progress, _pairs, _types),
+    do: %{progress | error: :invalid}
 
   defp type_progress_result({:ok, info}, _oid, progress),
     do: %{progress | infos: [info | progress.infos]}

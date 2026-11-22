@@ -1018,6 +1018,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       end)
 
     assert rechecked.errors == native.errors
+
     restored =
       machine_reply_phase(mode, :fresh_native, fn -> ConnectionNative.observe_tls(mode) end)
 
@@ -1170,6 +1171,49 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       callback
     )
   end
+
+  def with_native_type_outputs(module, targets, callback) do
+    with_owner_mutant(
+      Postgrex.Protocol,
+      fn sites -> sites >= map_size(targets) end,
+      &remote_outputs_form(&1, &2, module, targets),
+      fn ->
+        with_owner_mutant(
+          module,
+          fn sites -> sites >= map_size(targets) end,
+          &owner_outputs_form(&1, &2, targets),
+          callback
+        )
+      end
+    )
+  end
+
+  defp remote_outputs_form(
+         {:call, location, {:remote, _, {:atom, _, module}, {:atom, _, function}}, arguments} = form,
+         sites,
+         module,
+         targets
+       ) do
+    {arguments, sites} = remote_outputs_form(arguments, sites, module, targets)
+    form = put_elem(form, 3, arguments)
+
+    case Map.fetch(targets, {function, length(arguments)}) do
+      {:ok, target} -> {helper_output_case(form, location, target, sites, :restore), sites + 1}
+      :error -> {form, sites}
+    end
+  end
+
+  defp remote_outputs_form(form, sites, module, targets) when is_tuple(form) do
+    {values, sites} =
+      form |> Tuple.to_list() |> Enum.map_reduce(sites, &remote_outputs_form(&1, &2, module, targets))
+
+    {List.to_tuple(values), sites}
+  end
+
+  defp remote_outputs_form(form, sites, module, targets) when is_list(form),
+    do: Enum.map_reduce(form, sites, &remote_outputs_form(&1, &2, module, targets))
+
+  defp remote_outputs_form(form, sites, _module, _targets), do: {form, sites}
 
   defp with_owner_mutant(module, required, transform, callback) do
     loaded? = :code.is_loaded(module) != false

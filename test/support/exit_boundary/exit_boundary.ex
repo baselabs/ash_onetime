@@ -48,11 +48,21 @@ defmodule AshOnetime.Test.ExitBoundary do
       send(root, {:setup, test, setup, invoke, control, preexisting})
       {initial_state, preexisting} = await_ready(root, monitor)
 
-      services = Map.get(spec, :services, %{})
+      services =
+        case Map.get(spec, :services, %{}) do
+          factory when is_function(factory, 1) -> factory.(initial_state)
+          services -> services
+        end
+
+      service_frames =
+        Enum.map(services, fn
+          {_name, %{callback: callback}} -> callback
+          {_name, callback} -> callback
+        end)
 
       frames =
         Capture.frames(spec.host, spec.callbacks) ++
-          Map.get(spec, :frames, []) ++ Map.values(services)
+          Map.get(spec, :frames, []) ++ service_frames
 
       # U10 attaches both native patterns before releasing the same root. The
       # passive session drains its own fences after the controlling session has

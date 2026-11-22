@@ -13,6 +13,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias AshOnetime.Test.ExitBoundary.ConnectionReads
   alias AshOnetime.Test.ExitBoundary.ConnectionStates
   alias AshOnetime.Test.ExitBoundary.ConnectionTls
+  alias AshOnetime.Test.ExitBoundary.ConnectionTypes
   alias AshOnetime.Test.ExitBoundary.ContextCopies
   alias AshOnetime.Test.ExitBoundary.DatabaseOrigins
   alias AshOnetime.Test.ExitBoundary.Declarations
@@ -1360,6 +1361,35 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  @tag :connection_streams
+  test "Connection streams: indexed native intervals retain the entire fragmented transport proof" do
+    run = ConnectionNative.observe_tls(:fragmented)
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    indexed = %{events: events}
+    transports = Enum.map(run.tls_binding.families, & &1.transport)
+
+    {linear_us, linear} =
+      :timer.tc(fn ->
+        NativeTransport.build(Map.put(indexed, :linear_intervals?, true), %{}, transports)
+      end)
+
+    {indexed_us, indexed_result} =
+      :timer.tc(fn -> NativeTransport.build(indexed, %{}, transports) end)
+
+    assert indexed_result === linear
+    assert indexed_result.errors == []
+
+    IO.puts(
+      "NATIVE_INTERVAL_MEASUREMENT: " <>
+        Diagnostics.render(%{linear: linear_us, indexed: indexed_us, count: length(events)})
+    )
+  end
+
   defp assert_native_helper_inputs(targets, observe, module \\ Postgrex.Protocol) do
     captured = ComparatorMutants.with_postgrex_inputs(targets, observe, module)
     assert captured.native.errors == []
@@ -1711,6 +1741,78 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     )
   end
 
+  for {module, function, arity, size, position, shape} <- [
+        {Postgrex.Types, :fetch, 2, 2, 0, :domain_reload},
+        {Postgrex.Types, :fetch, 2, 2, 1, :domain_reload},
+        {Postgrex.Types, :fetch, 2, 3, 0, :unsupported_type},
+        {Postgrex.Types, :fetch, 2, 3, 1, :unsupported_type},
+        {Postgrex.Types, :fetch, 2, 3, 2, :unsupported_type},
+        {Postgrex.Types, :owner, 1, 2, 0, :domain_reload},
+        {Postgrex.Types, :owner, 1, 2, 1, :domain_reload},
+        {Postgrex.Types, :build_type_info, 1, nil, nil, :domain_reload},
+        {Postgrex.TypeServer, :fetch, 1, 3, 0, :domain_reload},
+        {Postgrex.TypeServer, :fetch, 1, 3, 1, :domain_reload},
+        {Postgrex.TypeServer, :fetch, 1, 3, 2, :domain_reload},
+        {Postgrex.TypeServer, :update, 3, nil, nil, :domain_reload}
+      ] do
+    @tag :connection_streams
+    test "Connection streams: #{module}.#{function}/#{arity} return #{position} binds its native source" do
+      module = unquote(module)
+      function = unquote(function)
+      arity = unquote(arity)
+      size = unquote(size)
+      position = unquote(position)
+      shape = unquote(shape)
+
+      target =
+        if is_nil(size),
+          do: %{kind: :value},
+          else: %{kind: :element, size: size, position: position}
+
+      captured =
+        ComparatorMutants.with_native_type_outputs(module, %{{function, arity} => target}, fn ->
+          native_query_factory(shape)
+        end)
+
+      assert captured.native.errors == []
+      assert captured.streams.errors == []
+      assert captured.decoders.errors == []
+
+      coordinates =
+        for %{event: {_, :return_from, {^module, ^function, ^arity}, result}} = source <-
+              captured.events,
+            path = if(is_nil(size), do: [3], else: [3, position]),
+            value = native_type_return_field(result, size, position),
+            match?({:native_foreign_return, _}, value),
+            do: {source.index, path}
+
+      assert coordinates != []
+      states = native_copy_states(captured)
+
+      assert Enum.map(states.errors, & &1.rule) ==
+               List.duplicate(:state_helper_copy, length(coordinates))
+
+      assert Enum.map(states.errors, &{&1.index, &1.path}) == coordinates
+
+      for mutant <- [:stream_buffer_copy, :stream_state_copy, :stream_helper_copy] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+        expected = if mutant == :stream_helper_copy, do: [], else: states.errors
+        assert checked.errors == expected
+      end
+
+      assert native_copy_states(captured).errors == states.errors
+      assert native_copy_states(native_query_factory(shape)).errors == []
+    end
+  end
+
+  defp native_type_return_field(result, nil, _position), do: result
+
+  defp native_type_return_field(result, size, position)
+       when is_tuple(result) and tuple_size(result) == size,
+       do: elem(result, position)
+
+  defp native_type_return_field(_result, _size, _position), do: :other_return
+
   @tag :connection_streams
   test "Connection streams: native type requests retain their completed server callbacks" do
     captured = native_query_factory(:domain_reload)
@@ -1974,7 +2076,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       for instance <- captured.decoders.instances,
           {Postgrex.Protocol, :reload_init, 5} in instance.source.stack,
           {:ok, {:msg_data_row, values}, _buffer} <- [instance.expected],
-          do: Postgrex.Types.build_type_info(values)
+          do: ConnectionTypes.catalog(values)
 
     assert Enum.any?(infos, &(&1.category == :domain and &1.base_type != 0))
 

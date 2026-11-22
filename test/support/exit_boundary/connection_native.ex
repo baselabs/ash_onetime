@@ -423,7 +423,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
             :ok = module.close(socket)
           end
         end,
-        %{host: [], callbacks: []}
+        %{
+          host: [],
+          callbacks: [],
+          services: fn %{types: {module, table}} ->
+            owner = :ets.info(table, :owner)
+
+            %{
+              {:native_type_owner, module} => %{
+                pid: owner,
+                table: table,
+                callback: {Postgrex.TypeServer, :handle_call, 3}
+              }
+            }
+          end
+        }
       )
 
     receive do

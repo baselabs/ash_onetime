@@ -13,6 +13,11 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     initial = %{
       pairs: pairs,
       events: indexed.events,
+      event_index:
+        if(Map.get(indexed, :linear_intervals?, false),
+          do: indexed.events,
+          else: List.to_tuple(indexed.events)
+        ),
       reads: [],
       writes: [],
       options: [],
@@ -305,8 +310,8 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
          {:ok, internal} <- unique_call(state, outer, {:erts_internal, :port_control, 3}, args),
          {:ok, [1], deferred} <- driver_reply(state, outer, internal, port),
          {:ok, native_return} <- return_value(internal),
-         {:ok, signals} <- option_controls(state.events, outer, port, encoded),
-         events <- in_interval(state.events, outer, &(&1.pid == source.pid)),
+         {:ok, signals} <- option_controls(state.event_index, outer, port, encoded),
+         events <- in_interval(state.event_index, outer, &(&1.pid == source.pid)),
          calls <- Enum.flat_map(events, &program_event/1),
          :ok <- option_events(calls, option_program(port, mode, encoded, native_return)) do
       indexes = for event <- events, program_event(event) != [], do: event.index
@@ -465,9 +470,9 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
          {:ok, send3} <- unique_call(state, outer, {:prim_inet, :send, 3}, [port, data, []]),
          {:ok, :ok} <- return_value(send3),
          {:ok, send4} <- write_send(state, outer, port, ref, bytes),
-         {:ok, command} <- write_command(state.events, outer, port, send4.data),
+         {:ok, command} <- write_command(state.event_index, outer, port, send4.data),
          {:ok, driver} <- write_driver(state, outer, port, send4.data, command),
-         {:ok, signals} <- write_signals(state.events, outer, port, ref),
+         {:ok, signals} <- write_signals(state.event_index, outer, port, ref),
          {:ok, demonitor} <-
            unique_call(state, outer, {:erlang, :demonitor, 2}, [ref, [:flush]]),
          {:ok, true} <- return_value(demonitor),
@@ -526,7 +531,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     pid = outer.source.pid
 
     sends =
-      in_interval(state.events, outer, fn
+      in_interval(state.event_index, outer, fn
         %{event: {^pid, :call, {:prim_inet, :send, [^port, _, [], ^ref]}}} -> true
         _ -> false
       end)
@@ -571,7 +576,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     with {:ok, erlang} <- unique_call(state, outer, {:erlang, :port_command, 3}, args),
          {:ok, internal} <- unique_call(state, outer, {:erts_internal, :port_command, 3}, args),
          {:ok, true} <- return_value(erlang),
-         {:ok, signals} <- command_result(state.events, outer, internal, port, command) do
+         {:ok, signals} <- command_result(state.event_index, outer, internal, port, command) do
       {:ok, %{pairs: [erlang, internal], signals: signals}}
     end
   end
@@ -692,7 +697,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
          {:ok, {:ok, [^hi, ^lo]}} <- return_value(ctl),
          {:ok, {:ok, id}} <- return_value(async),
          true <- id == hi * 256 + lo,
-         {:ok, controls} <- read_controls(state.events, outer, internal, driver_args, id),
+         {:ok, controls} <- read_controls(state.event_index, outer, internal, driver_args, id),
          {:ok, ^result} <- return_value(recv0),
          {:ok, ^result} <- return_value(recv) do
       pairs = [outer, socket, recv, recv0, async, time, ctl, erlang, internal]
@@ -755,15 +760,17 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     id = chain.id
     message = {:inet_async, port, id, result}
 
-    with [received] <- in_interval(state.events, outer, &(&1.event == {pid, :receive, message})),
-         [sent] <- in_interval(state.events, outer, &(&1.event == {port, :send, message, pid})),
+    with [received] <-
+           in_interval(state.event_index, outer, &(&1.event == {pid, :receive, message})),
+         [sent] <-
+           in_interval(state.event_index, outer, &(&1.event == {port, :send, message, pid})),
          true <- sent.index < received.index,
          true <- chain.requested.index < sent.index,
          true <- outer.returned.index > received.index do
       {:ok, %{sent: sent, received: received, indexes: [received.index, sent.index]}}
     else
       _ ->
-        diagnostic = receive_diagnostic(state.events, outer, chain, port, result)
+        diagnostic = receive_diagnostic(state.event_index, outer, chain, port, result)
         {:error, {:native_receive_copy, diagnostic}}
     end
   end
@@ -886,7 +893,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
         {:ok, reply, []}
 
       {:ok, ref} when is_reference(ref) ->
-        deferred_reply(state.events, outer, internal, port, ref)
+        deferred_reply(state.event_index, outer, internal, port, ref)
 
       _ ->
         {:error, :native_control_origin}
@@ -930,7 +937,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     else
       _ ->
         signals =
-          Enum.flat_map(events, fn
+          Enum.flat_map(interval_events(events), fn
             %{event: {^pid, :receive, {^ref, reply}}, index: index} ->
               [%{index: index, kind: :receive, result: control_result(reply)}]
 
@@ -957,7 +964,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     {module, function, arity} = mfa
 
     candidates =
-      in_interval(state.events, outer, fn
+      in_interval(state.event_index, outer, fn
         %{event: {^pid, :call, {^module, ^function, args}}} -> length(args) == arity
         _ -> false
       end)
@@ -979,11 +986,40 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     end
   end
 
+  # The tuple contains every raw event in its original integer chronology.
+  # Binary search bounds the traversal; all events in the inclusive interval,
+  # including duplicates and other processes' events, still reach the predicate.
+  defp in_interval(events, outer, predicate) when is_tuple(events) do
+    first = event_bound(events, outer.source.index, false, 0, tuple_size(events))
+    stop = event_bound(events, outer.returned.index, true, first, tuple_size(events))
+
+    if first < stop do
+      for position <- first..(stop - 1), event = elem(events, position), predicate.(event),
+        do: event
+    else
+      []
+    end
+  end
+
   defp in_interval(events, outer, predicate) do
     Enum.filter(events, fn e ->
       e.index >= outer.source.index and e.index <= outer.returned.index and predicate.(e)
     end)
   end
+
+  defp event_bound(_events, _index, _after?, low, high) when low == high, do: low
+
+  defp event_bound(events, index, after?, low, high) do
+    middle = div(low + high, 2)
+    actual = elem(events, middle).index
+
+    if actual < index or (after? and actual == index),
+      do: event_bound(events, index, after?, middle + 1, high),
+      else: event_bound(events, index, after?, low, middle)
+  end
+
+  defp interval_events(events) when is_tuple(events), do: Tuple.to_list(events)
+  defp interval_events(events), do: events
 
   defp return_value(%{returned: %{event: {_, :return_from, _, value}}}), do: {:ok, value}
   defp return_value(_pair), do: {:error, :native_exception}

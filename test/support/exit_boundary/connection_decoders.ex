@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Compiled
+  alias AshOnetime.Test.ExitBoundary.ConnectionTypes
   alias AshOnetime.Test.ExitBoundary.Wire
 
   # Decoder buffers are copies of one physical connection's unconsumed bytes.
@@ -133,6 +134,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     |> Enum.reverse()
     |> Enum.reduce(state, fn pair, state ->
       program = Map.fetch!(plans, pair.source.index)
+
       actual =
         {Enum.map(program.execution, &program_event/1), program_terminal(pair.returned.event)}
 
@@ -898,7 +900,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp query_type_info(state, source, call) do
-    results =
+    input = Map.fetch!(state.query_inputs, call.index)
+    oids = if elem(call.mfa, 1) == :describe_params, do: input.param_oids, else: input.result_oids
+
+    pairs =
       state.pairs
       |> Map.values()
       |> Enum.filter(fn pair ->
@@ -907,11 +912,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
           pair.source.mfa == {Postgrex.Types, :fetch, 2}
       end)
       |> Enum.sort_by(& &1.source.index)
-      |> Enum.map(fn pair -> elem(pair.returned.event, 3) end)
 
-    if Enum.all?(results, &match?({:ok, _}, &1)),
-      do: {:ok, Enum.map(results, &elem(&1, 1))},
-      else: :error
+    if length(pairs) == length(oids) do
+      Enum.zip(pairs, oids)
+      |> Enum.reduce_while({:ok, []}, fn {pair, oid}, {:ok, infos} ->
+        case ConnectionTypes.fetch(state.pairs, pair, oid, input.types) do
+          {:ok, {:ok, info}, _origins} -> {:cont, {:ok, [info | infos]}}
+          _ -> {:halt, :error}
+        end
+      end)
+      |> case do
+        {:ok, infos} -> {:ok, Enum.reverse(infos)}
+        :error -> :error
+      end
+    else
+      :error
+    end
   end
 
   defp earlier_query_factory(state, source, first) do
@@ -1136,14 +1152,34 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
     case {program, received} do
       {[_source, call, sent, returned, _stop], %{index: index}} ->
-        record_replay(e, pair, cursor, buffer, port, [call, sent, returned], received, index, state)
+        record_replay(
+          e,
+          pair,
+          cursor,
+          buffer,
+          port,
+          [call, sent, returned],
+          received,
+          index,
+          state
+        )
 
       _ ->
         failure(state, e, :decoder_replay_copy, false)
     end
   end
 
-  defp record_replay(e, pair, cursor, buffer, port, [call, sent, returned], received, index, state) do
+  defp record_replay(
+         e,
+         pair,
+         cursor,
+         buffer,
+         port,
+         [call, sent, returned],
+         received,
+         index,
+         state
+       ) do
     size = byte_size(buffer)
 
     copies = [

@@ -7,7 +7,11 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
 
   def build(side) do
     initial = %{
-      roles: %{side.run.snapshot.root => :caller},
+      roles:
+        Map.new(side.run.snapshot.services || %{}, fn {pid, binding} ->
+          {pid, {:service, binding.name}}
+        end)
+        |> Map.put(side.run.snapshot.root, :caller),
       role_counts: %{},
       counts: %{},
       origins: %{},

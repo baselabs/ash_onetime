@@ -346,12 +346,22 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   # native receive and the matching callback's completed return. Every event and
   # spawned descendant remains in the same trace session.
   defp service_bindings(declared) do
-    Map.new(declared, fn {name, callback} ->
-      pid = Process.whereis(name)
-      unless is_pid(pid), do: raise("a declared observation service is unavailable")
-      {pid, %{name: name, callback: callback}}
+    Map.new(declared, fn
+      {name, %{pid: pid, callback: callback, table: table}} ->
+        unless is_pid(pid) and :ets.info(table, :owner) == pid,
+          do: raise("a declared native type-table owner is unavailable")
+
+        {pid, %{name: name, callback: callback, table: table}}
+
+      {name, callback} ->
+        pid = Process.whereis(name)
+        unless is_pid(pid), do: raise("a declared observation service is unavailable")
+        {pid, %{name: name, callback: callback}}
     end)
   end
+
+  defp service_bound?(pid, %{table: table}), do: :ets.info(table, :owner) == pid
+  defp service_bound?(pid, %{name: name}), do: Process.whereis(name) == pid
 
   defp service_event(state, {pid, :receive, message} = event) do
     case Map.fetch(state.services, pid) do
@@ -361,7 +371,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
           message: message,
           received: event,
           received_stamp: state.stamp,
-          registered?: Process.whereis(binding.name) == pid,
+          registered?: service_bound?(pid, binding),
           called: nil,
           called_stamp: nil,
           returned: nil,
@@ -369,7 +379,16 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
           used_by: nil
         }
 
-        %{state | service_receipts: [receipt | state.service_receipts]}
+        state = %{state | service_receipts: [receipt | state.service_receipts]}
+
+        case {binding.callback, message} do
+          {{_, :handle_call, 3}, {:"$gen_call", {_caller, _tag}, _request}} ->
+            pending = Map.update(state.service_pending, pid, [receipt], &(&1 ++ [receipt]))
+            %{state | service_pending: pending}
+
+          _ ->
+            state
+        end
 
       :error ->
         state
@@ -379,7 +398,13 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   defp service_event(state, {pid, :call, {module, function, [message | _] = args}} = event) do
     case Map.fetch(state.services, pid) do
       {:ok, %{callback: {^module, ^function, arity}}} when arity == length(args) ->
-        service_call(state, pid, message, event)
+        envelope =
+          case {function, args} do
+            {:handle_call, [request, from, _state]} -> {:"$gen_call", from, request}
+            _ -> message
+          end
+
+        service_call(state, pid, envelope, event)
 
       _ ->
         state
@@ -418,9 +443,13 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       receipt ->
         receipt = %{receipt | called: event, called_stamp: state.stamp}
         state = replace_service_receipt(state, receipt)
-        pending = Map.update(state.service_pending, pid, [receipt], &[receipt | &1])
 
-        %{state | service_pending: pending}
+        pending =
+          state.service_pending
+          |> Map.get(pid, [])
+          |> Enum.reject(&(&1.received_stamp == receipt.received_stamp))
+
+        %{state | service_pending: Map.put(state.service_pending, pid, [receipt | pending])}
     end
   end
 
