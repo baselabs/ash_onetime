@@ -48,11 +48,7 @@ defmodule AshOnetime.Test.ExitBoundary do
       send(root, {:setup, test, setup, invoke, control, preexisting})
       {initial_state, preexisting} = await_ready(root, monitor)
 
-      services =
-        case Map.get(spec, :services, %{}) do
-          factory when is_function(factory, 1) -> factory.(initial_state)
-          services -> services
-        end
+      services = observation_services(spec, initial_state)
 
       service_frames =
         Enum.map(services, fn
@@ -120,6 +116,13 @@ defmodule AshOnetime.Test.ExitBoundary do
       Process.demonitor(monitor, [:flush])
       Process.exit(root, :kill)
       :erlang.system_flag(:backtrace_depth, depth)
+    end
+  end
+
+  defp observation_services(spec, initial_state) do
+    case Map.get(spec, :services, %{}) do
+      factory when is_function(factory, 1) -> factory.(initial_state)
+      services -> services
     end
   end
 

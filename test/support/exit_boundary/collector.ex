@@ -351,6 +351,10 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
         unless is_pid(pid) and :ets.info(table, :owner) == pid,
           do: raise("a declared native type-table owner is unavailable")
 
+        # The synchronous system reply places every pre-arm dispatch before
+        # tracing. New ordinary messages then have their own native receipts.
+        _state = :sys.get_state(pid)
+
         {pid, %{name: name, callback: callback, table: table}}
 
       {name, callback} ->

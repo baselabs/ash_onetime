@@ -15,28 +15,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTypes do
       end)
       |> Enum.sort_by(& &1.source.index)
 
-    case lookups do
-      [lookup] ->
-        case native_lookup(lookup, table, oid, 3) do
-          {:ok, {_, _} = info} -> {:ok, {:ok, info}, [lookup.source.index]}
-          {:ok, :associating} -> {:ok, {:error, nil, module}, [lookup.source.index]}
-          :missing -> {:ok, {:error, nil, module}, [lookup.source.index]}
-          _ -> :error
-        end
+    fetch_result(lookups, module, table, oid)
+  end
 
-      [first, second] ->
-        with {:ok, nil} <- native_lookup(first, table, oid, 3),
-             result when result != :error <- native_lookup(second, table, oid, 2) do
-          info = if result == :missing, do: nil, else: elem(result, 1)
-          {:ok, {:error, info, module}, [first.source.index, second.source.index]}
-        else
-          _ -> :error
-        end
-
-      _ ->
-        :error
+  defp fetch_result([lookup], module, table, oid) do
+    case native_lookup(lookup, table, oid, 3) do
+      {:ok, {_, _} = info} -> {:ok, {:ok, info}, [lookup.source.index]}
+      {:ok, :associating} -> {:ok, {:error, nil, module}, [lookup.source.index]}
+      :missing -> {:ok, {:error, nil, module}, [lookup.source.index]}
+      _ -> :error
     end
   end
+
+  defp fetch_result([first, second], module, table, oid) do
+    with {:ok, nil} <- native_lookup(first, table, oid, 3),
+         result when result != :error <- native_lookup(second, table, oid, 2) do
+      info = if result == :missing, do: nil, else: elem(result, 1)
+      {:ok, {:error, info, module}, [first.source.index, second.source.index]}
+    else
+      _ -> :error
+    end
+  end
+
+  defp fetch_result(_lookups, _module, _table, _oid), do: :error
 
   defp native_lookup(%{source: source, returned: returned}, table, oid, field) do
     case {source.event, returned.event} do
@@ -58,7 +59,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTypes do
   def catalog(bytes) do
     case columns(bytes) do
       [oid, type, category, send, receive, output, input, array, base, composite] ->
-        fields = fields(oid, type, send, receive, output, input, array, base, composite)
+        fields = fields([oid, type, send, receive, output, input, array, base, composite])
 
         category =
           Map.get(
@@ -78,12 +79,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTypes do
         struct!(Postgrex.TypeInfo, Map.put(fields, :category, category))
 
       [oid, type, send, receive, output, input, array, base, composite] ->
-        fields = fields(oid, type, send, receive, output, input, array, base, composite)
+        fields = fields([oid, type, send, receive, output, input, array, base, composite])
         struct!(Postgrex.TypeInfo, %{fields | send: send})
     end
   end
 
-  defp fields(oid, type, send, receive, output, input, array, base, composite) do
+  defp fields([oid, type, send, receive, output, input, array, base, composite]) do
     %{
       oid: String.to_integer(oid),
       type: type,

@@ -67,22 +67,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   # stack; remove exactly that frame when locating its caller's direct program.
   # The index changes neither the capture nor the whole-observation comparison.
   defp decoder_programs(state) do
-    direct =
-      Enum.group_by(state.events, fn source ->
-        stack =
-          case source.event do
-            {_, tag, mfa, _} when tag in [:return_from, :exception_from] ->
-              case source.stack do
-                [^mfa | stack] -> stack
-                stack -> stack
-              end
-
-            _ ->
-              source.stack
-          end
-
-        {source.pid, stack}
-      end)
+    direct = Enum.group_by(state.events, &{&1.pid, direct_stack(&1)})
 
     context = %{
       state: state,
@@ -146,6 +131,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     end)
   end
 
+  defp direct_stack(%{event: {_, tag, mfa, _}, stack: [mfa | stack]})
+       when tag in [:return_from, :exception_from],
+       do: stack
+
+  defp direct_stack(source), do: source.stack
+
   # An arrival is reported when it enters the mailbox, possibly before the
   # selective receive that consumes it. Its native source/copy proof owns its
   # position independently of the executing call stack. Keep every raw event
@@ -178,50 +169,60 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     {inputs, _used} =
       pairs
       |> Enum.reverse()
-      |> Enum.reduce({%{}, MapSet.new()}, fn pair, {inputs, used} ->
-        events = decoder_direct(context, pair)
-
-        if pair.source.mfa == {Postgrex.Protocol, :msg_recv, 3} and
-             is_nil(direct_call(events, {Postgrex.Protocol, :msg_decode, 1})) do
-          {_, :call, {_, _, [protocol, _, _]}} = pair.source.event
-          {module, socket} = protocol.sock
-          tag = if module == :gen_tcp, do: :tcp, else: :ssl
-          child = direct_call(events, {Postgrex.Protocol, :msg_recv, 3})
-
-          cursor =
-            context.state.timeline
-            |> Enum.filter(&(&1.port == socket and &1.index < pair.source.index))
-            |> Enum.max_by(& &1.index, fn -> nil end)
-            |> case do
-              %{cursor: cursor} -> cursor
-              nil -> initial[socket]
-            end
-
-          delivery =
-            if child && cursor do
-              Enum.find(deliveries, fn delivery ->
-                received = delivery.received
-
-                delivery.port == socket and delivery.start >= cursor.offset and
-                  received.index < child.index and received.pid == pair.source.pid and
-                  not MapSet.member?(used, received.index) and
-                  match?({_, :receive, {^tag, ^socket, _}}, received.event)
-              end)
-            end
-
-          if delivery do
-            received = delivery.received
-            {Map.put(inputs, pair.source.index, received), MapSet.put(used, received.index)}
-          else
-            {inputs, used}
-          end
-        else
-          {inputs, used}
-        end
-      end)
+      |> Enum.reduce({%{}, MapSet.new()}, &active_input(&1, &2, context, initial, deliveries))
 
     inputs
   end
+
+  defp active_input(pair, {inputs, used}, context, initial, deliveries) do
+    events = decoder_direct(context, pair)
+
+    if pair.source.mfa == {Postgrex.Protocol, :msg_recv, 3} and
+         is_nil(direct_call(events, {Postgrex.Protocol, :msg_decode, 1})) do
+      delivery = active_input_delivery(context, pair, events, initial, deliveries, used)
+      bind_active_input(delivery, pair.source.index, inputs, used)
+    else
+      {inputs, used}
+    end
+  end
+
+  defp active_input_delivery(context, pair, events, initial, deliveries, used) do
+    {_, :call, {_, _, [protocol, _, _]}} = pair.source.event
+    {module, socket} = protocol.sock
+    tag = if module == :gen_tcp, do: :tcp, else: :ssl
+    child = direct_call(events, {Postgrex.Protocol, :msg_recv, 3})
+    cursor = active_cursor(context, socket, pair.source.index, initial)
+
+    if child && cursor do
+      Enum.find(deliveries, fn delivery ->
+        eligible_active_delivery?(delivery, pair, child, cursor, {tag, socket}, used)
+      end)
+    end
+  end
+
+  defp active_cursor(context, socket, index, initial) do
+    context.state.timeline
+    |> Enum.filter(&(&1.port == socket and &1.index < index))
+    |> Enum.max_by(& &1.index, fn -> nil end)
+    |> case do
+      %{cursor: cursor} -> cursor
+      nil -> initial[socket]
+    end
+  end
+
+  defp eligible_active_delivery?(delivery, pair, child, cursor, {tag, socket}, used) do
+    received = delivery.received
+
+    delivery.port == socket and delivery.start >= cursor.offset and
+      received.index < child.index and received.pid == pair.source.pid and
+      not MapSet.member?(used, received.index) and
+      match?({_, :receive, {^tag, ^socket, _}}, received.event)
+  end
+
+  defp bind_active_input(nil, _index, inputs, used), do: {inputs, used}
+
+  defp bind_active_input(%{received: received}, index, inputs, used),
+    do: {Map.put(inputs, index, received), MapSet.put(used, received.index)}
 
   defp decoder_program_equal?(actual, expected), do: actual === expected
 
@@ -259,34 +260,60 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
          %{expected: result} <- context.instances[index] do
       prefix = program_call(mfa)
 
-      case {mfa, result} do
-        {{Postgrex.Protocol, :msg_decode, 1}, {:ok, _, _}} ->
-          {prefix, {:return_from, :ok, 3}, [index]}
-
-        {{Postgrex.Protocol, :msg_decode, 1}, {:more, _}} ->
-          child_program(context, events, {Postgrex.Protocol, :msg_recv, 4}, prefix, [index])
-
-        {{Postgrex.Types, :decode_rows, 4}, {:ok, _, _}} ->
-          # rows_msg/3 is an untraced pure bridge: exactly one msg_recv/3,
-          # then the row accumulator accompanies that message in the return.
-          {program, terminal, origins} =
-            child_program(context, events, {Postgrex.Protocol, :msg_recv, 3}, prefix, [index])
-
-          terminal =
-            case terminal do
-              {:return_from, :ok, 3} -> {:return_from, :ok, 4}
-              other -> other
-            end
-
-          {program, terminal, origins}
-
-        {{Postgrex.Types, :decode_rows, 4}, {:more, _, _, _}} ->
-          child_program(context, events, {Postgrex.Protocol, :rows_recv, 5}, prefix, [index])
-      end
+      leaf_result(context, events, mfa, result, prefix, index)
     else
       _ -> {[:missing_decoder_origin], :missing_decoder_origin, []}
     end
   end
+
+  defp leaf_result(
+         _context,
+         _events,
+         {Postgrex.Protocol, :msg_decode, 1},
+         {:ok, _, _},
+         prefix,
+         index
+       ),
+    do: {prefix, {:return_from, :ok, 3}, [index]}
+
+  defp leaf_result(
+         context,
+         events,
+         {Postgrex.Protocol, :msg_decode, 1},
+         {:more, _},
+         prefix,
+         index
+       ),
+    do: child_program(context, events, {Postgrex.Protocol, :msg_recv, 4}, prefix, [index])
+
+  defp leaf_result(
+         context,
+         events,
+         {Postgrex.Types, :decode_rows, 4},
+         {:ok, _, _},
+         prefix,
+         index
+       ) do
+    # rows_msg/3 is an untraced pure bridge: exactly one msg_recv/3,
+    # then the row accumulator accompanies that message in the return.
+    {program, terminal, origins} =
+      child_program(context, events, {Postgrex.Protocol, :msg_recv, 3}, prefix, [index])
+
+    {program, row_terminal(terminal), origins}
+  end
+
+  defp leaf_result(
+         context,
+         events,
+         {Postgrex.Types, :decode_rows, 4},
+         {:more, _, _, _},
+         prefix,
+         index
+       ),
+    do: child_program(context, events, {Postgrex.Protocol, :rows_recv, 5}, prefix, [index])
+
+  defp row_terminal({:return_from, :ok, 3}), do: {:return_from, :ok, 4}
+  defp row_terminal(terminal), do: terminal
 
   defp continuation_program(context, pair, events, function) do
     {_, :call, {_, _, [protocol | _]}} = pair.source.event
@@ -298,39 +325,39 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
            context.state.pairs[index] do
       prefix = program_call(mfa)
 
-      case result do
-        {:ok, data} ->
-          kind = if function == :msg_recv, do: :message, else: :rows
-
-          case program_demand(context, pair.source, kind) do
-            {:ok, more, origins} ->
-              arity =
-                case {function, byte_size(data) < more} do
-                  {:msg_recv, true} -> 4
-                  {:msg_recv, false} -> 3
-                  {:rows_recv, true} -> 5
-                  {:rows_recv, false} -> 4
-                end
-
-              child_program(
-                context,
-                events,
-                {Postgrex.Protocol, function, arity},
-                prefix,
-                [index | origins]
-              )
-
-            :error ->
-              {prefix, :missing_decoder_demand, [index]}
-          end
-
-        {:error, _reason} ->
-          {prefix, {:return_from, :disconnect, 3}, [index]}
-      end
+      continuation_result(context, pair, events, function, result, prefix, index)
     else
       _ -> {[:missing_native_receive], :missing_native_receive, []}
     end
   end
+
+  defp continuation_result(context, pair, events, function, {:ok, data}, prefix, index) do
+    kind = if function == :msg_recv, do: :message, else: :rows
+
+    case program_demand(context, pair.source, kind) do
+      {:ok, more, origins} ->
+        arity = continuation_arity(function, byte_size(data) < more)
+
+        child_program(
+          context,
+          events,
+          {Postgrex.Protocol, function, arity},
+          prefix,
+          [index | origins]
+        )
+
+      :error ->
+        {prefix, :missing_decoder_demand, [index]}
+    end
+  end
+
+  defp continuation_result(_context, _pair, _events, _function, {:error, _}, prefix, index),
+    do: {prefix, {:return_from, :disconnect, 3}, [index]}
+
+  defp continuation_arity(:msg_recv, true), do: 4
+  defp continuation_arity(:msg_recv, false), do: 3
+  defp continuation_arity(:rows_recv, true), do: 5
+  defp continuation_arity(:rows_recv, false), do: 4
 
   defp program_demand(context, source, kind) do
     mfa =
@@ -374,32 +401,41 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       Map.get(context.active_inputs, pair.source.index) ||
         Enum.find(events, &(elem(&1.event, 1) == :receive))
 
-    case received do
-      %{event: {_, :receive, {^tag, ^socket, _}}, index: index} ->
-        child_program(context, events, {Postgrex.Protocol, :msg_recv, 3}, [], [index])
+    active_message(received, context, events, tag, socket)
+  end
 
-      %{event: {_, :receive, message}} = received ->
-        closed = if tag == :tcp, do: :tcp_closed, else: :ssl_closed
-        error = if tag == :tcp, do: :tcp_error, else: :ssl_error
+  defp active_message(
+         %{event: {_, :receive, {tag, socket, _}}, index: index},
+         context,
+         events,
+         tag,
+         socket
+       ),
+    do: child_program(context, events, {Postgrex.Protocol, :msg_recv, 3}, [], [index])
 
-        case message do
-          {^closed, ^socket} ->
-            {[program_event(received)], {:return_from, :disconnect, 3}, [received.index]}
+  defp active_message(
+         %{event: {_, :receive, message}} = received,
+         _context,
+         _events,
+         tag,
+         socket
+       ) do
+    closed = if tag == :tcp, do: :tcp_closed, else: :ssl_closed
+    error = if tag == :tcp, do: :tcp_error, else: :ssl_error
 
-          {^error, ^socket, _reason} ->
-            {[program_event(received)], {:return_from, :disconnect, 3}, [received.index]}
-
-          :timeout ->
-            {[program_event(received)], {:return_from, :disconnect, 3}, [received.index]}
-
-          _ ->
-            {[:unexpected_active_message], :unexpected_active_message, []}
-        end
-
-      nil ->
-        {[:missing_active_origin], :missing_active_origin, []}
+    case message do
+      {^closed, ^socket} -> active_disconnect(received)
+      {^error, ^socket, _reason} -> active_disconnect(received)
+      :timeout -> active_disconnect(received)
+      _ -> {[:unexpected_active_message], :unexpected_active_message, []}
     end
   end
+
+  defp active_message(nil, _context, _events, _tag, _socket),
+    do: {[:missing_active_origin], :missing_active_origin, []}
+
+  defp active_disconnect(received),
+    do: {[program_event(received)], {:return_from, :disconnect, 3}, [received.index]}
 
   defp child_program(context, events, mfa, prefix, origins) do
     case direct_call(events, mfa) do
@@ -813,22 +849,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
         []
 
       %{source: owner} ->
-        parameters =
-          state.instances
-          |> Enum.filter(fn instance ->
-            instance.source.pid == source.pid and instance.source.index > owner.index and
-              instance.returned.index < source.index and
-              match?({:ok, {:msg_parameter_desc, _}, _}, instance.expected)
-          end)
-          |> Enum.max_by(& &1.returned.index, fn -> nil end)
-
-        case parameters do
-          %{expected: {:ok, {:msg_parameter_desc, oids}, _}} -> oids
-          nil -> Map.fetch!(state.query_inputs, owner.index).parameter_accumulator
-        end
+        recv_parameter_oids(state, source, owner)
 
       nil ->
         root.query.param_oids || []
+    end
+  end
+
+  defp recv_parameter_oids(state, source, owner) do
+    parameters =
+      state.instances
+      |> Enum.filter(fn instance ->
+        instance.source.pid == source.pid and instance.source.index > owner.index and
+          instance.returned.index < source.index and
+          match?({:ok, {:msg_parameter_desc, _}, _}, instance.expected)
+      end)
+      |> Enum.max_by(& &1.returned.index, fn -> nil end)
+
+    case parameters do
+      %{expected: {:ok, {:msg_parameter_desc, oids}, _}} -> oids
+      nil -> Map.fetch!(state.query_inputs, owner.index).parameter_accumulator
     end
   end
 
@@ -916,10 +956,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     if length(pairs) == length(oids) do
       Enum.zip(pairs, oids)
       |> Enum.reduce_while({:ok, []}, fn {pair, oid}, {:ok, infos} ->
-        case ConnectionTypes.fetch(state.pairs, pair, oid, input.types) do
-          {:ok, {:ok, info}, _origins} -> {:cont, {:ok, [info | infos]}}
-          _ -> {:halt, :error}
-        end
+        query_type_step(state.pairs, pair, oid, input.types, infos)
       end)
       |> case do
         {:ok, infos} -> {:ok, Enum.reverse(infos)}
@@ -927,6 +964,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       end
     else
       :error
+    end
+  end
+
+  defp query_type_step(pairs, pair, oid, types, infos) do
+    case ConnectionTypes.fetch(pairs, pair, oid, types) do
+      {:ok, {:ok, info}, _origins} -> {:cont, {:ok, [info | infos]}}
+      _ -> {:halt, :error}
     end
   end
 
@@ -1151,7 +1195,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       end)
 
     case {program, received} do
-      {[_source, call, sent, returned, _stop], %{index: index}} ->
+      {[_source, call, sent, returned, _stop], %{index: _index}} ->
         record_replay(
           e,
           pair,
@@ -1160,7 +1204,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
           port,
           [call, sent, returned],
           received,
-          index,
           state
         )
 
@@ -1176,8 +1219,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
          buffer,
          port,
          [call, sent, returned],
-         received,
-         index,
+         %{index: index} = received,
          state
        ) do
     size = byte_size(buffer)

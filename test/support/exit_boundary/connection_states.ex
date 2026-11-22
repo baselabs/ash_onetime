@@ -137,6 +137,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       type_models: %{},
       type_locks: %{},
       type_owners: %{},
+      type_services: native_type_services(native.pairs),
+      service_queues: %{},
+      service_current: %{},
       events: indexed.events,
       reload_spawns: %{},
       reload_children: %{},
@@ -188,7 +191,108 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     state = fixture_event(source, state)
     state = reload_event(source, state)
     state = factory_event(source, state)
+    state = type_service_event(source, state)
     callback_event(source, state)
+  end
+
+  # The true table-owner BIF identifies shared services without making them
+  # root descendants. Their receive trace is mailbox ingress; decode_msg/6
+  # consumes the FIFO receipt before any dispatch copy is qualified.
+  defp native_type_services(pairs) do
+    for {_index, pair} <- pairs,
+        pair.source.mfa == {:ets, :info, 2},
+        {Postgrex.Types, :owner, 1} in pair.source.stack,
+        {_, :call, {:ets, :info, [_table, :owner]}} <- [pair.source.event],
+        {_, :return_from, _, owner} <- [pair.returned.event],
+        is_pid(owner),
+        into: MapSet.new(),
+        do: owner
+  end
+
+  defp type_service_event(%{event: {pid, :receive, message}} = source, state) do
+    if MapSet.member?(state.type_services, pid) do
+      queue = Map.get(state.service_queues, pid, :queue.new())
+      state = put_in(state.service_queues[pid], :queue.in(source, queue))
+      terminal_service_copy(state, source, message, [2], service_terminal(state, pid, message))
+    else
+      state
+    end
+  end
+
+  defp type_service_event(
+         %{event: {pid, :call, {:gen_server, :decode_msg, [_, _, _, _, _, message]}}} = source,
+         state
+       ) do
+    if MapSet.member?(state.type_services, pid) do
+      queue = Map.get(state.service_queues, pid, :queue.new())
+
+      case :queue.out(queue) do
+        {{:value, receipt}, remaining} ->
+          {^pid, :receive, expected} = receipt.event
+          state = exact(state, source, :state_service_receive, message, expected)
+          context = service_terminal(state, pid, expected)
+
+          state
+          |> put_in([:service_queues, pid], remaining)
+          |> put_in([:service_current, pid], context)
+          |> terminal_service_copy(source, message, [2, 2, 5], context)
+
+        {:empty, _} ->
+          # The native relative-timeout branch synthesizes this atom; it has
+          # no Protocol copy. Every ordinary message requires its real receipt.
+          state = exact(state, source, :state_service_receive, message, :timeout)
+          put_in(state.service_current[pid], nil)
+      end
+    else
+      state
+    end
+  end
+
+  defp type_service_event(
+         %{event: {pid, :call, {:gen_server, function, arguments}}} = source,
+         state
+       )
+       when (function == :decode_msg and length(arguments) == 4) or
+              (function == :handle_msg and length(arguments) in [3, 4]) or
+              (function == :try_handle_info and length(arguments) == 3) or
+              (function == :handle_common_reply and length(arguments) in [5, 6]) do
+    terminal_service_copy(
+      state,
+      source,
+      Enum.at(arguments, 2),
+      [2, 2, 2],
+      state.service_current[pid]
+    )
+  end
+
+  defp type_service_event(_source, state), do: state
+
+  defp service_terminal(state, server, {:EXIT, child, _reason}) do
+    case {state.type_owners[child], state.reload_children[child]} do
+      {%{server: ^server}, %{terminal: terminal, terminal_version: version}} ->
+        %{message: {:EXIT, child, terminal}, version: version}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp service_terminal(_state, _server, _message), do: nil
+
+  defp terminal_service_copy(state, _source, _message, _path, nil), do: state
+
+  defp terminal_service_copy(state, source, message, path, context) do
+    state =
+      helper_copy(
+        state,
+        source,
+        path,
+        message,
+        context.message,
+        {:reload_service_exit, context.version.origin}
+      )
+
+    copy(state, source, path ++ [2, 1], context.version)
   end
 
   defp factory_event(

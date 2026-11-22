@@ -158,9 +158,12 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
                   }
               end
 
+            locations = Diagnostics.locations(result.errors)
+
             all =
               Enum.reduce(result.errors, all, fn difference, found ->
-                log_difference(row, label, difference)
+                source = Diagnostics.location(difference, locations)
+                log_difference(row, label, difference, source)
 
                 at =
                   case difference.at do
@@ -181,7 +184,7 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
                       count: 1,
                       tuple: label,
                       row: row,
-                      source: Diagnostics.location(difference),
+                      source: source,
                       sample: Diagnostics.safe(difference)
                     })
                 end
@@ -197,37 +200,20 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
       assert counts.pairs == length(path_indices) * length(labels)
 
       for {key, sample} <- Enum.sort(residuals),
-          do:
-            IO.puts(
-              "C_POS_RESIDUAL" <>
-                ": " <>
-                Diagnostics.render({key, sample},
-                  pretty: true,
-                  limit: :infinity,
-                  printable_limit: :infinity
-                )
-            )
+          do: Diagnostics.emit("C_POS_RESIDUAL", {key, sample})
 
       assert residuals == %{},
              "C-pos residuals: #{map_size(residuals)} qualified locations (the whole matrix ran)"
     end
   end
 
-  defp log_difference(row, tuple, difference) do
-    IO.puts(
-      "C_POS_RESIDUAL_OCCURRENCE: " <>
-        Diagnostics.render(
-          %{
-            row: row,
-            tuple: tuple,
-            source: Diagnostics.location(difference),
-            difference: Diagnostics.safe(difference)
-          },
-          pretty: true,
-          limit: :infinity,
-          printable_limit: :infinity
-        )
-    )
+  defp log_difference(row, tuple, difference, source) do
+    Diagnostics.emit("C_POS_RESIDUAL_OCCURRENCE", %{
+      row: row,
+      tuple: tuple,
+      source: source,
+      difference: Diagnostics.safe(difference)
+    })
   end
 
   defp log_protocol_copies(%{connections: {run, twin}}, row, tuple) do
@@ -250,13 +236,12 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
     site = Map.take(copy, [:mfa, :tag, :role, :path, :buffer_kind, :stack])
 
     unless MapSet.member?(seen, site) do
-      IO.puts(
-        "CONNECTION_PROTOCOL_COPY_SITE: " <>
-          Diagnostics.render(%{row: row, tuple: tuple, side: side, copy: copy},
-            pretty: true,
-            limit: :infinity
-          )
-      )
+      Diagnostics.emit("CONNECTION_PROTOCOL_COPY_SITE", %{
+        row: row,
+        tuple: tuple,
+        side: side,
+        copy: copy
+      })
     end
 
     MapSet.put(seen, site)

@@ -90,21 +90,15 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
   end
 
   defp log_divergences(errors, row) do
+    locations = Diagnostics.locations(errors)
+
     for difference <- errors do
-      IO.puts(
-        "U9_NATIVE_RESIDUAL_OCCURRENCE: " <>
-          Diagnostics.render(
-            %{
-              row: row,
-              tuple: :va,
-              source: Diagnostics.location(difference),
-              difference: Diagnostics.safe(difference)
-            },
-            pretty: true,
-            limit: :infinity,
-            printable_limit: :infinity
-          )
-      )
+      Diagnostics.emit("U9_NATIVE_RESIDUAL_OCCURRENCE", %{
+        row: row,
+        tuple: :va,
+        source: Diagnostics.location(difference, locations),
+        difference: Diagnostics.safe(difference)
+      })
     end
   end
 end

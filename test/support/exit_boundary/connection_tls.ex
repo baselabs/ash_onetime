@@ -382,9 +382,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     state =
       profile_component(profile, :worker_events, fn ->
-        Enum.reduce(events, initial, fn source, state ->
-          if Map.has_key?(owners, source.pid), do: worker_event(source, state), else: state
-        end)
+        Enum.reduce(events, initial, &worker_owner_event(&1, &2, owners))
       end)
 
     profile_component(profile, :worker_debug_completion, fn ->
@@ -392,6 +390,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         tls_failure(state, source, :tls_machine_debug_required)
       end)
     end)
+  end
+
+  defp worker_owner_event(source, state, owners) do
+    if Map.has_key?(owners, source.pid), do: worker_event(source, state), else: state
   end
 
   defp worker_event(%{event: {pid, :receive, message}} = source, state) do

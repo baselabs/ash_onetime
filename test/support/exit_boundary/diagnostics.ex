@@ -6,6 +6,34 @@ defmodule AshOnetime.Test.ExitBoundary.Diagnostics do
   # is still private: scalar values never become printable by losing a field name.
   def render(value, options \\ []), do: inspect(safe(value), options)
 
+  # Each occurrence remains in the log. Large records use bounded gzip/base64
+  # chunks so the runner never truncates a diagnostic line. Only the existing
+  # private-value output boundary can supply the encoded text.
+  def emit(label, value) do
+    rendered = render(value, pretty: false, limit: :infinity, printable_limit: :infinity)
+
+    if byte_size(rendered) <= 4096 do
+      IO.puts(label <> ": " <> rendered)
+    else
+      emit_archive(label, rendered)
+    end
+  end
+
+  defp emit_archive(label, rendered) do
+    compressed = :zlib.gzip(rendered)
+    encoded = Base.encode64(compressed)
+    digest = Base.encode16(:crypto.hash(:sha256, rendered), case: :lower)
+    chunks = for <<chunk::binary-size(4096) <- encoded>>, do: chunk
+    consumed = length(chunks) * 4096
+    tail = binary_part(encoded, consumed, byte_size(encoded) - consumed)
+    chunks = if tail == "", do: chunks, else: chunks ++ [tail]
+
+    IO.puts(label <> "_GZIP_BEGIN: " <> digest)
+
+    for chunk <- chunks, do: IO.puts(label <> "_GZIP_CHUNK: " <> chunk)
+    IO.puts(label <> "_GZIP_END: " <> Integer.to_string(length(chunks)))
+  end
+
   def logger_filter(event, _extra) do
     if private?(event) do
       %{event | msg: {:string, render(event.msg)}, meta: Map.take(event.meta, [:time, :gl, :pid])}
@@ -94,6 +122,20 @@ defmodule AshOnetime.Test.ExitBoundary.Diagnostics do
   end
 
   def location(error), do: %{at: safe(Map.get(error, :at))}
+
+  # Code is fixed while one completed comparison is reported. Scope the map
+  # to that comparison, so native owner reloads and production mutations never
+  # share cached locations. Decode each module/function's debug info once.
+  def locations(errors) do
+    Enum.reduce(errors, %{}, fn error, locations ->
+      Map.put_new_lazy(locations, location_key(error), fn -> location(error) end)
+    end)
+  end
+
+  def location(error, locations), do: Map.fetch!(locations, location_key(error))
+
+  defp location_key(%{at: %{mfa: mfa}}), do: {:mfa, mfa}
+  defp location_key(error), do: {:at, Map.get(error, :at)}
 
   # These are diagnostic coordinates, selected by their named fields. Actual,
   # expected, event, state, result and reason always take the private value route.

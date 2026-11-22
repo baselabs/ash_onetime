@@ -719,6 +719,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:diagnostic_record_complete) do
+    [
+      %{
+        path: "test/support/exit_boundary/diagnostics.ex",
+        original: "    compressed = :zlib.gzip(rendered)\n",
+        mutated: "    compressed = :zlib.gzip(binary_part(rendered, 0, 4096))\n"
+      }
+    ]
+  end
+
   def compare(pair, rule), do: with_mutant(rule, fn -> Comparator.compare(pair) end)
 
   # Change a real TLS sender's private state argument, restoring it inside the
@@ -950,16 +960,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     targets = %{{:reply, 2} => [0, 1]}
 
     run =
-      machine_reply_phase(mode, :native_capture, fn ->
-        with_owner_mutant(:gen_statem, &(&1 > 1), &owner_inputs_form(&1, &2, targets), fn ->
-          with_owner_mutant(
-            :ssl_gen_statem,
-            &(&1 > 1),
-            &remote_reply_form/2,
-            fn -> ConnectionNative.observe_tls(mode) end
-          )
-        end)
-      end)
+      machine_reply_phase(mode, :native_capture, fn -> capture_machine_reply(targets, mode) end)
 
     assert run.result == []
 
@@ -1048,6 +1049,24 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         ConnectionTls.build(%{events: events}, binding, %{mode: mode, phase: mutant})
       end)
     end)
+  end
+
+  defp capture_machine_reply(targets, mode) do
+    with_owner_mutant(
+      :gen_statem,
+      &(&1 > 1),
+      &owner_inputs_form(&1, &2, targets),
+      fn -> capture_ssl_reply(mode) end
+    )
+  end
+
+  defp capture_ssl_reply(mode) do
+    with_owner_mutant(
+      :ssl_gen_statem,
+      &(&1 > 1),
+      &remote_reply_form/2,
+      fn -> ConnectionNative.observe_tls(mode) end
+    )
   end
 
   defp machine_reply_phase(mode, phase, callback) do
@@ -1412,11 +1431,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         values =
           inputs
           |> Enum.with_index()
-          |> Enum.map(fn {input, position} ->
-            if position in positions,
-              do: unwrapped_input(input, position, annotation),
-              else: input
-          end)
+          |> Enum.map(&owner_input_value(&1, positions, annotation))
 
         cases =
           for {:clause, location, arguments, guards, body} <- clauses,
@@ -1435,6 +1450,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   defp owner_inputs_form(form, sites, _targets), do: {form, sites}
+
+  defp owner_input_value({input, position}, positions, annotation) do
+    if position in positions,
+      do: unwrapped_input(input, position, annotation),
+      else: input
+  end
 
   defp unwrapped_input(input, position, location) do
     value = {:var, location, String.to_atom("AshOnetimeHelperValue#{position}")}
@@ -1581,26 +1602,20 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     output =
       if operation == :corrupt, do: List.replace_at(fields, target.position, marker), else: fields
 
-    literal_size =
-      case expression do
-        {:tuple, _, fields} -> length(fields)
-        _ -> nil
-      end
-
-    cond do
-      operation == :corrupt and not is_nil(literal_size) and literal_size != target.size ->
+    case helper_output_mode(expression, target, operation) do
+      :unchanged ->
         expression
 
-      Map.get(target, :total?, false) or (operation == :corrupt and literal_size == target.size) ->
-        # A literal tuple in this clause already fixes the return size. Adding
-        # a catch-all would be unreachable and change the native warning set.
+      :total ->
+        # A literal tuple fixes the return size. An unreachable catch-all would
+        # change the native warning set.
         {:block, location,
          [
            {:match, location, {:tuple, location, input}, expression},
            {:tuple, location, output}
          ]}
 
-      true ->
+      :partial ->
         other = {:var, location, String.to_atom("AshOnetimeElementOther#{site}")}
 
         {:case, location, expression,
@@ -1671,6 +1686,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
        {:clause, location, [input], [], [output]},
        {:clause, location, [other], [], [other]}
      ]}
+  end
+
+  defp helper_output_mode({:tuple, _, fields}, %{size: size}, :corrupt)
+       when length(fields) != size,
+       do: :unchanged
+
+  defp helper_output_mode({:tuple, _, _fields}, _target, :corrupt), do: :total
+
+  defp helper_output_mode(_expression, target, _operation) do
+    if Map.get(target, :total?, false), do: :total, else: :partial
   end
 
   defp machine_form({:function, annotation, :loop_msg_event, 5, clauses}, sites, rule) do

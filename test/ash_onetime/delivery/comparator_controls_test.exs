@@ -700,18 +700,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
          %{index: index, event: {_, :return_from, {module, function, _arity}, result}} = source
        )
        when module in [Postgrex.Types, Postgrex.TypeServer] do
-    paths =
-      case {module, function, result} do
-        {Postgrex.Types, :owner, {:ok, _owner}} -> [[3, 0], [3, 1]]
-        {Postgrex.Types, :owner, :error} -> [[3]]
-        {Postgrex.Types, :fetch, {:ok, _info}} -> [[3, 0], [3, 1]]
-        {Postgrex.Types, :fetch, {:error, _info, _module}} -> [[3, 0], [3, 1], [3, 2]]
-        {Postgrex.Types, :build_type_info, _info} -> [[3]]
-        {Postgrex.TypeServer, :fetch, {:lock, _reference, _types}} -> [[3, 0], [3, 1], [3, 2]]
-        {Postgrex.TypeServer, :fetch, status} when status in [:error, :noproc] -> [[3]]
-        {Postgrex.TypeServer, :update, _status} -> [[3]]
-        _ -> []
-      end
+    paths = native_type_return_paths(module, function, result)
 
     for path <- paths, do: %{index: index, mfa: source.mfa, path: path}
   end
@@ -767,6 +756,25 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   defp native_helper_term(_source), do: []
+
+  defp native_type_return_paths(Postgrex.Types, :owner, {:ok, _owner}), do: [[3, 0], [3, 1]]
+  defp native_type_return_paths(Postgrex.Types, :owner, :error), do: [[3]]
+  defp native_type_return_paths(Postgrex.Types, :fetch, {:ok, _info}), do: [[3, 0], [3, 1]]
+
+  defp native_type_return_paths(Postgrex.Types, :fetch, {:error, _info, _module}),
+    do: [[3, 0], [3, 1], [3, 2]]
+
+  defp native_type_return_paths(Postgrex.Types, :build_type_info, _info), do: [[3]]
+
+  defp native_type_return_paths(Postgrex.TypeServer, :fetch, {:lock, _reference, _types}),
+    do: [[3, 0], [3, 1], [3, 2]]
+
+  defp native_type_return_paths(Postgrex.TypeServer, :fetch, status)
+       when status in [:error, :noproc],
+       do: [[3]]
+
+  defp native_type_return_paths(Postgrex.TypeServer, :update, _status), do: [[3]]
+  defp native_type_return_paths(_module, _function, _result), do: []
 
   defp native_helper_return_positions(
          :recv_describe,
@@ -1386,8 +1394,74 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     IO.puts(
       "NATIVE_INTERVAL_MEASUREMENT: " <>
-        Diagnostics.render(%{linear: linear_us, indexed: indexed_us, count: length(events)})
+        Diagnostics.render(%{
+          linear: %{length: linear_us},
+          indexed: %{length: indexed_us},
+          events: %{length: length(events)}
+        })
     )
+  end
+
+  @tag :connection_streams
+  test "Connection streams: bounded diagnostics preserve every native error coordinate" do
+    captured =
+      ComparatorMutants.with_postgrex_inputs(
+        %{{:fetch, 2} => [0, 1]},
+        fn -> native_query_factory(:array_nested_composite_array_domain_reload) end,
+        Postgrex.Types
+      )
+
+    assert captured.native.errors == []
+    assert captured.streams.errors == []
+    assert captured.decoders.errors == []
+    states = native_copy_states(captured)
+    assert length(states.errors) > 1
+
+    {plain_us, sources} = :timer.tc(fn -> Enum.map(states.errors, &Diagnostics.location/1) end)
+
+    {indexed_us, locations} = :timer.tc(fn -> Diagnostics.locations(states.errors) end)
+    assert Enum.map(states.errors, &Diagnostics.location(&1, locations)) == sources
+
+    record = %{occurrences: List.to_tuple(states.errors)}
+    expected =
+      Diagnostics.render(record, pretty: false, limit: :infinity, printable_limit: :infinity)
+    assert byte_size(expected) > 4096
+
+    {truncated, truncated_digest} =
+      ComparatorMutants.with_mutant(:diagnostic_record_complete, fn ->
+        native_diagnostic_archive(record)
+      end)
+
+    assert byte_size(truncated) == 4096
+    assert Base.encode16(:crypto.hash(:sha256, truncated), case: :lower) != truncated_digest
+    {complete, digest} = native_diagnostic_archive(record)
+    assert complete == expected
+    assert Base.encode16(:crypto.hash(:sha256, complete), case: :lower) == digest
+
+    IO.puts(
+      "NATIVE_DIAGNOSTIC_LOCATION: " <>
+        Diagnostics.render(%{plain: %{length: plain_us}, indexed: %{length: indexed_us}})
+    )
+  end
+
+  defp native_diagnostic_archive(record) do
+    output = ExUnit.CaptureIO.capture_io(fn -> Diagnostics.emit("NATIVE_RECORD", record) end)
+    lines = String.split(output, "\n", trim: true)
+    assert Enum.all?(lines, &(byte_size(&1) <= 4200))
+    [begin | rest] = lines
+    {chunks, [ending]} = Enum.split(rest, -1)
+    "NATIVE_RECORD_GZIP_BEGIN: " <> digest = begin
+    "NATIVE_RECORD_GZIP_END: " <> count = ending
+    assert String.to_integer(count) == length(chunks)
+
+    decoded =
+      chunks
+      |> Enum.map(fn "NATIVE_RECORD_GZIP_CHUNK: " <> chunk -> chunk end)
+      |> Enum.join()
+      |> Base.decode64!()
+      |> :zlib.gunzip()
+
+    {decoded, digest}
   end
 
   defp assert_native_helper_inputs(targets, observe, module \\ Postgrex.Protocol) do
