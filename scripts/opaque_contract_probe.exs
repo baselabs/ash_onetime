@@ -34,7 +34,8 @@ try do
 
   {:value, {new_result, new_args}} = :dialyzer_plt.lookup(plt, {module, :new, 1})
   {:value, new_contract} = :dialyzer_plt.lookup_contract(plt, {module, :new, 1})
-  types = :erl_types.t_inf(new_result, :dialyzer_contracts.get_contract_return(new_contract, new_args))
+  types =
+    :erl_types.t_inf(new_result, :dialyzer_contracts.get_contract_return(new_contract, new_args))
 
   actual =
     :erl_types.t_map([
