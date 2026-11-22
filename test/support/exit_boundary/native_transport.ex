@@ -15,6 +15,10 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       writes: [],
       options: [],
       active: [],
+      passive: [],
+      passive_pending: %{},
+      passive_receives: MapSet.new(),
+      port_owners: port_owners(historical, transports),
       active_modes: Map.merge(historical_modes(historical), transport_modes(transports)),
       active_receives: %{},
       errors: []
@@ -40,6 +44,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
     state = option_sources(state)
     state = active_deliveries(state)
+    state = passive_sources(state)
 
     %{
       pairs: pairs,
@@ -47,6 +52,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       writes: Enum.reverse(state.writes),
       options: Enum.reverse(state.options),
       active: Enum.reverse(state.active),
+      passive: Enum.reverse(state.passive),
       historical: historical,
       errors: Enum.reverse(state.errors)
     }
@@ -56,6 +62,19 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     for {holder, %{protocol: %{sock: {:gen_tcp, port}, buffer: :active_once}}} <- historical,
         into: %{},
         do: {port, %{mode: :once, origin: {:historical_active_mode, holder}}}
+  end
+
+  defp port_owners(historical, transports) do
+    owners =
+      for {_holder, %{protocol: %{sock: {:gen_tcp, port}}, port_owner: owner}} <- historical,
+          is_pid(owner),
+          into: %{},
+          do: {port, owner}
+
+    Enum.reduce(transports, owners, fn
+      %{port: port, owner: owner}, owners when is_pid(owner) -> Map.put(owners, port, owner)
+      _transport, owners -> owners
+    end)
   end
 
   defp transport_modes(transports) do
@@ -94,7 +113,12 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
           is_port(port),
           do: {source.index, :data, source}
 
-    (modes ++ data)
+    passive =
+      for %{event: {port, :send, {:tcp_passive, port}, _pid}} = source <- state.events,
+          is_port(port),
+          do: {source.index, :passive, source}
+
+    (modes ++ data ++ passive)
     |> Enum.sort_by(&elem(&1, 0))
     |> Enum.reduce(state, &active_event/2)
   end
@@ -111,8 +135,17 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
         option.mode
       end
 
-    put_in(state.active_modes[option.port], %{option | mode: mode})
+    state = put_in(state.active_modes[option.port], %{option | mode: mode})
+
+    if is_integer(option.mode) and mode == false do
+      passive_pending(state, option.port, option.requested.index, port_owner(state, option.port))
+    else
+      state
+    end
   end
+
+  defp active_event({_index, :passive, source}, state),
+    do: passive_delivery(state, source)
 
   defp active_event({_index, :data, source}, state) do
     case Map.fetch(state.active_modes, source.pid) do
@@ -154,10 +187,15 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
         ]
       }
 
-      state
-      |> put_in([:active_modes, port], %{option | mode: after_delivery(option.mode)})
-      |> put_in([:active_receives, index], true)
-      |> Map.update!(:active, &[delivery | &1])
+      state =
+        state
+        |> put_in([:active_modes, port], %{option | mode: after_delivery(option.mode)})
+        |> put_in([:active_receives, index], true)
+        |> Map.update!(:active, &[delivery | &1])
+
+      if option.mode === 1,
+        do: passive_pending(state, port, source.index, pid),
+        else: state
     else
       _ -> failure(state, source, :native_active_copy)
     end
@@ -167,6 +205,69 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   defp after_delivery(true), do: true
   defp after_delivery(1), do: false
   defp after_delivery(count) when is_integer(count) and count > 1, do: count - 1
+
+  defp passive_pending(state, port, origin, owner) do
+    item = %{origin: origin, owner: owner}
+    Map.update!(state, :passive_pending, &Map.update(&1, port, [item], fn q -> q ++ [item] end))
+  end
+
+  defp port_owner(state, port), do: Map.get(state.port_owners, port)
+
+  defp passive_delivery(state, %{event: {port, :send, message, pid}} = source) do
+    case Map.get(state.passive_pending, port, []) do
+      [%{owner: ^pid, origin: origin} | rest] when origin < source.index ->
+        received =
+          Enum.find(state.events, fn received ->
+            received.index > source.index and received.event === {pid, :receive, message} and
+              not MapSet.member?(state.passive_receives, received.index)
+          end)
+
+        record_passive(state, source, received, origin, rest)
+
+      _ ->
+        failure(state, source, :native_passive_mode)
+    end
+  end
+
+  defp record_passive(state, source, %{index: index} = received, origin, rest) do
+    notification = %{
+      port: source.pid,
+      source: source,
+      received: received,
+      origin: origin,
+      indexes: [source.index, index]
+    }
+
+    state
+    |> put_in([:passive_pending, source.pid], rest)
+    |> Map.update!(:passive_receives, &MapSet.put(&1, index))
+    |> Map.update!(:passive, &[notification | &1])
+  end
+
+  defp record_passive(state, source, _received, _origin, _rest),
+    do: failure(state, source, :native_passive_copy)
+
+  defp passive_sources(state) do
+    state =
+      Enum.reduce(state.events, state, fn
+        %{event: {_, :receive, {:tcp_passive, port}}} = source, state when is_port(port) ->
+          if MapSet.member?(state.passive_receives, source.index),
+            do: state,
+            else: failure(state, source, :native_passive_source)
+
+        _source, state ->
+          state
+      end)
+
+    Enum.reduce(state.passive_pending, state, fn
+      {_port, [%{origin: index} | _]}, state ->
+        source = Enum.find(state.events, &(&1.index == index))
+        failure(state, source, :native_passive_required)
+
+      {_port, []}, state ->
+        state
+    end)
+  end
 
   # The once fast path and the passive enum path have different native programs.
   # Build each from the option supplied to this instance, including every helper

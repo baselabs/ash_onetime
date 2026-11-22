@@ -3654,6 +3654,32 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: TLS reply forwarding binds its recipient and result" do
+    for corruption <- [:reply_copy, :reply_value] do
+      run =
+        ComparatorMutants.with_tls_sender_mutant(corruption, &ConnectionNative.observe_tls/0)
+
+      assert run.result == []
+
+      events =
+        run.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+      assert Enum.any?(events, fn
+               %{event: {_, :call, {:tls_sender, :send_reply, arguments}}} ->
+                 Enum.any?(arguments, &match?({:native_foreign_tls_reply, _}, &1))
+
+               _ ->
+                 false
+             end)
+
+      native = ConnectionTls.build(%{events: events}, run.tls_binding)
+      assert Enum.map(native.errors, & &1.rule) == [:tls_reply_copy]
+    end
+  end
+
+  @tag :connection_streams
   test "Connection streams: counted passive notifications need their own native origin" do
     for corruption <- [nil, :passive_source] do
       run = ConnectionNative.observe(:active_counted, corruption)
@@ -3675,7 +3701,34 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert notification.source.index in notification.indexes
         assert notification.received.index in notification.indexes
       end
+
+      if corruption do
+        for mutant <- [:stream_active_source, :stream_active_mode, :stream_passive_source] do
+          bypassed =
+            ComparatorMutants.with_mutant(mutant, fn ->
+              NativeTransport.build(%{events: events}, run.native_history)
+            end)
+
+          expected = if mutant == :stream_passive_source, do: [], else: expected
+          assert Enum.map(bypassed.errors, & &1.actual) == expected
+        end
+
+        assert Enum.map(
+                 NativeTransport.build(%{events: events}, run.native_history).errors,
+                 & &1.actual
+               ) == expected
+      end
     end
+
+    restored = ConnectionNative.observe(:active_counted)
+
+    restored_events =
+      restored.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    assert NativeTransport.build(%{events: restored_events}, restored.native_history).errors == []
+    IO.puts("CONNECTION_PASSIVE_ORIGIN: native positive; owning RED; sole catcher; restore GREEN")
   end
 
   @tag :connection_streams

@@ -36,6 +36,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
             {table,
              %{
                owner: owner,
+               port_owner: port_owner(protocol),
                protocol: protocol,
                lock: lock,
                clock: clock,
@@ -96,6 +97,15 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
         |> Map.new()
     }
   end
+
+  defp port_owner(%{sock: {:gen_tcp, port}}) do
+    case Port.info(port, :connected) do
+      {:connected, owner} -> owner
+      nil -> :closed
+    end
+  end
+
+  defp port_owner(_protocol), do: :not_tcp
 
   defp descriptors(%{protocol: protocol} = connection, origins) do
     queries = if protocol.queries, do: readable(protocol.queries), else: []

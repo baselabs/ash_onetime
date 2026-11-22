@@ -1,6 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   @moduledoc false
-  alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.NativeTransport
 
   # The SSL socket stays opaque. Match its public endpoint pair to the unique
@@ -36,7 +35,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       peer: peer,
       supervisor: supervisor,
       sender: sender,
-      transport: %{port: port, active: active},
+      transport: %{port: port, active: active, owner: owner},
       states: %{owner => :sys.get_state(owner), sender => :sys.get_state(sender)},
       processes: process_origins([owner, sender, supervisor])
     }
@@ -407,20 +406,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       end)
 
     case replies do
-      [%{event: {_, :send, message, _}} = reply] ->
-        receipts =
-          for %{event: {^pid, :receive, {^tag, _value}}} = received <- events,
-              received.index > reply.index and received.index < returned.index,
-              do: received
+      [reply] ->
+        call_reply_received(events, reply, returned, pid, tag, result)
 
-        case receipts do
-          [%{event: {_, :receive, ^message}, index: index}]
-          when elem(message, 1) === result ->
-            [index]
+      _ ->
+        []
+    end
+  end
 
-          _ ->
-            []
-        end
+  defp call_reply_received(events, reply, returned, pid, tag, result) do
+    {_, :send, message, _} = reply.event
+
+    receipts =
+      for %{event: {^pid, :receive, {^tag, _value}}} = received <- events,
+          received.index > reply.index and received.index < returned.index,
+          do: received
+
+    case receipts do
+      [%{event: {_, :receive, ^message}, index: index}] when elem(message, 1) === result ->
+        [index]
 
       _ ->
         []
@@ -610,29 +614,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           Map.get(elem(data, 10), :max_fragment_length, :undefined),
           elem(environment, 2)
         ]
-
-        if arguments !== expected_args do
-          for error <- Enum.reverse(state.errors) do
-            IO.puts(
-              "CONNECTION_TLS_PRIOR_SOURCE: " <>
-                Diagnostics.render(error)
-            )
-          end
-
-          for {{actual, expected}, position} <-
-                Enum.with_index(Enum.zip(arguments, expected_args)),
-              actual !== expected do
-            IO.puts(
-              "CONNECTION_TLS_RECORD_INPUT_SOURCE: " <>
-                Diagnostics.render(%{
-                  index: source.index,
-                  mfa: source.mfa,
-                  path: [2, 2, position],
-                  origin: frame.input.origin
-                })
-            )
-          end
-        end
 
         {records, buffer} = expected = apply(:tls_record, :get_tls_records, expected_args)
 

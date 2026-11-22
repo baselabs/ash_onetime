@@ -365,6 +365,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_passive_source) do
+    [
+      %{
+        path: "test/support/exit_boundary/native_transport.ex",
+        original: "            else: failure(state, source, :native_passive_source)\n",
+        mutated: "            else: state\n"
+      }
+    ]
+  end
+
   def edits(:stream_query_copy) do
     [
       %{
@@ -566,7 +576,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       :beam_lib.chunks(original, [:abstract_code])
 
     {forms, sites} = Enum.map_reduce(forms, 0, &tls_sender_form(&1, &2, rule))
-    required = if rule == :helper_state, do: 2, else: 3
+    required =
+      case rule do
+        :helper_state -> 2
+        rule when rule in [:reply_copy, :reply_value] -> 7
+        _ -> 3
+      end
     unless sites == required, do: raise("TLS sender mutant requires every pinned owner site")
     {:ok, ^module, mutant, []} = :compile.forms(forms, [:binary, :return, :debug_info])
 
@@ -628,6 +643,27 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   defp tls_sender_form(
+         {:function, _, :send_or_buffer, 5, _} = form,
+         sites,
+         rule
+       )
+       when rule in [:reply_copy, :reply_value],
+       do: tls_constructed_call(form, sites, rule)
+
+  defp tls_sender_form(
+         {:function, annotation, :send_reply, 2, clauses},
+         sites,
+         rule
+       )
+       when rule in [:reply_copy, :reply_value] do
+    arguments = [{:var, annotation, :NativeFrom}, {:var, annotation, :NativeReply}]
+    tagged = tls_forward_argument(arguments, annotation, rule)
+    call = {:call, annotation, {:atom, annotation, :send_reply}, arguments}
+    clause = {:clause, annotation, tagged, [], [call]}
+    {{:function, annotation, :send_reply, 2, [clause | clauses]}, sites + 1}
+  end
+
+  defp tls_sender_form(
          {:function, _, :send_application_data, 4, _} = form,
          sites,
          rule
@@ -650,6 +686,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   defp tls_sender_form(form, sites, _rule), do: {form, sites}
+
+  defp tls_constructed_call(
+         {:call, location, {:atom, name_location, :send_reply}, arguments},
+         sites,
+         rule
+       )
+       when rule in [:reply_copy, :reply_value] do
+    {{:call, location, {:atom, name_location, :send_reply},
+      tls_forward_argument(arguments, location, rule)}, sites + 1}
+  end
 
   defp tls_constructed_call(
          {:call, location, {:atom, name_location, :send_or_buffer}, arguments},
@@ -678,6 +724,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         :constructed_state -> {4, :native_foreign_tls_constructed}
         :record_copy -> {2, :native_foreign_tls_records}
         :from_copy -> {3, :native_foreign_tls_from}
+        :reply_copy -> {0, :native_foreign_tls_reply}
+        :reply_value -> {1, :native_foreign_tls_reply}
       end
 
     List.update_at(arguments, position, fn argument ->

@@ -16,7 +16,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         fn ->
           protocol = connect()
           protocol = initial_mode(protocol, mode)
-          send(observer, {tag, %{self() => %{protocol: protocol}}})
+          {:gen_tcp, port} = protocol.sock
+          {:connected, owner} = Port.info(port, :connected)
+          send(observer, {tag, %{self() => %{protocol: protocol, port_owner: owner}}})
           protocol
         end,
         &execute(&1, mode, corruption),

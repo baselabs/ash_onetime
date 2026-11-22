@@ -536,6 +536,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {:tls_sender, :connection, 3},
         {:tls_sender, :send_application_data, 4},
         {:tls_sender, :send_or_buffer, 5},
+        {:tls_sender, :send_reply, 2},
         {:tls_sender, :time_to_rekey, 5},
         {:tls_sender, :hibernate_after, 3},
         {:tls_sender, :send_tls_alert, 2},
