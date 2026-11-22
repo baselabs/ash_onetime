@@ -1291,7 +1291,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     unchanged = [
       {:op, location, :"=:=", hd(inputs), {:bin, location, []}},
-      {:op, location, :"=:=", hd(inputs), buffer},
+      {:op, location, :"=:=", buffer, {nil, location}},
       {:op, location, :"=:=", Enum.at(inputs, 2), rows}
     ]
 
