@@ -2031,18 +2031,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         # the reference query with the library over a fresh genuine type table,
         # so later native updates cannot change the expected earlier statement.
         {module, _table} = context.version.protocol.types
-        types = Postgrex.Types.new(module)
+        table = :ets.new(Postgrex.Types, [:protected, read_concurrency: true])
 
         statement =
           try do
             options = %{
-              types: types,
+              types: {module, table},
               disable_composite_types: context.version.protocol.disable_composite_types
             }
 
             Postgrex.Types.reload_query(version, Enum.to_list(oids), options)
           after
-            :ets.delete(elem(types, 1))
+            :ets.delete(table)
           end
 
         helper_copy(
