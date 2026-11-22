@@ -1,5 +1,5 @@
 name: Delivery comparator
-description: Run one declared comparator partition on the job's disposable platform engine
+description: Run one declared comparator partition on the job's declared disposable PostgreSQL engine
 inputs:
   elixir:
     description: Exact Elixir build
@@ -10,6 +10,15 @@ inputs:
   postgres-client:
     description: Pinned PostgreSQL client package version
     required: true
+  postgres-image:
+    description: Declared upstream image; empty selects the checked platform engine
+    default: ''
+  postgres-major:
+    description: Declared PostgreSQL major from the toolchain lane
+    default: ''
+  libpq-version:
+    description: Platform libpq package pin for compatibility clients
+    default: ''
   pgdg-key:
     description: PGDG apt signing key fingerprint
     required: true
@@ -26,6 +35,14 @@ runs:
   using: composite
   steps:
     - uses: ./.github/actions/postgres
+      with:
+        image: ${{ inputs.postgres-image }}
+    - name: Select the declared compatibility contract
+      if: inputs.postgres-image != ''
+      shell: bash
+      env:
+        MAJOR: ${{ inputs.postgres-major }}
+      run: echo "ASH_ONETIME_POSTGRES_COMPAT_MAJOR=$MAJOR" >> "$GITHUB_ENV"
     - uses: ./.github/actions/postgres-tls
       if: inputs.lane == 'native'
     - name: Refuse an unknown cache input
@@ -40,6 +57,7 @@ runs:
     - uses: ./.github/actions/postgres-client
       with:
         version: ${{ inputs.postgres-client }}
+        libpq-version: ${{ inputs.libpq-version }}
         pgdg-key: ${{ inputs.pgdg-key }}
     - uses: ./.github/actions/beam
       with:
@@ -66,6 +84,7 @@ runs:
       if: always()
       with:
         mode: stop
+        image: ${{ inputs.postgres-image }}
     - uses: ./.github/actions/postgres-tls
       if: always() && inputs.lane == 'native'
       with:

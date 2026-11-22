@@ -1423,8 +1423,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Enum.map(states.errors, &Diagnostics.location(&1, locations)) == sources
 
     record = %{occurrences: List.to_tuple(states.errors)}
+
     expected =
       Diagnostics.render(record, pretty: false, limit: :infinity, printable_limit: :infinity)
+
     assert byte_size(expected) > 4096
 
     {truncated, truncated_digest} =

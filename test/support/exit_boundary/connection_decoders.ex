@@ -274,7 +274,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
          prefix,
          index
        ),
-    do: {prefix, {:return_from, :ok, 3}, [index]}
+       do: {prefix, {:return_from, :ok, 3}, [index]}
 
   defp leaf_result(
          context,
@@ -284,7 +284,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
          prefix,
          index
        ),
-    do: child_program(context, events, {Postgrex.Protocol, :msg_recv, 4}, prefix, [index])
+       do: child_program(context, events, {Postgrex.Protocol, :msg_recv, 4}, prefix, [index])
 
   defp leaf_result(
          context,
@@ -310,7 +310,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
          prefix,
          index
        ),
-    do: child_program(context, events, {Postgrex.Protocol, :rows_recv, 5}, prefix, [index])
+       do: child_program(context, events, {Postgrex.Protocol, :rows_recv, 5}, prefix, [index])
 
   defp row_terminal({:return_from, :ok, 3}), do: {:return_from, :ok, 4}
   defp row_terminal(terminal), do: terminal
@@ -411,7 +411,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
          tag,
          socket
        ),
-    do: child_program(context, events, {Postgrex.Protocol, :msg_recv, 3}, [], [index])
+       do: child_program(context, events, {Postgrex.Protocol, :msg_recv, 3}, [], [index])
 
   defp active_message(
          %{event: {_, :receive, message}} = received,

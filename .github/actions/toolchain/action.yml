@@ -19,6 +19,9 @@ outputs:
   postgres_lanes:
     description: Declared upstream PostgreSQL compatibility images and matching clients as JSON
     value: ${{ steps.service-pins.outputs.postgres_lanes }}
+  postgres_all_lanes:
+    description: Platform engine and every declared PostgreSQL compatibility lane as JSON
+    value: ${{ steps.service-pins.outputs.postgres_all_lanes }}
   pgdg_key:
     description: PGDG apt signing key fingerprint from .github/service-pins
     value: ${{ steps.service-pins.outputs.pgdg_key }}
@@ -120,4 +123,6 @@ runs:
             for name, value in entries.items():
                 output.write(f'{name}={value}\n')
             output.write(f'postgres_lanes={json.dumps(lanes)}\n')
+            platform = {'major': major[1], 'image': '', 'client': entries['postgres_client']}
+            output.write(f'postgres_all_lanes={json.dumps([platform] + lanes)}\n')
         PYTHON

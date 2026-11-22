@@ -41,6 +41,7 @@ jobs:
       ash_floor: ${{ steps.versions.outputs.ash_floor }}
       postgres_client: ${{ steps.versions.outputs.postgres_client }}
       postgres_lanes: ${{ steps.versions.outputs.postgres_lanes }}
+      postgres_all_lanes: ${{ steps.versions.outputs.postgres_all_lanes }}
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
       matrix_routes: ${{ steps.test-shards.outputs.matrix_routes }}
       scheduling_shards: ${{ steps.test-shards.outputs.scheduling_shards }}
@@ -100,7 +101,7 @@ jobs:
       - run: mix deps.get --check-locked
       - run: mix compile --warnings-as-errors
       - run: MIX_ENV='test' mix compile --warnings-as-errors
-      - run: mix test
+      - run: mix test --exclude exit_boundary
 
       - uses: ./.github/actions/postgres
         if: always()
@@ -173,7 +174,7 @@ jobs:
   # every Nth registered mutation (scripts/check_mutations.exs --shard); together they run
   # all of them once. Add a shard to the list when the slowest one nears 45 minutes.
   comparator-matrix:
-    name: "Comparator matrix (${{ matrix.route }})"
+    name: "Comparator matrix (PostgreSQL ${{ matrix.postgres.major }}, ${{ matrix.route }})"
     needs: toolchain
     runs-on: ubuntu-24.04
     # New tuple partitions halve each local path batch; no merged green run yet.
@@ -181,6 +182,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        postgres: ${{ fromJSON(needs.toolchain.outputs.postgres_all_lanes) }}
         route: ${{ fromJSON(needs.toolchain.outputs.matrix_routes) }}
     env:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-matrix-${{ strategy.job-index }}"
@@ -192,13 +194,16 @@ jobs:
         with:
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
-          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          postgres-client: ${{ matrix.postgres.client }}
+          postgres-image: ${{ matrix.postgres.image }}
+          postgres-major: ${{ matrix.postgres.major }}
+          libpq-version: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
           lane: matrix
           selector: ${{ matrix.route }}
 
   comparator-scheduling:
-    name: "Comparator scheduling (${{ matrix.name }})"
+    name: "Comparator scheduling (PostgreSQL ${{ matrix.postgres.major }}, ${{ matrix.shard.name }})"
     needs: toolchain
     runs-on: ubuntu-24.04
     # One five-path group per shard, split from measured 29m13s double groups; no merged green run yet.
@@ -206,7 +211,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.toolchain.outputs.scheduling_shards) }}
+        postgres: ${{ fromJSON(needs.toolchain.outputs.postgres_all_lanes) }}
+        shard: ${{ fromJSON(needs.toolchain.outputs.scheduling_shards) }}
     env:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-scheduling-${{ strategy.job-index }}"
     steps:
@@ -217,19 +223,26 @@ jobs:
         with:
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
-          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          postgres-client: ${{ matrix.postgres.client }}
+          postgres-image: ${{ matrix.postgres.image }}
+          postgres-major: ${{ matrix.postgres.major }}
+          libpq-version: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
           lane: scheduling
-          selector: ${{ matrix.name }}
+          selector: ${{ matrix.shard.name }}
 
   comparator-native:
-    name: "Native connection prerequisites"
+    name: "Native connection prerequisites (PostgreSQL ${{ matrix.postgres.major }})"
     needs: toolchain
     runs-on: ubuntu-24.04
     # Expanded native obligations have no green run yet; remeasure after cold qualification.
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ${{ fromJSON(needs.toolchain.outputs.postgres_all_lanes) }}
     env:
-      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-native"
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-native-${{ strategy.job-index }}"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -238,19 +251,27 @@ jobs:
         with:
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
-          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          postgres-client: ${{ matrix.postgres.client }}
+          postgres-image: ${{ matrix.postgres.image }}
+          postgres-major: ${{ matrix.postgres.major }}
+          libpq-version: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
           lane: native
           cache: none
 
   comparator-controls:
-    name: "Comparator controls"
+    name: "Comparator controls (PostgreSQL ${{ matrix.postgres.major }})"
     needs: [toolchain, comparator-native]
     runs-on: ubuntu-24.04
-    # Cached 28m50s on Work 44873694440, plus historical 57s cold setup delta; remeasure cold.
+    # Platform cached 28m50s on Work 44873694440, plus historical 57s cold setup delta.
+    # New declared-major cells have no green run yet; remeasure cold.
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ${{ fromJSON(needs.toolchain.outputs.postgres_all_lanes) }}
     env:
-      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-controls"
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-controls-${{ strategy.job-index }}"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -259,7 +280,10 @@ jobs:
         with:
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
-          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          postgres-client: ${{ matrix.postgres.client }}
+          postgres-image: ${{ matrix.postgres.image }}
+          postgres-major: ${{ matrix.postgres.major }}
+          libpq-version: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
           lane: controls
 
