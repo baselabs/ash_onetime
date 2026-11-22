@@ -854,10 +854,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     for {_index, %{source: call, returned: returned}} <- state.pairs,
         call.pid == pid and call.index > first and returned.index < last,
         call.mfa == {Postgrex.Types, :fetch, 2},
-        {_, :call, {_, _, [oid, _types]}} <- [call.event],
         {_, :return_from, _, {:error, nil, _}} <- [returned.event],
         into: MapSet.new(),
-        do: oid
+        do: native_type_key(state, call, returned)
+  end
+
+  defp native_type_key(state, call, returned) do
+    keys =
+      for {_index, pair} <- state.pairs,
+          pair.source.pid == call.pid and pair.source.index > call.index and
+            pair.returned.index < returned.index,
+          {_, :call, {:ets, :lookup_element, [_table, oid, 3]}} <- [pair.source.event],
+          do: oid
+
+    case keys do
+      [oid] -> oid
+      _ -> :missing_native_type_key
+    end
   end
 
   defp reload_cover(state, source, version) do
@@ -1400,7 +1413,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           source,
           [2, 2, 2],
           actual,
-          input.param_oids,
+          input.parameter_accumulator,
           {:parameter_description, input.origin}
         )
 
@@ -1734,9 +1747,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
             call.pid == source.pid and call.mfa == {Postgrex.Types, :fetch, 2},
             returned.index < source.index,
             {_, :return_from, _, {:error, nil, _}} <- [returned.event],
-            {_, :call, {_, _, [oid, _types]}} <- [call.event],
             into: MapSet.new(),
-            do: oid
+            do: native_type_key(state, call, returned)
 
       loaded = MapSet.new(reload_catalog_rows(state, source), fn {_row, info} -> info.oid end)
       MapSet.difference(missing, loaded)

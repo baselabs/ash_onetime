@@ -1534,22 +1534,33 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     output =
       if operation == :corrupt, do: List.replace_at(fields, target.position, marker), else: fields
 
-    if Map.get(target, :total?, false) do
-      # Every normal return in this pinned codomain has this tuple size. A
-      # catch-all is unreachable after Core folding; bind the whole result.
-      {:block, location,
-       [
-         {:match, location, {:tuple, location, input}, expression},
-         {:tuple, location, output}
-       ]}
-    else
-      other = {:var, location, String.to_atom("AshOnetimeElementOther#{site}")}
+    literal_size =
+      case expression do
+        {:tuple, _, fields} -> length(fields)
+        _ -> nil
+      end
 
-      {:case, location, expression,
-       [
-         {:clause, location, [{:tuple, location, input}], [], [{:tuple, location, output}]},
-         {:clause, location, [other], [], [other]}
-       ]}
+    cond do
+      operation == :corrupt and not is_nil(literal_size) and literal_size != target.size ->
+        expression
+
+      Map.get(target, :total?, false) or (operation == :corrupt and literal_size == target.size) ->
+        # A literal tuple in this clause already fixes the return size. Adding
+        # a catch-all would be unreachable and change the native warning set.
+        {:block, location,
+         [
+           {:match, location, {:tuple, location, input}, expression},
+           {:tuple, location, output}
+         ]}
+
+      true ->
+        other = {:var, location, String.to_atom("AshOnetimeElementOther#{site}")}
+
+        {:case, location, expression,
+         [
+           {:clause, location, [{:tuple, location, input}], [], [{:tuple, location, output}]},
+           {:clause, location, [other], [], [other]}
+         ]}
     end
   end
 

@@ -632,7 +632,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
             query: query,
             types: protocol.types,
             root: root.index,
-            pid: source.pid
+            pid: source.pid,
+            parameter_accumulator: recv_parameter_input(state, source, root)
           })
 
         put_in(state.query_inputs[source.index], input)
@@ -789,6 +790,44 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       param_oids: param_oids,
       origin: origin
     }
+  end
+
+  defp recv_parameter_input(state, source, root) do
+    parent =
+      state.pairs
+      |> Map.values()
+      |> Enum.filter(fn pair ->
+        pair.source.pid == source.pid and pair.source.index < source.index and
+          pair.returned.index > source.index and
+          pair.source.mfa in [
+            {Postgrex.Protocol, :recv_describe, 3},
+            {Postgrex.Protocol, :recv_describe, 4}
+          ]
+      end)
+      |> Enum.max_by(& &1.source.index, fn -> nil end)
+
+    case parent do
+      %{source: %{mfa: {Postgrex.Protocol, :recv_describe, 3}}} ->
+        []
+
+      %{source: owner} ->
+        parameters =
+          state.instances
+          |> Enum.filter(fn instance ->
+            instance.source.pid == source.pid and instance.source.index > owner.index and
+              instance.returned.index < source.index and
+              match?({:ok, {:msg_parameter_desc, _}, _}, instance.expected)
+          end)
+          |> Enum.max_by(& &1.returned.index, fn -> nil end)
+
+        case parameters do
+          %{expected: {:ok, {:msg_parameter_desc, oids}, _}} -> oids
+          nil -> Map.fetch!(state.query_inputs, owner.index).parameter_accumulator
+        end
+
+      nil ->
+        root.query.param_oids || []
+    end
   end
 
   defp query_columns(%{expected: {:ok, {:msg_row_desc, fields}, _}, returned: returned}),
