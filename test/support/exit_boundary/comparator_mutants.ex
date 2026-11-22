@@ -911,13 +911,15 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     targets = %{{:reply, 2} => [0, 1]}
 
     run =
-      with_owner_mutant(:gen_statem, &(&1 > 1), &owner_inputs_form(&1, &2, targets), fn ->
-        with_owner_mutant(
-          :ssl_gen_statem,
-          &(&1 > 1),
-          &remote_reply_form/2,
-          fn -> ConnectionNative.observe_tls(mode) end
-        )
+      machine_reply_phase(:native_capture, fn ->
+        with_owner_mutant(:gen_statem, &(&1 > 1), &owner_inputs_form(&1, &2, targets), fn ->
+          with_owner_mutant(
+            :ssl_gen_statem,
+            &(&1 > 1),
+            &remote_reply_form/2,
+            fn -> ConnectionNative.observe_tls(mode) end
+          )
+        end)
       end)
 
     assert run.result == []
@@ -947,7 +949,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     coordinates =
       for source <- corrupted, position <- [0, 1], do: {source.index, [2, 2, position]}
 
-    native = ConnectionTls.build(%{events: events}, run.tls_binding)
+    native =
+      machine_reply_phase(:validation, fn ->
+        ConnectionTls.build(%{events: events}, run.tls_binding)
+      end)
 
     assert Enum.map(native.errors, & &1.rule) ==
              List.duplicate(:tls_machine_program_copy, length(coordinates))
@@ -960,23 +965,51 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
           :stream_tls_worker_state_copy
         ] do
       checked =
-        with_mutant(mutant, fn -> ConnectionTls.build(%{events: events}, run.tls_binding) end)
+        machine_reply_phase({:mutant, mutant}, fn ->
+          with_mutant(mutant, fn -> ConnectionTls.build(%{events: events}, run.tls_binding) end)
+        end)
 
       expected = if mutant == :stream_tls_machine_program, do: [], else: native.errors
       assert checked.errors == expected
     end
 
-    assert ConnectionTls.build(%{events: events}, run.tls_binding).errors == native.errors
-    restored = ConnectionNative.observe_tls(mode)
+    rechecked =
+      machine_reply_phase(:restored_validation, fn ->
+        ConnectionTls.build(%{events: events}, run.tls_binding)
+      end)
+
+    assert rechecked.errors == native.errors
+    restored = machine_reply_phase(:fresh_native, fn -> ConnectionNative.observe_tls(mode) end)
 
     restored_events =
       restored.events
       |> Enum.with_index()
       |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
 
-    assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+    fresh =
+      machine_reply_phase(:fresh_validation, fn ->
+        ConnectionTls.build(%{events: restored_events}, restored.tls_binding)
+      end)
+
+    assert fresh.errors == []
     IO.puts("CONNECTION_MACHINE_REPLY: owning RED; sole catcher; exact restore; fresh GREEN")
     :ok
+  end
+
+  # Temporary phase probe for the hosted fragmented-peer timeout. Native
+  # captures and every validation/restoration assertion remain unchanged.
+  defp machine_reply_phase(phase, callback) do
+    IO.puts("NATIVE_MACHINE_REPLY_PHASE: " <> Diagnostics.render(%{phase: phase, status: :start}))
+    started = System.monotonic_time(:millisecond)
+    value = callback.()
+    elapsed = System.monotonic_time(:millisecond) - started
+
+    IO.puts(
+      "NATIVE_MACHINE_REPLY_PHASE: " <>
+        Diagnostics.render(%{phase: phase, status: :done, length: elapsed})
+    )
+
+    value
   end
 
   def assert_machine_debug_log do
@@ -1197,19 +1230,19 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   defp repeated_decoder_form(form, sites, _owner, _kind), do: {form, sites}
 
   defp repeated_decoder_calls(
-         {:call, location, {:atom, _, :msg_decode}, [buffer]} = call,
+         {:call, location, {:atom, _, :msg_decode}, [_]} = call,
          sites,
          :message
        ),
-       do: {repeated_decoder_case(call, buffer, location, 2), sites + 1}
+       do: {repeated_decoder_case(call, location, 2), sites + 1}
 
   defp repeated_decoder_calls(
          {:call, location, {:remote, _, {:atom, _, Postgrex.Types}, {:atom, _, :decode_rows}},
-          [buffer, _, _, _]} = call,
+          [_, _, _, _]} = call,
          sites,
          :rows
        ),
-       do: {repeated_decoder_case(call, buffer, location, 4), sites + 1}
+       do: {repeated_decoder_case(call, location, 4), sites + 1}
 
   defp repeated_decoder_calls(form, sites, kind) when is_tuple(form) do
     {values, sites} =
@@ -1223,7 +1256,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   defp repeated_decoder_calls(form, sites, _kind), do: {form, sites}
 
-  defp repeated_decoder_case(call, buffer, location, size) do
+  defp repeated_decoder_case({:call, location, callee, arguments}, location, size) do
+    inputs =
+      for position <- 0..(length(arguments) - 1),
+          do: {:var, location, String.to_atom("AshOnetimeDecoderInput#{position}")}
+
+    call = {:call, location, callee, inputs}
     value = {:var, location, :AshOnetimeNativeDecodeValue}
     wildcard = {:var, location, :_}
     more = {:tuple, location, [{:atom, location, :more} | List.duplicate(wildcard, size - 1)]}
@@ -1235,7 +1273,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       {:clause, location, [other], [], [value]}
     ]
 
-    {:case, location, {:tuple, location, [buffer, call]}, clauses}
+    body = {:case, location, {:tuple, location, [hd(inputs), call]}, clauses}
+    function = {:fun, location, {:clauses, [{:clause, location, inputs, [], [body]}]}}
+    {:call, location, function, arguments}
   end
 
   defp owner_inputs_form({:function, annotation, function, arity, clauses}, sites, targets) do
@@ -1264,11 +1304,11 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   defp hygienic_input_clause({:clause, location, arguments, _guards, _body} = clause) do
     counts = input_variables(clause, %{})
     head = input_variables(arguments, %{})
-    renamed = Map.take(counts, Map.keys(head))
+    renamed = counts
     {:clause, _, arguments, guards, body} = rename_input_variables(clause, renamed)
 
     uses =
-      for {name, count} <- renamed,
+      for {name, count} <- Map.take(renamed, Map.keys(head)),
           count > 1 and name != :_ and String.starts_with?(Atom.to_string(name), "_"),
           do:
             {:match, location, {:var, location, :_},
