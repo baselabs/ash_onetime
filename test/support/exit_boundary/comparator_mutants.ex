@@ -689,7 +689,24 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   def with_postgrex_inputs(targets, callback) do
     required = fn sites -> sites > map_size(targets) end
-    with_owner_mutant(Postgrex.Protocol, required, &postgrex_inputs_form(&1, &2, targets), callback)
+
+    with_owner_mutant(
+      Postgrex.Protocol,
+      required,
+      &postgrex_inputs_form(&1, &2, targets),
+      callback
+    )
+  end
+
+  def with_postgrex_outputs(targets, callback) do
+    required = fn sites -> sites > map_size(targets) end
+
+    with_owner_mutant(
+      Postgrex.Protocol,
+      required,
+      &postgrex_outputs_form(&1, &2, targets),
+      callback
+    )
   end
 
   defp with_owner_mutant(module, required, transform, callback) do
@@ -698,19 +715,31 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     {:ok, {^module, [abstract_code: {:raw_abstract_v1, forms}]}} =
       :beam_lib.chunks(original, [:abstract_code])
 
+    {:ok, ^module, _baseline, original_warnings} =
+      :compile.forms(forms, [:binary, :return, :debug_info])
+
     {forms, sites} = Enum.map_reduce(forms, 0, transform)
     valid? = if is_function(required, 1), do: required.(sites), else: sites == required
     unless valid?, do: raise("native mutant requires every pinned owner site")
-    {:ok, ^module, mutant, []} = :compile.forms(forms, [:binary, :return, :debug_info])
+    {:ok, ^module, mutant, ^original_warnings} =
+      :compile.forms(forms, [:binary, :return, :debug_info])
+
+    sticky? = :code.is_sticky(module)
 
     try do
+      if sticky?, do: true = :code.unstick_mod(module)
       {:module, ^module} = :code.load_binary(module, path, mutant)
       callback.()
     after
-      true = :code.soft_purge(module)
-      {:module, ^module} = :code.load_binary(module, path, original)
-      true = :code.soft_purge(module)
-      {^module, ^original, ^path} = :code.get_object_code(module)
+      try do
+        true = :code.soft_purge(module)
+        {:module, ^module} = :code.load_binary(module, path, original)
+        true = :code.soft_purge(module)
+        {^module, ^original, ^path} = :code.get_object_code(module)
+      after
+        if sticky?, do: true = :code.stick_mod(module)
+        ^sticky? = :code.is_sticky(module)
+      end
     end
   end
 
@@ -766,6 +795,80 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         {:tuple, location, [{:atom, location, :native_foreign_helper}, original]}
       end)
     end)
+  end
+
+  defp postgrex_outputs_form({:function, annotation, function, arity, clauses}, sites, targets) do
+    {clauses, sites} = postgrex_output_calls(clauses, sites, targets)
+
+    case Map.fetch(targets, {function, arity}) do
+      {:ok, target} ->
+        {clauses, sites} =
+          Enum.map_reduce(clauses, sites, fn {:clause, location, arguments, guards, body}, n ->
+            {prefix, [result]} = Enum.split(body, -1)
+            result = helper_output_case(result, location, target, n, :corrupt)
+            {{:clause, location, arguments, guards, prefix ++ [result]}, n + 1}
+          end)
+
+        {{:function, annotation, function, arity, clauses}, sites}
+
+      :error ->
+        {{:function, annotation, function, arity, clauses}, sites}
+    end
+  end
+
+  defp postgrex_outputs_form(form, sites, _targets), do: {form, sites}
+
+  defp postgrex_output_calls(
+         {:call, location, {:atom, _, function}, arguments} = form,
+         sites,
+         targets
+       ) do
+    {arguments, sites} = postgrex_output_calls(arguments, sites, targets)
+    form = put_elem(form, 3, arguments)
+
+    case Map.fetch(targets, {function, length(arguments)}) do
+      {:ok, target} ->
+        {helper_output_case(form, location, target, sites, :restore), sites + 1}
+
+      :error ->
+        {form, sites}
+    end
+  end
+
+  defp postgrex_output_calls(form, sites, targets) when is_tuple(form) do
+    {elements, sites} =
+      form |> Tuple.to_list() |> Enum.map_reduce(sites, &postgrex_output_calls(&1, &2, targets))
+
+    {List.to_tuple(elements), sites}
+  end
+
+  defp postgrex_output_calls(form, sites, targets) when is_list(form),
+    do: Enum.map_reduce(form, sites, &postgrex_output_calls(&1, &2, targets))
+
+  defp postgrex_output_calls(form, sites, _targets), do: {form, sites}
+
+  defp helper_output_case(expression, location, target, site, operation) do
+    fields =
+      for position <- 0..(target.size - 1),
+          do: {:var, location, String.to_atom("_AshOnetimeReturn#{site}_#{position}")}
+
+    value = {:var, location, String.to_atom("_AshOnetimeValue#{site}")}
+    key = {:atom, location, target.field}
+    marker = {:tuple, location, [{:atom, location, :native_foreign_return}, value]}
+    pattern = if operation == :corrupt, do: value, else: marker
+    replacement = if operation == :corrupt, do: marker, else: value
+    record = Enum.fetch!(fields, target.position)
+    matched = {:match, location, {:map, location, [{:map_field_exact, location, key, pattern}]}, record}
+    updated = {:map, location, record, [{:map_field_exact, location, key, replacement}]}
+    input = {:tuple, location, List.replace_at(fields, target.position, matched)}
+    output = {:tuple, location, List.replace_at(fields, target.position, updated)}
+    other = {:var, location, String.to_atom("_AshOnetimeOther#{site}")}
+
+    {:case, location, expression,
+     [
+       {:clause, location, [input], [], [output]},
+       {:clause, location, [other], [], [other]}
+     ]}
   end
 
   defp machine_form({:function, annotation, :loop_msg_event, 5, clauses}, sites, rule) do

@@ -638,17 +638,33 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
          %{index: index, event: {_, :return_from, {Postgrex.Protocol, function, _}, result}} =
            source
        )
-       when function in [:done, :error_ready, :error_flushed, :rollback_flushed,
-                        :parse_describe_flush, :close_parse_describe_flush, :redescribe] and
+       when function in [
+              :done,
+              :error_ready,
+              :error_flushed,
+              :rollback_flushed,
+              :parse_describe_flush,
+              :close_parse_describe_flush,
+              :redescribe
+            ] and
               is_tuple(result) do
     positions =
       case {function, result} do
-        {:done, {%Postgrex.Result{}, %Postgrex.Protocol{}}} -> [0]
+        {:done, {%Postgrex.Result{}, %Postgrex.Protocol{}}} ->
+          [0]
+
         {function, {:error, _error, %Postgrex.Protocol{}}}
-        when function in [:error_ready, :error_flushed, :rollback_flushed] -> [1]
-        {function, {:ok, %Postgrex.Query{}, _protocol}} when function != :done -> [1]
-        {:redescribe, {:ok, %Postgrex.Query{}, _protocol, _buffer}} -> [1]
-        _ -> []
+        when function in [:error_ready, :error_flushed, :rollback_flushed] ->
+          [1]
+
+        {function, {:ok, %Postgrex.Query{}, _protocol}} when function != :done ->
+          [1]
+
+        {:redescribe, {:ok, %Postgrex.Query{}, _protocol, _buffer}} ->
+          [1]
+
+        _ ->
+          []
       end
 
     for position <- positions, do: %{index: index, mfa: source.mfa, path: [3, position]}
@@ -1089,12 +1105,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     targets = %{{:done, 4} => [1, 3], {:done, 5} => [1, 3, 4]}
 
     for shape <- [:rows, :none] do
-      captured = ComparatorMutants.with_postgrex_inputs(targets, fn -> cached_decoders(nil, shape) end)
+      captured =
+        ComparatorMutants.with_postgrex_inputs(targets, fn -> cached_decoders(nil, shape) end)
+
       assert captured.native.errors == []
       assert captured.decoders.errors == []
 
       corrupted =
-        for %{event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source <- captured.events,
+        for %{event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source <-
+              captured.events,
             positions = Map.get(targets, {function, length(arguments)}, []),
             position <- positions do
           assert match?({:native_foreign_helper, _}, Enum.at(arguments, position))
@@ -1102,10 +1121,110 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         end
 
       assert corrupted != []
+
+      for target <- Map.keys(targets) do
+        assert Enum.any?(
+                 captured.events,
+                 &(&1.mfa == {Postgrex.Protocol, elem(target, 0), elem(target, 1)})
+               )
+      end
+
       states = native_copy_states(captured)
-      assert Enum.map(states.errors, & &1.rule) == List.duplicate(:state_helper_copy, length(corrupted))
+
+      assert Enum.map(states.errors, & &1.rule) ==
+               List.duplicate(:state_helper_copy, length(corrupted))
+
       assert Enum.map(states.errors, &{&1.index, &1.path}) == corrupted
+
+      for mutant <- [:stream_buffer_copy, :stream_helper_copy, :stream_error_copy] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+        expected = if mutant == :stream_helper_copy, do: [], else: states.errors
+        assert checked.errors == expected
+      end
+
+      assert native_copy_states(captured).errors == states.errors
+      assert native_copy_states(cached_decoders(nil, shape)).errors == []
     end
+
+    IO.puts("CONNECTION_COMPLETION_INPUTS: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  @tag :connection_streams
+  test "Connection streams: unsolicited helper messages cannot supply their expected state" do
+    for shape <- [:notice, :parameter, :notification] do
+      captured =
+        ComparatorMutants.with_postgrex_inputs(%{{:handle_msg, 3} => [2]}, fn ->
+          cached_decoders(nil, shape)
+        end)
+
+      corrupted =
+        for %{event: {_, :call, {Postgrex.Protocol, :handle_msg, [_, _, message]}}} = source <-
+              captured.events do
+          assert match?({:native_foreign_helper, _}, message)
+          {source.index, [2, 2, 2]}
+        end
+
+      assert corrupted != []
+      states = native_copy_states(captured)
+      assert Enum.map(states.errors, & &1.rule) == List.duplicate(:state_message_copy, length(corrupted))
+      assert Enum.map(states.errors, &{&1.index, &1.path}) == corrupted
+
+      for mutant <- [:stream_message_copy, :stream_helper_copy, :stream_error_copy] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+        expected = if mutant == :stream_message_copy, do: [], else: states.errors
+        assert checked.errors == expected
+      end
+
+      assert native_copy_states(captured).errors == states.errors
+      assert native_copy_states(cached_decoders(nil, shape)).errors == []
+    end
+
+    IO.puts("CONNECTION_UNSOLICITED_INPUTS: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  @tag :connection_streams
+  test "Connection streams: helper return constructors retain their earlier inputs" do
+    cases = [
+      {:rows, {:done, 5}, %{size: 2, position: 0, field: :num_rows}},
+      {:cross_connection, {:redescribe, 6}, %{size: 4, position: 1, field: :columns}},
+      {:bind_error, {:error_ready, 4}, %{size: 3, position: 1, field: :message}}
+    ]
+
+    for {shape, {function, arity} = target, output} <- cases do
+      captured =
+        ComparatorMutants.with_postgrex_outputs(%{target => output}, fn ->
+          cached_decoders(nil, shape)
+        end)
+
+      corrupted =
+        for %{event: {_, :return_from, {Postgrex.Protocol, ^function, ^arity}, result}} = source <-
+              captured.events,
+            is_tuple(result),
+            tuple_size(result) == output.size,
+            record = elem(result, output.position),
+            is_map(record),
+            match?({:native_foreign_return, _}, Map.get(record, output.field)),
+            do: {source.index, [3, output.position]}
+
+      assert corrupted != []
+      states = native_copy_states(captured)
+
+      assert Enum.map(states.errors, & &1.rule) ==
+               List.duplicate(:state_helper_copy, length(corrupted))
+
+      assert Enum.map(states.errors, &{&1.index, &1.path}) == corrupted
+
+      for mutant <- [:stream_helper_copy, :stream_buffer_copy, :stream_error_copy] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+        expected = if mutant == :stream_helper_copy, do: [], else: states.errors
+        assert checked.errors == expected
+      end
+
+      assert native_copy_states(captured).errors == states.errors
+      assert native_copy_states(cached_decoders(nil, shape)).errors == []
+    end
+
+    IO.puts("CONNECTION_HELPER_RETURNS: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
   @tag :connection_streams
@@ -3926,7 +4045,52 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert is_list(elem(state, 4))
       assert is_boolean(elem(state, 5))
     end
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    native = ConnectionTls.build(%{events: events}, run.tls_binding)
+    assert native.errors == []
+    covered = MapSet.new(native.terms, &{&1.index, &1.path})
+
+    unbound =
+      for %{event: {pid, :call, {:gen_statem, function, arguments}}} = source <- events,
+          Map.has_key?(machines, pid),
+          machine_program_function?(function),
+          {argument, position} <- Enum.with_index(arguments),
+          path = [2, 2, position],
+          not native_argument_bound?(covered, source.index, path, argument),
+          do: %{index: source.index, mfa: source.mfa, path: path}
+
+    for copy <- unbound do
+      IO.puts("CONNECTION_MACHINE_ARGUMENT_UNBOUND: " <> Diagnostics.render(copy))
+    end
+
+    assert unbound == [], "every native machine temporary argument needs its own program origin"
   end
+
+  defp machine_program_function?(function),
+    do:
+      String.starts_with?(Atom.to_string(function), "loop") or
+        function in [:reply_then_terminate, :do_reply_then_terminate, :terminate]
+
+  defp native_argument_bound?(covered, index, path, value) do
+    MapSet.member?(covered, {index, path}) or native_argument_children?(covered, index, path, value)
+  end
+
+  defp native_argument_children?(covered, index, path, value)
+       when is_tuple(value) and tuple_size(value) > 0 do
+    value
+    |> Tuple.to_list()
+    |> Enum.with_index()
+    |> Enum.all?(fn {item, position} ->
+      native_argument_bound?(covered, index, path ++ [position], item)
+    end)
+  end
+
+  defp native_argument_children?(_covered, _index, _path, _value), do: false
 
   for {corruption, position} <- [params: 0, queue: 3, hibernate: 4] do
     @tag :connection_streams
