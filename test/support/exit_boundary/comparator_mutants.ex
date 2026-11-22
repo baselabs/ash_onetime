@@ -743,6 +743,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     with_machine_peer(:assert_machine_reply, [mode])
   end
 
+  def machine_debug_log_control, do: with_machine_peer(:assert_machine_debug_log, [])
+
   # OTP's own peer I/O server avoids the parent VM's user_drv/group machines.
   # Only the real fixture's TLS machines run here; no Repo pool is started.
   # The process preflight and both soft-purge checks remain mandatory.
@@ -972,6 +974,58 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     :ok
   end
 
+  def assert_machine_debug_log do
+    run =
+      with_owner_outputs(:sys, %{{:nlog_put, 2} => %{kind: :value}}, fn ->
+        ConnectionNative.observe_tls(:debug)
+      end)
+
+    assert run.result == []
+    events = indexed_native_events(run)
+
+    coordinates =
+      for %{event: {_, :return_from, {:sys, :nlog_put, 2}, {:native_foreign_return, _}}} = source <-
+            events,
+          do: {source.index, [3]}
+
+    assert coordinates != []
+    native = ConnectionTls.build(%{events: events}, run.tls_binding)
+
+    assert Enum.map(native.errors, & &1.rule) ==
+             List.duplicate(:tls_machine_program_copy, length(coordinates))
+
+    assert Enum.map(native.errors, &{&1.index, &1.path}) == coordinates
+
+    for mutant <- [
+          :stream_tls_machine_program,
+          :stream_tls_machine_copy,
+          :stream_tls_worker_state_copy
+        ] do
+      checked =
+        with_mutant(mutant, fn ->
+          ConnectionTls.build(%{events: events}, run.tls_binding)
+        end)
+
+      expected = if mutant == :stream_tls_machine_program, do: [], else: native.errors
+      assert checked.errors == expected
+    end
+
+    assert ConnectionTls.build(%{events: events}, run.tls_binding).errors == native.errors
+    restored = ConnectionNative.observe_tls(:debug)
+
+    assert ConnectionTls.build(%{events: indexed_native_events(restored)}, restored.tls_binding).errors ==
+             []
+
+    IO.puts("CONNECTION_MACHINE_DEBUG_LOG: owning RED; sole catcher; exact restore; fresh GREEN")
+    :ok
+  end
+
+  defp indexed_native_events(run) do
+    run.events
+    |> Enum.with_index()
+    |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+  end
+
   defp remote_reply_form({:function, annotation, function, arity, clauses}, sites) do
     {clauses, sites} = remote_reply_calls(clauses, sites)
     {{:function, annotation, function, arity, clauses}, sites}
@@ -1013,13 +1067,13 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     )
   end
 
-  def with_postgrex_outputs(targets, callback) do
+  def with_owner_outputs(module, targets, callback) do
     required = fn sites -> sites > map_size(targets) end
 
     with_owner_mutant(
-      Postgrex.Protocol,
+      module,
       required,
-      &postgrex_outputs_form(&1, &2, targets),
+      &owner_outputs_form(&1, &2, targets),
       callback
     )
   end
@@ -1227,8 +1281,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end)
   end
 
-  defp postgrex_outputs_form({:function, annotation, function, arity, clauses}, sites, targets) do
-    {clauses, sites} = postgrex_output_calls(clauses, sites, targets)
+  defp owner_outputs_form({:function, annotation, function, arity, clauses}, sites, targets) do
+    {clauses, sites} = owner_output_calls(clauses, sites, targets)
 
     case Map.fetch(targets, {function, arity}) do
       {:ok, target} ->
@@ -1246,14 +1300,14 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end
   end
 
-  defp postgrex_outputs_form(form, sites, _targets), do: {form, sites}
+  defp owner_outputs_form(form, sites, _targets), do: {form, sites}
 
-  defp postgrex_output_calls(
+  defp owner_output_calls(
          {:call, location, {:atom, _, function}, arguments} = form,
          sites,
          targets
        ) do
-    {arguments, sites} = postgrex_output_calls(arguments, sites, targets)
+    {arguments, sites} = owner_output_calls(arguments, sites, targets)
     form = put_elem(form, 3, arguments)
 
     case Map.fetch(targets, {function, length(arguments)}) do
@@ -1265,17 +1319,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end
   end
 
-  defp postgrex_output_calls(form, sites, targets) when is_tuple(form) do
+  defp owner_output_calls(form, sites, targets) when is_tuple(form) do
     {elements, sites} =
-      form |> Tuple.to_list() |> Enum.map_reduce(sites, &postgrex_output_calls(&1, &2, targets))
+      form |> Tuple.to_list() |> Enum.map_reduce(sites, &owner_output_calls(&1, &2, targets))
 
     {List.to_tuple(elements), sites}
   end
 
-  defp postgrex_output_calls(form, sites, targets) when is_list(form),
-    do: Enum.map_reduce(form, sites, &postgrex_output_calls(&1, &2, targets))
+  defp owner_output_calls(form, sites, targets) when is_list(form),
+    do: Enum.map_reduce(form, sites, &owner_output_calls(&1, &2, targets))
 
-  defp postgrex_output_calls(form, sites, _targets), do: {form, sites}
+  defp owner_output_calls(form, sites, _targets), do: {form, sites}
 
   defp helper_output_case(expression, location, %{kind: :element} = target, site, operation) do
     fields =
@@ -1308,6 +1362,15 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
          {:clause, location, [other], [], [other]}
        ]}
     end
+  end
+
+  defp helper_output_case(expression, location, %{kind: :value}, _site, :corrupt),
+    do: {:tuple, location, [{:atom, location, :native_foreign_return}, expression]}
+
+  defp helper_output_case(expression, location, %{kind: :value}, site, :restore) do
+    value = {:var, location, String.to_atom("AshOnetimeReturn#{site}")}
+    wrapped = {:tuple, location, [{:atom, location, :native_foreign_return}, value]}
+    {:block, location, [{:match, location, wrapped, expression}, value]}
   end
 
   defp helper_output_case(expression, location, %{kind: :factory}, site, :corrupt) do

@@ -564,6 +564,8 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {:tls_record, :decode_cipher_text, 4},
         {:tls_record_1_3, :encode_data, 2},
         {:tls_record_1_3, :decode_cipher_text, 2},
+        {:sys, :handle_debug, 4},
+        {:sys, :nlog_put, 2},
         {Splode, :filter_stacktrace, 2}
       ]
   end

@@ -1,6 +1,36 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   @moduledoc false
+  alias AshOnetime.Test.ExitBoundary.Compiled
   alias AshOnetime.Test.ExitBoundary.NativeTransport
+
+  # Local formatter metadata must be frozen while a native owner mutant is
+  # loaded. Its expected identity comes from that owner's independent BEAM.
+  def freeze_debug(events, binding) do
+    formatters =
+      for %{event: {_, :call, {:sys, :handle_debug, [_, formatter, _, _]}}} <- events,
+          is_function(formatter),
+          do: formatter
+
+    observations = Map.new(formatters, &{&1, formatter_observation(&1)})
+
+    identity =
+      if formatters != [], do: Compiled.identity(:gen_statem, :print_event, 3), else: nil
+
+    binding
+    |> Map.put(:debug_observations, observations)
+    |> Map.put(:debug_formatter, {:compiled_formatter, identity, []})
+  end
+
+  defp formatter_observation(formatter) do
+    info = Map.new(Function.info(formatter))
+
+    if info.type == :local do
+      identity = {info.module, info.name, info.arity, info.new_uniq, info.index}
+      {:compiled_formatter, identity, info.env}
+    else
+      {:external_formatter, info.module, info.name, info.arity}
+    end
+  end
 
   # The SSL socket stays opaque. Match its public endpoint pair to the unique
   # live TCP port and retain the port's actual connected owner before observation.
@@ -276,6 +306,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       machine_callbacks: %{},
       machine_zero: %{},
       machine_programs: %{},
+      machine_debug: %{},
+      debug_frames: %{},
+      debug_required: %{},
+      debug_observations: Map.get(binding, :debug_observations, %{}),
+      debug_formatter: Map.get(binding, :debug_formatter, :missing_debug_formatter),
       direct_replies: %{},
       machine_received: %{},
       messages: %{},
@@ -297,10 +332,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       |> MapSet.new()
       |> MapSet.union(call_receipts(events, pairs))
 
-    initial = Map.put(initial, :receipts, receipts)
+    debug =
+      Map.new(owners, fn {pid, owner} ->
+        root = owner.family.machines[pid]
+        {pid, %{value: expected_debug(root.debug, initial.debug_formatter), origin: root.debug_origin}}
+      end)
 
-    Enum.reduce(events, initial, fn source, state ->
-      if Map.has_key?(owners, source.pid), do: worker_event(source, state), else: state
+    initial = initial |> Map.put(:receipts, receipts) |> Map.put(:machine_debug, debug)
+
+    state =
+      Enum.reduce(events, initial, fn source, state ->
+        if Map.has_key?(owners, source.pid), do: worker_event(source, state), else: state
+      end)
+
+    Enum.reduce(state.debug_required, state, fn {_pid, source}, state ->
+      tls_failure(state, source, :tls_machine_debug_required)
     end)
   end
 
@@ -316,6 +362,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp worker_event(%{event: {_, :call, {:gen_statem, function, arguments}}} = source, state),
     do: loop_copy(state, source, function, arguments)
 
+  defp worker_event(%{event: {_, :call, {:sys, function, arguments}}} = source, state)
+       when function in [:handle_debug, :nlog_put],
+       do: debug_call(state, source, function, arguments)
+
   defp worker_event(%{event: {_, :call, {module, function, arguments}}} = source, state) do
     case Map.fetch(@worker_inputs, source.mfa) do
       {:ok, position} -> worker_call(state, source, arguments, position)
@@ -324,7 +374,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp worker_event(%{event: {_, :return_from, _, result}} = source, state),
-    do: state |> active_option_return(source) |> worker_return(source, result)
+    do: state |> debug_return(source) |> active_option_return(source) |> worker_return(source, result)
 
   defp worker_event(_source, state), do: state
 
@@ -351,7 +401,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp machine_program(state, source, function, arguments)
        when function in @loop_state_functions or
               function in [:reply_then_terminate, :do_reply_then_terminate, :terminate] do
-    root = state.owners[source.pid].family.machines[source.pid]
+    debug = Map.fetch!(state.machine_debug, source.pid)
     debug_position = if function in @loop_state_functions, do: 1, else: 4
 
     context = Map.get(state.machine_programs, source.pid)
@@ -360,15 +410,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case program_fields(function, length(arguments), context, state, source) do
       {:ok, fields} ->
         fields = Enum.map(fields, fn {path, expected} -> {path, expected, context.origin} end)
-        fields = [{debug_position, root.debug, root.debug_origin} | fields]
+        fields = [{debug_position, debug.value, debug.origin} | fields]
 
         state =
           fields
           |> Enum.sort_by(fn {path, _expected, _origin} -> List.wrap(path) end)
           |> Enum.reduce(state, fn {path, expected, origin}, state ->
-            program_term(state, source, [2, 2 | List.wrap(path)], expected, origin)
+            transform =
+              if path == debug_position, do: &observed_debug(&1, state), else: &Function.identity/1
+
+            program_term(state, source, [2, 2 | List.wrap(path)], expected, origin, transform)
           end)
 
+        state = require_debug(state, source, function, length(arguments), context)
         state = program_callback_result(state, source, function, context)
         {state, context} = program_after(state, source, function, length(arguments), context)
         put_in(state.machine_programs[source.pid], context)
@@ -376,6 +430,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       :error ->
         tls_failure(state, source, :tls_machine_program_origin)
     end
+  end
+
+  defp machine_program(state, source, :sys_debug, arguments),
+    do: debug_call(state, source, :sys_debug, arguments)
+
+  defp machine_program(state, source, :terminate_sys_debug, _arguments) do
+    root = state.owners[source.pid].family.machines[source.pid]
+    context = Map.fetch!(state.machine_programs, source.pid)
+    debug = Map.fetch!(state.machine_debug, source.pid)
+    {_class, reason} = context.stop
+
+    state
+    |> program_term(source, [2, 2, 0], debug.value, debug.origin, &observed_debug(&1, state))
+    |> program_term(source, [2, 2, 1], root.params, root.origin)
+    |> program_term(source, [2, 2, 2], elem(context.data, 0), context.origin)
+    |> program_term(source, [2, 2, 3], reason, context.origin)
+    |> require_debug(source, :terminate_sys_debug, 4, context)
   end
 
   defp machine_program(state, source, :reply, _arguments) do
@@ -411,6 +482,246 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp machine_program(state, _source, _function, _arguments), do: state
+
+  defp debug_call(state, source, function, _arguments) do
+    case debug_frame(state, source, function) do
+      {:ok, frame} ->
+        state = consume_debug(state, source, function)
+
+        state =
+          frame.arguments
+          |> Enum.with_index()
+          |> Enum.reduce(state, fn {expected, position}, state ->
+            transform = debug_transform(frame.kind, position, state)
+
+            program_term(
+              state,
+              source,
+              [2, 2, position],
+              expected,
+              frame.origin,
+              transform
+            )
+          end)
+
+        frame = Map.put(frame, :mfa, source.mfa)
+        frames = Map.get(state.debug_frames, source.pid, [])
+        put_in(state.debug_frames[source.pid], [frame | frames])
+
+      :error ->
+        tls_failure(state, source, :tls_machine_debug_origin)
+    end
+  end
+
+  defp require_debug(state, source, function, arity, context) do
+    required? =
+      function in [
+        :loop_msg_event,
+        :loop_actions_reply,
+        :loop_actions_next_event,
+        :loop_state_transition,
+        :terminate_sys_debug
+      ] or (function == :loop_timeouts_register and arity == 17) or
+        (function == :do_reply_then_terminate and context.replies != [])
+
+    if required? and state.machine_debug[source.pid].value != [] do
+      state =
+        case Map.get(state.debug_required, source.pid) do
+          nil -> state
+          previous -> tls_failure(state, previous, :tls_machine_debug_required)
+        end
+
+      put_in(state.debug_required[source.pid], source)
+    else
+      state
+    end
+  end
+
+  defp consume_debug(state, source, :sys_debug) do
+    parent = List.first(source.stack)
+
+    case Map.get(state.debug_required, source.pid) do
+      %{mfa: ^parent} ->
+        Map.update!(state, :debug_required, &Map.delete(&1, source.pid))
+
+      _ ->
+        tls_failure(state, source, :tls_machine_debug_origin)
+    end
+  end
+
+  defp consume_debug(state, _source, _function), do: state
+
+  defp debug_frame(state, source, :sys_debug) do
+    root = state.owners[source.pid].family.machines[source.pid]
+    debug = Map.fetch!(state.machine_debug, source.pid)
+    context = Map.get(state.machine_programs, source.pid)
+    extra = elem(root.params, 5)
+
+    with {:ok, event} <- debug_event(state, source, context),
+         {:ok, result} <- advance_debug(debug.value, event, extra, state.debug_formatter) do
+      {:ok,
+       %{
+         kind: :sys_debug,
+         debug: debug.value,
+         event: event,
+         extra: extra,
+         arguments: [debug.value, extra, event],
+         result: result,
+         origin: debug.origin
+       }}
+    end
+  end
+
+  defp debug_frame(state, source, :handle_debug) do
+    with [parent | _] <- Map.get(state.debug_frames, source.pid, []),
+         {:ok, debug} <- debug_tail(parent),
+         {:ok, result} <- advance_debug(debug, parent.event, parent.extra, state.debug_formatter) do
+      {:ok,
+       %{
+         parent
+         | kind: :handle_debug,
+           debug: debug,
+           arguments: [debug, state.debug_formatter, parent.extra, parent.event],
+           result: result
+       }}
+    else
+      _ -> :error
+    end
+  end
+
+  defp debug_frame(state, source, :nlog_put) do
+    case Map.get(state.debug_frames, source.pid, []) do
+      [%{kind: :handle_debug, debug: [{:log, log} | _]} = parent | _] ->
+        item = {parent.event, parent.extra, state.debug_formatter}
+
+        {:ok,
+         %{parent | kind: :nlog_put, arguments: [item, log], result: advance_log(item, log)}}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp debug_tail(%{kind: :sys_debug, debug: debug}), do: {:ok, debug}
+  defp debug_tail(%{kind: :handle_debug, debug: [_ | tail]}), do: {:ok, tail}
+  defp debug_tail(_parent), do: :error
+
+  defp debug_transform(:sys_debug, 0, state), do: &observed_debug(&1, state)
+  defp debug_transform(:handle_debug, 0, state), do: &observed_debug(&1, state)
+
+  defp debug_transform(:handle_debug, 1, state),
+    do: &Map.get(state.debug_observations, &1, :unobserved_debug_formatter)
+
+  defp debug_transform(:nlog_put, 0, state),
+    do: &debug_item(&1, fn formatter -> Map.get(state.debug_observations, formatter) end)
+
+  defp debug_transform(:nlog_put, 1, state),
+    do: &debug_log(&1, fn formatter -> Map.get(state.debug_observations, formatter) end)
+
+  defp debug_transform(_kind, _position, _state), do: &Function.identity/1
+
+  defp debug_return(state, source) do
+    case Map.get(state.debug_frames, source.pid, []) do
+      [%{mfa: mfa} = frame | rest] when mfa == source.mfa ->
+        transform =
+          if frame.kind == :nlog_put,
+            do: debug_transform(:nlog_put, 1, state),
+            else: &observed_debug(&1, state)
+
+        state = program_term(state, source, [3], frame.result, frame.origin, transform)
+        state = put_in(state.debug_frames[source.pid], rest)
+
+        if frame.kind == :sys_debug,
+          do:
+            put_in(state.machine_debug[source.pid], %{
+              value: frame.result,
+              origin: {:native_debug_return, source.index}
+            }),
+          else: state
+
+      _ ->
+        state
+    end
+  end
+
+  defp debug_event(state, source, context) when is_map(context) do
+    case List.first(source.stack) do
+      {:gen_statem, :loop_msg_event, _} ->
+        queue = Map.fetch!(state.machine_queues, source.pid)
+        {:ok, {:in, hd(queue.events), state.owners[source.pid].version.name}}
+
+      {:gen_statem, function, _} when function in [:loop_actions_reply, :do_reply_then_terminate] ->
+        {from, reply} = context.reply
+        {:ok, {:out, reply, from}}
+
+      {:gen_statem, :loop_actions_next_event, _} ->
+        {:ok, {:in, hd(context.next), elem(context.data, 0)}}
+
+      {:gen_statem, :loop_state_transition, _} ->
+        old_name = state.machine_states[source.pid].state |> elem(1) |> elem(0)
+        kind = if context.postpone, do: :postpone, else: :consume
+        {:ok, {kind, hd(context.q), old_name, elem(context.data, 0)}}
+
+      {:gen_statem, :loop_timeouts_register, _} ->
+        {:ok, {:start_timer, context.timeout, elem(context.data, 0)}}
+
+      {:gen_statem, :terminate_sys_debug, _} ->
+        {_class, reason} = context.stop
+        {:ok, {:terminate, reason, elem(context.data, 0)}}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp debug_event(_state, _source, _context), do: :error
+
+  defp expected_debug(debug, formatter), do: map_debug(debug, fn _actual -> formatter end)
+
+  defp observed_debug(debug, state),
+    do: map_debug(debug, &Map.get(state.debug_observations, &1, :unobserved_debug_formatter))
+
+  defp map_debug(debug, formatter) when is_list(debug) do
+    Enum.map(debug, fn
+      {:log, log} -> {:log, debug_log(log, formatter)}
+      option -> option
+    end)
+  end
+
+  defp map_debug(debug, _formatter), do: debug
+
+  defp debug_log([reverse | forward], formatter) when is_list(reverse),
+    do: [Enum.map(reverse, &debug_item(&1, formatter)) | Enum.map(forward, &debug_item(&1, formatter))]
+
+  defp debug_log([remaining | reverse], formatter) when is_integer(remaining),
+    do: [remaining | Enum.map(reverse, &debug_item(&1, formatter))]
+
+  defp debug_log(log, _formatter), do: log
+  defp debug_item({event, extra, fun}, formatter), do: {event, extra, formatter.(fun)}
+  defp debug_item(item, _formatter), do: item
+
+  defp advance_debug(debug, event, extra, formatter) do
+    Enum.reduce_while(debug, {:ok, []}, fn
+      {:log, log}, {:ok, result} ->
+        {:cont, {:ok, result ++ [{:log, advance_log({event, extra, formatter}, log)}]}}
+
+      _option, _result ->
+        {:halt, :error}
+    end)
+  end
+
+  # OTP's ring representation has a filling countdown, then reverse/forward
+  # queues. Preserve its exact representation as well as every retained entry.
+  defp advance_log(item, [reverse | [_oldest | forward]]) when is_list(reverse),
+    do: [[item | reverse] | forward]
+
+  defp advance_log(item, [reverse]) when is_list(reverse) do
+    [_oldest | forward] = Enum.reverse(reverse, [item])
+    [[] | forward]
+  end
+
+  defp advance_log(item, [1 | reverse]), do: [[item | reverse]]
+  defp advance_log(item, [remaining | reverse]), do: [remaining - 1, item | reverse]
 
   defp direct_reply(state, source) do
     case state.direct_replies[source.pid] do
@@ -1041,7 +1352,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp program_term(state, source, path, expected, origin) do
-    actual = native_term(source.event, path)
+    program_term(state, source, path, expected, origin, &Function.identity/1)
+  end
+
+  defp program_term(state, source, path, expected, origin, transform) do
+    actual = source.event |> native_term(path) |> transform.()
     state = tls_exact(state, source, :tls_machine_program_copy, actual, expected)
     state = tls_error_path(state, source, path, :tls_machine_program_copy)
 

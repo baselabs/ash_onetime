@@ -1131,7 +1131,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             ComparatorMutants.with_postgrex_inputs(targets, &native_transactions/0)
 
           :result ->
-            ComparatorMutants.with_postgrex_outputs(
+            ComparatorMutants.with_owner_outputs(
+          Postgrex.Protocol,
               %{{:done, 2} => %{size: 2, position: 0, field: :num_rows}},
               &native_transactions/0
             )
@@ -1345,7 +1346,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       target = %{size: unquote(size), position: 1, field: field}
 
       captured =
-        ComparatorMutants.with_postgrex_outputs(
+        ComparatorMutants.with_owner_outputs(
+          Postgrex.Protocol,
           %{{function, arity} => target},
           &native_query_factory/0
         )
@@ -1472,6 +1474,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert captured.run.result == :unsupported_type
 
     assert Enum.any?(captured.events, fn
+             %{event: {_, :return_from, {Postgrex.Protocol, :handle_prepare, 3},
+               {:disconnect, %Postgrex.QueryError{}, %Postgrex.Protocol{}}}} -> true
+             _ -> false
+           end)
+
+    assert Enum.any?(captured.events, fn
              %{
                event:
                  {_, :return_from, {Postgrex.Types, :fetch, 2}, {:error, %Postgrex.TypeInfo{}, _}}
@@ -1581,7 +1589,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       target = %{kind: :element, size: size, position: position}
 
       captured =
-        ComparatorMutants.with_postgrex_outputs(
+        ComparatorMutants.with_owner_outputs(
+          Postgrex.Protocol,
           %{{function, arity} => target},
           &native_query_factory/0
         )
@@ -1645,7 +1654,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       }
 
       captured =
-        ComparatorMutants.with_postgrex_outputs(
+        ComparatorMutants.with_owner_outputs(
+          Postgrex.Protocol,
           %{{function, arity} => target},
           &native_query_factory/0
         )
@@ -1683,7 +1693,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @tag :connection_streams
   test "Connection streams: notify factories retain their native code and empty environment" do
     captured =
-      ComparatorMutants.with_postgrex_outputs(%{{:notify, 1} => %{kind: :factory}}, fn ->
+      ComparatorMutants.with_owner_outputs(Postgrex.Protocol, %{{:notify, 1} => %{kind: :factory}}, fn ->
         cached_decoders(nil)
       end)
 
@@ -1763,7 +1773,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       output = unquote(Macro.escape(output))
 
       captured =
-        ComparatorMutants.with_postgrex_outputs(%{target => output}, fn ->
+        ComparatorMutants.with_owner_outputs(Postgrex.Protocol, %{target => output}, fn ->
           cached_decoders(nil, shape)
         end)
 
@@ -4639,13 +4649,26 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
 
       native = ConnectionTls.build(%{events: events}, run.tls_binding)
+
+      for error <- native.errors do
+        IO.puts("CONNECTION_MACHINE_STATE: " <> Diagnostics.render(error))
+      end
+
       assert native.errors == []
+
+      if unquote(mode) == :debug do
+        for mfa <- [{:sys, :handle_debug, 4}, {:sys, :nlog_put, 2}] do
+          assert Enum.any?(events, &(&1.mfa == mfa))
+        end
+      end
+
       covered = MapSet.new(native.terms, &{&1.index, &1.path})
 
       unbound =
-        for %{event: {pid, :call, {:gen_statem, function, arguments}}} = source <- events,
+        for %{event: {pid, :call, {module, function, arguments}}} = source <- events,
             Map.has_key?(machines, pid),
-            machine_program_function?(function),
+            (module == :gen_statem and machine_program_function?(function)) or
+              (module == :sys and function in [:handle_debug, :nlog_put]),
             {argument, position} <- Enum.with_index(arguments),
             path = [2, 2, position],
             not native_argument_bound?(covered, source.index, path, argument),
@@ -4667,7 +4690,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp machine_program_function?(function),
     do:
       String.starts_with?(Atom.to_string(function), "loop") or
-        function in [:reply_then_terminate, :do_reply_then_terminate, :terminate]
+        function in [
+          :reply_then_terminate,
+          :do_reply_then_terminate,
+          :terminate,
+          :terminate_sys_debug,
+          :sys_debug
+        ]
 
   defp native_argument_bound?(covered, index, path, value) do
     MapSet.member?(covered, {index, path}) or
@@ -4708,6 +4737,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   test "Connection streams: native debug logs retain their program inputs and successive roots" do
     targets = %{{:loop_event, 5} => [1], {:sys_debug, 3} => [0, 1, 2]}
     assert :ok == ComparatorMutants.machine_program_control(targets, :debug)
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native debug ring outputs retain every entry and formatter" do
+    assert :ok == ComparatorMutants.machine_debug_log_control()
   end
 
   @tag :connection_streams

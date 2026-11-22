@@ -151,7 +151,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           end
         end
 
-        Map.put(run, :tls_binding, binding)
+        Map.put(run, :tls_binding, ConnectionTls.freeze_debug(run.events, binding))
     after
       0 -> raise "native TLS binding was not captured"
     end
@@ -385,7 +385,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
               when shape == :prepare_error ->
                 :prepare_error
 
-              {:disconnect, %Postgrex.QueryError{}, %Postgrex.Protocol{}}
+              {:disconnect, _error, %Postgrex.Protocol{}}
               when shape == :unsupported_type ->
                 :unsupported_type
             end

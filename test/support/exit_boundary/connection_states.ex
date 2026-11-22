@@ -1088,11 +1088,123 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         helper_copy(state, source, [2, 2, 1], messages, expected, {:error_rollback, owner.index})
 
       _ ->
-        state
+        callback_messages(state, source, messages)
     end
   end
 
   defp helper_input(state, _source, _function, _arguments, _version), do: state
+
+  defp callback_messages(state, source, actual) do
+    with %{source: callback} = frame <- status_callback(state, source.pid),
+         {:ok, options} <- status_options(frame),
+         {:ok, expected, origins} <- callback_message_origin(state, source, frame, options) do
+      helper_copy(
+        state,
+        source,
+        [2, 2, 1],
+        actual,
+        expected,
+        {:callback_messages, callback.index, origins}
+      )
+    else
+      _ -> failure(state, source, :state_helper_send_origin)
+    end
+  end
+
+  defp callback_message_origin(
+         _state,
+         _source,
+         %{source: %{event: {_, :call, {_, :handle_prepare, [query, _options, protocol]}}}},
+         options
+       ) do
+    query =
+      if is_reference(query.ref),
+        do: %Postgrex.Query{name: query.name, statement: query.statement},
+        else: query
+
+    query = if is_nil(protocol.queries), do: %{query | name: ""}, else: query
+    comment = options[:comment]
+    statement =
+      if is_binary(comment), do: [query.statement, "/*", comment, "*/"], else: query.statement
+
+    parse = msg_parse(name: query.name, statement: statement, type_oids: query.param_oids || [])
+    describe = msg_describe(type: :statement, name: query.name)
+    head = if query.name == "", do: [], else: [msg_close(type: :statement, name: query.name)]
+    tail = if options[:postgrex_prepare], do: [msg_sync()], else: [msg_flush()]
+    tail =
+      if options[:postgrex_prepare] and query.name == "",
+        do: [msg_close(type: :statement, name: "") | tail],
+        else: tail
+
+    {:ok, head ++ [parse, describe] ++ tail, []}
+  end
+
+  defp callback_message_origin(
+         _state,
+         _source,
+         %{source: %{event: {_, :call, {_, :handle_close, [query, _options, _protocol]}}}},
+         _options
+       ),
+    do: {:ok, [msg_close(type: :statement, name: query.name), msg_sync()], []}
+
+  defp callback_message_origin(
+         _state,
+         _source,
+         %{source: %{event: {_, :call, {_, :handle_fetch, [_query, cursor, _options, _protocol]}}}},
+         options
+       ) do
+    execute = msg_execute(name_port: cursor.portal, max_rows: Keyword.get(options, :max_rows, 500))
+    {:ok, [execute, msg_sync()], []}
+  end
+
+  defp callback_message_origin(
+         _state,
+         _source,
+         %{
+           source: %{event: {_, :call, {_, :handle_deallocate, [_query, cursor, _options, _protocol]}}}
+         },
+         _options
+       ),
+    do: {:ok, [msg_close(type: :portal, name: cursor.portal), msg_sync()], []}
+
+  defp callback_message_origin(
+         state,
+         source,
+         %{
+           source:
+             %{event: {_, :call, {_, :handle_declare, [query, params, _options, _protocol]}}} =
+               callback
+         },
+         _options
+       ) do
+    portals =
+      for {_index, %{source: call, returned: returned}} <- state.pairs,
+          call.pid == source.pid and call.index > callback.index and returned.index < source.index,
+          call.mfa == {System, :unique_integer, 1},
+          {_, :call, {_, _, [[:positive]]}} <- [call.event],
+          {_, :return_from, _, value} <- [returned.event],
+          is_integer(value),
+          do: {Integer.to_string(value, 36), returned.index}
+
+    case portals do
+      [{portal, origin}] ->
+        bind =
+          msg_bind(
+            name_port: portal,
+            name_stat: query.name,
+            param_formats: query.param_formats,
+            params: params,
+            result_formats: query.result_formats
+          )
+
+        {:ok, [bind, msg_sync()], [origin]}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp callback_message_origin(_state, _source, _frame, _options), do: :error
 
   defp prepare_error(state, source, version, fields) do
     error = Postgrex.Error.exception(postgres: fields)
