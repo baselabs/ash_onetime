@@ -305,8 +305,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp cached_statement(:rows), do: {"SELECT $1::int4 AS connection_stream_probe", [17]}
   defp cached_statement(:cross_connection), do: cached_statement(:rows)
 
-  defp cached_statement(:error),
+  defp cached_statement(:bind_error),
     do: {"SELECT 17 / $1::int4 AS connection_stream_probe", [0]}
+
+  defp cached_statement(:execute_error),
+    do:
+      {"SELECT 17 / (n - $1::int4) AS connection_stream_probe FROM generate_series(1, 1) AS series(n)",
+       [1]}
 
   defp cached_statement(:large_rows),
     do: {"SELECT $1::int4 AS connection_stream_probe, repeat('x', 131072)::text AS filler", [17]}
@@ -344,7 +349,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp cached_environment(protocol, _shape), do: protocol
 
   defp warm_cached(protocol, _query, _params, shape)
-       when shape in [:parameter, :notification, :error],
+       when shape in [:parameter, :notification, :bind_error, :execute_error],
        do: protocol
 
   defp warm_cached(protocol, query, params, _shape) do

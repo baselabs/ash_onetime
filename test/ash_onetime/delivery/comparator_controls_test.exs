@@ -450,7 +450,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           :notice,
           :parameter,
           :notification,
-          :error
+          :bind_error,
+          :execute_error
         ] do
       captured = cached_decoders(nil, shape)
       %{decoders: decoders, origin: origin, events: events, streams: streams} = captured
@@ -523,7 +524,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       rows =
         Enum.filter(decoders.instances, &(&1.source.mfa == {Postgrex.Types, :decode_rows, 4}))
 
-      assert rows != []
+      if shape == :bind_error, do: assert(rows == []), else: assert(rows != [])
       assert length(decoders.versions) == length(decoders.instances)
 
       assert Enum.all?(decoders.versions, fn version ->
@@ -538,7 +539,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert Enum.all?(rows, &(&1.descriptor == Map.take(origin, [:index, :path])))
 
-      if shape == :error do
+      if shape in [:bind_error, :execute_error] do
+        expected = if shape == :bind_error, do: :bind, else: :execute
+
+        assert Enum.any?(streams.connections, fn {_port, connection} ->
+                 Enum.any?(connection.protocol.messages, fn
+                   %{direction: :backend, tag: ?E, association: {^expected, _}} -> true
+                   _ -> false
+                 end)
+               end)
+
         ready_errors =
           for %{
                 event:
@@ -1259,11 +1269,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp cached_decoders(corruption, shape \\ :rows) do
     %{run: run, history: history} = ConnectionNative.observe_cached(corruption, shape)
 
-    if shape == :error do
+    if shape in [:bind_error, :execute_error] do
       assert {:error, %Postgrex.Error{postgres: %{code: :division_by_zero}}} = run.result
     else
       assert native_result(run) == {:ok, cached_rows(shape)}
     end
+
     [origin] = history.history.descriptors
     query = origin.query
     framing = Wire.frames(history.chunks)
@@ -1288,7 +1299,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end)
 
     case shape do
-      shape when shape in [:rows, :cross_connection, :error] ->
+      shape when shape in [:rows, :cross_connection, :bind_error, :execute_error] ->
         assert catalog.parameter_types == [23]
         assert [{"connection_stream_probe", {:table_oid, 0}, 0, 23, 4, -1, 0}] = catalog.columns
         assert catalog.description == :rows

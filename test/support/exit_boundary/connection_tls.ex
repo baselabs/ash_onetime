@@ -89,7 +89,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   # This ledger grants no event allowance; native interior/copy qualification and
   # the main comparator's consumption remain separate obligations.
   def build(indexed, binding) do
-    pairs = NativeTransport.pairs(indexed.events)
+    families = Map.get(binding, :families, [binding])
+    transport = NativeTransport.build(indexed, %{}, Enum.map(families, & &1.transport))
+    pairs = transport.pairs
 
     state =
       Enum.reduce(indexed.events, %{pairs: pairs, writes: [], reads: [], errors: []}, fn
@@ -110,7 +112,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       end)
 
     helper = sender_copies(indexed.events, pairs, binding)
-    workers = worker_states(indexed.events, pairs, binding, helper.terms)
+    workers = worker_states(indexed.events, pairs, binding, helper.terms, transport)
 
     %{
       pairs: pairs,
@@ -118,9 +120,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       reads: Enum.reverse(state.reads),
       active: [],
       historical: %{},
+      transport: transport,
       terms: Enum.reverse(helper.terms) ++ Enum.reverse(workers.terms),
       errors:
-        Enum.reverse(state.errors) ++ Enum.reverse(helper.errors) ++ Enum.reverse(workers.errors)
+        Enum.reverse(state.errors) ++ transport.errors ++ Enum.reverse(helper.errors) ++
+          Enum.reverse(workers.errors)
     }
   end
 
@@ -173,7 +177,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   # Native sys:get_state roots precede observation. Gen_statem retains its old
   # StateData while a callback's next StateData is carried separately; only
   # loop_done (or the stopping branch) commits that independently built version.
-  defp worker_states(events, pairs, binding, covered) do
+  defp worker_states(events, pairs, binding, covered, transport) do
     families = Map.get(binding, :families, [binding])
 
     owners =
@@ -201,13 +205,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       covered: MapSet.new(covered, &{&1.index, &1.path})
     }
 
+    receipts =
+      (transport.writes ++ transport.reads ++ transport.options)
+      |> Enum.flat_map(& &1.indexes)
+      |> MapSet.new()
+      |> MapSet.union(call_receipts(events, pairs))
+
+    initial = Map.put(initial, :receipts, receipts)
+
     Enum.reduce(events, initial, fn source, state ->
       if Map.has_key?(owners, source.pid), do: worker_event(source, state), else: state
     end)
   end
 
-  defp worker_event(%{event: {pid, :receive, message}} = source, state),
-    do: put_in(state.received[pid], %{source: source, message: message})
+  defp worker_event(%{event: {pid, :receive, message}} = source, state) do
+    if MapSet.member?(state.receipts, source.index) do
+      state
+    else
+      queue = Map.get(state.received, pid, :queue.new())
+      put_in(state.received[pid], :queue.in(%{source: source, message: message}, queue))
+    end
+  end
 
   defp worker_event(%{event: {_, :call, {:gen_statem, function, arguments}}} = source, state),
     do: loop_copy(state, source, function, arguments)
@@ -287,8 +305,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp loop_commit(state, _pid, _function), do: state
 
   defp loop_message(state, source, arguments) do
-    case Map.get(state.received, source.pid) do
-      %{message: message, source: origin} when origin.index < source.index ->
+    queue = Map.get(state.received, source.pid, :queue.new())
+
+    case :queue.out(queue) do
+      {{:value, %{message: message, source: origin}}, remaining}
+      when origin.index < source.index ->
+        state = put_in(state.received[source.pid], remaining)
         state = tls_exact(state, source, :tls_event_copy, Enum.at(arguments, 3), message)
 
         put_in(state.messages[source.pid], %{
@@ -298,6 +320,109 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
       _ ->
         tls_failure(state, source, :tls_event_origin)
+    end
+  end
+
+  # Receive tracing records mailbox arrivals. Selective native helpers consume
+  # only their independently bound receipts; every other arrival stays FIFO for
+  # loop_msg. Receipt selection never grants an observation allowance.
+  defp call_receipts(events, pairs) do
+    pairs
+    |> Map.values()
+    |> Enum.flat_map(fn
+      %{
+        source:
+          %{event: {pid, :call, {module, :call, [target, request | _]}}} = source,
+        returned: %{event: {_, :return_from, _, result}} = returned
+      }
+      when module in [:gen_statem, :gen_server] and is_pid(target) ->
+        call_receipt(events, pairs, source, returned, pid, target, request, result)
+
+      _ ->
+        []
+    end)
+    |> MapSet.new()
+  end
+
+  defp call_receipt(events, pairs, source, returned, pid, target, request, result) do
+    requests =
+      Enum.filter(events, fn
+        %{event: {^pid, :send, {:"$gen_call", {^pid, _tag}, ^request}, ^target}} = sent ->
+          sent.index > source.index and sent.index < returned.index
+
+        _ ->
+          false
+      end)
+
+    case requests do
+      [%{event: {_, :send, {_, {_, tag}, _}, _}} = sent] ->
+        if call_monitor?(pairs, source, sent, pid, target, tag) do
+          call_reply(events, sent, returned, pid, target, tag, result)
+        else
+          []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp call_monitor?(pairs, source, sent, pid, target, tag) do
+    Enum.any?(pairs, fn
+      {_,
+       %{
+         source: %{event: {^pid, :call, {:erlang, :monitor, arguments}}} = monitor,
+         returned: %{event: {_, :return_from, _, ref}} = returned
+       }}
+      when is_reference(ref) ->
+        expected =
+          case tag do
+            ^ref -> [:process, target]
+            [:alias | ^ref] -> [:process, target, [alias: :demonitor]]
+            _ -> :invalid_monitor_tag
+          end
+
+        arguments === expected and monitor.index > source.index and returned.index < sent.index
+
+      _ ->
+        false
+    end)
+  end
+
+  defp call_reply(events, sent, returned, pid, target, tag, result) do
+    destination =
+      case tag do
+        [:alias | ref] -> ref
+        _ -> pid
+      end
+
+    replies =
+      Enum.filter(events, fn
+        %{event: {^target, :send, {^tag, _reply}, ^destination}} = reply ->
+          reply.index > sent.index and reply.index < returned.index
+
+        _ ->
+          false
+      end)
+
+    case replies do
+      [%{event: {_, :send, message, _}} = reply] ->
+        receipts =
+          for %{event: {^pid, :receive, {^tag, _value}}} = received <- events,
+              received.index > reply.index and received.index < returned.index,
+              do: received
+
+        case receipts do
+          [%{event: {_, :receive, ^message}, index: index}]
+          when elem(message, 1) === result ->
+            [index]
+
+          _ ->
+            []
+        end
+
+      _ ->
+        []
     end
   end
 
@@ -415,26 +540,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       actual = native_term(source.event, path)
       state = tls_exact(state, source, :tls_worker_state_copy, actual, expected)
 
-      state =
-        if actual !== expected do
-          [error | errors] = state.errors
-
-          differences =
-            if is_tuple(actual) and is_tuple(expected) and
-                 tuple_size(actual) == tuple_size(expected) do
-              for position <- 0..(tuple_size(expected) - 1),
-                  elem(actual, position) !== elem(expected, position),
-                  do: %{path: path ++ [position]}
-            else
-              []
-            end
-
-          error = Map.merge(error, %{path: path, origin: origin, differences: differences})
-          %{state | errors: [error | errors]}
-        else
-          state
-        end
-
       copy = %{index: source.index, path: path, origin: origin}
       Map.update!(state, :terms, &[copy | &1])
     end
@@ -513,7 +618,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             )
           end
 
-          for {{actual, expected}, position} <- Enum.with_index(Enum.zip(arguments, expected_args)),
+          for {{actual, expected}, position} <-
+                Enum.with_index(Enum.zip(arguments, expected_args)),
               actual !== expected do
             IO.puts(
               "CONNECTION_TLS_RECORD_INPUT_SOURCE: " <>
