@@ -334,7 +334,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         recv_input(state, source, parent)
 
       {:tls_sender, :send_or_buffer, 5} ->
-        sender_constructed(state, source, parent)
+        {state, version} = sender_constructed(state, source, parent)
+        {sender_forward_copies(state, source, arguments, parent), version}
 
       {:tls_gen_connection, :next_event, 4} ->
         buffered_input(state, source, parent)
@@ -370,6 +371,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
       nil ->
         {tls_failure(state, source, :tls_encode_origin), parent.current}
+    end
+  end
+
+  defp sender_forward_copies(state, source, arguments, parent) do
+    [transport, socket, records, from, _data] = arguments
+    family = state.owners[source.pid].family
+    environment = elem(parent.input.data, 1)
+    expected = {elem(environment, 5), family.port, Enum.at(parent.arguments, 1)}
+    actual = {transport, socket, from}
+    state = tls_exact(state, source, :tls_forward_copy, actual, expected)
+
+    case Map.get(state.encoded, source.pid) do
+      %{result: {expected, _states}, origin: origin} ->
+        state = tls_exact(state, source, :tls_record_copy, records, expected)
+        copy = %{index: source.index, path: [2, 2, 2], origin: origin}
+        Map.update!(state, :terms, &[copy | &1])
+
+      nil ->
+        tls_failure(state, source, :tls_encode_origin)
     end
   end
 

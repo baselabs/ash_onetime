@@ -94,6 +94,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           assert hd(copies).offset == message.start
         end
       end
+
+      # Comparator self-test on captured native bytes: one message cannot borrow
+      # ownership from the protocol that supplied only the end of its frame.
+      frontend = Enum.find(chunks, &(&1.direction == :frontend))
+      [first | rest] = split_stream_chunk(frontend, 1)
+
+      crossed = [
+        Map.put(first, :phase, :shared) | Enum.map(rest, &Map.put(&1, :phase, :committed_read))
+      ]
+
+      rejected = Wire.frames(crossed)
+      assert Enum.map(rejected.errors, & &1.rule) == [:frame_ownership]
+      assert Wire.frames([frontend]).errors == []
     end
   end
 
@@ -1203,14 +1216,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
 
     refute Enum.any?(indexed, &(&1.mfa == {Postgrex.Protocol, :handle_prepare, 3}))
-    native = NativeTransport.build(%{events: indexed})
+    historical = %{history.holder => history.history}
+    native = NativeTransport.build(%{events: indexed}, historical)
     assert native.errors == []
 
     streams =
       ConnectionReads.build(native, MapSet.new(), %{origin.port => %{query.name => catalog}})
 
     assert streams.errors == []
-    historical = %{history.holder => history.history}
     decoders = ConnectionDecoders.build(%{events: indexed}, native, streams, historical, [origin])
 
     %{
@@ -3454,7 +3467,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :connection_streams
   test "Connection streams: native TLS forwarding retains record and reply copies" do
-    for {control, rule} <- [record_copy: :tls_record_copy, from_copy: :tls_event_copy] do
+    for {control, rule, owner} <- [
+          {:record_copy, :tls_record_copy, :stream_tls_record_copy},
+          {:from_copy, :tls_forward_copy, :stream_tls_forward_copy}
+        ] do
       run = ComparatorMutants.with_tls_sender_mutant(control, &ConnectionNative.observe_tls/0)
       assert run.result == []
 
@@ -3465,6 +3481,34 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       native = ConnectionTls.build(%{events: events}, run.tls_binding)
       assert Enum.map(native.errors, & &1.rule) == [rule]
+
+      for mutant <- [
+            :stream_tls_worker_state_copy,
+            :stream_tls_record_copy,
+            :stream_tls_forward_copy
+          ] do
+        checked =
+          ComparatorMutants.with_mutant(mutant, fn ->
+            ConnectionTls.build(%{events: events}, run.tls_binding)
+          end)
+
+        assert Enum.map(checked.errors, & &1.rule) == if(mutant == owner, do: [], else: [rule])
+      end
+
+      assert Enum.map(ConnectionTls.build(%{events: events}, run.tls_binding).errors, & &1.rule) ==
+               [rule]
+
+      restored = ConnectionNative.observe_tls()
+
+      restored_events =
+        restored.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+      assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+      IO.puts(
+        "CONNECTION_TLS_FORWARD_COPY: owning RED; sole catcher; exact restore; fresh GREEN"
+      )
     end
   end
 
