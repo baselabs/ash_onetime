@@ -59,12 +59,27 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   }
 
   @helper_term_inputs %{
+    {:parse_describe_flush, 4} => [1, 2, 3],
+    {:close_parse_describe_flush, 4} => [1, 2, 3],
+    {:recv_ready, 3} => [1],
+    {:recv_strict_ready, 4} => [1, 2],
+    {:recv_transaction, 3} => [1],
+    {:recv_transaction, 4} => [1, 2],
+    {:error_ready, 4} => [1, 2],
+    {:error_flushed, 4} => [1, 2],
+    {:rollback_flushed, 4} => [1, 2],
+    {:reload_flushed, 5} => [1, 2, 3],
+    {:handle_msg, 3} => [1, 2],
+    {:ping_recv, 4} => [1],
+    {:redescribe, 6} => [1, 2, 3, 4],
+    {:msg_send, 3} => [1],
     {:rows_recv, 4} => [1, 2],
     {:rows_recv, 5} => [1, 2, 4],
     {:msg_recv, 3} => [1],
     {:msg_recv, 4} => [1, 3],
-    {:done, 4} => [2],
-    {:done, 5} => [2]
+    {:done, 2} => [1],
+    {:done, 4} => [1, 2, 3],
+    {:done, 5} => [1, 2, 3, 4]
   }
 
   @tag :connection_streams
@@ -504,7 +519,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
 
       assert unbound_terms == [],
-             "native helper messages, row accumulators and types need origins"
+             "every captured helper argument needs its own status, query, error, metadata or value origin"
 
       if shape == :large_rows do
         assert Enum.any?(decoders.versions, &is_list(&1.returned_buffer))
@@ -617,6 +632,26 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
        ) do
     for position <- Map.get(@helper_term_inputs, {function, length(arguments)}, []),
         do: %{index: index, mfa: source.mfa, path: [2, 2, position]}
+  end
+
+  defp native_helper_term(
+         %{index: index, event: {_, :return_from, {Postgrex.Protocol, function, _}, result}} =
+           source
+       )
+       when function in [:done, :error_ready, :error_flushed, :rollback_flushed,
+                        :parse_describe_flush, :close_parse_describe_flush, :redescribe] and
+              is_tuple(result) do
+    positions =
+      case {function, result} do
+        {:done, {%Postgrex.Result{}, %Postgrex.Protocol{}}} -> [0]
+        {function, {:error, _error, %Postgrex.Protocol{}}}
+        when function in [:error_ready, :error_flushed, :rollback_flushed] -> [1]
+        {function, {:ok, %Postgrex.Query{}, _protocol}} when function != :done -> [1]
+        {:redescribe, {:ok, %Postgrex.Query{}, _protocol, _buffer}} -> [1]
+        _ -> []
+      end
+
+    for position <- positions, do: %{index: index, mfa: source.mfa, path: [3, position]}
   end
 
   defp native_helper_term(
@@ -1047,6 +1082,30 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
 
     IO.puts("CONNECTION_ERROR_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native completion inputs retain query and command origins" do
+    targets = %{{:done, 4} => [1, 3], {:done, 5} => [1, 3, 4]}
+
+    for shape <- [:rows, :none] do
+      captured = ComparatorMutants.with_postgrex_inputs(targets, fn -> cached_decoders(nil, shape) end)
+      assert captured.native.errors == []
+      assert captured.decoders.errors == []
+
+      corrupted =
+        for %{event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source <- captured.events,
+            positions = Map.get(targets, {function, length(arguments)}, []),
+            position <- positions do
+          assert match?({:native_foreign_helper, _}, Enum.at(arguments, position))
+          {source.index, [2, 2, position]}
+        end
+
+      assert corrupted != []
+      states = native_copy_states(captured)
+      assert Enum.map(states.errors, & &1.rule) == List.duplicate(:state_helper_copy, length(corrupted))
+      assert Enum.map(states.errors, &{&1.index, &1.path}) == corrupted
+    end
   end
 
   @tag :connection_streams
@@ -4136,7 +4195,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         if event.pid == pid and event.index > source.index and
              event.index < pair.returned.index and
              event.mfa == {:tls_gen_connection, :next_event, 3},
-          do: event.index
+           do: event.index
       end)
     end
   end

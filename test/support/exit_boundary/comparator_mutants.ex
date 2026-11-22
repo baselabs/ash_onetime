@@ -532,7 +532,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_tls.ex",
-        original: "        state = tls_exact(state, source, :tls_active_option_copy, mode, expected)\n",
+        original:
+          "        state = tls_exact(state, source, :tls_active_option_copy, mode, expected)\n",
         mutated:
           "        _ = mode\n        state = tls_exact(state, source, :tls_active_option_copy, expected, expected)\n"
       }
@@ -543,7 +544,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_tls.ex",
-        original: "      state = tls_exact(state, source, :tls_passive_option, length(options), 1)\n",
+        original:
+          "      state = tls_exact(state, source, :tls_passive_option, length(options), 1)\n",
         mutated: "      state = tls_exact(state, source, :tls_passive_option, 1, 1)\n"
       },
       %{
@@ -685,6 +687,11 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   def with_tls_connection_mutant(rule, callback),
     do: with_owner_mutant(:tls_gen_connection, 1, &receiver_form(&1, &2, rule), callback)
 
+  def with_postgrex_inputs(targets, callback) do
+    required = fn sites -> sites > map_size(targets) end
+    with_owner_mutant(Postgrex.Protocol, required, &postgrex_inputs_form(&1, &2, targets), callback)
+  end
+
   defp with_owner_mutant(module, required, transform, callback) do
     {^module, original, path} = :code.get_object_code(module)
 
@@ -692,7 +699,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       :beam_lib.chunks(original, [:abstract_code])
 
     {forms, sites} = Enum.map_reduce(forms, 0, transform)
-    unless sites == required, do: raise("native mutant requires every pinned owner site")
+    valid? = if is_function(required, 1), do: required.(sites), else: sites == required
+    unless valid?, do: raise("native mutant requires every pinned owner site")
     {:ok, ^module, mutant, []} = :compile.forms(forms, [:binary, :return, :debug_info])
 
     try do
@@ -704,6 +712,60 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       true = :code.soft_purge(module)
       {^module, ^original, ^path} = :code.get_object_code(module)
     end
+  end
+
+  defp postgrex_inputs_form({:function, annotation, function, arity, clauses}, sites, targets) do
+    {clauses, sites} = postgrex_input_calls(clauses, sites, targets)
+
+    case Map.fetch(targets, {function, arity}) do
+      {:ok, positions} ->
+        copied =
+          Enum.map(clauses, fn {:clause, location, arguments, guards, body} ->
+            arguments = helper_arguments(arguments, positions, location)
+            {:clause, location, arguments, guards, body}
+          end)
+
+        {{:function, annotation, function, arity, copied ++ clauses}, sites + length(copied)}
+
+      :error ->
+        {{:function, annotation, function, arity, clauses}, sites}
+    end
+  end
+
+  defp postgrex_inputs_form(form, sites, _targets), do: {form, sites}
+
+  defp postgrex_input_calls(
+         {:call, location, {:atom, _, function} = name, arguments} = form,
+         sites,
+         targets
+       ) do
+    case Map.fetch(targets, {function, length(arguments)}) do
+      {:ok, positions} ->
+        {{:call, location, name, helper_arguments(arguments, positions, location)}, sites + 1}
+
+      :error ->
+        {form, sites}
+    end
+  end
+
+  defp postgrex_input_calls(form, sites, targets) when is_tuple(form) do
+    {elements, sites} =
+      form |> Tuple.to_list() |> Enum.map_reduce(sites, &postgrex_input_calls(&1, &2, targets))
+
+    {List.to_tuple(elements), sites}
+  end
+
+  defp postgrex_input_calls(form, sites, targets) when is_list(form),
+    do: Enum.map_reduce(form, sites, &postgrex_input_calls(&1, &2, targets))
+
+  defp postgrex_input_calls(form, sites, _targets), do: {form, sites}
+
+  defp helper_arguments(arguments, positions, location) do
+    Enum.reduce(positions, arguments, fn position, arguments ->
+      List.update_at(arguments, position, fn original ->
+        {:tuple, location, [{:atom, location, :native_foreign_helper}, original]}
+      end)
+    end)
   end
 
   defp machine_form({:function, annotation, :loop_msg_event, 5, clauses}, sites, rule) do
@@ -743,10 +805,13 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   defp receiver_copy(
          {:call, location,
           {:remote, remote, {:atom, _, :tls_socket} = module, {:atom, _, :setopts} = name},
-          [transport, socket,
-           {:cons, list_location,
-            {:tuple, tuple_location, [{:atom, _, :active} = active, {:var, _, :N} = count]},
-            {nil, _} = tail}]},
+          [
+            transport,
+            socket,
+            {:cons, list_location,
+             {:tuple, tuple_location, [{:atom, _, :active} = active, {:var, _, :N} = count]},
+             {nil, _} = tail}
+          ]},
          sites,
          :active_option
        ) do
@@ -757,8 +822,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   defp receiver_copy(
          {:clause, location, [{:atom, _, false}], guards,
-          [{:match, _, {:var, _, :State}, _} = constructed,
-           {:call, _, {:atom, _, :next_event}, _} = next]},
+          [
+            {:match, _, {:var, _, :State}, _} = constructed,
+            {:call, _, {:atom, _, :next_event}, _} = next
+          ]},
          sites,
          :passive_option
        ) do
@@ -766,7 +833,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       {:call, location, {:atom, location, :do_activate_socket},
        [{:var, location, :PS0}, {:var, location, :StatEnv}]}
 
-    {{:clause, location, [{:atom, location, false}], guards, [activate, constructed, next]}, sites + 1}
+    {{:clause, location, [{:atom, location, false}], guards, [activate, constructed, next]},
+     sites + 1}
   end
 
   defp receiver_copy(form, sites, rule) when is_tuple(form) do

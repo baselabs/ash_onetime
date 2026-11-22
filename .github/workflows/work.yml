@@ -241,8 +241,8 @@ jobs:
     name: "Native connection prerequisites"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Cold 160s on Work 44936712474, job 136944980288, 92e3cb11f41583ffda63b15e4ee4eee71d8c629f.
-    timeout-minutes: 6
+    # Expanded native obligations have no green run yet; remeasure after cold qualification.
+    timeout-minutes: 90
     env:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-native"
     steps:
