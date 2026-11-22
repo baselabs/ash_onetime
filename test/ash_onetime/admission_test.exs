@@ -777,7 +777,10 @@ defmodule AshOnetime.AdmissionTest do
          function_exported?(AshOnetime.Admission, :reset_test_store, 0),
          function_exported?(AshOnetime.Admission, :put_test_state, 2)}
 
-      IO.puts("admission_seam: " <> AshOnetime.Test.ExitBoundary.Diagnostics.render(seam))
+      case seam do
+        {false, false, false} -> IO.puts("admission_seam: {false, false, false}")
+        _ -> raise "the dev build exported an admission test seam"
+      end
       '''
 
       build_path =

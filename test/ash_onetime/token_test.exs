@@ -508,7 +508,16 @@ defmodule AshOnetime.TokenTest do
         custody_context: %{material: ReviewMaterial, key: secret}
       )
 
-    IO.puts(AshOnetime.Test.ExitBoundary.Diagnostics.render(result, limit: :infinity))
+    case result do
+      {:error, %AshOnetime.Error{
+        code: :invalid_options,
+        message: "verification clock override requires explicit " <> _
+      }} ->
+        IO.puts("code: :invalid_options; verification clock override requires explicit opt-in")
+
+      _ ->
+        raise "the dev build did not refuse the verification clock override"
+    end
     '''
 
     # The dev subprocess inherits a clean env: config/config.exs imports test.exs ONLY for
