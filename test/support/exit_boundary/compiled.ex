@@ -57,9 +57,11 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
     end
   end
 
+  defp object(module), do: Process.get({__MODULE__, :object, module}, :code.which(module))
+
   def identity(module, name, arity) do
     References.memo({:compiled_fun, module, module.module_info(:md5), name, arity}, fn ->
-      object = Process.get({__MODULE__, :object, module}, :code.which(module))
+      object = object(module)
       {:ok, {^module, chunks}} = :beam_lib.chunks(object, [:atoms, ~c"FunT"])
       atoms = Map.new(chunks[:atoms])
       <<_count::32, entries::binary>> = elem(List.keyfind(chunks, ~c"FunT", 0), 1)
@@ -85,7 +87,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
         # owner edits may wrap the callee's arguments, while the closure still
         # captures the same source inputs. identity/3 reads the exact active
         # object, including a mutant's own FunT index and code digest.
-        {:beam_file, _, _, _, _, functions} = :beam_disasm.file(:code.which(module))
+        {:beam_file, _, _, _, _, functions} = :beam_disasm.file(object(module))
         prefix = "-#{owner}/#{owner_arity}-fun-"
         target = {module, callee, arity}
 
@@ -99,9 +101,10 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
 
         positions =
           for argument <- 0..(arity - 1) do
-            [{:environment, position}] =
+            [source] =
               capture_arguments(instructions, registers, %{}, target, argument, {name, count})
 
+            [{:environment, position}] = source |> captured_environments() |> Enum.uniq()
             position
           end
 
@@ -110,6 +113,13 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
       end
     )
   end
+
+  defp captured_environments({:environment, _position} = source), do: [source]
+
+  defp captured_environments({:constructed_tuple, elements}),
+    do: Enum.flat_map(elements, &captured_environments/1)
+
+  defp captured_environments(_literal), do: []
 
   # Read which free register supplies a callee argument. This identifies a
   # closure slot by its compiled call, without guessing a fun number or reading
@@ -122,7 +132,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
   end
 
   defp captured_argument_from_beam(module, function, callee, arity, argument) do
-    {:beam_file, _, _, _, _, functions} = :beam_disasm.file(:code.which(module))
+    {:beam_file, _, _, _, _, functions} = :beam_disasm.file(object(module))
 
     {:function, ^function, count, _, instructions} =
       Enum.find(functions, &match?({:function, ^function, _, _, _}, &1))
@@ -298,8 +308,10 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
   defp capture_step({:get_tuple_element, _, _, to}, regs),
     do: Map.put(regs, register(to), :not_environment)
 
-  defp capture_step({:put_tuple2, to, _}, regs),
-    do: Map.put(regs, register(to), :not_environment)
+  defp capture_step({:put_tuple2, to, {:list, elements}}, regs) do
+    sources = Enum.map(elements, &Map.get(regs, register(&1), :not_environment))
+    Map.put(regs, register(to), {:constructed_tuple, sources})
+  end
 
   defp capture_step({:trim, count, remaining}, regs) do
     regs
@@ -353,7 +365,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
       References.memo(
         {:compiled_environment, module, module.module_info(:md5), function, arity, callee},
         fn ->
-          {:beam_file, _, _, _, _, functions} = :beam_disasm.file(:code.which(module))
+          {:beam_file, _, _, _, _, functions} = :beam_disasm.file(object(module))
           name = String.to_existing_atom("-#{function}/#{arity}-fun-0-")
 
           {:function, ^name, count, _, instructions} =

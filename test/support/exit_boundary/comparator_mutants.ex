@@ -1266,19 +1266,36 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     call = {:call, location, callee, inputs}
     value = {:var, location, :AshOnetimeNativeDecodeValue}
-    wildcard = {:var, location, :_}
-    more = {:tuple, location, [{:atom, location, :more} | List.duplicate(wildcard, size - 1)]}
-    empty_more = {:tuple, location, [{:bin, location, []}, more]}
-    other = {:tuple, location, [wildcard, value]}
-
-    clauses = [
-      {:clause, location, [empty_more], [], [call]},
-      {:clause, location, [other], [], [value]}
-    ]
-
-    body = {:case, location, {:tuple, location, [hd(inputs), call]}, clauses}
+    clauses = repeated_decoder_clauses(call, inputs, value, location, size)
+    body = {:case, location, call, clauses}
     function = {:fun, location, {:clauses, [{:clause, location, inputs, [], [body]}]}}
     {:call, location, function, arguments}
+  end
+
+  defp repeated_decoder_clauses(call, inputs, value, location, 2) do
+    wildcard = {:var, location, :_}
+    more = {:tuple, location, [{:atom, location, :more}, wildcard]}
+    empty = {:op, location, :"=:=", hd(inputs), {:bin, location, []}}
+    [
+      {:clause, location, [more], [[empty]], [call]},
+      {:clause, location, [value], [], [value]}
+    ]
+  end
+
+  defp repeated_decoder_clauses(call, inputs, value, location, 4) do
+    buffer = {:var, location, :AshOnetimeDecoderBuffer}
+    rows = {:var, location, :AshOnetimeDecoderRows}
+    wildcard = {:var, location, :_}
+    more = {:tuple, location, [{:atom, location, :more}, buffer, rows, wildcard]}
+    unchanged = [
+      {:op, location, :"=:=", hd(inputs), {:bin, location, []}},
+      {:op, location, :"=:=", hd(inputs), buffer},
+      {:op, location, :"=:=", Enum.at(inputs, 2), rows}
+    ]
+    [
+      {:clause, location, [more], [unchanged], [call]},
+      {:clause, location, [value], [], [value]}
+    ]
   end
 
   defp owner_inputs_form({:function, annotation, function, arity, clauses}, sites, targets) do
@@ -1286,13 +1303,22 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     case Map.fetch(targets, {function, arity}) do
       {:ok, positions} ->
-        copied =
-          Enum.map(clauses, fn {:clause, location, arguments, guards, body} ->
-            arguments = helper_arguments(arguments, positions, location)
-            hygienic_input_clause({:clause, location, arguments, guards, body})
-          end)
+        inputs = for position <- 0..(arity - 1),
+          do: {:var, annotation, String.to_atom("AshOnetimeHelperInput#{position}")}
 
-        {{:function, annotation, function, arity, copied ++ clauses}, sites + length(copied)}
+        values = inputs |> Enum.with_index() |> Enum.map(fn {input, position} ->
+          if position in positions, do: unwrapped_input(input, position, annotation), else: input
+        end)
+
+        cases = for {:clause, location, arguments, guards, body} <- clauses,
+          do: {:clause, location, [{:tuple, location, arguments}], guards, body}
+
+        # Keep every native body once, in its original order and with its original
+        # variables. Pure entry unwrapping adds neither a traced call nor a copied
+        # closure or compiler warning.
+        body = {:case, annotation, {:tuple, annotation, values}, cases}
+        entry = {:clause, annotation, inputs, [], [body]}
+        {{:function, annotation, function, arity, [entry]}, sites + length(clauses)}
 
       :error ->
         {{:function, annotation, function, arity, clauses}, sites}
@@ -1301,50 +1327,15 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   defp owner_inputs_form(form, sites, _targets), do: {form, sites}
 
-  # A duplicated Elixir clause must not duplicate its inherited Erlang
-  # underscore-match warnings. Rename only repeated named underscore variables
-  # in the copy; preserve the original clause and exact warning equality.
-  defp hygienic_input_clause({:clause, location, arguments, _guards, _body} = clause) do
-    counts = input_variables(clause, %{})
-    head = input_variables(arguments, %{})
-    renamed = counts
-    {:clause, _, arguments, guards, body} = rename_input_variables(clause, renamed)
-
-    uses =
-      for {name, count} <- Map.take(renamed, Map.keys(head)),
-          count > 1 and name != :_ and String.starts_with?(Atom.to_string(name), "_"),
-          do:
-            {:match, location, {:var, location, :_},
-             {:var, location, String.to_atom("AshOnetimeInput" <> Atom.to_string(name))}}
-
-    {:clause, location, arguments, guards, uses ++ body}
+  defp unwrapped_input(input, position, location) do
+    value = {:var, location, String.to_atom("AshOnetimeHelperValue#{position}")}
+    wrapped = {:tuple, location, [{:atom, location, :native_foreign_helper}, value]}
+    clauses = [
+      {:clause, location, [wrapped], [], [value]},
+      {:clause, location, [value], [], [value]}
+    ]
+    {:case, location, input, clauses}
   end
-
-  defp input_variables({:var, _, name}, counts), do: Map.update(counts, name, 1, &(&1 + 1))
-
-  defp input_variables(form, counts) when is_tuple(form),
-    do: form |> Tuple.to_list() |> Enum.reduce(counts, &input_variables/2)
-
-  defp input_variables(form, counts) when is_list(form),
-    do: Enum.reduce(form, counts, &input_variables/2)
-
-  defp input_variables(_form, counts), do: counts
-
-  defp rename_input_variables({:var, location, name} = form, counts) do
-    if name != :_ and String.starts_with?(Atom.to_string(name), "_") and
-         Map.get(counts, name, 0) > 1,
-       do: {:var, location, String.to_atom("AshOnetimeInput" <> Atom.to_string(name))},
-       else: form
-  end
-
-  defp rename_input_variables(form, counts) when is_tuple(form),
-    do:
-      form |> Tuple.to_list() |> Enum.map(&rename_input_variables(&1, counts)) |> List.to_tuple()
-
-  defp rename_input_variables(form, counts) when is_list(form),
-    do: Enum.map(form, &rename_input_variables(&1, counts))
-
-  defp rename_input_variables(form, _counts), do: form
 
   defp owner_input_calls(
          {:call, location, {:atom, _, function} = name, arguments} = form,

@@ -1592,7 +1592,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                   instance.source.stack == [owner.mfa | owner.stack]
               end),
             length(children) == 2,
-            Enum.all?(children, &(elem(&1.expected, 0) == :more)),
+            Enum.all?(children, &(elem(&1.expected, 0) == :more and &1.start == &1.stop and &1.input == <<>>)),
             do: owner.index
 
       assert duplicated != [], "the loaded native program must repeat a no-progress decoder"
@@ -1610,7 +1610,17 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   defp native_decoder_program(:message), do: native_query_factory(:rows)
-  defp native_decoder_program(:rows), do: cached_decoders(nil, :large_rows)
+  defp native_decoder_program(:rows) do
+    # Execute on an already bound cursor enters rows_recv directly with the
+    # preceding ReadyForQuery's empty buffer, before its first real socket read.
+    run = ConnectionNative.observe_cursor()
+    assert run.result == [[1], [2], [3]]
+    events = run.events |> Enum.with_index() |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+    native = NativeTransport.build(%{events: events}, run.native_history)
+    streams = ConnectionReads.build(native)
+    decoders = ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
+    %{events: events, native: native, streams: streams, decoders: decoders}
+  end
 
   @tag :connection_streams
   test "Connection streams: reload inputs retain parent, catalog and reference origins" do
@@ -1639,6 +1649,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert coordinates != []
     states = native_copy_states(captured)
+
+    for error <- states.errors do
+      IO.puts("CONNECTION_RELOAD_INPUT_STATE: " <> Diagnostics.render(error))
+    end
 
     assert Enum.map(states.errors, & &1.rule) ==
              List.duplicate(:state_helper_copy, length(coordinates))
