@@ -735,6 +735,11 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     )
   end
 
+  def with_postgrex_repeated_decoder(kind, callback) when kind in [:message, :rows] do
+    owner = if kind == :message, do: {:msg_recv, 3}, else: {:rows_recv, 4}
+    with_owner_mutant(Postgrex.Protocol, 1, &repeated_decoder_form(&1, &2, owner, kind), callback)
+  end
+
   def machine_program_control(targets, mode \\ nil) do
     with_machine_peer(:assert_machine_program, [targets, mode])
   end
@@ -1177,6 +1182,60 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     :gen_statem in List.flatten(behaviours) or
       Enum.any?(stack, fn {module, _, _, _} -> module == :gen_statem end)
+  end
+
+  defp repeated_decoder_form(
+         {:function, annotation, function, arity, clauses},
+         sites,
+         {function, arity},
+         kind
+       ) do
+    {clauses, sites} = repeated_decoder_calls(clauses, sites, kind)
+    {{:function, annotation, function, arity, clauses}, sites}
+  end
+
+  defp repeated_decoder_form(form, sites, _owner, _kind), do: {form, sites}
+
+  defp repeated_decoder_calls(
+         {:call, location, {:atom, _, :msg_decode}, [buffer]} = call,
+         sites,
+         :message
+       ),
+       do: {repeated_decoder_case(call, buffer, location, 2), sites + 1}
+
+  defp repeated_decoder_calls(
+         {:call, location, {:remote, _, {:atom, _, Postgrex.Types}, {:atom, _, :decode_rows}},
+          [buffer, _, _, _]} = call,
+         sites,
+         :rows
+       ),
+       do: {repeated_decoder_case(call, buffer, location, 4), sites + 1}
+
+  defp repeated_decoder_calls(form, sites, kind) when is_tuple(form) do
+    {values, sites} =
+      form |> Tuple.to_list() |> Enum.map_reduce(sites, &repeated_decoder_calls(&1, &2, kind))
+
+    {List.to_tuple(values), sites}
+  end
+
+  defp repeated_decoder_calls(form, sites, kind) when is_list(form),
+    do: Enum.map_reduce(form, sites, &repeated_decoder_calls(&1, &2, kind))
+
+  defp repeated_decoder_calls(form, sites, _kind), do: {form, sites}
+
+  defp repeated_decoder_case(call, buffer, location, size) do
+    value = {:var, location, :AshOnetimeNativeDecodeValue}
+    wildcard = {:var, location, :_}
+    more = {:tuple, location, [{:atom, location, :more} | List.duplicate(wildcard, size - 1)]}
+    empty_more = {:tuple, location, [{:bin, location, []}, more]}
+    other = {:tuple, location, [wildcard, value]}
+
+    clauses = [
+      {:clause, location, [empty_more], [], [call]},
+      {:clause, location, [other], [], [value]}
+    ]
+
+    {:case, location, {:tuple, location, [buffer, call]}, clauses}
   end
 
   defp owner_inputs_form({:function, annotation, function, arity, clauses}, sites, targets) do

@@ -422,12 +422,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           fields
           |> Enum.sort_by(fn {path, _expected, _origin} -> List.wrap(path) end)
           |> Enum.reduce(state, fn {path, expected, origin}, state ->
-            transform =
-              if path == debug_position,
-                do: &observed_debug(&1, state),
-                else: &Function.identity/1
-
-            program_term(state, source, [2, 2 | List.wrap(path)], expected, origin, transform)
+            program_field(state, source, {path, expected, origin}, debug_position)
           end)
 
         state = require_debug(state, source, function, length(arguments), context)
@@ -490,6 +485,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp machine_program(state, _source, _function, _arguments), do: state
+
+  defp program_field(state, source, {path, expected, origin}, debug_position) do
+    transform =
+      if path == debug_position,
+        do: &observed_debug(&1, state),
+        else: &Function.identity/1
+
+    program_term(state, source, [2, 2 | List.wrap(path)], expected, origin, transform)
+  end
 
   defp debug_call(state, source, function, _arguments) do
     case debug_frame(state, source, function) do

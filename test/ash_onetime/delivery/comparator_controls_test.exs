@@ -1472,6 +1472,21 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       options = [postgrex_prepare: unquote(postgrex_prepare), mode: unquote(mode)]
       captured = native_query_factory(unquote(shape), unquote(prepare), options)
       assert_query_factory_path(captured, unquote(shape))
+
+      for {stage, errors} <- [
+            native: captured.native.errors,
+            stream: captured.streams.errors,
+            decoder: captured.decoders.errors
+          ],
+          error <- errors do
+        row = {unquote(shape), unquote(prepare), unquote(postgrex_prepare), unquote(mode)}
+
+        IO.puts(
+          "CONNECTION_RELOAD_CAPTURE: " <>
+            Diagnostics.render(%{row: row, stage: stage, difference: error})
+        )
+      end
+
       assert captured.native.errors == []
       assert captured.streams.errors == []
       assert captured.decoders.errors == []
@@ -1498,6 +1513,53 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
     end
   end
+
+  for {kind, owner} <- [
+        message: {Postgrex.Protocol, :msg_recv, 3},
+        rows: {Postgrex.Protocol, :rows_recv, 4}
+      ] do
+    @tag :connection_streams
+    test "Connection streams: an extra no-progress #{kind} decoder remains observable" do
+      kind = unquote(kind)
+
+      captured =
+        ComparatorMutants.with_postgrex_repeated_decoder(kind, fn ->
+          native_decoder_program(kind)
+        end)
+
+      assert captured.native.errors == []
+      assert captured.streams.errors == []
+      pairs = NativeTransport.pairs(captured.events)
+
+      duplicated =
+        for {_index, %{source: owner, returned: terminal}} <- pairs,
+            owner.mfa == unquote(Macro.escape(owner)),
+            children =
+              Enum.filter(captured.decoders.instances, fn instance ->
+                instance.source.pid == owner.pid and instance.source.index > owner.index and
+                  instance.returned.index < terminal.index and
+                  instance.source.stack == [owner.mfa | owner.stack]
+              end),
+            length(children) == 2,
+            Enum.all?(children, &(elem(&1.expected, 0) == :more)),
+            do: owner.index
+
+      assert duplicated != [], "the loaded native program must repeat a no-progress decoder"
+
+      for error <- captured.decoders.errors do
+        IO.puts("CONNECTION_DECODER_PROGRAM: " <> Diagnostics.render(error))
+      end
+
+      assert Enum.map(captured.decoders.errors, & &1.rule) ==
+               List.duplicate(:decoder_program, length(duplicated))
+
+      assert Enum.map(captured.decoders.errors, & &1.index) == Enum.sort(duplicated)
+      assert native_decoder_program(kind).decoders.errors == []
+    end
+  end
+
+  defp native_decoder_program(:message), do: native_query_factory(:rows)
+  defp native_decoder_program(:rows), do: cached_decoders(nil, :large_rows)
 
   @tag :connection_streams
   test "Connection streams: reload inputs retain parent, catalog and reference origins" do

@@ -562,21 +562,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       %{source: owner} = frame ->
         with %{value: query} <- state.term_values[{owner.index, [2, 2, 2]}],
              %{value: status} <- state.term_values[{owner.index, [2, 2, 1]}] do
-          oids =
-            for {_index, %{source: call, returned: returned}} <- state.pairs,
-                call.pid == pid and call.index > owner.index and returned.index < source.index,
-                call.mfa == {Postgrex.Types, :fetch, 2},
-                {_, :call, {_, _, [oid, _types]}} <- [call.event],
-                {_, :return_from, _, {:error, nil, _}} <- [returned.event],
-                into: MapSet.new(),
-                do: oid
-
           context = %{
             source: source,
             version: %{frame.owner | protocol: frame.current},
             query: query,
             status: status,
-            oids: oids,
+            oids: missing_type_origins(state, pid, owner.index, source.index),
             buffer: cursor_buffer(state, source, frame)
           }
 
@@ -825,6 +816,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp reload_event(_source, state), do: state
+
+  defp missing_type_origins(state, pid, first, last) do
+    for {_index, %{source: call, returned: returned}} <- state.pairs,
+        call.pid == pid and call.index > first and returned.index < last,
+        call.mfa == {Postgrex.Types, :fetch, 2},
+        {_, :call, {_, _, [oid, _types]}} <- [call.event],
+        {_, :return_from, _, {:error, nil, _}} <- [returned.event],
+        into: MapSet.new(),
+        do: oid
+  end
 
   defp reload_cover(state, source, version) do
     Enum.reduce(state.decoders.protocol_copies, state, fn
@@ -1447,60 +1448,116 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp helper_input(state, source, :msg_send, [_protocol, messages, _buffer], version) do
-    case List.first(Map.get(state.frames, source.pid, [])) do
-      %{source: %{mfa: {Postgrex.Protocol, function, 4}}} = frame
-      when function in [:handle_execute, :handle_prepare_execute] ->
-        execute_messages(state, source, frame, version, messages)
-
-      %{source: %{mfa: {Postgrex.Protocol, :ping, 1}} = callback} ->
-        helper_copy(state, source, [2, 2, 1], messages, msg_sync(), {:ping_sync, callback.index})
-
-      %{source: %{mfa: {Postgrex.Protocol, function, 2}} = callback} = frame
-      when function in [:handle_begin, :handle_commit, :handle_rollback] ->
-        transaction_messages(state, source, frame, callback, messages)
-
-      %{source: %{mfa: {Postgrex.Protocol, function, 4}}} = frame
-      when function in [:parse_describe_flush, :close_parse_describe_flush] ->
-        prepare_messages(state, source, frame, messages)
-
-      %{source: %{mfa: {Postgrex.Protocol, :error_flushed, 4}} = owner} ->
-        helper_copy(state, source, [2, 2, 1], messages, [msg_sync()], {:error_sync, owner.index})
-
-      %{source: %{mfa: {Postgrex.Protocol, :rollback_flushed, 4}} = owner} ->
-        statement = "ROLLBACK TO SAVEPOINT postgrex_query;RELEASE SAVEPOINT postgrex_query"
-        expected = [msg_sync(), msg_query(statement: statement)]
-        helper_copy(state, source, [2, 2, 1], messages, expected, {:error_rollback, owner.index})
-
-      %{source: %{mfa: {Postgrex.Protocol, :reload_flushed, 5}} = owner} ->
-        context = Map.fetch!(state.reload_spawns, source.pid)
-        close = msg_close(type: :statement, name: context.query.name)
-
-        tail =
-          if context.status.mode == :transaction,
-            do: msg_sync(),
-            else:
-              msg_query(
-                statement: "ROLLBACK TO SAVEPOINT postgrex_query;RELEASE SAVEPOINT postgrex_query"
-              )
-
-        helper_copy(
-          state,
-          source,
-          [2, 2, 1],
-          messages,
-          [close, tail],
-          {:reload_close, owner.index}
-        )
-
-      %{source: %{mfa: {Postgrex.Protocol, :reload_init, 5}}} ->
-        reload_query_messages(state, source, messages)
-
-      _ ->
-        callback_messages(state, source, messages)
-    end
+    frame = List.first(Map.get(state.frames, source.pid, []))
+    helper_messages(state, source, frame, version, messages)
   end
 
   defp helper_input(state, _source, _function, _arguments, _version), do: state
+
+  defp helper_messages(
+         state,
+         source,
+         %{source: %{mfa: {Postgrex.Protocol, function, 4}}} = frame,
+         version,
+         messages
+       )
+       when function in [:handle_execute, :handle_prepare_execute] do
+    execute_messages(state, source, frame, version, messages)
+  end
+
+  defp helper_messages(
+         state,
+         source,
+         %{source: %{mfa: {Postgrex.Protocol, :ping, 1}} = callback},
+         _version,
+         messages
+       ) do
+    helper_copy(state, source, [2, 2, 1], messages, msg_sync(), {:ping_sync, callback.index})
+  end
+
+  defp helper_messages(
+         state,
+         source,
+         %{source: %{mfa: {Postgrex.Protocol, function, 2}} = callback} = frame,
+         _version,
+         messages
+       )
+       when function in [:handle_begin, :handle_commit, :handle_rollback] do
+    transaction_messages(state, source, frame, callback, messages)
+  end
+
+  defp helper_messages(
+         state,
+         source,
+         %{source: %{mfa: {Postgrex.Protocol, function, 4}}} = frame,
+         _version,
+         messages
+       )
+       when function in [:parse_describe_flush, :close_parse_describe_flush] do
+    prepare_messages(state, source, frame, messages)
+  end
+
+  defp helper_messages(
+         state,
+         source,
+         %{source: %{mfa: {Postgrex.Protocol, :error_flushed, 4}} = owner},
+         _version,
+         messages
+       ) do
+    helper_copy(state, source, [2, 2, 1], messages, [msg_sync()], {:error_sync, owner.index})
+  end
+
+  defp helper_messages(
+         state,
+         source,
+         %{source: %{mfa: {Postgrex.Protocol, :rollback_flushed, 4}} = owner},
+         _version,
+         messages
+       ) do
+    statement = "ROLLBACK TO SAVEPOINT postgrex_query;RELEASE SAVEPOINT postgrex_query"
+    expected = [msg_sync(), msg_query(statement: statement)]
+    helper_copy(state, source, [2, 2, 1], messages, expected, {:error_rollback, owner.index})
+  end
+
+  defp helper_messages(
+         state,
+         source,
+         %{source: %{mfa: {Postgrex.Protocol, :reload_flushed, 5}} = owner},
+         _version,
+         messages
+       ) do
+    context = Map.fetch!(state.reload_spawns, source.pid)
+    close = msg_close(type: :statement, name: context.query.name)
+
+    tail =
+      if context.status.mode == :transaction,
+        do: msg_sync(),
+        else:
+          msg_query(
+            statement: "ROLLBACK TO SAVEPOINT postgrex_query;RELEASE SAVEPOINT postgrex_query"
+          )
+
+    helper_copy(
+      state,
+      source,
+      [2, 2, 1],
+      messages,
+      [close, tail],
+      {:reload_close, owner.index}
+    )
+  end
+
+  defp helper_messages(
+         state,
+         source,
+         %{source: %{mfa: {Postgrex.Protocol, :reload_init, 5}}},
+         _version,
+         messages
+       ),
+       do: reload_query_messages(state, source, messages)
+
+  defp helper_messages(state, source, _frame, _version, messages),
+    do: callback_messages(state, source, messages)
 
   defp callback_messages(state, source, actual) do
     with %{source: callback} = frame <- status_callback(state, source.pid),
@@ -2371,29 +2428,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp input_protocol(state, _source, protocol, _function, _arguments), do: {state, protocol}
 
-  defp output_protocol(state, source, frame, function, result)
+  defp output_protocol(state, source, frame, function, {:ok, _query, _protocol})
        when function in [:parse_describe_flush, :close_parse_describe_flush] do
-    case result do
-      {:ok, query, _protocol} ->
-        case query_origin(state, frame) do
-          %Postgrex.Query{} = expected_query ->
-            _ = query
+    case query_origin(state, frame) do
+      %Postgrex.Query{} = expected_query ->
+        postgres =
+          case frame.current.postgres do
+            {postgres, _ref} -> postgres
+            postgres -> postgres
+          end
 
-            postgres =
-              case frame.current.postgres do
-                {postgres, _ref} -> postgres
-                postgres -> postgres
-              end
+        protocol = %{frame.current | postgres: {postgres, expected_query.ref}}
+        {state, %{protocol | buffer: cursor_buffer(state, source, frame)}}
 
-            protocol = %{frame.current | postgres: {postgres, expected_query.ref}}
-            {state, %{protocol | buffer: cursor_buffer(state, source, frame)}}
-
-          nil ->
-            {failure(state, source, :state_query_origin), frame.current}
-        end
-
-      _ ->
-        {state, frame.current}
+      nil ->
+        {failure(state, source, :state_query_origin), frame.current}
     end
   end
 
