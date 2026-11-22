@@ -385,7 +385,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
               when shape == :prepare_error ->
                 :prepare_error
 
-              {:error, %Postgrex.QueryError{}, %Postgrex.Protocol{}}
+              {:disconnect, %Postgrex.QueryError{}, %Postgrex.Protocol{}}
               when shape == :unsupported_type ->
                 :unsupported_type
             end
@@ -420,7 +420,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     do: "SELECT 'native'::pg_temp.ash_onetime_native_enum AS connection_stream_probe"
 
   defp query_factory_statement(:composite_reload),
-    do: "SELECT ROW(17, 'native')::pg_temp.ash_onetime_native_composite AS connection_stream_probe"
+    do:
+      "SELECT ROW(17, 'native')::pg_temp.ash_onetime_native_composite AS connection_stream_probe"
 
   defp query_factory_statement(:unsupported_type),
     do: "SELECT NULL::pg_node_tree AS connection_stream_probe"
@@ -478,6 +479,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
             {:ok, first, protocol} = Postgrex.Protocol.handle_prepare(query, options, protocol)
             {:ok, cached, protocol} = Postgrex.Protocol.handle_prepare(query, options, protocol)
             {:ok, reparsed, protocol} = Postgrex.Protocol.handle_prepare(first, options, protocol)
+
             {:ok, %Postgrex.Result{}, protocol} =
               Postgrex.Protocol.handle_close(first, [], protocol)
 

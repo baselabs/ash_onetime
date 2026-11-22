@@ -1020,7 +1020,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     case {execution_origin(state, source, version.protocol),
           command_origin(state, source, version.protocol)} do
       {%{descriptor: descriptor}, %{tag: tag, index: index}} ->
-        {expected_command, expected_count} = command_tag(tag)
+        %{value: expected_rows} = Map.fetch!(state.term_values, {source.index, [2, 2, 2]})
+        {expected_command, expected_count} = completion_command(tag, expected_rows)
 
         state
         |> helper_copy(
@@ -1512,7 +1513,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     with {:ok, %{value: query}} <- values.(1),
          {:ok, %{value: rows}} <- values.(2),
          %{tag: tag, index: index} <- command_origin(state, source, protocol) do
-      {command, count} = command_tag(tag)
+      {command, count} = completion_command(tag, rows)
       count = if is_nil(count) and command == :select, do: length(rows), else: count
       rows = if is_nil(query.columns) and rows == [] and command != :copy, do: nil, else: rows
 
@@ -1561,8 +1562,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       %{expected: {:ok, {:msg_command_complete, tag}, _}, returned: returned} ->
         %{tag: tag, index: returned.index}
 
-      %{expected: {:ok, {kind}, _}, returned: returned}
-      when kind in [:msg_empty_query, :msg_portal_suspend] ->
+      %{expected: {:ok, {:msg_portal_suspend}, _}, returned: returned} ->
+        %{tag: :portal_suspend, index: returned.index}
+
+      %{expected: {:ok, {:msg_empty_query}, _}, returned: returned} ->
         %{tag: nil, index: returned.index}
 
       _ ->
@@ -1583,6 +1586,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       _ -> source.index
     end
   end
+
+  defp completion_command(:portal_suspend, rows), do: {:stream, length(rows)}
+  defp completion_command(tag, _rows), do: command_tag(tag)
 
   defp command_tag(nil), do: {nil, nil}
 

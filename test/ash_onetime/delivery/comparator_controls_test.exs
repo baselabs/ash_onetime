@@ -1386,7 +1386,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp native_query_factory(shape \\ :rows) do
     run = ConnectionNative.observe_query_factory(shape)
-    assert run.result == if(shape == :prepare_error, do: :prepare_error, else: :ok)
+    expected = if shape in [:prepare_error, :unsupported_type], do: shape, else: :ok
+    assert run.result == expected
 
     events =
       run.events
@@ -1423,8 +1424,18 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert_query_factory_path(captured, unquote(shape))
       assert captured.native.errors == []
       assert captured.streams.errors == []
+
+      for error <- captured.decoders.errors do
+        IO.puts("CONNECTION_PREPARATION_DECODER: " <> Diagnostics.render(error))
+      end
+
       assert captured.decoders.errors == []
       states = native_copy_states(captured)
+
+      for error <- states.errors do
+        IO.puts("CONNECTION_PREPARATION_STATE: " <> Diagnostics.render(error))
+      end
+
       assert states.errors == []
 
       for {copies, covered} <- [
@@ -1463,8 +1474,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Enum.any?(captured.events, fn
              %{
                event:
-                 {_, :return_from, {Postgrex.Types, :fetch, 2},
-                  {:error, %Postgrex.TypeInfo{}, _}}
+                 {_, :return_from, {Postgrex.Types, :fetch, 2}, {:error, %Postgrex.TypeInfo{}, _}}
              } ->
                true
 
@@ -1482,9 +1492,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   test "Connection streams: native prepare cache hits, reprepare and invalidation retain origins" do
     run = ConnectionNative.observe_prepare_cycle()
     assert {first, cached, reparsed, renewed} = run.result
-    assert is_reference(first) and is_reference(renewed)
-    assert first == cached and first == reparsed
-    assert first != renewed
+    assert Enum.all?([first, cached, reparsed, renewed], &is_reference/1)
+    assert first == cached
+    assert length(Enum.uniq([first, reparsed, renewed])) == 3
     assert_native_caller_census(run)
   end
 
@@ -1626,6 +1636,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       arity = unquote(arity)
       size = unquote(size)
       position = unquote(position)
+
       target = %{
         kind: :element,
         size: size,
@@ -4691,6 +4702,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     }
 
     assert :ok == ComparatorMutants.machine_program_control(targets)
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native debug logs retain their program inputs and successive roots" do
+    targets = %{{:loop_event, 5} => [1], {:sys_debug, 3} => [0, 1, 2]}
+    assert :ok == ComparatorMutants.machine_program_control(targets, :debug)
   end
 
   @tag :connection_streams

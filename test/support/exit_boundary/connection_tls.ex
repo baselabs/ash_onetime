@@ -354,17 +354,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     root = state.owners[source.pid].family.machines[source.pid]
     debug_position = if function in @loop_state_functions, do: 1, else: 4
 
-    state =
-      program_term(state, source, [2, 2, debug_position], root.debug, root.debug_origin)
-
     context = Map.get(state.machine_programs, source.pid)
     {state, context} = program_before(state, source, function, context)
 
     case program_fields(function, length(arguments), context, state, source) do
       {:ok, fields} ->
+        fields = Enum.map(fields, fn {path, expected} -> {path, expected, context.origin} end)
+        fields = [{debug_position, root.debug, root.debug_origin} | fields]
+
         state =
-          Enum.reduce(fields, state, fn {path, expected}, state ->
-            program_term(state, source, [2, 2 | List.wrap(path)], expected, context.origin)
+          fields
+          |> Enum.sort_by(fn {path, _expected, _origin} -> List.wrap(path) end)
+          |> Enum.reduce(state, fn {path, expected, origin}, state ->
+            program_term(state, source, [2, 2 | List.wrap(path)], expected, origin)
           end)
 
         state = program_callback_result(state, source, function, context)

@@ -735,8 +735,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     )
   end
 
-  def machine_program_control(targets) do
-    with_machine_peer(:assert_machine_program, [targets])
+  def machine_program_control(targets, mode \\ nil) do
+    with_machine_peer(:assert_machine_program, [targets, mode])
   end
 
   def machine_reply_control(mode \\ nil) do
@@ -838,8 +838,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     :ok
   end
 
-  def assert_machine_program(targets) do
-    run = machine_input_mutation(targets, &ConnectionNative.observe_tls/0)
+  def assert_machine_program(targets, mode) do
+    run = machine_input_mutation(targets, fn -> ConnectionNative.observe_tls(mode) end)
     assert run.result == []
 
     events =
@@ -887,7 +887,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end
 
     assert ConnectionTls.build(%{events: events}, run.tls_binding).errors == native.errors
-    restored = ConnectionNative.observe_tls()
+    restored = ConnectionNative.observe_tls(mode)
 
     restored_events =
       restored.events
