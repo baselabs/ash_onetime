@@ -245,6 +245,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       %{query: query, protocol: protocol} = root ->
         port = elem(protocol.sock, 1)
         description = query_description(state, source, root, port)
+
         query =
           if function in [:describe, :describe_params],
             do: query,

@@ -359,16 +359,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  def observe_query_factory(shape \\ :rows) do
+  def observe_query_factory(shape \\ :rows, prepare \\ :named, options \\ []) do
     observer = self()
     tag = make_ref()
+
     reload_factory =
       Compiled.native_closure_factory(Postgrex.Protocol, :reload_spawn, 5, :reload_init, 5)
 
     run =
       ExitBoundary.observe(
         fn ->
-          protocol = query_factory_environment(connect(:named), shape)
+          protocol = query_factory_environment(connect(prepare), shape)
+
+          protocol =
+            if options[:mode] == :savepoint do
+              {:ok, %Postgrex.Result{}, protocol} = Postgrex.Protocol.handle_begin([], protocol)
+              protocol
+            else
+              protocol
+            end
+
           history = %{protocol: protocol, reload_factory: reload_factory}
           send(observer, {tag, %{self() => history}})
           protocol
@@ -381,7 +391,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           }
 
           try do
-            case Postgrex.Protocol.handle_prepare(query, query_factory_options(shape), protocol) do
+            settings = Keyword.merge(query_factory_options(shape), options)
+
+            case Postgrex.Protocol.handle_prepare(query, settings, protocol) do
               {:ok, %Postgrex.Query{}, %Postgrex.Protocol{}}
               when shape in [:rows, :none, :external_notify, :enum_reload, :composite_reload] ->
                 :ok
@@ -412,6 +424,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     receive do
       {^tag, historical} ->
         observations = ConnectionDecoders.freeze_factories(run.events)
+
         historical =
           Map.new(historical, fn {pid, history} ->
             {pid, Map.put(history, :factory_observations, observations)}

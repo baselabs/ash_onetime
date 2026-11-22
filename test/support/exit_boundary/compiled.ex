@@ -78,7 +78,8 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
   # expected code identity or environment permutation.
   def native_closure_factory(module, owner, owner_arity, callee, arity) do
     References.memo(
-      {:native_closure_factory, module, module.module_info(:md5), owner, owner_arity, callee, arity},
+      {:native_closure_factory, module, module.module_info(:md5), owner, owner_arity, callee,
+       arity},
       fn ->
         # The installed native program supplies the input permutation. Guarded
         # owner edits may wrap the callee's arguments, while the closure still

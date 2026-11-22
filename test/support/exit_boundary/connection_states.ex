@@ -304,6 +304,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          rows when rows != [] <- reload_catalog_rows(state, source),
          {row, info} <- List.last(rows) do
       new = rows |> Enum.drop(-1) |> MapSet.new(fn {_row, info} -> info.oid end)
+
       dependencies =
         Enum.reject(
           [info.array_elem, info.base_type | info.comp_elems],
@@ -601,6 +602,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          [frame | _] <- Map.get(state.frames, pid, []) do
       protocol = %{frame.current | buffer: nil}
       version = %{frame.owner | protocol: protocol}
+
       context = %{
         context
         | source: source,
@@ -704,6 +706,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       %{fun: fun} = context ->
         state =
           exact(state, source, :state_reload_spawn_entry, entry, {:erlang, :apply, [fun, []]})
+
         child_context = Map.merge(context, %{parent: pid, child: child})
 
         state
@@ -801,8 +804,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           end)
 
         state = exact(state, source, :state_reload_monitor_origin, spawned, true)
+
         state =
           helper_copy(state, source, [2, 4], actual, expected, {:reload_terminal, version.origin})
+
         state = reload_cover(state, source, version)
 
         case Map.get(state.frames, parent, []) do
@@ -1001,7 +1006,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     cursor? =
       Enum.any?(source.stack, fn
         {Postgrex.Protocol, function, _} ->
-          function in [:error_flushed, :rollback_flushed, :reload_flushed]
+          function in [:error_flushed, :rollback_flushed, :reload_flushed, :reload_init]
 
         _ ->
           false
@@ -1531,8 +1536,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       {index, values} ->
         version = Postgrex.Utils.parse_version(values["server_version"])
         oids = reload_missing_oids(state, source, context)
+
+        # The native reload has populated its type table by comparison time.
+        # These OIDs are independently proven absent at this occurrence. Build
+        # the reference query with the library over a fresh genuine type table,
+        # so later native updates cannot change the expected earlier statement.
+        {module, _table} = context.version.protocol.types
+        types = Postgrex.Types.new(module)
+
         statement =
-          Postgrex.Types.reload_query(version, Enum.to_list(oids), context.version.protocol)
+          try do
+            protocol = %{context.version.protocol | types: types}
+            Postgrex.Types.reload_query(version, Enum.to_list(oids), protocol)
+          after
+            :ets.delete(elem(types, 1))
+          end
 
         helper_copy(
           state,
@@ -1649,7 +1667,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     portals =
       for {_index, %{source: call, returned: returned}} <- state.pairs,
           call.pid == source.pid and call.index > callback.index and returned.index < source.index,
-          call.mfa == {System, :unique_integer, 1},
+          call.mfa == {:erlang, :unique_integer, 1},
           {_, :call, {_, _, [[:positive]]}} <- [call.event],
           {_, :return_from, _, value} <- [returned.event],
           is_integer(value),
@@ -2360,6 +2378,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         case query_origin(state, frame) do
           %Postgrex.Query{} = expected_query ->
             _ = query
+
             postgres =
               case frame.current.postgres do
                 {postgres, _ref} -> postgres

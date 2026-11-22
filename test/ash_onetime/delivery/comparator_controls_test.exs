@@ -1392,8 +1392,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  defp native_query_factory(shape \\ :rows) do
-    run = ConnectionNative.observe_query_factory(shape)
+  defp native_query_factory(shape \\ :rows, prepare \\ :named, options \\ []) do
+    run = ConnectionNative.observe_query_factory(shape, prepare, options)
     expected = if shape in [:prepare_error, :unsupported_type], do: shape, else: :ok
     assert run.result == expected
 
@@ -1462,12 +1462,49 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  for shape <- [:enum_reload, :composite_reload],
+      prepare <- [:named, :unnamed],
+      postgrex_prepare <- [false, true],
+      mode <- [:transaction, :savepoint],
+      {prepare, postgrex_prepare, mode} != {:named, false, :transaction} do
+    @tag :connection_streams
+    test "Connection streams: #{shape} reload closes #{prepare}/#{postgrex_prepare}/#{mode} origins" do
+      options = [postgrex_prepare: unquote(postgrex_prepare), mode: unquote(mode)]
+      captured = native_query_factory(unquote(shape), unquote(prepare), options)
+      assert_query_factory_path(captured, unquote(shape))
+      assert captured.native.errors == []
+      assert captured.streams.errors == []
+      assert captured.decoders.errors == []
+      states = native_copy_states(captured)
+
+      for error <- states.errors do
+        IO.puts("CONNECTION_RELOAD_STATE: " <> Diagnostics.render(error))
+      end
+
+      assert states.errors == []
+
+      for {copies, covered} <- [
+            {native_helper_buffers(captured.events), states.buffers},
+            {native_helper_terms(captured.events), states.terms}
+          ] do
+        coordinates = MapSet.new(covered, &{&1.index, &1.path})
+        unbound = Enum.reject(copies, &MapSet.member?(coordinates, {&1.index, &1.path}))
+
+        for copy <- unbound do
+          IO.puts("CONNECTION_RELOAD_COORDINATE_UNBOUND: " <> Diagnostics.render(copy))
+        end
+
+        assert unbound == [], "every reload helper coordinate needs its own origin"
+      end
+    end
+  end
+
   @tag :connection_streams
   test "Connection streams: reload inputs retain parent, catalog and reference origins" do
     targets = %{{:reload_spawn, 5} => [1, 2, 3], {:reload_init, 5} => [1, 2, 3]}
 
     captured =
-      ComparatorMutants.with_owner_inputs(Postgrex.Protocol, targets, fn ->
+      ComparatorMutants.with_postgrex_inputs(targets, fn ->
         native_query_factory(:composite_reload)
       end)
 
@@ -1489,8 +1526,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert coordinates != []
     states = native_copy_states(captured)
+
     assert Enum.map(states.errors, & &1.rule) ==
              List.duplicate(:state_helper_copy, length(coordinates))
+
     assert Enum.map(states.errors, &{&1.index, &1.path}) == coordinates
 
     for mutant <- [:stream_buffer_copy, :stream_state_copy, :stream_helper_copy] do
