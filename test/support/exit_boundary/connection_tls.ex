@@ -140,8 +140,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       |> Enum.max_by(& &1.source.index, fn -> nil end)
 
     case parent do
-      %{source: %{event: {_, :call, {_, _, [{:call, expected_from},
-        {:application_data, expected_data}, expected]}}} = origin} ->
+      %{
+        source:
+          %{
+            event:
+              {_, :call,
+               {_, _, [{:call, expected_from}, {:application_data, expected_data}, expected]}}
+          } = origin
+      } ->
         state
         |> tls_copy(source, [2, 2, 0], data, expected_data, origin.index)
         |> tls_copy(source, [2, 2, 1], from, expected_from, origin.index)
@@ -172,6 +178,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       actual: false,
       expected: true
     }
+
     Map.update!(state, :errors, &[error | &1])
   end
 

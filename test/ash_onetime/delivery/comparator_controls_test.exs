@@ -3374,6 +3374,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
         native = ConnectionTls.build(%{events: events}, run.tls_binding)
         assert native.errors == []
+
+        bound_states = MapSet.new(native.terms, &{&1.index, &1.path})
+
+        unbound_states =
+          events
+          |> Enum.flat_map(&native_tls_states(&1, run.tls_binding))
+          |> Enum.reject(&MapSet.member?(bound_states, {&1.index, &1.path}))
+
+        for copy <- unbound_states do
+          IO.puts("CONNECTION_TLS_STATE_UNBOUND: " <> Diagnostics.render(copy))
+        end
+
+        assert unbound_states == [], "every native TLS worker state copy needs an earlier origin"
         assert length(native.writes) == 1
         assert native.reads != []
 
@@ -3440,4 +3453,61 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert ConnectionNative.observe_tls().result == []
     IO.puts("CONNECTION_TLS_WORKERS: native positive; owning RED; exact restore GREEN")
   end
+
+  defp native_tls_states(source, binding) do
+    # Pinned OTP 29.1.2 tls_sender's data and ssl_connection.hrl's state.
+    # This enumerates native coordinates; it grants no event or field allowance.
+    kind =
+      cond do
+        source.pid == binding.sender -> {:data, 5}
+        source.pid == binding.owner -> {:state, 13}
+        true -> nil
+      end
+
+    for path <- tls_state_paths(source.event, [], kind, binding.socket),
+        do: %{index: source.index, mfa: source.mfa, path: path}
+  end
+
+  defp tls_state_paths(_value, _path, nil, _socket), do: []
+  defp tls_state_paths(socket, _path, _kind, socket), do: []
+
+  defp tls_state_paths(value, path, {tag, size} = kind, socket) when is_tuple(value) do
+    if tuple_size(value) == size and elem(value, 0) == tag do
+      [path]
+    else
+      value
+      |> Tuple.to_list()
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {item, position} ->
+        tls_state_paths(item, path ++ [position], kind, socket)
+      end)
+    end
+  end
+
+  defp tls_state_paths(value, path, kind, socket) when is_map(value) do
+    Enum.flat_map(value, fn {key, item} ->
+      tls_state_paths(key, path ++ [{:map_key, key}], kind, socket) ++
+        tls_state_paths(item, path ++ [key], kind, socket)
+    end)
+  end
+
+  defp tls_state_paths(value, path, kind, socket) when is_function(value) do
+    {:env, environment} = Function.info(value, :env)
+    tls_state_paths(environment, path ++ [:function, :env], kind, socket)
+  end
+
+  defp tls_state_paths([_head | _tail] = list, path, kind, socket),
+    do: tls_state_list(list, path, kind, socket, 0)
+
+  defp tls_state_paths(_value, _path, _kind, _socket), do: []
+
+  defp tls_state_list([head | tail], path, kind, socket, position),
+    do:
+      tls_state_paths(head, path ++ [position], kind, socket) ++
+        tls_state_list(tail, path, kind, socket, position + 1)
+
+  defp tls_state_list([], _path, _kind, _socket, _position), do: []
+
+  defp tls_state_list(tail, path, kind, socket, position),
+    do: tls_state_paths(tail, path ++ [{:improper_tail, position}], kind, socket)
 end
