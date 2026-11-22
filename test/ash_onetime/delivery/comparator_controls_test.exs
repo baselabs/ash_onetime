@@ -1324,13 +1324,18 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  defp assert_native_helper_inputs(targets, observe) do
-    captured = ComparatorMutants.with_postgrex_inputs(targets, observe)
+  defp assert_native_helper_inputs(targets, observe, module \\ Postgrex.Protocol) do
+    captured =
+      case module do
+        Postgrex.Protocol -> ComparatorMutants.with_postgrex_inputs(targets, observe)
+        Postgrex.Types -> ComparatorMutants.with_postgrex_type_inputs(targets, observe)
+      end
+
     assert captured.native.errors == []
     assert captured.decoders.errors == []
 
     corrupted =
-      for %{event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source <-
+      for %{event: {_, :call, {^module, function, arguments}}} = source <-
             captured.events,
           positions = Map.get(targets, {function, length(arguments)}, []),
           position <- positions do
@@ -1352,7 +1357,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert corrupted != []
 
     for {function, arity} <- Map.keys(targets) do
-      assert Enum.any?(captured.events, &(&1.mfa == {Postgrex.Protocol, function, arity}))
+      assert Enum.any?(captured.events, &(&1.mfa == {module, function, arity}))
     end
 
     states = native_copy_states(captured)
@@ -1609,6 +1614,22 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert_native_helper_inputs(%{{:reload_describe_result, 4} => [1, 2]}, fn ->
       native_query_factory(:domain_reload)
     end)
+  end
+
+  @tag :connection_streams
+  test "Connection streams: type lookup inputs retain each recursive accumulator origin" do
+    targets = %{{:fetch_type_info, 2} => [0, 1], {:fetch_type_info, 4} => [0, 1, 2, 3]}
+
+    assert_native_helper_inputs(targets, fn -> native_query_factory(:domain_reload) end)
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native type lookup arguments retain OID and table origins" do
+    assert_native_helper_inputs(
+      %{{:fetch, 2} => [0, 1]},
+      fn -> native_query_factory(:domain_reload) end,
+      Postgrex.Types
+    )
   end
 
   @tag :connection_streams

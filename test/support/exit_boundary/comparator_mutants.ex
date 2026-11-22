@@ -735,6 +735,22 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     )
   end
 
+  def with_postgrex_type_inputs(targets, callback) do
+    with_owner_mutant(
+      Postgrex.Protocol,
+      &(&1 > 0),
+      &remote_inputs_form(&1, &2, Postgrex.Types, targets),
+      fn ->
+        with_owner_mutant(
+          Postgrex.Types,
+          &(&1 >= map_size(targets)),
+          &owner_inputs_form(&1, &2, targets),
+          callback
+        )
+      end
+    )
+  end
+
   def with_postgrex_repeated_decoder(kind, callback) when kind in [:message, :rows] do
     owner = if kind == :message, do: {:msg_recv, 3}, else: {:rows_recv, 4}
     with_owner_mutant(Postgrex.Protocol, 1, &repeated_decoder_form(&1, &2, owner, kind), callback)
@@ -1385,6 +1401,38 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       end)
     end)
   end
+
+  defp remote_inputs_form(
+         {:call, location, {:remote, _, {:atom, _, module}, {:atom, _, function}} = callee,
+          arguments},
+         sites,
+         module,
+         targets
+       ) do
+    {arguments, sites} = remote_inputs_form(arguments, sites, module, targets)
+
+    case Map.fetch(targets, {function, length(arguments)}) do
+      {:ok, positions} ->
+        {{:call, location, callee, helper_arguments(arguments, positions, location)}, sites + 1}
+
+      :error ->
+        {{:call, location, callee, arguments}, sites}
+    end
+  end
+
+  defp remote_inputs_form(form, sites, module, targets) when is_tuple(form) do
+    {values, sites} =
+      form
+      |> Tuple.to_list()
+      |> Enum.map_reduce(sites, &remote_inputs_form(&1, &2, module, targets))
+
+    {List.to_tuple(values), sites}
+  end
+
+  defp remote_inputs_form(form, sites, module, targets) when is_list(form),
+    do: Enum.map_reduce(form, sites, &remote_inputs_form(&1, &2, module, targets))
+
+  defp remote_inputs_form(form, sites, _module, _targets), do: {form, sites}
 
   defp owner_outputs_form({:function, annotation, function, arity, clauses}, sites, targets) do
     {clauses, sites} = owner_output_calls(clauses, sites, targets)
