@@ -21,6 +21,7 @@ try do
     IO.puts(
       "TYPE_CONTRACT_PLT #{name}/#{arity} #{:dialyzer_contracts.contract_to_string(contract)}"
     )
+
     IO.puts("TYPE_CONTRACT_RETURN #{name}/#{arity} #{:erl_types.t_to_string(result)}")
 
     for {given, required, position} <- Enum.zip([declared, inferred, 1..arity]) do
@@ -34,6 +35,7 @@ try do
 
   {:value, {new_result, new_args}} = :dialyzer_plt.lookup(plt, {module, :new, 1})
   {:value, new_contract} = :dialyzer_plt.lookup_contract(plt, {module, :new, 1})
+
   types =
     :erl_types.t_inf(new_result, :dialyzer_contracts.get_contract_return(new_contract, new_args))
 
@@ -44,6 +46,7 @@ try do
     ])
 
   {:value, {_, reload_args}} = :dialyzer_plt.lookup(plt, {module, :reload_query, 3})
+
   {:value, {:contract, _, declared, _}} =
     :dialyzer_plt.lookup_contract(plt, {module, :reload_query, 3})
 
