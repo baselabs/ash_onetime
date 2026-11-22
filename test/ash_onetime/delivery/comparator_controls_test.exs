@@ -1543,6 +1543,24 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  for shape <- [:prepare_error, :unsupported_type],
+      prepare <- [:named, :unnamed],
+      postgrex_prepare <- [false, true],
+      mode <- [:transaction, :savepoint],
+      {prepare, postgrex_prepare, mode} != {:named, false, :transaction} do
+    @tag :connection_streams
+    test "Connection streams: #{shape} preparation closes #{prepare}/#{postgrex_prepare}/#{mode} errors" do
+      captured =
+        native_query_factory(unquote(shape), unquote(prepare),
+          postgrex_prepare: unquote(postgrex_prepare),
+          mode: unquote(mode)
+        )
+
+      assert_query_factory_path(captured, unquote(shape))
+      assert_native_caller_census(captured.run)
+    end
+  end
+
   for {prepare, mode, targets} <- [
         {:named, :transaction,
          %{
