@@ -770,7 +770,7 @@ defmodule AshOnetime.AdmissionTest do
 
     test "the seam functions are absent from a dev build without the opt-in" do
       script = ~s'''
-      Code.ensure_loaded(AshOnetime.Admission)
+      Code.ensure_loaded!(AshOnetime.Admission)
 
       seam =
         {function_exported?(AshOnetime.Admission, :put_test_store, 1),

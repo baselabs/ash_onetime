@@ -1327,6 +1327,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp assert_native_helper_inputs(targets, observe, module \\ Postgrex.Protocol) do
     captured = ComparatorMutants.with_postgrex_inputs(targets, observe, module)
     assert captured.native.errors == []
+    assert captured.streams.errors == []
     assert captured.decoders.errors == []
 
     corrupted =
@@ -1356,6 +1357,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
 
     states = native_copy_states(captured)
+
+    for error <- states.errors do
+      IO.puts("CONNECTION_HELPER_INPUT_STATE: " <> Diagnostics.render(error))
+    end
 
     assert Enum.map(states.errors, & &1.rule) ==
              List.duplicate(:state_helper_copy, length(corrupted))
