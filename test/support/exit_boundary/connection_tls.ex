@@ -377,10 +377,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp machine_program(state, source, :reply, _arguments) do
-    action? = Enum.any?(source.stack, fn
-      {:gen_statem, function, _} -> function in [:loop_actions_reply, :do_reply_then_terminate]
-      _ -> false
-    end)
+    action? =
+      case source.stack do
+        [{:gen_statem, function, _} | _] ->
+          function in [:loop_actions_reply, :do_reply_then_terminate]
+
+        _ ->
+          false
+      end
 
     expected =
       if action? do
@@ -398,7 +402,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         |> program_term(source, [2, 2, 0], from, origin)
         |> program_term(source, [2, 2, 1], reply, origin)
         |> Map.update!(:direct_replies, &Map.delete(&1, source.pid))
-      :error -> tls_failure(state, source, :tls_machine_program_reply_origin)
+
+      :error ->
+        tls_failure(state, source, :tls_machine_program_reply_origin)
     end
   end
 
@@ -408,7 +414,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case state.direct_replies[source.pid] do
       %{from: from, reply: reply, origin: origin, last: last} when source.index < last ->
         {:ok, from, reply, origin}
-      _ -> receiver_reply(state, source)
+
+      _ ->
+        receiver_reply(state, source)
     end
   end
 
@@ -423,7 +431,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          required <- elem(recv, 2),
          true <- from != :undefined and is_integer(required) and required >= 0 do
       {front, _size, rear} = elem(version.data, 12)
-      {bytes, front, rear} = queued_binary(front, [IO.iodata_to_binary(fragments) | rear])
+      {front, rear, bytes} = queued_binary(front, [IO.iodata_to_binary(fragments) | rear])
       count = if required == 0, do: byte_size(bytes), else: required
       available = IO.iodata_to_binary([bytes, front, Enum.reverse(rear)])
 
@@ -1875,10 +1883,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             state = tls_exact(state, source, :tls_reply_copy, arguments, [from, reply])
             origin = {:tls_reply, message.origin, write.returned.index}
             copy = %{index: source.index, path: [2, 2], origin: origin}
+
             state
             |> Map.update!(:terms, &[copy | &1])
             |> put_in([:direct_replies, source.pid], %{
-              from: from, reply: reply, origin: origin,
+              from: from,
+              reply: reply,
+              origin: origin,
               last: state.pairs[source.index].returned.index
             })
 

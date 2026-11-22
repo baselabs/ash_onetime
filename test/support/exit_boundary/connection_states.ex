@@ -364,8 +364,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp factory_value(state, source, function, actual, options) do
     expected = factory_expected(state, function, options)
     actual = factory_observed(actual, expected)
+    factory_diagnostic(source, actual, expected)
     exact(state, source, :state_status_factory_value, actual, expected)
   end
+
+  # Report only which independent checks differ. Closure environments and
+  # protocol state must never enter hosted diagnostics.
+  defp factory_diagnostic(
+         source,
+         {:compiled_notify, actual, environment},
+         {:compiled_notify, expected, expected_environment}
+       ) when actual != expected or environment != expected_environment do
+    fields = [:module, :name, :arity, :new_uniq, :index]
+
+    equal =
+      fields
+      |> Enum.with_index()
+      |> Map.new(fn {field, index} -> {field, elem(actual, index) === elem(expected, index)} end)
+      |> Map.put(:environment, environment === expected_environment)
+
+    IO.puts("NATIVE_FACTORY_IDENTITY_EQUAL: " <> inspect(%{index: source.index, fields: equal}))
+  end
+
+  defp factory_diagnostic(_source, _actual, _expected), do: :ok
 
   defp factory_expected(_state, :mode, options), do: options[:mode] || :transaction
 
@@ -721,6 +742,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp buffer_copy(state, source, path, buffer, expected, origin, sock) do
     state = exact(state, source, :state_buffer_copy, buffer, expected)
+    state = copy_error_path(state, source, path, :state_buffer_copy)
 
     copy = %{
       index: source.index,
@@ -811,7 +833,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp buffer_return(state, source, frame, result)
-       when elem(source.mfa, 1) in [:msg_recv, :rows_recv, :redescribe] and is_tuple(result) do
+       when elem(source.mfa, 1) in [:msg_recv, :rows_recv, :redescribe, :describe, :recv_describe] and
+              is_tuple(result) do
     if elem(result, 0) in [:ok, :reload, :error] do
       position = tuple_size(result) - 1
       {expected, origin} = helper_buffer_origin(state, source, frame.owner, frame)

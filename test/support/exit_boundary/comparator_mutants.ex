@@ -738,6 +738,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     with_machine_peer(:assert_machine_program, [targets])
   end
 
+  def machine_reply_control do
+    with_machine_peer(:assert_machine_reply, [])
+  end
+
   # OTP's own peer I/O server avoids the parent VM's user_drv/group machines.
   # Only the real fixture's TLS machines run here; no Repo pool is started.
   # The process preflight and both soft-purge checks remain mandatory.
@@ -847,7 +851,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
           positions = Map.get(targets, {function, length(arguments)}, []),
           position <- positions do
         wrapped? = match?({:native_foreign_helper, _}, Enum.at(arguments, position))
-        assert wrapped?, "native machine input must be wrapped: #{inspect(source.mfa)} argument #{position}"
+
+        assert wrapped?,
+               "native machine input must be wrapped: #{inspect(source.mfa)} argument #{position}"
+
         {source.index, [2, 2, position]}
       end
 
@@ -891,6 +898,104 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     :ok
   end
+
+  def assert_machine_reply do
+    targets = %{{:reply, 2} => [0, 1]}
+
+    run =
+      with_owner_mutant(:gen_statem, &(&1 > 1), &owner_inputs_form(&1, &2, targets), fn ->
+        with_owner_mutant(
+          :ssl_gen_statem,
+          &(&1 > 1),
+          &remote_reply_form/2,
+          &ConnectionNative.observe_tls/0
+        )
+      end)
+
+    assert run.result == []
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    corrupted =
+      for %{event: {_, :call, {:gen_statem, :reply, [from, reply]}}} = source <- events,
+          match?({:native_foreign_helper, _}, from) do
+        wrapped? = match?({:native_foreign_helper, _}, reply)
+        assert wrapped?
+        source
+      end
+
+    assert corrupted != []
+
+    assert Enum.any?(corrupted, fn source ->
+      Enum.any?(source.stack, fn
+        {:ssl_gen_statem, _, _} -> true
+        _ -> false
+      end)
+    end)
+
+    coordinates =
+      for source <- corrupted, position <- [0, 1], do: {source.index, [2, 2, position]}
+
+    native = ConnectionTls.build(%{events: events}, run.tls_binding)
+
+    assert Enum.map(native.errors, & &1.rule) ==
+             List.duplicate(:tls_machine_program_copy, length(coordinates))
+
+    assert Enum.map(native.errors, &{&1.index, &1.path}) == coordinates
+
+    for mutant <- [
+          :stream_tls_machine_program,
+          :stream_tls_machine_copy,
+          :stream_tls_worker_state_copy
+        ] do
+      checked =
+        with_mutant(mutant, fn -> ConnectionTls.build(%{events: events}, run.tls_binding) end)
+
+      expected = if mutant == :stream_tls_machine_program, do: [], else: native.errors
+      assert checked.errors == expected
+    end
+
+    assert ConnectionTls.build(%{events: events}, run.tls_binding).errors == native.errors
+    restored = ConnectionNative.observe_tls()
+
+    restored_events =
+      restored.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+    IO.puts("CONNECTION_MACHINE_REPLY: owning RED; sole catcher; exact restore; fresh GREEN")
+    :ok
+  end
+
+  defp remote_reply_form({:function, annotation, function, arity, clauses}, sites) do
+    {clauses, sites} = remote_reply_calls(clauses, sites)
+    {{:function, annotation, function, arity, clauses}, sites}
+  end
+
+  defp remote_reply_form(form, sites), do: {form, sites}
+
+  defp remote_reply_calls(
+         {:call, location, {:remote, _, {:atom, _, :gen_statem}, {:atom, _, :reply}} = callee,
+          arguments},
+         sites
+       )
+       when length(arguments) == 2 do
+    {{:call, location, callee, helper_arguments(arguments, [0, 1], location)}, sites + 1}
+  end
+
+  defp remote_reply_calls(form, sites) when is_tuple(form) do
+    {elements, sites} = form |> Tuple.to_list() |> Enum.map_reduce(sites, &remote_reply_calls/2)
+    {List.to_tuple(elements), sites}
+  end
+
+  defp remote_reply_calls(form, sites) when is_list(form),
+    do: Enum.map_reduce(form, sites, &remote_reply_calls/2)
+
+  defp remote_reply_calls(form, sites), do: {form, sites}
 
   defp machine_mutation(rule, callback) do
     with_owner_mutant(:gen_statem, 3, &machine_form(&1, &2, rule), callback)
@@ -1026,8 +1131,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     uses =
       for {name, count} <- renamed,
           count > 1 and name != :_ and String.starts_with?(Atom.to_string(name), "_"),
-          do: {:match, location, {:var, location, :_},
-               {:var, location, String.to_atom("AshOnetimeInput" <> Atom.to_string(name))}}
+          do:
+            {:match, location, {:var, location, :_},
+             {:var, location, String.to_atom("AshOnetimeInput" <> Atom.to_string(name))}}
 
     {:clause, location, arguments, guards, uses ++ body}
   end
@@ -1043,9 +1149,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   defp input_variables(_form, counts), do: counts
 
   defp rename_input_variables({:var, location, name} = form, counts) do
-    if name != :_ and String.starts_with?(Atom.to_string(name), "_") and Map.get(counts, name, 0) > 1,
-      do: {:var, location, String.to_atom("AshOnetimeInput" <> Atom.to_string(name))},
-      else: form
+    if name != :_ and String.starts_with?(Atom.to_string(name), "_") and
+         Map.get(counts, name, 0) > 1,
+       do: {:var, location, String.to_atom("AshOnetimeInput" <> Atom.to_string(name))},
+       else: form
   end
 
   defp rename_input_variables(form, counts) when is_tuple(form),
@@ -1151,8 +1258,13 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     value = Enum.fetch!(fields, target.position)
     marker = {:tuple, location, [{:atom, location, :native_foreign_return}, value]}
-    input = if operation == :restore, do: List.replace_at(fields, target.position, marker), else: fields
-    output = if operation == :corrupt, do: List.replace_at(fields, target.position, marker), else: fields
+
+    input =
+      if operation == :restore, do: List.replace_at(fields, target.position, marker), else: fields
+
+    output =
+      if operation == :corrupt, do: List.replace_at(fields, target.position, marker), else: fields
+
     other = {:var, location, String.to_atom("AshOnetimeElementOther#{site}")}
 
     {:case, location, expression,

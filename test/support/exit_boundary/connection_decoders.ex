@@ -292,8 +292,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp query_event(
-         %{event: {_, :return_from, {Postgrex.Protocol, :handle_prepare, 3},
-             {:ok, %Postgrex.Query{}, _protocol}}} = source,
+         %{
+           event:
+             {_, :return_from, {Postgrex.Protocol, :handle_prepare, 3},
+              {:ok, %Postgrex.Query{}, _protocol}}
+         } = source,
          state
        ) do
     with %{source: call} <- returned_pair(state, source),
@@ -466,8 +469,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     end
   end
 
-  defp cached_query_origin(state, %{event: {_, :call, {_, :handle_prepare,
-         [%Postgrex.Query{cache: :statement} = query, _options, protocol]}}}) do
+  defp cached_query_origin(state, %{
+         event:
+           {_, :call,
+            {_, :handle_prepare, [%Postgrex.Query{cache: :statement} = query, _options, protocol]}}
+       }) do
     matches =
       for {_ref, descriptor} <- state.descriptors,
           descriptor.port == elem(protocol.sock, 1),
@@ -477,8 +483,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
           do: descriptor
 
     case matches do
-      [descriptor] -> %{query: descriptor.query, origin: {:cached_query, descriptor.index, descriptor.path}}
-      _ -> nil
+      [descriptor] ->
+        %{query: descriptor.query, origin: {:cached_query, descriptor.index, descriptor.path}}
+
+      _ ->
+        nil
     end
   end
 
@@ -557,7 +566,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       %{query: expected} ->
         origin = %{query: expected, port: port, index: e.index, path: [3, 1]}
         put_in(state.descriptors[expected.ref], origin)
-      nil -> failure(state, e, :decoder_query_factory_origin, false)
+
+      nil ->
+        failure(state, e, :decoder_query_factory_origin, false)
     end
   end
 

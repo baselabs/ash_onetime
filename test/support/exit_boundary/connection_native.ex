@@ -369,6 +369,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           try do
             {:ok, %Postgrex.Query{}, %Postgrex.Protocol{}} =
               Postgrex.Protocol.handle_prepare(query, [], protocol)
+
             :ok
           after
             :ok = module.close(socket)

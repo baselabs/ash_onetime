@@ -646,7 +646,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
          %{index: index, event: {_, :return_from, {Postgrex.Protocol, function, _}, result}} =
            source
        )
-       when function in [:msg_recv, :rows_recv, :redescribe, :describe, :recv_describe] and is_tuple(result) do
+       when function in [:msg_recv, :rows_recv, :redescribe, :describe, :recv_describe] and
+              is_tuple(result) do
     if elem(result, 0) in [:ok, :reload, :error],
       do: [%{index: index, mfa: source.mfa, path: [3, tuple_size(result) - 1]}],
       else: []
@@ -1296,8 +1297,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           positions = Map.get(targets, {function, length(arguments)}, []),
           position <- positions do
         wrapped? = match?({:native_foreign_helper, _}, Enum.at(arguments, position))
-        unless wrapped?, do: IO.puts("NATIVE_HELPER_INPUT_UNWRAPPED: " <> Diagnostics.render(%{mfa: source.mfa, path: [2, 2, position]}))
-        assert wrapped?, "native helper input must be wrapped: #{inspect(source.mfa)} argument #{position}"
+
+        unless wrapped?,
+          do:
+            IO.puts(
+              "NATIVE_HELPER_INPUT_UNWRAPPED: " <>
+                Diagnostics.render(%{mfa: source.mfa, path: [2, 2, position]})
+            )
+
+        assert wrapped?,
+               "native helper input must be wrapped: #{inspect(source.mfa)} argument #{position}"
 
         {source.index, [2, 2, position]}
       end
@@ -1338,7 +1347,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       target = %{size: unquote(size), position: 1, field: field}
 
       captured =
-        ComparatorMutants.with_postgrex_outputs(%{{function, arity} => target}, &native_query_factory/0)
+        ComparatorMutants.with_postgrex_outputs(
+          %{{function, arity} => target},
+          &native_query_factory/0
+        )
 
       assert captured.native.errors == []
       assert captured.decoders.errors == []
@@ -1353,7 +1365,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert corrupted != []
       states = native_copy_states(captured)
-      assert Enum.map(states.errors, & &1.rule) == List.duplicate(:state_helper_copy, length(corrupted))
+
+      assert Enum.map(states.errors, & &1.rule) ==
+               List.duplicate(:state_helper_copy, length(corrupted))
+
       assert Enum.map(states.errors, &{&1.index, &1.path}) == corrupted
 
       for mutant <- [:stream_buffer_copy, :stream_helper_copy, :stream_status_copy] do
@@ -1364,20 +1379,35 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert native_copy_states(captured).errors == states.errors
       assert native_copy_states(native_query_factory()).errors == []
-      IO.puts("CONNECTION_QUERY_FACTORY_RETURN: owning RED; sole catcher; exact restore; fresh GREEN")
+
+      IO.puts(
+        "CONNECTION_QUERY_FACTORY_RETURN: owning RED; sole catcher; exact restore; fresh GREEN"
+      )
     end
   end
 
   defp native_query_factory do
     run = ConnectionNative.observe_query_factory()
     assert run.result == :ok
-    events = run.events |> Enum.with_index() |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
+    events =
+      run.events
+      |> Enum.with_index()
+      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+
     native = NativeTransport.build(%{events: events}, run.native_history)
     streams = ConnectionReads.build(native)
     decoders = ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
 
-    %{run: run, events: events, native: native, streams: streams, decoders: decoders,
-      historical: run.native_history, initial: run.initial_state}
+    %{
+      run: run,
+      events: events,
+      native: native,
+      streams: streams,
+      decoders: decoders,
+      historical: run.native_history,
+      initial: run.initial_state
+    }
   end
 
   for {function, arity, size, position} <- [{:describe, 7, 4, 3}, {:recv_describe, 4, 7, 6}] do
@@ -1390,9 +1420,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       target = %{kind: :element, size: size, position: position}
 
       captured =
-        ComparatorMutants.with_postgrex_outputs(%{{function, arity} => target}, fn ->
-          cached_decoders(nil, :cross_connection)
-        end)
+        ComparatorMutants.with_postgrex_outputs(
+          %{{function, arity} => target},
+          &native_query_factory/0
+        )
 
       assert captured.native.errors == []
       assert captured.decoders.errors == []
@@ -1407,7 +1438,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert corrupted != []
       states = native_copy_states(captured)
-      assert Enum.map(states.errors, & &1.rule) == List.duplicate(:state_buffer_copy, length(corrupted))
+
+      assert Enum.map(states.errors, & &1.rule) ==
+               List.duplicate(:state_buffer_copy, length(corrupted))
+
       assert Enum.map(states.errors, &{&1.index, &1.path}) == corrupted
 
       for mutant <- [:stream_buffer_copy, :stream_helper_copy, :stream_status_copy] do
@@ -1417,8 +1451,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
 
       assert native_copy_states(captured).errors == states.errors
-      assert native_copy_states(cached_decoders(nil, :cross_connection)).errors == []
-      IO.puts("CONNECTION_QUERY_BUFFER_RETURN: owning RED; sole catcher; exact restore; fresh GREEN")
+      assert native_copy_states(native_query_factory()).errors == []
+
+      IO.puts(
+        "CONNECTION_QUERY_BUFFER_RETURN: owning RED; sole catcher; exact restore; fresh GREEN"
+      )
     end
   end
 
@@ -4429,6 +4466,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     }
 
     assert :ok == ComparatorMutants.machine_program_control(targets)
+  end
+
+  @tag :connection_streams
+  test "Connection streams: native machine and direct TLS reply values retain their origins" do
+    assert :ok == ComparatorMutants.machine_reply_control()
   end
 
   for corruption <- [:reply_copy, :reply_value] do
