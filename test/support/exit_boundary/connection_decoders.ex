@@ -27,7 +27,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       factory_identities: %{
         notify: Compiled.identity(Postgrex.Protocol, :"-notify/1-fun-0-", 2)
       },
-      factory_observations: factory_observations(indexed.events),
+      factory_observations: historical_factories(historical, indexed.events),
       instances: [],
       replays: [],
       replay_sends: MapSet.new(),
@@ -49,6 +49,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       query_outputs: state.query_outputs,
       factory_identities: state.factory_identities,
       factory_observations: state.factory_observations,
+      reload_factories:
+        Map.new(historical, fn {pid, history} -> {pid, Map.get(history, :reload_factory)} end),
       protocol_copies: protocol_copies(indexed, historical),
       replays: Enum.reverse(state.replays),
       errors: Enum.reverse(state.errors)
@@ -58,10 +60,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   # A local fun's name becomes [] after its code is unloaded. Freeze observed
   # metadata while the native owner is installed; expected identities still
   # come independently from that owner's object code and declared environment.
-  defp factory_observations(events) do
+  def freeze_factories(events) do
     events
     |> Enum.flat_map(fn
       %{event: {_, :return_from, {Postgrex.Protocol, :notify, 1}, callback}}
+      when is_function(callback) ->
+        [callback]
+
+      %{event: {_, :call, {:erlang, :spawn_monitor, [callback]}}}
       when is_function(callback) ->
         [callback]
 
@@ -76,7 +82,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     |> Map.new(fn callback ->
       info = Map.new(Function.info(callback))
       identity = {info.module, info.name, info.arity, info.new_uniq, info.index}
-      {callback, {:compiled_notify, identity, info.env}}
+      {callback, {:compiled_factory, identity, info.env}}
+    end)
+  end
+
+  defp historical_factories(historical, events) do
+    Enum.reduce(historical, freeze_factories(events), fn {_pid, history}, observations ->
+      Map.merge(observations, Map.get(history, :factory_observations, %{}))
     end)
   end
 
@@ -233,7 +245,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       %{query: query, protocol: protocol} = root ->
         port = elem(protocol.sock, 1)
         description = query_description(state, source, root, port)
-        query = Map.get(state.query_params, root.index, query)
+        query =
+          if function in [:describe, :describe_params],
+            do: query,
+            else: Map.get(state.query_params, root.index, query)
 
         input =
           Map.merge(description, %{

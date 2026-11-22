@@ -56,7 +56,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     :error_ready,
     :error_flushed,
     :rollback_flushed,
-    :reload_flushed
+    :reload_flushed,
+    :reload_spawn,
+    :reload_init
   ]
   @copies [:msg_send, :msg_recv, :rows_recv, :redescribe]
   @owners @callbacks ++ @constructors ++ @scopes ++ @copies
@@ -88,6 +90,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     error_flushed: 3,
     rollback_flushed: 3,
     reload_flushed: 4,
+    reload_spawn: 4,
+    reload_init: 4,
     ping_recv: 3,
     activate: 1
   }
@@ -112,6 +116,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       pending: %{},
       described: %{},
       factories: %{},
+      reload_spawns: %{},
+      reload_children: %{},
       versions: Map.values(holders),
       copies: [],
       buffers: [],
@@ -158,6 +164,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     state = commit(source, state)
     state = holder_event(source, state)
     state = fixture_event(source, state)
+    state = reload_event(source, state)
     state = factory_event(source, state)
     callback_event(source, state)
   end
@@ -176,6 +183,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
       put_in(state.factories[{callback.index, function}], %{
         value: factory_expected(state, function, options),
+        native: value,
         index: source.index
       })
     else
@@ -277,8 +285,51 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       oids = type_oids(elem(owner.mfa, 1), input)
       {:ok, %{oids: oids, types: input.types}, owner.index}
     else
+      _ -> reload_type_context(state, source)
+    end
+  end
+
+  defp reload_type_context(state, source) do
+    case active_reload(state, source.pid, source.index) do
+      %{source: owner, oids: oids, version: version} ->
+        {:ok, %{oids: Enum.to_list(oids), types: version.protocol.types}, owner.index}
+
+      _ ->
+        reload_dependency_context(state, source)
+    end
+  end
+
+  defp reload_dependency_context(state, source) do
+    with %{version: version} <- state.reload_children[source.pid],
+         rows when rows != [] <- reload_catalog_rows(state, source),
+         {row, info} <- List.last(rows) do
+      new = rows |> Enum.drop(-1) |> MapSet.new(fn {_row, info} -> info.oid end)
+      dependencies =
+        Enum.reject(
+          [info.array_elem, info.base_type | info.comp_elems],
+          &(&1 == 0 or MapSet.member?(new, &1))
+        )
+
+      earlier =
+        Enum.count(state.pairs, fn {_index, pair} ->
+          pair.source.pid == source.pid and pair.source.mfa == {Postgrex.Types, :fetch, 2} and
+            pair.source.index > row.returned.index and pair.returned.index < source.index
+        end)
+
+      case Enum.fetch(dependencies, earlier) do
+        {:ok, oid} -> {:ok, %{oids: [oid], types: version.protocol.types}, source.index}
+        :error -> :error
+      end
+    else
       _ -> :error
     end
+  end
+
+  defp reload_catalog_rows(state, source) do
+    for instance <- state.decoders.instances,
+        instance.returned.pid == source.pid and instance.returned.index < source.index,
+        {:ok, {:msg_data_row, values}, _buffer} <- [instance.expected],
+        do: {instance, Postgrex.Types.build_type_info(values)}
   end
 
   defp type_oids(:describe_params, input), do: input.param_oids
@@ -378,10 +429,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp factory_expected(state, :notify, options) do
     options[:notify] ||
-      {:compiled_notify, Map.fetch!(state.decoders.factory_identities, :notify), []}
+      {:compiled_factory, Map.fetch!(state.decoders.factory_identities, :notify), []}
   end
 
-  defp factory_observed(state, actual, {:compiled_notify, _identity, _environment})
+  defp factory_observed(state, actual, {:compiled_factory, _identity, _environment})
        when is_function(actual) do
     Map.get(state.decoders.factory_observations, actual, :missing_observed_factory)
   end
@@ -501,6 +552,294 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp fixture_event(_source, state), do: state
+
+  defp reload_event(
+         %{event: {pid, :call, {Postgrex.Protocol, :reload_flushed, _}}} = source,
+         state
+       ) do
+    case List.first(Map.get(state.frames, pid, [])) do
+      %{source: owner} = frame ->
+        with %{value: query} <- state.term_values[{owner.index, [2, 2, 2]}],
+             %{value: status} <- state.term_values[{owner.index, [2, 2, 1]}] do
+          oids =
+            for {_index, %{source: call, returned: returned}} <- state.pairs,
+                call.pid == pid and call.index > owner.index and returned.index < source.index,
+                call.mfa == {Postgrex.Types, :fetch, 2},
+                {_, :call, {_, _, [oid, _types]}} <- [call.event],
+                {_, :return_from, _, {:error, nil, _}} <- [returned.event],
+                into: MapSet.new(),
+                do: oid
+
+          context = %{
+            source: source,
+            version: %{frame.owner | protocol: frame.current},
+            query: query,
+            status: status,
+            oids: oids,
+            buffer: cursor_buffer(state, source, frame)
+          }
+
+          callback = status_callback(state, pid).source
+          native_notify = state.factories[{callback.index, :notify}].native
+          context = Map.put(context, :native_status, Map.put(status, :notify, native_notify))
+
+          put_in(state.reload_spawns[pid], context)
+        else
+          _ -> failure(state, source, :state_reload_origin)
+        end
+
+      _ ->
+        failure(state, source, :state_reload_origin)
+    end
+  end
+
+  defp reload_event(
+         %{event: {pid, :call, {Postgrex.Protocol, :reload_spawn, _}}} = source,
+         state
+       ) do
+    with context when is_map(context) <- state.reload_spawns[pid],
+         [frame | _] <- Map.get(state.frames, pid, []) do
+      protocol = %{frame.current | buffer: nil}
+      version = %{frame.owner | protocol: protocol}
+      context = %{
+        context
+        | source: source,
+          version: version,
+          buffer: cursor_buffer(state, source, frame)
+      }
+
+      put_in(state.reload_spawns[pid], context)
+    else
+      _ -> failure(state, source, :state_reload_origin)
+    end
+  end
+
+  defp reload_event(
+         %{event: {child, :call, {Postgrex.Protocol, :msg_send, _}}},
+         state
+       ) do
+    case {state.reload_children[child], Map.get(state.frames, child, [])} do
+      {%{}, [%{source: %{mfa: {Postgrex.Protocol, :reload_init, 5}}} = frame | rest]} ->
+        put_in(state.frames[child], [%{frame | current: %{frame.current | buffer: nil}} | rest])
+
+      _ ->
+        state
+    end
+  end
+
+  defp reload_event(
+         %{event: {pid, :call, {:erlang, :spawn_monitor, [fun]}}} = source,
+         state
+       ) do
+    case active_reload(state, pid, source.index) do
+      %{source: %{mfa: {Postgrex.Protocol, :reload_spawn, 5}} = owner} = context ->
+        references =
+          for {_index, %{source: call, returned: returned}} <- state.pairs,
+              call.pid == pid and call.index > owner.index and returned.index < source.index,
+              call.mfa == {:erlang, :make_ref, 0},
+              List.first(call.stack) == owner.mfa,
+              {_, :return_from, _, ref} <- [returned.event],
+              is_reference(ref),
+              do: {ref, returned.index}
+
+        case {references, state.decoders.reload_factories[pid]} do
+          {[{ref, index}], %{identity: identity, positions: positions}} ->
+            inputs = [
+              context.version.protocol,
+              context.native_status,
+              context.oids,
+              ref,
+              context.buffer
+            ]
+
+            environment =
+              positions
+              |> Enum.zip(inputs)
+              |> Enum.sort_by(&elem(&1, 0))
+              |> Enum.map(&elem(&1, 1))
+
+            expected = {:compiled_factory, identity, environment}
+            actual = factory_observed(state, fun, expected)
+            context = Map.merge(context, %{fun: fun, exit_ref: ref, reference_origin: index})
+
+            state
+            |> helper_copy(
+              source,
+              [2, 2, 0],
+              actual,
+              expected,
+              {:reload_closure, owner.index, index}
+            )
+            |> reload_cover(source, context.version)
+            |> put_in([:reload_spawns, pid], context)
+
+          _ ->
+            failure(state, source, :state_reload_closure_origin)
+        end
+
+      _ ->
+        state
+    end
+  end
+
+  defp reload_event(
+         %{event: {pid, :call, {:erlang, :spawn_opt, arguments}}} = source,
+         state
+       ) do
+    case active_reload(state, pid, source.index) do
+      %{fun: fun, version: version, source: owner} ->
+        expected = [:erlang, :apply, [fun, []], [:monitor]]
+
+        state
+        |> helper_copy(source, [2, 2], arguments, expected, {:reload_native_spawn, owner.index})
+        |> reload_cover(source, version)
+
+      _ ->
+        state
+    end
+  end
+
+  defp reload_event(%{event: {pid, :spawn, child, entry}} = source, state) do
+    case active_reload(state, pid, source.index) do
+      %{fun: fun} = context ->
+        state =
+          exact(state, source, :state_reload_spawn_entry, entry, {:erlang, :apply, [fun, []]})
+        child_context = Map.merge(context, %{parent: pid, child: child})
+
+        state
+        |> reload_cover(source, context.version)
+        |> put_in([:reload_children, child], child_context)
+        |> put_in([:lookups, child], context.version)
+
+      _ ->
+        state
+    end
+  end
+
+  defp reload_event(%{event: {child, :spawned, parent, entry}} = source, state) do
+    case state.reload_children[child] do
+      %{parent: ^parent, fun: fun, version: version} ->
+        state
+        |> exact(source, :state_reload_spawn_entry, entry, {:erlang, :apply, [fun, []]})
+        |> reload_cover(source, version)
+
+      _ ->
+        state
+    end
+  end
+
+  defp reload_event(
+         %{event: {child, :call, {:erlang, :exit, [actual]}}} = source,
+         state
+       ) do
+    case {state.reload_children[child], List.first(Map.get(state.frames, child, []))} do
+      {%{exit_ref: ref} = context,
+       %{source: %{mfa: {Postgrex.Protocol, :reload_init, 5}}} = frame} ->
+        protocol = %{frame.current | buffer: nil}
+        buffer = cursor_buffer(state, source, frame)
+        expected = {ref, protocol, buffer}
+        version = %{frame.owner | protocol: protocol, origin: {:reload_exit, source.index}}
+        context = Map.merge(context, %{terminal: expected, terminal_version: version})
+
+        state
+        |> helper_copy(
+          source,
+          [2, 2, 0],
+          actual,
+          expected,
+          {:reload_terminal, frame.source.index}
+        )
+        |> reload_cover(source, version)
+        |> put_in([:reload_children, child], context)
+
+      _ ->
+        state
+    end
+  end
+
+  defp reload_event(
+         %{event: {child, :exception_from, {module, function, _}, actual}} = source,
+         state
+       )
+       when (module == :erlang and function == :exit) or
+              (module == Postgrex.Protocol and function == :reload_init) do
+    case state.reload_children[child] do
+      %{terminal: expected, terminal_version: version} ->
+        state
+        |> helper_copy(source, [3], actual, {:exit, expected}, {:reload_terminal, version.origin})
+        |> reload_cover(source, version)
+
+      _ ->
+        state
+    end
+  end
+
+  defp reload_event(%{event: {child, :exit, actual}} = source, state) do
+    case state.reload_children[child] do
+      %{terminal: expected, terminal_version: version} ->
+        state
+        |> helper_copy(source, [2], actual, expected, {:reload_terminal, version.origin})
+        |> reload_cover(source, version)
+
+      _ ->
+        state
+    end
+  end
+
+  defp reload_event(
+         %{event: {parent, :receive, {:DOWN, monitor, :process, child, actual}}} = source,
+         state
+       ) do
+    case state.reload_children[child] do
+      %{parent: ^parent, terminal: expected, terminal_version: version} = context ->
+        spawned =
+          Enum.any?(state.pairs, fn {_index, pair} ->
+            pair.source.pid == parent and pair.source.index > context.source.index and
+              pair.returned.index < source.index and
+              pair.source.mfa == {:erlang, :spawn_monitor, 1} and
+              elem(pair.returned.event, 3) === {child, monitor}
+          end)
+
+        state = exact(state, source, :state_reload_monitor_origin, spawned, true)
+        state =
+          helper_copy(state, source, [2, 4], actual, expected, {:reload_terminal, version.origin})
+        state = reload_cover(state, source, version)
+
+        case Map.get(state.frames, parent, []) do
+          [%{source: %{mfa: {Postgrex.Protocol, :reload_spawn, 5}}} = frame | rest] ->
+            next = %{frame | current: version.protocol, owner: version}
+            put_in(state.frames[parent], [next | rest])
+
+          _ ->
+            failure(state, source, :state_reload_join_origin)
+        end
+
+      _ ->
+        state
+    end
+  end
+
+  defp reload_event(_source, state), do: state
+
+  defp reload_cover(state, source, version) do
+    Enum.reduce(state.decoders.protocol_copies, state, fn
+      %{index: index, path: path}, state when index == source.index ->
+        copy(state, source, path, version)
+
+      _, state ->
+        state
+    end)
+  end
+
+  defp active_reload(state, pid, index) do
+    with %{source: owner} = context <- state.reload_spawns[pid],
+         %{returned: returned} <- state.pairs[owner.index],
+         true <- owner.index < index and index < returned.index do
+      context
+    else
+      _ -> nil
+    end
+  end
 
   defp holder_event(
          %{event: {pid, :return_from, {:ets, :lookup, 2}, [row]}} = source,
@@ -859,6 +1198,46 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
+  defp helper_input(state, source, function, arguments, _version)
+       when function in [:reload_flushed, :reload_spawn, :reload_init] do
+    context =
+      if function == :reload_init,
+        do: state.reload_children[source.pid],
+        else: state.reload_spawns[source.pid]
+
+    case context do
+      %{status: status, oids: oids} ->
+        actual_status = Enum.at(arguments, 1)
+
+        actual_status =
+          if is_map(actual_status) and Map.has_key?(actual_status, :notify),
+            do: Map.update!(actual_status, :notify, &factory_observed(state, &1, status.notify)),
+            else: actual_status
+
+        {second, third} =
+          if function == :reload_init,
+            do: {oids, context.exit_ref},
+            else: {context.query, oids}
+
+        [actual_status, Enum.at(arguments, 2), Enum.at(arguments, 3)]
+        |> Enum.zip([status, second, third])
+        |> Enum.with_index(1)
+        |> Enum.reduce(state, fn {{actual, expected}, position}, state ->
+          helper_copy(
+            state,
+            source,
+            [2, 2, position],
+            actual,
+            expected,
+            {:reload_input, context.source.index, position}
+          )
+        end)
+
+      _ ->
+        failure(state, source, :state_reload_origin)
+    end
+  end
+
   defp helper_input(state, source, :done, [_protocol, query, rows, tag], version) do
     state = helper_rows(state, source, [2, 2, 2], rows, version.protocol)
 
@@ -1087,6 +1466,30 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         expected = [msg_sync(), msg_query(statement: statement)]
         helper_copy(state, source, [2, 2, 1], messages, expected, {:error_rollback, owner.index})
 
+      %{source: %{mfa: {Postgrex.Protocol, :reload_flushed, 5}} = owner} ->
+        context = Map.fetch!(state.reload_spawns, source.pid)
+        close = msg_close(type: :statement, name: context.query.name)
+
+        tail =
+          if context.status.mode == :transaction,
+            do: msg_sync(),
+            else:
+              msg_query(
+                statement: "ROLLBACK TO SAVEPOINT postgrex_query;RELEASE SAVEPOINT postgrex_query"
+              )
+
+        helper_copy(
+          state,
+          source,
+          [2, 2, 1],
+          messages,
+          [close, tail],
+          {:reload_close, owner.index}
+        )
+
+      %{source: %{mfa: {Postgrex.Protocol, :reload_init, 5}}} ->
+        reload_query_messages(state, source, messages)
+
       _ ->
         callback_messages(state, source, messages)
     end
@@ -1111,6 +1514,64 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
+  defp reload_query_messages(state, source, actual) do
+    context = Map.fetch!(state.reload_children, source.pid)
+
+    parameters =
+      for {_index, %{source: call, returned: returned}} <- state.pairs,
+          call.pid == source.pid and call.index > context.source.index and
+            returned.index < source.index,
+          call.mfa == {Postgrex.Parameters, :fetch, 1},
+          {_, :call, {_, _, [reference]}} <- [call.event],
+          reference === context.version.protocol.parameters,
+          {_, :return_from, _, {:ok, values}} <- [returned.event],
+          do: {returned.index, values}
+
+    case Enum.max_by(parameters, &elem(&1, 0), fn -> nil end) do
+      {index, values} ->
+        version = Postgrex.Utils.parse_version(values["server_version"])
+        oids = reload_missing_oids(state, source, context)
+        statement =
+          Postgrex.Types.reload_query(version, Enum.to_list(oids), context.version.protocol)
+
+        helper_copy(
+          state,
+          source,
+          [2, 2, 1],
+          actual,
+          msg_query(statement: statement),
+          {:reload_query, context.source.index, index}
+        )
+
+      nil ->
+        failure(state, source, :state_reload_parameters_origin)
+    end
+  end
+
+  defp reload_missing_oids(state, source, context) do
+    complete? =
+      Enum.any?(state.decoders.instances, fn instance ->
+        instance.returned.pid == source.pid and instance.returned.index < source.index and
+          match?({:ok, {:msg_command_complete, _}, _}, instance.expected)
+      end)
+
+    if complete? do
+      missing =
+        for {_index, %{source: call, returned: returned}} <- state.pairs,
+            call.pid == source.pid and call.mfa == {Postgrex.Types, :fetch, 2},
+            returned.index < source.index,
+            {_, :return_from, _, {:error, nil, _}} <- [returned.event],
+            {_, :call, {_, _, [oid, _types]}} <- [call.event],
+            into: MapSet.new(),
+            do: oid
+
+      loaded = MapSet.new(reload_catalog_rows(state, source), fn {_row, info} -> info.oid end)
+      MapSet.difference(missing, loaded)
+    else
+      context.oids
+    end
+  end
+
   defp callback_message_origin(
          _state,
          _source,
@@ -1124,6 +1585,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     query = if is_nil(protocol.queries), do: %{query | name: ""}, else: query
     comment = options[:comment]
+
     statement =
       if is_binary(comment), do: [query.statement, "/*", comment, "*/"], else: query.statement
 
@@ -1131,6 +1593,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     describe = msg_describe(type: :statement, name: query.name)
     head = if query.name == "", do: [], else: [msg_close(type: :statement, name: query.name)]
     tail = if options[:postgrex_prepare], do: [msg_sync()], else: [msg_flush()]
+
     tail =
       if options[:postgrex_prepare] and query.name == "",
         do: [msg_close(type: :statement, name: "") | tail],
@@ -1143,17 +1606,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          _state,
          _source,
          %{source: %{event: {_, :call, {_, :handle_close, [query, _options, _protocol]}}}},
-         _options
+         _callback_options
        ),
-    do: {:ok, [msg_close(type: :statement, name: query.name), msg_sync()], []}
+       do: {:ok, [msg_close(type: :statement, name: query.name), msg_sync()], []}
 
   defp callback_message_origin(
          _state,
          _source,
-         %{source: %{event: {_, :call, {_, :handle_fetch, [_query, cursor, _options, _protocol]}}}},
+         %{
+           source: %{event: {_, :call, {_, :handle_fetch, [_query, cursor, _options, _protocol]}}}
+         },
          options
        ) do
-    execute = msg_execute(name_port: cursor.portal, max_rows: Keyword.get(options, :max_rows, 500))
+    execute =
+      msg_execute(name_port: cursor.portal, max_rows: Keyword.get(options, :max_rows, 500))
+
     {:ok, [execute, msg_sync()], []}
   end
 
@@ -1161,11 +1628,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          _state,
          _source,
          %{
-           source: %{event: {_, :call, {_, :handle_deallocate, [_query, cursor, _options, _protocol]}}}
+           source: %{
+             event: {_, :call, {_, :handle_deallocate, [_query, cursor, _options, _protocol]}}
+           }
          },
-         _options
+         _callback_options
        ),
-    do: {:ok, [msg_close(type: :portal, name: cursor.portal), msg_sync()], []}
+       do: {:ok, [msg_close(type: :portal, name: cursor.portal), msg_sync()], []}
 
   defp callback_message_origin(
          state,
@@ -1175,7 +1644,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
              %{event: {_, :call, {_, :handle_declare, [query, params, _options, _protocol]}}} =
                callback
          },
-         _options
+         _callback_options
        ) do
     portals =
       for {_index, %{source: call, returned: returned}} <- state.pairs,
@@ -1359,7 +1828,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         helper_copy(state, source, [2, 2, 1], actual, expected, origin)
 
       nil ->
-        failure(state, source, :state_helper_timeout_origin)
+        case state.reload_children[source.pid] do
+          %{source: owner} ->
+            helper_copy(
+              state,
+              source,
+              [2, 2, 1],
+              actual,
+              :infinity,
+              {:reload_timeout, owner.index}
+            )
+
+          _ ->
+            failure(state, source, :state_helper_timeout_origin)
+        end
     end
   end
 
@@ -1467,6 +1949,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
               :redescribe,
               :parse_describe_flush,
               :close_parse_describe_flush,
+              :reload_flushed,
+              :reload_spawn,
               :handle_prepare
             ] do
     case result do
@@ -1831,16 +2315,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp input_protocol(state, source, protocol, :msg_send, _arguments) do
     preserve? =
-      Enum.any?(source.stack, fn
+      case List.first(source.stack) do
         {Postgrex.Protocol, function, _} ->
           function in [:error_flushed, :rollback_flushed, :reload_flushed]
 
         _ ->
           false
-      end)
+      end
 
     expected = if preserve?, do: protocol, else: %{protocol | buffer: nil}
     {state, expected}
+  end
+
+  defp input_protocol(state, _source, protocol, :reload_spawn, _arguments),
+    do: {state, %{protocol | buffer: nil}}
+
+  defp input_protocol(state, source, protocol, :parse_describe_flush, _arguments) do
+    if {Postgrex.Protocol, :reload_spawn, 5} in source.stack,
+      do: {state, %{protocol | buffer: cursor_buffer(state, source, %{input: protocol})}},
+      else: {state, protocol}
   end
 
   defp input_protocol(state, source, protocol, :done, arguments) when length(arguments) == 2,
@@ -1867,7 +2360,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         case query_origin(state, frame) do
           %Postgrex.Query{} = expected_query ->
             _ = query
-            protocol = %{frame.current | postgres: {frame.current.postgres, expected_query.ref}}
+            postgres =
+              case frame.current.postgres do
+                {postgres, _ref} -> postgres
+                postgres -> postgres
+              end
+
+            protocol = %{frame.current | postgres: {postgres, expected_query.ref}}
             {state, %{protocol | buffer: cursor_buffer(state, source, frame)}}
 
           nil ->
@@ -1967,7 +2466,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp output_protocol(state, _source, frame, _function, _result), do: {state, frame.current}
 
   defp described(state, source, frame, {:ok, %Postgrex.Query{}, _protocol, _buffer}) do
-    if source.mfa == {Postgrex.Protocol, :redescribe, 6} do
+    if source.mfa in [{Postgrex.Protocol, :redescribe, 6}, {Postgrex.Protocol, :describe, 7}] do
       case state.decoders.query_outputs[source.index] do
         %{query: expected} ->
           put_in(state.described[frame.input.sock], %{query: expected, index: source.index})

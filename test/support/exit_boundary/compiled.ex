@@ -73,6 +73,43 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
     end)
   end
 
+  # Select the zero-argument native closure by its compiled callee, then read
+  # the environment registers supplying that call. No checked fun supplies its
+  # expected code identity or environment permutation.
+  def native_closure_factory(module, owner, owner_arity, callee, arity) do
+    References.memo(
+      {:native_closure_factory, module, module.module_info(:md5), owner, owner_arity, callee, arity},
+      fn ->
+        # The installed native program supplies the input permutation. Guarded
+        # owner edits may wrap the callee's arguments, while the closure still
+        # captures the same source inputs. identity/3 reads the exact active
+        # object, including a mutant's own FunT index and code digest.
+        {:beam_file, _, _, _, _, functions} = :beam_disasm.file(:code.which(module))
+        prefix = "-#{owner}/#{owner_arity}-fun-"
+        target = {module, callee, arity}
+
+        [{:function, name, count, _, instructions}] =
+          Enum.filter(functions, fn {:function, name, _, _, instructions} ->
+            String.starts_with?(Atom.to_string(name), prefix) and
+              Enum.any?(instructions, &target_call?(&1, target))
+          end)
+
+        registers = Map.new(0..(count - 1), &{{:x, &1}, {:environment, &1}})
+
+        positions =
+          for argument <- 0..(arity - 1) do
+            [{:environment, position}] =
+              capture_arguments(instructions, registers, %{}, target, argument, {name, count})
+
+            position
+          end
+
+        true = Enum.sort(positions) == Enum.to_list(0..(count - 1))
+        %{identity: identity(module, name, 0), positions: positions}
+      end
+    )
+  end
+
   # Read which free register supplies a callee argument. This identifies a
   # closure slot by its compiled call, without guessing a fun number or reading
   # the checked environment to decide where its date belongs.

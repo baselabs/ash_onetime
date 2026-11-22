@@ -1,6 +1,8 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary
+  alias AshOnetime.Test.ExitBoundary.Compiled
+  alias AshOnetime.Test.ExitBoundary.ConnectionDecoders
   alias AshOnetime.Test.ExitBoundary.ConnectionTls
   alias AshOnetime.Test.Repo
 
@@ -360,12 +362,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   def observe_query_factory(shape \\ :rows) do
     observer = self()
     tag = make_ref()
+    reload_factory =
+      Compiled.native_closure_factory(Postgrex.Protocol, :reload_spawn, 5, :reload_init, 5)
 
     run =
       ExitBoundary.observe(
         fn ->
           protocol = query_factory_environment(connect(:named), shape)
-          send(observer, {tag, %{self() => %{protocol: protocol}}})
+          history = %{protocol: protocol, reload_factory: reload_factory}
+          send(observer, {tag, %{self() => history}})
           protocol
         end,
         fn %{sock: {module, socket}} = protocol ->
@@ -405,7 +410,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       )
 
     receive do
-      {^tag, historical} -> Map.put(run, :native_history, historical)
+      {^tag, historical} ->
+        observations = ConnectionDecoders.freeze_factories(run.events)
+        historical =
+          Map.new(historical, fn {pid, history} ->
+            {pid, Map.put(history, :factory_observations, observations)}
+          end)
+
+        Map.put(run, :native_history, historical)
     after
       0 -> raise "native query factory history was not captured"
     end

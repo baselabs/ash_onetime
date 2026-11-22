@@ -335,7 +335,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     debug =
       Map.new(owners, fn {pid, owner} ->
         root = owner.family.machines[pid]
-        {pid, %{value: expected_debug(root.debug, initial.debug_formatter), origin: root.debug_origin}}
+
+        {pid,
+         %{value: expected_debug(root.debug, initial.debug_formatter), origin: root.debug_origin}}
       end)
 
     initial = initial |> Map.put(:receipts, receipts) |> Map.put(:machine_debug, debug)
@@ -374,7 +376,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp worker_event(%{event: {_, :return_from, _, result}} = source, state),
-    do: state |> debug_return(source) |> active_option_return(source) |> worker_return(source, result)
+    do:
+      state
+      |> debug_return(source)
+      |> active_option_return(source)
+      |> worker_return(source, result)
 
   defp worker_event(_source, state), do: state
 
@@ -417,7 +423,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           |> Enum.sort_by(fn {path, _expected, _origin} -> List.wrap(path) end)
           |> Enum.reduce(state, fn {path, expected, origin}, state ->
             transform =
-              if path == debug_position, do: &observed_debug(&1, state), else: &Function.identity/1
+              if path == debug_position,
+                do: &observed_debug(&1, state),
+                else: &Function.identity/1
 
             program_term(state, source, [2, 2 | List.wrap(path)], expected, origin, transform)
           end)
@@ -594,8 +602,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       [%{kind: :handle_debug, debug: [{:log, log} | _]} = parent | _] ->
         item = {parent.event, parent.extra, state.debug_formatter}
 
-        {:ok,
-         %{parent | kind: :nlog_put, arguments: [item, log], result: advance_log(item, log)}}
+        {:ok, %{parent | kind: :nlog_put, arguments: [item, log], result: advance_log(item, log)}}
 
       _ ->
         :error
@@ -650,7 +657,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         queue = Map.fetch!(state.machine_queues, source.pid)
         {:ok, {:in, hd(queue.events), state.owners[source.pid].version.name}}
 
-      {:gen_statem, function, _} when function in [:loop_actions_reply, :do_reply_then_terminate] ->
+      {:gen_statem, function, _}
+      when function in [:loop_actions_reply, :do_reply_then_terminate] ->
         {from, reply} = context.reply
         {:ok, {:out, reply, from}}
 
@@ -691,7 +699,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp map_debug(debug, _formatter), do: debug
 
   defp debug_log([reverse | forward], formatter) when is_list(reverse),
-    do: [Enum.map(reverse, &debug_item(&1, formatter)) | Enum.map(forward, &debug_item(&1, formatter))]
+    do: [
+      Enum.map(reverse, &debug_item(&1, formatter))
+      | Enum.map(forward, &debug_item(&1, formatter))
+    ]
 
   defp debug_log([remaining | reverse], formatter) when is_integer(remaining),
     do: [remaining | Enum.map(reverse, &debug_item(&1, formatter))]

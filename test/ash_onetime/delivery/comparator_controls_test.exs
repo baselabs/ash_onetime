@@ -56,6 +56,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     error_flushed: [3],
     rollback_flushed: [3],
     reload_flushed: [4],
+    reload_spawn: [4],
+    reload_init: [4],
     ping_recv: [2, 3],
     activate: [1]
   }
@@ -71,6 +73,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     {:error_flushed, 4} => [1, 2],
     {:rollback_flushed, 4} => [1, 2],
     {:reload_flushed, 5} => [1, 2, 3],
+    {:reload_spawn, 5} => [1, 2, 3],
+    {:reload_init, 5} => [1, 2, 3],
     {:handle_msg, 3} => [1, 2],
     {:ping_recv, 4} => [1],
     {:redescribe, 6} => [1, 2, 3, 4],
@@ -673,6 +677,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
               :error_ready,
               :error_flushed,
               :rollback_flushed,
+              :reload_flushed,
+              :reload_spawn,
               :parse_describe_flush,
               :close_parse_describe_flush,
               :redescribe,
@@ -1132,7 +1138,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
           :result ->
             ComparatorMutants.with_owner_outputs(
-          Postgrex.Protocol,
+              Postgrex.Protocol,
               %{{:done, 2} => %{size: 2, position: 0, field: :num_rows}},
               &native_transactions/0
             )
@@ -1456,6 +1462,48 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  @tag :connection_streams
+  test "Connection streams: reload inputs retain parent, catalog and reference origins" do
+    targets = %{{:reload_spawn, 5} => [1, 2, 3], {:reload_init, 5} => [1, 2, 3]}
+
+    captured =
+      ComparatorMutants.with_owner_inputs(Postgrex.Protocol, targets, fn ->
+        native_query_factory(:composite_reload)
+      end)
+
+    assert captured.native.errors == []
+    assert captured.streams.errors == []
+    assert captured.decoders.errors == []
+
+    coordinates =
+      for %{event: {_, :call, {Postgrex.Protocol, function, arguments}}} = source <-
+            captured.events,
+          position <- Map.get(targets, {function, length(arguments)}, []) do
+        assert match?({:native_foreign_helper, _}, Enum.at(arguments, position))
+        {source.index, [2, 2, position]}
+      end
+
+    for {function, arity} <- Map.keys(targets) do
+      assert Enum.any?(captured.events, &(&1.mfa == {Postgrex.Protocol, function, arity}))
+    end
+
+    assert coordinates != []
+    states = native_copy_states(captured)
+    assert Enum.map(states.errors, & &1.rule) ==
+             List.duplicate(:state_helper_copy, length(coordinates))
+    assert Enum.map(states.errors, &{&1.index, &1.path}) == coordinates
+
+    for mutant <- [:stream_buffer_copy, :stream_state_copy, :stream_helper_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+      expected = if mutant == :stream_helper_copy, do: [], else: states.errors
+      assert checked.errors == expected
+    end
+
+    assert native_copy_states(captured).errors == states.errors
+    assert native_copy_states(native_query_factory(:composite_reload)).errors == []
+    IO.puts("CONNECTION_RELOAD_INPUTS: owning RED; sole catcher; exact restore; fresh GREEN")
+  end
+
   defp assert_query_factory_path(captured, shape)
        when shape in [:enum_reload, :composite_reload] do
     assert captured.run.result == :ok
@@ -1474,9 +1522,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert captured.run.result == :unsupported_type
 
     assert Enum.any?(captured.events, fn
-             %{event: {_, :return_from, {Postgrex.Protocol, :handle_prepare, 3},
-               {:disconnect, %Postgrex.QueryError{}, %Postgrex.Protocol{}}}} -> true
-             _ -> false
+             %{
+               event:
+                 {_, :return_from, {Postgrex.Protocol, :handle_prepare, 3},
+                  {:disconnect, %Postgrex.QueryError{}, %Postgrex.Protocol{}}}
+             } ->
+               true
+
+             _ ->
+               false
            end)
 
     assert Enum.any?(captured.events, fn
@@ -1693,9 +1747,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @tag :connection_streams
   test "Connection streams: notify factories retain their native code and empty environment" do
     captured =
-      ComparatorMutants.with_owner_outputs(Postgrex.Protocol, %{{:notify, 1} => %{kind: :factory}}, fn ->
-        cached_decoders(nil)
-      end)
+      ComparatorMutants.with_owner_outputs(
+        Postgrex.Protocol,
+        %{{:notify, 1} => %{kind: :factory}},
+        fn ->
+          cached_decoders(nil)
+        end
+      )
 
     corrupted =
       for %{event: {_, :return_from, {Postgrex.Protocol, :notify, 1}, callback}} = source <-
