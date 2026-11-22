@@ -143,10 +143,6 @@ jobs:
       - run: mix precommit
       - run: mix dialyzer
       - run: MIX_ENV='test' mix dialyzer
-        id: test-types
-      - name: Inspect the opaque contract after a type failure
-        if: failure() && steps.test-types.outcome == 'failure'
-        run: MIX_ENV='test' mix run --no-start scripts/opaque_contract_probe.exs
 
   tests:
     name: Test suite

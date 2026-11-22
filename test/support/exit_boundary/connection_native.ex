@@ -80,8 +80,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
             DBConnection.get_connection_metrics(pool)
             [row] = :ets.lookup(holder, :conn)
-            protocol = elem(row, 3)
-            send(observer, {tag, %{holder => %{protocol: protocol}}})
+            send(observer, {tag, %{holder => holder_fields(row)}})
             pool
           catch
             kind, reason ->
@@ -94,13 +93,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
             DBConnection.run(pool, fn %{pool_ref: pool_ref} ->
               {:idle, protocol} = DBConnection.Holder.handle(pool_ref, :handle_status, [], [])
 
-              stored =
-                if corruption == :state_copy,
-                  do: %{protocol | null: :foreign_native_null},
-                  else: protocol
-
-              :ok = DBConnection.Holder.put_state(pool_ref, stored)
-              :ok = DBConnection.Holder.put_state(pool_ref, protocol)
+              holder_action(pool_ref, protocol, corruption)
               :ok
             end)
           after
@@ -114,6 +107,72 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       {^tag, historical} -> Map.put(run, :native_history, historical)
     after
       0 -> raise "native holder state was not captured"
+    end
+  end
+
+  defp holder_fields(
+         {:conn, owner, Postgrex.Protocol, protocol, lock, clock, deadline, status}
+       ) do
+    {:gen_tcp, port} = protocol.sock
+    {:connected, port_owner} = Port.info(port, :connected)
+
+    %{
+      owner: owner,
+      port_owner: port_owner,
+      protocol: protocol,
+      lock: lock,
+      clock: clock,
+      deadline: deadline,
+      status: status
+    }
+  end
+
+  defp holder_action(pool_ref, protocol, {:committed_history, observer, token}) do
+    {:pool_ref, _, _, _, holder, _} = pool_ref
+
+    protocol =
+      case protocol do
+        %{buffer: :active_once} ->
+          {:ok, checked} = Postgrex.Protocol.checkout(protocol)
+          :ok = DBConnection.Holder.put_state(pool_ref, checked)
+          [row] = :ets.lookup(holder, :conn)
+          elem(row, 3)
+
+        %{buffer: buffer} when is_binary(buffer) ->
+          protocol
+      end
+
+    {:ok, active} = Postgrex.Protocol.checkin(protocol)
+    holder_barrier(observer, token, holder, :uncommitted_checkin)
+    :ok = DBConnection.Holder.put_state(pool_ref, active)
+    holder_barrier(observer, token, holder, :committed_checkin)
+
+    # Refresh the actual holder lookup before the next direct callback. The
+    # temporary callback return and the committed ETS row are separate origins.
+    [row] = :ets.lookup(holder, :conn)
+    {:ok, passive} = Postgrex.Protocol.checkout(elem(row, 3))
+    holder_barrier(observer, token, holder, :uncommitted_checkout)
+    :ok = DBConnection.Holder.put_state(pool_ref, passive)
+    holder_barrier(observer, token, holder, :committed_checkout)
+  end
+
+  defp holder_action(pool_ref, protocol, corruption) do
+    stored =
+      if corruption == :state_copy,
+        do: %{protocol | null: :foreign_native_null},
+        else: protocol
+
+    :ok = DBConnection.Holder.put_state(pool_ref, stored)
+    :ok = DBConnection.Holder.put_state(pool_ref, protocol)
+  end
+
+  defp holder_barrier(observer, token, holder, phase) do
+    send(observer, {:native_holder_cut, token, self(), holder, phase})
+
+    receive do
+      {:native_holder_cut, ^token, ^phase, :observed} -> :ok
+    after
+      5_000 -> raise "the native holder observer did not acknowledge its live read"
     end
   end
 

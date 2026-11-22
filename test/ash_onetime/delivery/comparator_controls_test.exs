@@ -2733,6 +2733,104 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_STATE_HOLDER_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
+  @tag :connection_streams
+  test "Connection streams: history cuts retain committed holder rows, not temporary outputs" do
+    parent = self()
+    token = make_ref()
+
+    {observer, monitor} =
+      spawn_monitor(fn ->
+        parent_monitor = Process.monitor(parent)
+        holder_observer(parent, token, parent_monitor)
+      end)
+
+    try do
+      {captured, states} = holder_states({:committed_history, observer, token})
+      assert states.errors == []
+
+      snapshots =
+        for phase <- [
+              :uncommitted_checkin,
+              :committed_checkin,
+              :uncommitted_checkout,
+              :committed_checkout
+            ],
+            into: %{} do
+          receive do
+            {:native_holder_snapshot, ^token, ^phase, holder, row} -> {phase, {holder, row}}
+          after
+            0 -> flunk("the independent observer did not retain every live holder row")
+          end
+        end
+
+      {_holder, before_checkin} = snapshots.uncommitted_checkin
+      {_holder, after_checkin} = snapshots.committed_checkin
+      {_holder, before_checkout} = snapshots.uncommitted_checkout
+      {_holder, after_checkout} = snapshots.committed_checkout
+      assert is_binary(elem(before_checkin, 3).buffer)
+      assert elem(after_checkin, 3).buffer == :active_once
+      assert elem(before_checkout, 3).buffer == :active_once
+      assert is_binary(elem(after_checkout, 3).buffer)
+
+      history? = Map.has_key?(states, :commits)
+      assert history?, "the native committed-history ledger is absent"
+      commits = Map.fetch!(states, :commits)
+
+      barriers =
+        Enum.filter(captured.events, fn
+          %{event: {_, :receive, {:native_holder_cut, ^token, _phase, :observed}}} -> true
+          _ -> false
+        end)
+
+      assert length(barriers) == map_size(snapshots)
+
+      for {phase, {holder, row}} <- snapshots do
+        [barrier] =
+          Enum.filter(barriers, fn
+            %{event: {_, :receive, {:native_holder_cut, ^token, ^phase, :observed}}} -> true
+            _ -> false
+          end)
+
+        committed =
+          commits
+          |> Enum.filter(&(&1.holder == holder and &1.index < barrier.index))
+          |> Enum.max_by(& &1.index, fn -> nil end)
+
+        assert committed, "every live-read cut needs its preceding committed holder row"
+        same_row? = committed.row === row
+        assert same_row?, "the cut must equal all eight fields of the independently read ETS row"
+      end
+    after
+      send(observer, :stop)
+
+      receive do
+        {:DOWN, ^monitor, :process, ^observer, reason} ->
+          stopped_normally? = reason === :normal
+          assert stopped_normally?, "the independent holder observer must stop normally"
+      after
+        5_000 ->
+          Process.exit(observer, :kill)
+          flunk("the native holder observer did not stop")
+      end
+    end
+  end
+
+  defp holder_observer(parent, token, parent_monitor) do
+    receive do
+      {:native_holder_cut, ^token, caller, holder, phase} ->
+        [row] = :ets.lookup(holder, :conn)
+        send(parent, {:native_holder_snapshot, token, phase, holder, row})
+        send(caller, {:native_holder_cut, token, phase, :observed})
+        holder_observer(parent, token, parent_monitor)
+
+      :stop ->
+        :ok
+
+      {:DOWN, ^parent_monitor, :process, ^parent, _reason} ->
+        :ok
+    end
+  end
+
   defp holder_states(corruption) do
     run = ConnectionNative.observe_holder(corruption)
     assert run.result == :ok
