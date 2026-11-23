@@ -1,9 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.Comparator do
   alias AshOnetime.Test.ExitBoundary.AttributeCopies
   alias AshOnetime.Test.ExitBoundary.ClockExpressions
-  alias AshOnetime.Test.ExitBoundary.ConnectionDecoders
-  alias AshOnetime.Test.ExitBoundary.ConnectionReads
-  alias AshOnetime.Test.ExitBoundary.ConnectionStates
+  alias AshOnetime.Test.ExitBoundary.ConnectionHistory
   alias AshOnetime.Test.ExitBoundary.ContextCopies
   alias AshOnetime.Test.ExitBoundary.DatabaseOrigins
   alias AshOnetime.Test.ExitBoundary.Declarations
@@ -11,7 +9,6 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   alias AshOnetime.Test.ExitBoundary.FailureTwins
   alias AshOnetime.Test.ExitBoundary.Hooks
   alias AshOnetime.Test.ExitBoundary.HostCall
-  alias AshOnetime.Test.ExitBoundary.NativeTransport
   alias AshOnetime.Test.ExitBoundary.Origins
   alias AshOnetime.Test.ExitBoundary.PathFrames
   alias AshOnetime.Test.ExitBoundary.PermittedTrace
@@ -42,25 +39,16 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
       # These indexes retain every captured event and the complete authoritative
       # baseline. No registry rule, scheduling move or OPEN interval has run.
-      ri = raw_index(run)
-      ti = raw_index(twin)
-      rc = connection_streams(ri, run.historical, run.run.initial_state)
-      tc = connection_streams(ti, twin.historical, twin.run.initial_state)
+      rc = ConnectionHistory.build(run)
+      tc = ConnectionHistory.build(twin)
 
       if rc.errors == [] and tc.errors == [] do
         matches = match_sides(run, twin, reference?, {rc, tc})
         compare_matched(matches, row, reference?, prior)
       else
-        raw_failure(ri, ti, rc, tc, prior)
+        raw_failure(rc.indexed, tc.indexed, rc, tc, prior)
       end
     end
-  end
-
-  defp raw_index(side) do
-    %{
-      events: Enum.with_index(side.run.events, &Map.put(&1, :index, &2)),
-      query_cache: side.historical.query_cache
-    }
   end
 
   defp raw_failure(ri, ti, rc, tc, prior) do
@@ -449,77 +437,6 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       clocks: state.clocks,
       connections: {rconnections, tconnections}
     }
-  end
-
-  defp connection_streams(indexed, historical, initial_state) do
-    native = NativeTransport.build(indexed, historical.connections)
-
-    # This labels exact frontend writes for statement ordinals only. It grants
-    # no event allowance. Backend ownership remains the protocol machine's exact
-    # request association; Readback must independently prove the complete call.
-    readback =
-      for write <- native.writes,
-          {AshOnetime.Store, :committed_completion, 2} in write.source.stack,
-          into: MapSet.new(),
-          do: write.command.index
-
-    reads = ConnectionReads.build(native, readback, historical.prepared_catalogs)
-
-    decoders =
-      ConnectionDecoders.build(
-        indexed,
-        native,
-        reads,
-        historical.connections,
-        historical.query_origins
-      )
-
-    states =
-      ConnectionStates.build(
-        indexed,
-        native,
-        decoders,
-        historical.connections,
-        {:initial, initial_state}
-      )
-
-    errors =
-      Enum.map(native.errors ++ reads.errors ++ decoders.errors ++ states.errors, fn
-        %{index: index} = error when is_integer(index) ->
-          error
-
-        error ->
-          connection = Map.fetch!(reads.connections, error.port)
-          offset = Map.get(error, :offset)
-
-          frame =
-            Enum.find(connection.framing.messages, &(&1.start == offset)) ||
-              List.last(connection.framing.messages)
-
-          index =
-            if frame do
-              frame.provenance |> Enum.map(& &1.index) |> Enum.max()
-            else
-              (native.writes ++ native.reads ++ native.active)
-              |> Enum.filter(&(&1.port == error.port))
-              |> Enum.sort_by(& &1.source.index)
-              |> List.last()
-              |> Map.fetch!(:source)
-              |> Map.fetch!(:index)
-            end
-
-          source = Enum.find(indexed.events, &(&1.index == index))
-
-          %{
-            index: index,
-            at: Map.take(source, [:mfa, :role, :stack]),
-            rule: error.rule,
-            actual: Map.get(error, :actual, Map.take(error, [:direction, :offset, :received])),
-            expected: Map.get(error, :expected, :complete_protocol_frame)
-          }
-      end)
-
-    %{native: native, reads: reads, decoders: decoders, states: states, errors: errors}
   end
 
   defp readback_backend_copies(state, ri, readback, checkpoint, reference?) do

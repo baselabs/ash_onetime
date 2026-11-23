@@ -2,6 +2,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   @moduledoc false
   use GenServer
 
+  alias AshOnetime.Test.ExitBoundary.ConnectionDecoders
+  alias AshOnetime.Test.ExitBoundary.ConnectionReads
+  alias AshOnetime.Test.ExitBoundary.ConnectionStates
+  alias AshOnetime.Test.ExitBoundary.NativeTransport
+
   import Postgrex.Messages,
     only: [msg_parameter_desc: 1, msg_row_desc: 1, msg_no_data: 0, row_field: 1]
 
@@ -15,6 +20,93 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       nil -> raise "the connection history observer was not started"
       pid -> GenServer.call(pid, :snapshot, 30_000)
     end
+  end
+
+  # Validate the complete capture before any origin pairing, scheduling move or
+  # interval selection. Every consuming control uses this same native history.
+  def build(side) do
+    indexed = %{
+      events: Enum.with_index(side.run.events, &Map.put(&1, :index, &2)),
+      query_cache: side.historical.query_cache
+    }
+
+    historical = side.historical
+    initial_state = side.run.initial_state
+    native = NativeTransport.build(indexed, historical.connections)
+
+    # This labels exact frontend writes for statement ordinals only. It grants
+    # no event allowance. Backend ownership remains the protocol machine's exact
+    # request association; Readback must independently prove the complete call.
+    readback =
+      for write <- native.writes,
+          {AshOnetime.Store, :committed_completion, 2} in write.source.stack,
+          into: MapSet.new(),
+          do: write.command.index
+
+    reads = ConnectionReads.build(native, readback, historical.prepared_catalogs)
+
+    decoders =
+      ConnectionDecoders.build(
+        indexed,
+        native,
+        reads,
+        historical.connections,
+        historical.query_origins
+      )
+
+    states =
+      ConnectionStates.build(
+        indexed,
+        native,
+        decoders,
+        historical.connections,
+        {:initial, initial_state}
+      )
+
+    errors =
+      Enum.map(native.errors ++ reads.errors ++ decoders.errors ++ states.errors, fn
+        %{index: index} = error when is_integer(index) ->
+          error
+
+        error ->
+          connection = Map.fetch!(reads.connections, error.port)
+          offset = Map.get(error, :offset)
+
+          frame =
+            Enum.find(connection.framing.messages, &(&1.start == offset)) ||
+              List.last(connection.framing.messages)
+
+          index =
+            if frame do
+              frame.provenance |> Enum.map(& &1.index) |> Enum.max()
+            else
+              (native.writes ++ native.reads ++ native.active)
+              |> Enum.filter(&(&1.port == error.port))
+              |> Enum.sort_by(& &1.source.index)
+              |> List.last()
+              |> Map.fetch!(:source)
+              |> Map.fetch!(:index)
+            end
+
+          source = Enum.find(indexed.events, &(&1.index == index))
+
+          %{
+            index: index,
+            at: Map.take(source, [:mfa, :role, :stack]),
+            rule: error.rule,
+            actual: Map.get(error, :actual, Map.take(error, [:direction, :offset, :received])),
+            expected: Map.get(error, :expected, :complete_protocol_frame)
+          }
+      end)
+
+    %{
+      indexed: indexed,
+      native: native,
+      reads: reads,
+      decoders: decoders,
+      states: states,
+      errors: errors
+    }
   end
 
   @impl true
