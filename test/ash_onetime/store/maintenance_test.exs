@@ -4005,7 +4005,8 @@ defmodule AshOnetime.Store.MaintenanceTest do
     rescue
       error in Postgrex.Error ->
         {:current_stacktrace, caller} = Process.info(self(), :current_stacktrace)
-        reraise error, __STACKTRACE__ ++ caller
+        owned = Enum.filter(caller, &match?({__MODULE__, :migrate_source!, 3, _}, &1))
+        reraise error, owned ++ __STACKTRACE__
     after
       Repo.put_dynamic_repo(previous)
       :code.purge(module)
@@ -4195,7 +4196,8 @@ defmodule AshOnetime.Store.MaintenanceTest do
       rescue
         error in Postgrex.Error ->
           {:current_stacktrace, caller} = Process.info(self(), :current_stacktrace)
-          reraise error, __STACKTRACE__ ++ caller
+          owned = Enum.filter(caller, &match?({__MODULE__, :with_upgrade, 2, _}, &1))
+          reraise error, owned ++ __STACKTRACE__
       end
 
       callback.()
