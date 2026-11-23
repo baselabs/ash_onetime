@@ -501,6 +501,8 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {DBConnection.Holder, :delete, 1},
         {DBConnection.Holder, :handle_ping, 1},
         {DBConnection.Connection, :ping, 2},
+        {DBConnection.Connection, :disconnect, 3},
+        {DBConnection.Connection, :stop, 3},
         {DBConnection.Connection, :handle_event, 4},
         {DBConnection.Connection, :pool_update, 2},
         {AshOnetime.Test.ExitBoundary.Scenarios, :allocation_checkpoint, 0},

@@ -4399,35 +4399,42 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
-  test "Connection streams: a native owner handoff has its own sole copy guard", context do
-    observe = fn -> native_renewal_observation(context, :idle_ping) end
-    {positive, historical, _, _, _, _} = observe.()
-    side = observation_side(context, positive, %{}, row!(:issue, :execute), historical)
-    assert ConnectionHistory.build(side).errors == []
+  for lifecycle <- [:idle_ping, :reconnect] do
+    @tag :connection_streams
+    test "Connection streams: a native #{lifecycle} owner handoff has its own sole copy guard",
+         context do
+      lifecycle = unquote(lifecycle)
+      kind = if lifecycle == :idle_ping, do: :ping, else: :disconnect
+      observe = fn -> native_renewal_observation(context, lifecycle) end
+      {positive, historical, _, _, _, _} = observe.()
+      side = observation_side(context, positive, %{}, row!(:issue, :execute), historical)
+      assert ConnectionHistory.build(side).errors == []
 
-    {corrupted, historical, _, _, _, _} =
-      ComparatorMutants.with_connection_owner_copy(observe)
+      {corrupted, historical, _, _, _, _} =
+        ComparatorMutants.with_connection_owner_copy(observe, kind)
 
-    side = observation_side(context, corrupted, %{}, row!(:issue, :execute), historical)
-    proof = ConnectionHistory.build(side)
-    assert proof.native.errors == []
-    assert proof.reads.errors == []
-    assert proof.decoders.errors == []
+      side = observation_side(context, corrupted, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
+      assert proof.native.errors == []
+      assert proof.reads.errors == []
+      assert proof.decoders.errors == []
 
-    assert [%{rule: :state_owner_copy, at: %{mfa: {DBConnection.Connection, :ping, 2}}}] =
-             proof.states.errors
+      arity = if kind == :ping, do: 2, else: 3
 
-    for mutant <- [:stream_owner_copy, :stream_state_copy, :stream_helper_copy] do
-      checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
-      expected = if mutant == :stream_owner_copy, do: [], else: proof.errors
-      assert checked.errors == expected
+      assert [%{rule: :state_owner_copy, at: %{mfa: {DBConnection.Connection, ^kind, ^arity}}}] =
+               proof.states.errors
+
+      for mutant <- [:stream_owner_copy, :stream_state_copy, :stream_helper_copy] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
+        expected = if mutant == :stream_owner_copy, do: [], else: proof.errors
+        assert checked.errors == expected
+      end
+
+      assert ConnectionHistory.build(side).errors == proof.errors
+      {restored, historical, _, _, _, _} = observe.()
+      side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+      assert ConnectionHistory.build(side).errors == []
     end
-
-    assert ConnectionHistory.build(side).errors == proof.errors
-    {restored, historical, _, _, _, _} = observe.()
-    side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
-    assert ConnectionHistory.build(side).errors == []
   end
 
   @tag :connection_streams

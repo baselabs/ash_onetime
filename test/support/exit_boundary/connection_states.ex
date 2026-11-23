@@ -835,7 +835,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     tag = elem(message, 0)
     holder = elem(message, 1)
 
-    case {tag, Map.get(state.holders, holder), Map.get(state.owner_machines, owner)} do
+    version = owner_handoff_version(state, source, holder, tag)
+
+    case {tag, version, Map.get(state.owner_machines, owner)} do
       {tag, version, machine}
       when tag in [:ping, :disconnect, :stop] and
              not is_nil(version) and not is_nil(machine) ->
@@ -864,6 +866,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         state
         |> put_in([:owner_messages, source.index], context)
         |> owner_protocol_copy(source, [2, 2, 1, tuple_size(message) - 1], version)
+        |> update_in([:lookups], &Map.delete(&1, source.pid))
 
       _ ->
         state
@@ -1274,7 +1277,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_public_copy(state, source, owner, holder, argument) do
-    case {state.holders[holder], state.holder_origins[holder]} do
+    {_module, kind, _arity} = source.mfa
+
+    case {owner_handoff_version(state, source, holder, kind), state.holder_origins[holder]} do
       {version, %{owner: expected}} when not is_nil(version) ->
         state
         |> exact(source, :state_owner_destination, owner, expected)
@@ -1282,6 +1287,28 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
       _ ->
         failure(state, source, :state_owner_public_origin)
+    end
+  end
+
+  # handle_done reads the last committed row, deletes the holder, then sends
+  # that row's Protocol to its owner. The lookup and successful deletion must
+  # belong to this same pool process; the cast consumes that lookup once.
+  defp owner_handoff_version(state, source, holder, kind) do
+    case state.holders[holder] do
+      nil when kind in [:disconnect, :stop] ->
+        with %{holder: ^holder, origin: {lookup, _path}} = version <- state.lookups[source.pid],
+             %{row: nil, index: deleted, origin: deletion} <-
+               Enum.find(state.commits, &(&1.holder == holder)),
+             %{source: %{pid: pid}} <- state.returns[deleted],
+             %{pool: ^pid} <- state.holder_origins[holder],
+             true <- pid == source.pid and lookup < deletion and deleted < source.index do
+          version
+        else
+          _ -> nil
+        end
+
+      version ->
+        version
     end
   end
 

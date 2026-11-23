@@ -2149,18 +2149,28 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   # Corrupt the actual public owner handoff, then undo that one private-field
-  # change on entry. The native ping, factory and captured events stay real.
-  def with_connection_owner_copy(callback) do
+  # change on entry. The native handoff, factory and captured events stay real.
+  def with_connection_owner_copy(callback, kind \\ :ping)
+      when kind in [:ping, :disconnect, :stop] do
     root = Path.join(Mix.Project.deps_path(), "db_connection/lib/db_connection")
 
     holder = [
-      {"      DBConnection.Connection.ping({conn, holder}, state)\n",
-       "      DBConnection.Connection.ping({conn, holder}, %{state | null: {:native_owner_copy, state.null}})\n"}
+      if kind == :ping do
+        {"      DBConnection.Connection.ping({conn, holder}, state)\n",
+         "      DBConnection.Connection.ping({conn, holder}, %{state | null: {:native_owner_copy, state.null}})\n"}
+      else
+        {"      stop.({pid, holder}, err, state)\n",
+         "      stop.({pid, holder}, err, %{state | null: {:native_owner_copy, state.null}})\n"}
+      end
     ]
 
+    arguments = if kind == :ping, do: "{pid, ref}, state", else: "{pid, ref}, err, state"
+    signature = "  def #{kind}(#{arguments}) do\n"
+
     connection = [
-      {"  def ping({pid, ref}, state) do\n",
-       "  def ping({pid, ref}, state) do\n    state = case state.null do\n      {:native_owner_copy, null} -> %{state | null: null}\n      _ -> state\n    end\n"}
+      {signature,
+       signature <>
+         "    state = case state.null do\n      {:native_owner_copy, null} -> %{state | null: null}\n      _ -> state\n    end\n"}
     ]
 
     with_source_owner(DBConnection.Holder, Path.join(root, "holder.ex"), holder, fn ->
