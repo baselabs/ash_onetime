@@ -34,7 +34,10 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
             {_, :call, {:ets, :insert_new, [_, {_, :cache, _, {id, query}}]}} ->
               if id in generated,
                 do: %{state | ids: Map.put(state.ids, statement(query), id)},
-                else: %{state | errors: [{source, id, :missing_unique_integer_origin} | state.errors]}
+                else: %{
+                  state
+                  | errors: [{source, id, :missing_unique_integer_origin} | state.errors]
+                }
 
             _ ->
               state

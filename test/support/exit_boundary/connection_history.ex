@@ -22,8 +22,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
     end
   end
 
-  # Validate the complete capture before any origin pairing, scheduling move or
-  # interval selection. Every consuming control uses this same native history.
+  # Build one authoritative history for the complete raw capture, before origin
+  # pairing, scheduling moves or interval selection.
   def build(side) do
     indexed = %{
       events: Enum.with_index(side.run.events, &Map.put(&1, :index, &2)),

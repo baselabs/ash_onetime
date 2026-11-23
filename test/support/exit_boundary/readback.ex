@@ -130,7 +130,13 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
             %{
               claimed: MapSet.new(),
               errors: [
-                %{at: at, rule: failure.rule, path: [], run: failure, twin: :committed_history_cut}
+                %{
+                  at: at,
+                  rule: failure.rule,
+                  path: [],
+                  run: failure,
+                  twin: :committed_history_cut
+                }
               ]
             }
         end

@@ -2881,6 +2881,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
               Repo.all(from(c in "pg_class", prefix: "pg_catalog", select: count(c.relname)))
 
               table_barrier(observer, token, tables, holders, :later)
+
+              SQL.query!(context.repo, "SELECT $1::int4 AS pending_cache_history", [29],
+                cache_statement: "pending_native_description"
+              )
+
               :ok
             end)
           end,
@@ -3051,6 +3056,27 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             described? = Enum.any?(connection.descriptors, &(&1.query === query))
 
             if not described? do
+              baseline? =
+                Enum.any?(historical.connections, fn {_holder, original} ->
+                  original.query_cache.table === table and
+                    Enum.any?(original.query_cache.rows, fn
+                      {_name, _ref, cached} -> cached === query
+                      _ -> false
+                    end)
+                end)
+
+              insertions =
+                for {_index, pair} <- native.pairs,
+                    {_, :call, {:ets, :insert, [^table, {_name, _ref, cached}]}} <-
+                      [pair.source.event],
+                    cached === query do
+                  %{
+                    index: pair.source.index,
+                    stack: Enum.take(pair.source.stack, 6),
+                    success?: elem(pair.returned.event, 3) === true
+                  }
+                end
+
               factories =
                 for {index, output} <- decoders.query_outputs,
                     output.query.ref === query.ref do
@@ -3064,7 +3090,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                     index: index,
                     input?: input?,
                     fields:
-                      for({field, value} <- Map.from_struct(query),
+                      for(
+                        {field, value} <- Map.from_struct(query),
                         Map.fetch!(output.query, field) !== value,
                         do: field
                       )
@@ -3078,7 +3105,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                     same_socket?: origin.sock === connection.protocol.sock,
                     same_types?: origin.query.types === connection.protocol.types,
                     fields:
-                      for({field, value} <- Map.from_struct(query),
+                      for(
+                        {field, value} <- Map.from_struct(query),
                         Map.fetch!(origin.query, field) !== value,
                         do: field
                       )
@@ -3087,7 +3115,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
               IO.puts(
                 "CONNECTION_CUT_DESCRIPTOR_ORIGINS: " <>
-                  Diagnostics.render(%{phase: phase, factories: factories, origins: origins})
+                  Diagnostics.render(%{
+                    phase: phase,
+                    baseline?: baseline?,
+                    insertions: insertions,
+                    factories: factories,
+                    origins: origins
+                  })
               )
             end
 
@@ -3095,6 +3129,31 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                    "the full cut must retain the committed cache row's native descriptor"
           end
         end
+      end
+
+      pending =
+        for read <- native.reads,
+            connection = Map.fetch!(reads.connections, read.port),
+            prefix =
+              connection.protocol.messages
+              |> Enum.filter(fn frame ->
+                Enum.all?(frame.provenance, &(&1.index < read.source.index))
+              end)
+              |> Enum.reduce(
+                ConnectionProtocol.new(Map.get(historical.prepared_catalogs, read.port, %{})),
+                fn frame, protocol -> ConnectionProtocol.push(protocol, frame) end
+              ),
+            Enum.any?(prefix.pending, fn operation ->
+              operation.kind == :describe_statement and
+                operation.context.sql == "SELECT $1::int4 AS pending_cache_history"
+            end),
+            do: read.source.index
+
+      assert pending != [], "the native prefix must await its inferred parameter description"
+
+      for before <- pending do
+        assert {:error, %{rule: :cut_pending_protocol, index: ^before}} =
+                 cut.(historical, proof, before)
       end
     after
       send(observer, :stop)

@@ -10,6 +10,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     Root,
     Scenarios
   }
+
   alias AshOnetime.Test.Repo
 
   @checkpoint {Scenarios, :allocation_checkpoint, 0}
