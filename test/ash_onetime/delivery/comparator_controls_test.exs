@@ -3454,6 +3454,31 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
         assert same_completion?,
                "retained partial bytes and the remaining real chunks must recover full framing"
+
+        side = observation_side(context, run, %{}, row!(:issue, :execute), checkpoint)
+        continued = %{side | run: %{run | events: Enum.drop(run.events, before)}}
+        resumed = ConnectionHistory.build(continued)
+
+        for error <- resumed.errors do
+          Diagnostics.emit(
+            "CONNECTION_PENDING_SUFFIX_FAILURE",
+            Map.take(error, [:index, :at, :rule, :path, :context])
+          )
+        end
+
+        assert resumed.errors == [],
+               "a cut inside the real decoder program must retain its pending native owners"
+
+        complete = Map.fetch!(reads.connections, port)
+        continued = Map.fetch!(resumed.reads.connections, port)
+
+        for direction <- [:frontend, :backend] do
+          same_coordinates? =
+            Map.take(continued.framing.directions[direction], [:offset, :received]) ===
+              Map.take(complete.framing.directions[direction], [:offset, :received])
+
+          assert same_coordinates?, "a pending continuation must preserve both physical directions"
+        end
       end
     after
       send(observer, :stop)
