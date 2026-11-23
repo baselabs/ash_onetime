@@ -476,7 +476,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
   defp option_scalar(name, value, tag, table, number, bytes) do
     type = {:enum, table}
-    enum = program(:prim_inet, :enum_val, [value, table], {:value, number})
+    enum = option_enum_program(value, table, number)
     lookup = program(:prim_inet, :type_opt_1, [name], type)
     lookup = program(:prim_inet, :type_opt, [:set, name], type, lookup)
     check = program(:prim_inet, :type_value_2, [type, value], true, enum)
@@ -494,6 +494,14 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       end)
 
     lookup ++ check ++ program(:prim_inet, :enc_opt, [name], tag) ++ encoded
+  end
+
+  defp option_enum_program(value, [{value, number} | _] = table, number),
+    do: program(:prim_inet, :enum_val, [value, table], {:value, number})
+
+  defp option_enum_program(value, [_head | rest] = table, number) do
+    child = option_enum_program(value, rest, number)
+    program(:prim_inet, :enum_val, [value, table], {:value, number}, child)
   end
 
   defp program(module, function, args, result, children \\ []) do
