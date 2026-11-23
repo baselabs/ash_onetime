@@ -89,28 +89,47 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
   end
 
   def observe(row, values, context) do
+    eligibility = checkpoint_eligibility(row)
+
     # The same fixture installation is reset between sides. SQL identifiers therefore
     # compare literally; tenant names never need a string substitution rule. The
     # twin is non-delivery Ash plus the registry's declared allocation checkpoint.
     {run, twin} =
       if Map.get(context, :run_first?, false) do
-        run = side(row, values, Withheld, context)
+        run = side(row, values, Withheld, context, eligibility)
         between(context, run)
-        {run, side(row, values, Returned, context)}
+        {run, side(row, values, Returned, context, eligibility)}
       else
-        twin = side(row, values, Returned, context)
+        twin = side(row, values, Returned, context, eligibility)
         between(context, twin)
-        {side(row, values, Withheld, context), twin}
+        {side(row, values, Withheld, context, eligibility), twin}
       end
 
     %{run: run, twin: twin, row: row}
+  end
+
+  defp checkpoint_eligibility(row) do
+    prior =
+      cond do
+        row.branch == :replay or row.fault == :codec_decode ->
+          Registry.allocation_checkpoint?(%{row | branch: :execute, fault: nil})
+
+        row.branch in [:recovered, :recovery_absent] ->
+          point = if row.branch == :recovered, do: :after_execute, else: :before_execute
+          Registry.allocation_checkpoint?(%{row | branch: :interrupted, fault: point})
+
+        true ->
+          nil
+      end
+
+    {Registry.allocation_checkpoint?(row), prior}
   end
 
   defp between(context, side) do
     if callback = Map.get(context, :between_sides), do: callback.(side)
   end
 
-  defp side(row, values, resource, context) do
+  defp side(row, values, resource, context, {allocation_checkpoint?, prior_checkpoint?}) do
     reset!(context.prefix)
 
     path =
@@ -121,7 +140,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
 
     record = seed_record(row, resource, context.prefix)
 
-    prior = prior(row, values, resource, path, record, context)
+    prior = prior(row, values, resource, path, record, context, prior_checkpoint?)
     if row.fault == :store_completion, do: completion_fault!(context.prefix, :install)
 
     try do
@@ -133,8 +152,6 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
       hooks = Hooks.reference(resource, row.action, row.type)
       canonical = Hooks.reference(Returned, row.action, row.type)
       historical = Historical.capture(context.prefix)
-      allocation_checkpoint? = Registry.allocation_checkpoint?(row)
-
       prepared = prepare_subject(row, resource, context, path, record)
       fixture_bindings = fixture_bindings(prepared)
 
@@ -167,6 +184,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
           Persisted.delta(before, Persisted.snapshot(context.prefix, Repo.get_dynamic_repo())),
         resource: resource,
         row: row,
+        allocation_checkpoint?: allocation_checkpoint?,
         values: values,
         protection: protection,
         prior: prior,
@@ -316,22 +334,22 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
     end
   end
 
-  defp prior(row, values, resource, path, record, context) do
+  defp prior(row, values, resource, path, record, context, eligibility) do
     cond do
       row.branch == :replay or row.fault == :codec_decode ->
         # The first call is itself observed. Identities and database values in a
         # replay are carried forward from that call, never inferred from its row.
-        side(%{row | branch: :execute, fault: nil}, values, resource, context)
+        side(%{row | branch: :execute, fault: nil}, values, resource, context, {eligibility, nil})
 
       row.branch in [:recovered, :recovery_absent] ->
-        interrupted(row, values, resource, path, record, context)
+        interrupted(row, values, resource, path, record, context, eligibility)
 
       true ->
         nil
     end
   end
 
-  defp interrupted(row, values, resource, path, record, context) do
+  defp interrupted(row, values, resource, path, record, context, allocation_checkpoint?) do
     before = Persisted.snapshot(context.prefix, Repo.get_dynamic_repo())
     historical = Historical.capture(context.prefix)
     point = if row.branch == :recovered, do: :after_execute, else: :before_execute
@@ -365,6 +383,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
       run: run,
       resource: resource,
       row: prior_row,
+      allocation_checkpoint?: allocation_checkpoint?,
       values: values,
       prefix: context.prefix,
       historical: historical,

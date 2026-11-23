@@ -6459,28 +6459,49 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         global: false
       )
 
-    row = row!(:issue, :execute)
-    assert Registry.allocation_checkpoint?(row)
+    rows =
+      Enum.filter(Scenarios.rows(), fn row ->
+        Registry.allocation_checkpoint?(row) or row.branch == :replay or row.fault == :codec_decode
+      end)
 
     Compiled.with_source(mutated, path, fn ->
-      pair = observe(context, row, Values.set()[:vd])
-      assert Search.hits(pair.run) == []
-
-      refute Enum.any?(
-               pair.run.run.events,
-               &match?(%{event: {_, :call, {AshOnetime.Store, :committed_completion, _}}}, &1)
-             )
-
-      assert Map.has_key?(pair.run, :readback_reference),
-             "a prescribed OPEN reference cannot disappear with the observed OPEN"
-
-      assert pair.run.allocation_checkpoint?
-      assert pair.run.readback_reference.run.result == :complete
-      assert pair.run.readback_reference.historical.repo == pair.run.historical.repo
-      refute Map.has_key?(pair.twin, :readback_reference)
+      for row <- rows do
+        pair = observe(context, row, Values.set()[:vd])
+        assert Search.hits(pair.run) == []
+        assert_open_reference_plan(pair)
+      end
     end)
 
     assert File.read!(path) === original
+  end
+
+  defp assert_open_reference_plan(pair) do
+    invocations =
+      if pair.run.prior,
+        do: [{pair.run.prior, pair.twin.prior}, {pair.run, pair.twin}],
+        else: [{pair.run, pair.twin}]
+
+    for {run, twin} <- invocations do
+      assert run.allocation_checkpoint? == Registry.allocation_checkpoint?(run.row)
+      assert twin.allocation_checkpoint? == run.allocation_checkpoint?
+
+      refute Enum.any?(
+               run.run.events,
+               &match?(%{event: {_, :call, {AshOnetime.Store, :committed_completion, _}}}, &1)
+             )
+
+      if run.allocation_checkpoint? do
+        assert Map.has_key?(run, :readback_reference),
+               "a prescribed OPEN reference cannot disappear with the observed OPEN"
+
+        assert run.readback_reference.run.result == :complete
+        assert run.readback_reference.historical.repo == run.historical.repo
+      else
+        refute Map.has_key?(run, :readback_reference)
+      end
+
+      refute Map.has_key?(twin, :readback_reference)
+    end
   end
 
   @tag :allocation_checkpoint

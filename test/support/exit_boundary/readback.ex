@@ -1,14 +1,14 @@
 defmodule AshOnetime.Test.ExitBoundary.Readback do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary
-  alias AshOnetime.Test.ExitBoundary.{Comparator, Historical, Origins}
+  alias AshOnetime.Test.ExitBoundary.{Comparator, Historical, Origins, Withheld}
   @root {AshOnetime.Store, :committed_completion, 2}
 
   # OPEN's read is checked against a second real, read-only execution with the
   # already-bound target and admission row. It has no delivery dictionary, producer
   # or delivered values. This is a reference computation over paired origins; its
   # complete trace is compared, including native calls and the SQL wire.
-  def prepare(side) do
+  def prepare(%{resource: Withheld, allocation_checkpoint?: true} = side) do
     target =
       Enum.find_value(side.run.events, fn
         %{event: {_, :call, {AshOnetime.Store, function, [target | _]}}}
@@ -33,16 +33,11 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
           nil
       end)
 
-    if target && claim &&
-         Enum.any?(
-           side.run.events,
-           &match?(%{event: {_, :call, {AshOnetime.Store, :committed_completion, _}}}, &1)
-         ) do
-      Map.put(side, :readback_reference, capture(side, %{target: target, c_admit: claim}))
-    else
-      side
-    end
+    unless target && claim, do: raise("the prescribed OPEN reference has no admission origins")
+    Map.put(side, :readback_reference, capture(side, %{target: target, c_admit: claim}))
   end
+
+  def prepare(side), do: side
 
   defp capture(side, bound) do
     historical = Historical.capture(side.prefix)
@@ -59,7 +54,7 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
     %{run: run, historical: historical}
   end
 
-  def check(side, indexed, bound) do
+  def check(%{allocation_checkpoint?: true} = side, indexed, bound) do
     side = Map.put(side, :bound, bound)
 
     case interval(indexed.events) do
@@ -70,6 +65,10 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
         check_interval(side, bound, observed)
     end
   end
+
+  # An undeclared OPEN stays in the ordinary comparison. It cannot create its
+  # own reference computation or acquire any claimed events.
+  def check(_side, _indexed, _bound), do: %{claimed: MapSet.new(), errors: []}
 
   defp check_interval(side, bound, observed) do
     start =
@@ -85,7 +84,7 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
   end
 
   defp compare_interval(side, bound, observed, checkpoint) do
-    prepared = Map.get_lazy(side, :readback_reference, fn -> capture(side, bound) end)
+    prepared = Map.fetch!(side, :readback_reference)
     historical = prepared.historical
     reference = prepared.run
     reference_events = reference.events |> origins_for_interval(side) |> interval()
