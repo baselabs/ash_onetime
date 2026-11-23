@@ -414,6 +414,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:history_reload) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_history.ex",
+        original:
+          "  def owner_loaded(Postgrex.Protocol) do\n    case Process.whereis(__MODULE__) do\n      nil -> :ok\n      owner -> GenServer.call(owner, :owner_loaded)\n    end\n  end\n",
+        mutated: "  def owner_loaded(Postgrex.Protocol), do: :ok\n"
+      }
+    ]
+  end
+
   def edits(:stream_tls_binding) do
     [
       %{
@@ -1265,12 +1276,14 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     try do
       if sticky?, do: true = :code.unstick_mod(module)
       {:module, ^module} = :code.load_binary(module, path, mutant)
+      :ok = AshOnetime.Test.ExitBoundary.ConnectionHistory.owner_loaded(module)
       Compiled.with_object(module, mutant, callback)
     after
       try do
         true = :code.soft_purge(module)
         {:module, ^module} = :code.load_binary(module, path, original)
         true = :code.soft_purge(module)
+        :ok = AshOnetime.Test.ExitBoundary.ConnectionHistory.owner_loaded(module)
         {^module, ^original, ^path} = :code.get_object_code(module)
       after
         if sticky?, do: true = :code.stick_mod(module)
@@ -2060,12 +2073,14 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     try do
       modules = Code.compile_string(mutant, path)
       {Postgrex.Protocol, binary} = List.keyfind(modules, Postgrex.Protocol, 0)
+      :ok = AshOnetime.Test.ExitBoundary.ConnectionHistory.owner_loaded(Postgrex.Protocol)
       Compiled.with_object(Postgrex.Protocol, binary, callback)
     after
       try do
         true = :code.soft_purge(Postgrex.Protocol)
         {:module, Postgrex.Protocol} = :code.load_binary(Postgrex.Protocol, beam_path, original)
         true = :code.soft_purge(Postgrex.Protocol)
+        :ok = AshOnetime.Test.ExitBoundary.ConnectionHistory.owner_loaded(Postgrex.Protocol)
         {Postgrex.Protocol, ^original, ^beam_path} = :code.get_object_code(Postgrex.Protocol)
 
         unless File.read!(path) === source,

@@ -10,6 +10,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   import Postgrex.Messages,
     only: [msg_parameter_desc: 1, msg_row_desc: 1, msg_no_data: 0, row_field: 1]
 
+  @native_functions [
+    handle_prepare: 3,
+    handle_prepare_execute: 4,
+    recv_parse_describe: 4,
+    redescribe: 6,
+    msg_recv: 3,
+    msg_recv: 4
+  ]
+
   # Start before the fixture opens its pools. Only successful native prepare
   # returns and their own server descriptions can create a historical descriptor.
   # Opaque decoder types are retained as the Query their owner returned.
@@ -25,6 +34,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   def traced?(pid), do: GenServer.call(__MODULE__, {:traced, pid})
 
   def function_coverage, do: GenServer.call(__MODULE__, :function_coverage)
+
+  # Loading native owner code clears that code's local trace breakpoints. The
+  # owner loaders rearm this same session before any query uses the new code.
+  # Standalone native peers do not run the fixture application or this history.
+  def owner_loaded(Postgrex.Protocol) do
+    case Process.whereis(__MODULE__) do
+      nil -> :ok
+      owner -> GenServer.call(owner, :owner_loaded)
+    end
+  end
+
+  def owner_loaded(_module), do: :ok
 
   # Build one authoritative history for the complete raw capture, before origin
   # pairing, scheduling moves or interval selection.
@@ -119,20 +140,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
     Code.ensure_loaded!(Postgrex.Protocol)
     session = :trace.session_create(:ash_onetime_connection_history, self(), [])
 
-    for function <- [
-          :handle_prepare,
-          :handle_prepare_execute,
-          :recv_parse_describe,
-          :redescribe,
-          :msg_recv
-        ] do
-      :trace.function(
-        session,
-        {Postgrex.Protocol, function, :_},
-        [{:_, [], [{:exception_trace}]}],
-        [:local]
-      )
-    end
+    trace_functions(session)
 
     flags = [:call, :procs, :strict_monotonic_timestamp]
     :trace.process(session, :new, true, flags)
@@ -142,23 +150,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
      %{session: session, events: [], frames: %{}, origins: %{}, preparations: %{}, waiting: %{}}}
   end
 
+  defp trace_functions(session) do
+    for {function, arity} <- @native_functions do
+      :trace.function(
+        session,
+        {Postgrex.Protocol, function, arity},
+        [{:_, [], [{:exception_trace}]}],
+        [:local]
+      )
+    end
+
+    :ok
+  end
+
   @impl true
+  def handle_call(:owner_loaded, _from, state) do
+    :ok = trace_functions(state.session)
+    {:reply, :ok, state}
+  end
+
   def handle_call(:function_coverage, _from, state) do
     coverage =
-      Enum.map(
-        [
-          handle_prepare: 3,
-          handle_prepare_execute: 4,
-          recv_parse_describe: 4,
-          redescribe: 6,
-          msg_recv: 3,
-          msg_recv: 4
-        ],
-        fn {function, arity} ->
-          mfa = {Postgrex.Protocol, function, arity}
-          %{mfa: mfa, traced?: :trace.info(state.session, mfa, :traced) == {:traced, :local}}
-        end
-      )
+      Enum.map(@native_functions, fn {function, arity} ->
+        mfa = {Postgrex.Protocol, function, arity}
+        %{mfa: mfa, traced?: :trace.info(state.session, mfa, :traced) == {:traced, :local}}
+      end)
 
     {:reply, coverage, state}
   end

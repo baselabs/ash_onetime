@@ -453,6 +453,52 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :connection_streams
   @tag prepare: :named, pool_size: 1
+  test "Connection streams: native owner replacement preserves historical observation", context do
+    before = native_history_query(context, "history_before_reload")
+    assert Enum.all?(before.coverage, & &1.traced?)
+    assert before.descriptors != []
+
+    rejected =
+      ComparatorMutants.with_mutant(:history_reload, fn ->
+        ComparatorMutants.with_postgrex_mutant(:send_buffer_copy, fn ->
+          native_history_query(context, "history_unobserved_reload")
+        end)
+      end)
+
+    refute Enum.all?(rejected.coverage, & &1.traced?)
+    assert rejected.descriptors == []
+
+    for {loader, active, restored} <- [
+          {&ComparatorMutants.with_postgrex_mutant(:send_buffer_copy, &1),
+           "history_source_reload", "history_source_restored"},
+          {&ComparatorMutants.with_postgrex_repeated_decoder(:message, &1),
+           "history_object_reload", "history_object_restored"}
+        ] do
+      observed = loader.(fn -> native_history_query(context, active) end)
+      assert Enum.all?(observed.coverage, & &1.traced?)
+      assert observed.descriptors != []
+      after_restore = native_history_query(context, restored)
+      assert Enum.all?(after_restore.coverage, & &1.traced?)
+      assert after_restore.descriptors != []
+    end
+  end
+
+  defp native_history_query(context, name) do
+    sql = "SELECT $1::int4 AS " <> name
+    assert %{rows: [[17]]} = SQL.query!(context.repo, sql, [17], cache_statement: name)
+    historical = Historical.capture(context.prefix)
+
+    descriptors =
+      for {_holder, connection} <- historical.connections,
+          origin <- connection.descriptors,
+          IO.iodata_to_binary(origin.query.statement) == sql,
+          do: origin
+
+    %{coverage: ConnectionHistory.function_coverage(), descriptors: descriptors}
+  end
+
+  @tag :connection_streams
+  @tag prepare: :named, pool_size: 1
   test "Connection streams: main snapshots retain native prepared catalogs and descriptors",
        context do
     Repo.put_dynamic_repo(context.repo)

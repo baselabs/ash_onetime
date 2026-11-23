@@ -27,6 +27,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
         {^module, beam, _original} = List.keyfind(modules, module, 0)
         File.write!(beam, binary)
         {:module, ^module} = :code.load_binary(module, beam, binary)
+        :ok = AshOnetime.Test.ExitBoundary.ConnectionHistory.owner_loaded(module)
       end
 
       callback.()
@@ -35,6 +36,7 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
         for {module, beam, binary} <- modules do
           File.write!(beam, binary)
           {:module, ^module} = :code.load_binary(module, beam, binary)
+          :ok = AshOnetime.Test.ExitBoundary.ConnectionHistory.owner_loaded(module)
           unless File.read!(beam) === binary, do: raise("BEAM restoration failed")
         end
       after
