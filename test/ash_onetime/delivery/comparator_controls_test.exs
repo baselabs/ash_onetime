@@ -4146,7 +4146,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           {:data_column, _, _, _, _, _, _, 23, _, value} <- columns,
           do: {request, value}
 
-    assert rows == [{0, 17}, {1, 29}]
+    assert rows == [{0, "17"}, {1, "29"}]
 
     rejected =
       ComparatorMutants.with_mutant(:stream_request_owner, fn ->
@@ -4206,7 +4206,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           {:data_column, _, _, _, _, _, _, 23, _, value} <- columns,
           do: value
 
-    assert rows == [17, 29]
+    assert rows == ["17", "29"]
 
     native_indexes =
       (native.writes ++ native.reads ++ native.options ++ native.active ++ native.passive)
