@@ -3407,6 +3407,23 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         same_framing? = retained === prefix
         assert same_framing?, "the cut must retain the complete directional framing prefix"
 
+        decoder =
+          decoders.versions
+          |> Enum.filter(&(&1.port == port and &1.index < before))
+          |> List.last()
+
+        assert decoder, "a partial native frame needs its own earlier decoder cursor"
+
+        same_coordinates? =
+          decoder.cursor.offset + byte_size(decoder.cursor.buffer) ==
+            prefix.directions.backend.received
+
+        assert same_coordinates?, "framing and decoder cursors must use the same byte coordinates"
+        decoder_cut? = Map.has_key?(checkpoint, :connection_decoders)
+        assert decoder_cut?, "the cut must retain each physical decoder's actual cursor"
+        same_cursor? = Map.fetch!(checkpoint.connection_decoders, port) === decoder.cursor
+        assert same_cursor?, "the cut cannot restart its decoder at byte zero"
+
         resumed =
           chunks
           |> Enum.filter(&(&1.port == port and &1.index >= before))
