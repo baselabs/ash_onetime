@@ -4240,7 +4240,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              "a native holder renewal must retain its owner origin before cutting"
 
       allocation_side = Map.put(side, :connection_history, proof)
-      [lease] = Allocation.leases(allocation_side, Origins.build(allocation_side))
+      [initial_lease, lease] = Allocation.leases(allocation_side, Origins.build(allocation_side))
+      assert initial_lease.holder == original
+      assert initial_lease.owner == historical.connections[original].owner
+      assert initial_lease.port == historical.connections[original].port
+      assert is_integer(initial_lease.checkin) and is_integer(initial_lease.giveaway)
       assert lease.holder == renewed
       assert lease.owner == historical.connections[original].owner
       assert lease.port == proof.states.holder_origins[renewed].port
@@ -4639,9 +4643,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             try do
               %{rows: [[17]]} = Postgrex.query!(pool, "SELECT 17::int4 AS holder_renewal", [])
 
-              {:ok, pool_ref, Postgrex.Protocol, _checkin, _protocol} =
-                DBConnection.Holder.checkout(pool, [self()], [])
-
               historical = Historical.capture(context.prefix)
 
               [{holder, connection}] =
@@ -4654,8 +4655,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
               %{
                 dynamic_repo: dynamic_repo,
                 pool: pool,
-                owner: connection.owner,
-                pool_ref: pool_ref
+                owner: connection.owner
               }
             catch
               kind, reason ->
@@ -4663,8 +4663,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                 :erlang.raise(kind, reason, __STACKTRACE__)
             end
           end,
-          fn %{dynamic_repo: dynamic_repo, pool: pool, owner: owner, pool_ref: pool_ref} ->
+          fn %{dynamic_repo: dynamic_repo, pool: pool, owner: owner} ->
             try do
+              {:ok, pool_ref, Postgrex.Protocol, _checkin, _protocol} =
+                DBConnection.Holder.checkout(pool, [self()], [])
+
               send(observer, {:native_holder_factory_watch, token, self(), owner})
 
               receive do

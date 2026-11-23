@@ -280,6 +280,8 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
           %{
             service: elem(binding.callback, 0),
             request: service_request_kind(receipt.message),
+            shape: service_message_shape(receipt.message),
+            native_calls: service_receipt_calls(state.events, receipt),
             registered?: receipt.registered?,
             callback:
               case receipt.called do
@@ -311,6 +313,40 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   defp service_request_kind({:EXIT, _pid, _reason}), do: :linked_exit
   defp service_request_kind({:timeout, _ref, _message}), do: :timer_expiration
   defp service_request_kind(_message), do: :info
+
+  defp service_message_shape(message) when is_tuple(message),
+    do: {:tuple, tuple_size(message), Enum.map(Tuple.to_list(message), &service_field_kind/1)}
+
+  defp service_message_shape(message), do: service_field_kind(message)
+
+  defp service_field_kind(value) when is_atom(value), do: :atom
+  defp service_field_kind(value) when is_reference(value), do: :reference
+  defp service_field_kind(value) when is_pid(value), do: :pid
+  defp service_field_kind(value) when is_port(value), do: :port
+  defp service_field_kind(value) when is_tuple(value), do: {:tuple, tuple_size(value)}
+  defp service_field_kind(value) when is_list(value), do: :list
+  defp service_field_kind(value) when is_binary(value), do: :binary
+  defp service_field_kind(_value), do: :other
+
+  # A failed drain reports only code coordinates around mailbox ingress. Neither
+  # a private message nor a native call's arguments enter the diagnostic.
+  defp service_receipt_calls(events, receipt) do
+    events
+    |> Enum.filter(fn {_stamp, event} -> elem(event, 0) == receipt.pid end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.with_index(fn {stamp, event}, index -> %{stamp: stamp, event: event, index: index} end)
+    |> NativeTransport.pairs()
+    |> Map.values()
+    |> Enum.filter(fn pair ->
+      pair.source.stamp < receipt.received_stamp and
+        receipt.received_stamp < pair.returned.stamp
+    end)
+    |> Enum.sort_by(& &1.source.stamp)
+    |> Enum.map(fn pair ->
+      {module, function, arguments} = elem(pair.source.event, 2)
+      %{mfa: {module, function, length(arguments)}, index: pair.source.index}
+    end)
+  end
 
   defp service_request_tag(kind, request) do
     tag = if is_tuple(request) and tuple_size(request) > 0, do: elem(request, 0), else: request
