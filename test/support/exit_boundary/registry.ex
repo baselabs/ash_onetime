@@ -588,6 +588,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {DynamicSupervisor, :monitor_child, 1},
         {DynamicSupervisor, :terminate_children, 2},
         {DynamicSupervisor, :wait_child, 4},
+        {:gen, :call, 4},
         {Registry, :register, 3},
         {Postgrex.SCRAM, :negotiate_channel_binding, 3},
         {Postgrex.SCRAM, :client_first, 1},

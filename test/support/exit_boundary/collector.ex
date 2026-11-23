@@ -701,7 +701,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   defp service_program_event(state, {_, :return_from, {module, function, _arity}, _})
        when (module == :erlang and function in [:demonitor, :spawn_opt]) or
               (module == :proc_lib and function in [:sync_start, :init_ack]) or
-              (module == :gen_server and function == :call) or
+              (module == :gen and function == :call) or
               (module == DynamicSupervisor and
                  function in [:monitor_child, :terminate_children]) do
     Map.update!(state, :service_program_generation, &(&1 + 1))
@@ -878,11 +878,11 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     pid = receipt.pid
 
     matches =
-      for pair <- service_calls(context, pid, :gen_server, :call),
-          {^pid, :call, {:gen_server, :call, [destination, request, _timeout]}} <-
+      for pair <- service_calls(context, pid, :gen, :call),
+          {^pid, :call, {:gen, :call, [destination, :"$gen_call", request, _timeout]}} <-
             [pair.source.event],
           pair.returned.event ===
-            {pid, :return_from, {:gen_server, :call, 3}, result},
+            {pid, :return_from, {:gen, :call, 4}, {:ok, result}},
           pair.source.stamp < receipt.received_stamp,
           receipt.received_stamp < pair.returned.stamp,
           monitor <- service_calls(context, pid, :erlang, :monitor),

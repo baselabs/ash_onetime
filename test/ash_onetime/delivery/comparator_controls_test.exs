@@ -4668,6 +4668,28 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert run.result == :ok
     assert run.initial_state == :ok
 
+    replies =
+      for receipt <- run.snapshot.service_receipts,
+          run.snapshot.services[receipt.pid].name == DBConnection.Watcher,
+          %{kind: :gen_call_reply} <- [Map.get(receipt, :native_program)],
+          do: receipt
+
+    assert length(replies) == 2
+
+    for receipt <- replies do
+      assert is_nil(receipt.called) and is_nil(receipt.returned)
+      assert {_, :call, {:gen, :call, [_, :"$gen_call", _, _]}} = receipt.native_program.source
+      assert receipt.native_program.source_stamp < receipt.received_stamp
+      assert receipt.received_stamp < receipt.native_program.returned_stamp
+    end
+
+    ComparatorMutants.with_mutant(:stream_service_gen_call_reply, fn ->
+      assert_raise ExUnit.AssertionError, &ConnectionNative.observe_pool_startup/0
+    end)
+
+    run = ConnectionNative.observe_pool_startup()
+    assert run.result == :ok
+
     owners =
       for %{event: {pid, :call, {DBConnection.Connection, :init, [_]}}} <- run.events,
           uniq: true,
