@@ -107,8 +107,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
     emit(state, frame, {:startup, 196_608, fields}, nil)
   end
 
-  defp frontend(%{tag: ?p} = frame,
-                %{startup: %{phase: phase} = startup} = state)
+  defp frontend(
+         %{tag: ?p} = frame,
+         %{startup: %{phase: phase} = startup} = state
+       )
        when phase in [:password, :sasl_initial, :sasl_response] do
     startup =
       if phase == :sasl_initial do
@@ -219,28 +221,35 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
   defp frontend(frame, state),
     do: fail(state, frame, :frontend_message, frame.tag, :declared_frontend_protocol)
 
-  defp backend(%{tag: ?R, payload: <<code::32, data::binary>>} = frame,
-               %{startup: startup} = state) do
+  defp backend(
+         %{tag: ?R, payload: <<code::32, data::binary>>} = frame,
+         %{startup: startup} = state
+       ) do
     case authentication(startup, code, data) do
       {:ok, startup} ->
         state = Map.put(state, :startup, startup)
         emit(state, frame, {:exact_payload, ?R, frame.payload}, nil)
 
-      :error -> fail(state, frame, :startup_authentication, code, :declared_authentication_step)
+      :error ->
+        fail(state, frame, :startup_authentication, code, :declared_authentication_step)
     end
   end
 
-  defp backend(%{tag: ?K, payload: <<backend::signed-32, key::signed-32>>} = frame,
-               %{startup: %{phase: :authenticated} = startup} = state)
+  defp backend(
+         %{tag: ?K, payload: <<backend::signed-32, key::signed-32>>} = frame,
+         %{startup: %{phase: :authenticated} = startup} = state
+       )
        when not is_map_key(startup, :identity) do
     startup = Map.put(startup, :identity, {backend, key})
     state = Map.put(state, :startup, startup)
     emit(state, frame, {:backend_key, backend, key}, nil)
   end
 
-  defp backend(%{tag: ?Z, payload: <<?I>>} = frame,
-               %{startup: %{phase: :authenticated} = startup,
-                 pending: [%{kind: :startup} = operation]} = state) do
+  defp backend(
+         %{tag: ?Z, payload: <<?I>>} = frame,
+         %{startup: %{phase: :authenticated} = startup, pending: [%{kind: :startup} = operation]} =
+           state
+       ) do
     true = Map.has_key?(startup, :identity)
     state = %{state | startup: %{startup | phase: :ready}, pending: []}
     emit(state, frame, {:exact_payload, ?Z, frame.payload}, nil, operation)
@@ -350,12 +359,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
   defp authentication(_startup, _code, _data), do: :error
 
   defp sasl_mechanisms(<<0>>), do: []
+
   defp sasl_mechanisms(data) do
     {mechanism, rest} = string(data)
     [mechanism | sasl_mechanisms(rest)]
   end
 
   defp startup_parameters(<<0>>), do: []
+
   defp startup_parameters(data) do
     {name, rest} = string(data)
     {value, rest} = string(rest)

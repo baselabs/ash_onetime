@@ -153,8 +153,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     :loop_done
   ]
   @owner_loop_next @owner_loop_current --
-                     [:loop, :loop_hibernate, :loop_wakeup, :loop_msg, :loop_msg_event,
-                      :loop_event, :loop_t0q, :loop_done]
+                     [
+                       :loop,
+                       :loop_hibernate,
+                       :loop_wakeup,
+                       :loop_msg,
+                       :loop_msg_event,
+                       :loop_event,
+                       :loop_t0q,
+                       :loop_done
+                     ]
 
   # An owner version is a native return, or the pre-observation holder state.
   # Copies must bind to that version before a buffer can leave exact comparison.
@@ -187,9 +195,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       holders: holders,
       holder_origins: Map.get(indexed, :connection_holder_origins, historical),
       owner_machines: machines,
-      owner_commits: Enum.map(machines, fn {owner, machine} ->
-        %{owner: owner, index: -1, machine: machine}
-      end),
+      owner_commits:
+        Enum.map(machines, fn {owner, machine} ->
+          %{owner: owner, index: -1, machine: machine}
+        end),
       owner_pending: %{},
       owner_messages: %{},
       owner_received: %{},
@@ -220,7 +229,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       type_services: native_type_services(native.pairs),
       service_queues: %{},
       service_current: %{},
-      events: indexed.events,
+      events: Map.get(indexed, :connection_program_events, indexed.events),
       reload_spawns: %{},
       reload_children: %{},
       versions: Map.values(holders),
@@ -237,6 +246,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       fixture: fixture
     }
 
+    initial = Map.merge(initial, Map.get(indexed, :connection_state_program, %{}))
+    continuation = %{initial: initial, events: indexed.events}
+
     state = Enum.reduce(indexed.events, initial, &event/2)
     state = unbound_copies(state, indexed)
 
@@ -250,8 +262,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       copies: Enum.reverse(state.copies),
       buffers: Enum.reverse(state.buffers),
       terms: Enum.reverse(state.terms),
+      continuation: continuation,
       errors: Enum.reverse(state.errors)
     }
+  end
+
+  def checkpoint(%{continuation: input}, before) do
+    input.events
+    |> Enum.take_while(&(&1.index < before))
+    |> Enum.reduce(input.initial, &event/2)
+    |> Map.drop([:native, :events, :pairs, :returns, :decoders, :fixture, :type_services])
   end
 
   defp initial_tables(indexed, historical) do
@@ -309,40 +329,62 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_event(
-         %{event: {_, :call, {DBConnection.Connection, :ping, [{owner, holder}, _protocol]}}} = source,
+         %{event: {_, :call, {DBConnection.Connection, :ping, [{owner, holder}, _protocol]}}} =
+           source,
          state
        ),
        do: owner_public_copy(state, source, owner, holder, 1)
 
   defp owner_event(
-         %{event: {_, :call, {DBConnection.Connection, function,
-                            [{owner, holder}, _error, _protocol]}}} = source,
+         %{
+           event:
+             {_, :call, {DBConnection.Connection, function, [{owner, holder}, _error, _protocol]}}
+         } = source,
          state
-       ) when function in [:disconnect, :stop],
+       )
+       when function in [:disconnect, :stop],
        do: owner_public_copy(state, source, owner, holder, 2)
 
   defp owner_event(
          %{event: {_, :call, {:gen_statem, :cast, [owner, message]}}} = source,
          state
-       ) when is_tuple(message) and tuple_size(message) in [3, 4] do
+       )
+       when is_tuple(message) and tuple_size(message) in [3, 4] do
     tag = elem(message, 0)
     holder = elem(message, 1)
 
     case {tag, Map.get(state.holders, holder), Map.get(state.owner_machines, owner)} do
-      {tag, version, machine} when tag in [:ping, :disconnect, :stop] and
-                                  not is_nil(version) and not is_nil(machine) ->
+      {tag, version, machine}
+      when tag in [:ping, :disconnect, :stop] and
+             not is_nil(version) and not is_nil(machine) ->
         expected = put_elem(message, tuple_size(message) - 1, version.protocol)
-        state = exact(state, source, :state_owner_destination, owner, state.holder_origins[holder].owner)
+
+        state =
+          exact(
+            state,
+            source,
+            :state_owner_destination,
+            owner,
+            state.holder_origins[holder].owner
+          )
+
         state = exact(state, source, :state_owner_message, message, expected)
         pair = Map.fetch!(state.pairs, source.index)
-        context = %{source: source, returned: pair.returned, owner: owner, version: version,
-                    message: expected}
+
+        context = %{
+          source: source,
+          returned: pair.returned,
+          owner: owner,
+          version: version,
+          message: expected
+        }
 
         state
         |> put_in([:owner_messages, source.index], context)
         |> owner_protocol_copy(source, [2, 2, 1, tuple_size(message) - 1], version)
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
@@ -356,7 +398,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       |> Enum.find(&(elem(&1.message, 1) === elem(message, 1)))
 
     case context do
-      nil -> state
+      nil ->
+        state
+
       context ->
         state
         |> exact(source, :state_owner_message, message, context.message)
@@ -378,7 +422,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          state
        ) do
     case Map.get(state.owner_machines, source.pid) do
-      nil -> state
+      nil ->
+        state
+
       machine ->
         state = exact(state, source, :state_owner_machine, Enum.at(arguments, 3), machine.data)
         state = owner_protocol_copy(state, source, [2, 2, 3, :state], machine.version)
@@ -390,7 +436,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
             |> exact(source, :state_owner_message, message, expected)
             |> owner_protocol_copy(source, [2, 2, 1, tuple_size(message) - 1], version)
 
-          _ -> state
+          _ ->
+            state
         end
     end
   end
@@ -407,18 +454,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         |> owner_protocol_copy(source, [2, 2, 0], version)
         |> owner_protocol_copy(source, [2, 2, 1, :state], machine.version)
 
-      _ -> failure(state, source, :state_owner_update_origin)
+      _ ->
+        failure(state, source, :state_owner_update_origin)
     end
   end
 
   defp owner_event(
          %{event: {_, :call, {DBConnection.Holder, function, arguments}}} = source,
          state
-       ) when function in [:new, :update] and length(arguments) == 5 do
+       )
+       when function in [:new, :update] and length(arguments) == 5 do
     case {state.owner_machines[source.pid], state.completed[source.pid]} do
       {machine, version} when not is_nil(machine) and not is_nil(version) ->
-        expected = [machine.data.pool, machine.data.tag, Postgrex.Protocol, version.protocol,
-                    machine.data.connected_at]
+        expected = [
+          machine.data.pool,
+          machine.data.tag,
+          Postgrex.Protocol,
+          version.protocol,
+          machine.data.connected_at
+        ]
+
         state = exact(state, source, :state_holder_factory, arguments, expected)
         state = owner_protocol_copy(state, source, [2, 2, 3], version)
 
@@ -429,22 +484,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           state
         end
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
   defp owner_event(%{event: {_, :return_from, {:ets, :new, 2}, holder}} = source, state) do
     case {state.owner_factories[source.pid], pair_returned(state, source)} do
       {%{holder: nil} = factory, %{source: call}} ->
-        expected = {source.pid, :call,
-                    {:ets, :new, [DBConnection.Holder,
-                                 [:public, :ordered_set, decentralized_counters: true]]}}
+        expected =
+          {source.pid, :call,
+           {:ets, :new,
+            [DBConnection.Holder, [:public, :ordered_set, decentralized_counters: true]]}}
 
         state
         |> exact(source, :state_holder_factory_table, call.event, expected)
         |> put_in([:owner_factories, source.pid], %{factory | holder: holder})
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
@@ -457,7 +515,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         expected = {:heir, machine.data.pool, machine.data.tag}
         exact(state, source, :state_holder_factory_heir, options, expected)
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
@@ -481,13 +540,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           %{returned: %{event: {_, :return_from, _, value}}} ->
             state
             |> exact(source, :state_holder_factory_pool, pool, machine.data.pool)
-            |> exact(source, :state_holder_factory_checkin, message,
-                     {:checkin, machine.data.tag, value})
+            |> exact(
+              source,
+              :state_holder_factory_checkin,
+              message,
+              {:checkin, machine.data.tag, value}
+            )
 
-          _ -> failure(state, source, :state_holder_factory_clock_origin)
+          _ ->
+            failure(state, source, :state_holder_factory_clock_origin)
         end
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
@@ -507,14 +572,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
        ) do
     case state.owner_factories[source.pid] do
       %{holder: ^holder, machine: machine, version: version} ->
-        expected = {:conn, source.pid, Postgrex.Protocol, version.protocol, nil,
-                    machine.data.connected_at, nil, :ok}
+        expected =
+          {:conn, source.pid, Postgrex.Protocol, version.protocol, nil, machine.data.connected_at,
+           nil, :ok}
 
         state
         |> exact(source, :state_holder_factory_row, row, expected)
         |> owner_protocol_copy(source, [2, 2, 1, 3], version)
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
@@ -527,17 +594,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
        %{source: %{event: {_, :call, {:ets, :insert_new, [holder, _row]}}}}} ->
         version = %{version | holder: holder}
         previous = Map.fetch!(state.holder_origins, machine.version.holder)
+
         origin =
-          %{previous | owner: source.pid, pool: machine.data.pool,
-                       protocol: version.protocol,
-                       owner_machine: {machine.name, machine.data}}
+          %{
+            previous
+            | owner: source.pid,
+              pool: machine.data.pool,
+              protocol: version.protocol,
+              owner_machine: {machine.name, machine.data}
+          }
           |> Map.put(:holder_origin_index, source.index)
 
         state
         |> put_in([:holders, holder], version)
         |> put_in([:holder_origins, holder], origin)
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
@@ -558,7 +631,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         |> put_in([:owner_pending, source.pid], pending)
         |> put_in([:owner_results, source.pid], expected)
 
-      _ -> failure(state, source, :state_owner_result_origin)
+      _ ->
+        failure(state, source, :state_owner_result_origin)
     end
   end
 
@@ -567,7 +641,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          state
        ) do
     case state.owner_pending[source.pid] do
-      nil -> state
+      nil ->
+        state
+
       pending ->
         state
         |> exact(source, :state_owner_result, result, state.owner_results[source.pid])
@@ -597,7 +673,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         |> exact(source, :state_owner_destination, owner, expected)
         |> owner_protocol_copy(source, [2, 2, argument], version)
 
-      _ -> failure(state, source, :state_owner_public_origin)
+      _ ->
+        failure(state, source, :state_owner_public_origin)
     end
   end
 
@@ -605,7 +682,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     {state, machine} =
       if function == :loop_done do
         case Map.pop(state.owner_pending, source.pid) do
-          {nil, _pending} -> {state, machine}
+          {nil, _pending} ->
+            {state, machine}
+
           {next, pending} ->
             state = %{state | owner_pending: pending}
             commit = %{owner: source.pid, index: source.index, machine: next}
@@ -627,14 +706,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         function in [:reply_then_terminate, :do_reply_then_terminate, :terminate] ->
           owner_protocol_copy(state, source, [2, 2, 5, 1, 1, :state], machine.version)
 
-        true -> state
+        true ->
+          state
       end
 
     state =
       if function in @owner_loop_next do
         version =
           if function in [:loop_state_callback, :loop_state_callback_result],
-            do: machine.version, else: next.version
+            do: machine.version,
+            else: next.version
 
         owner_protocol_copy(state, source, [2, 2, 4, 1, :state], version)
       else
@@ -653,16 +734,33 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp owner_loop_message(state, source, function) do
     case state.owner_received[source.pid] do
-      nil -> state
+      nil ->
+        state
+
       context ->
-        base = case function do
-          function when function in [:loop_msg, :loop_msg_event] -> [2, 2, 3, 1]
-          function when function in [:loop_event, :loop_state_callback, :loop_state_callback_result,
-                                    :loop_actions, :loop_actions_list, :loop_actions_reply,
-                                    :loop_actions_next_event, :loop_state_enter, :loop_state_change,
-                                    :loop_state_transition] -> [2, 2, 3, 0, 1]
-          _ -> nil
-        end
+        base =
+          case function do
+            function when function in [:loop_msg, :loop_msg_event] ->
+              [2, 2, 3, 1]
+
+            function
+            when function in [
+                   :loop_event,
+                   :loop_state_callback,
+                   :loop_state_callback_result,
+                   :loop_actions,
+                   :loop_actions_list,
+                   :loop_actions_reply,
+                   :loop_actions_next_event,
+                   :loop_state_enter,
+                   :loop_state_change,
+                   :loop_state_transition
+                 ] ->
+              [2, 2, 3, 0, 1]
+
+            _ ->
+              nil
+          end
 
         state =
           if base do
@@ -673,8 +771,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           end
 
         if source.mfa == {:gen_statem, :loop_state_callback, 11} do
-          owner_protocol_copy(state, source,
-            [2, 2, 10, 1, tuple_size(context.message) - 1], context.version)
+          owner_protocol_copy(
+            state,
+            source,
+            [2, 2, 10, 1, tuple_size(context.message) - 1],
+            context.version
+          )
         else
           state
         end
@@ -682,27 +784,44 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_message_program(state, source) do
-    context = Enum.find_value(state.owner_messages, fn {_index, context} ->
-      if source.pid == context.source.pid and source.index > context.source.index and
-           source.index < context.returned.index, do: context
-    end)
+    context =
+      Enum.find_value(state.owner_messages, fn {_index, context} ->
+        if source.pid == context.source.pid and source.index > context.source.index and
+             source.index < context.returned.index,
+           do: context
+      end)
 
     case {context, source.event} do
-      {nil, _} -> state
+      {nil, _} ->
+        state
+
       {context, {_, :call, {module, :send, [_owner, _message]}}}
       when module in [:gen_statem, :erlang] ->
-        owner_protocol_copy(state, source,
-          [2, 2, 1, 1, tuple_size(context.message) - 1], context.version)
+        owner_protocol_copy(
+          state,
+          source,
+          [2, 2, 1, 1, tuple_size(context.message) - 1],
+          context.version
+        )
 
       {context, {_, :send, _message, _owner}} ->
-        owner_protocol_copy(state, source,
-          [2, 1, tuple_size(context.message) - 1], context.version)
+        owner_protocol_copy(
+          state,
+          source,
+          [2, 1, tuple_size(context.message) - 1],
+          context.version
+        )
 
       {context, {_, :return_from, {:erlang, :send, 2}, _message}} ->
-        owner_protocol_copy(state, source,
-          [3, 1, tuple_size(context.message) - 1], context.version)
+        owner_protocol_copy(
+          state,
+          source,
+          [3, 1, tuple_size(context.message) - 1],
+          context.version
+        )
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
@@ -715,13 +834,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_term(value, []), do: value
-  defp owner_term(value, [key | path]) when is_tuple(value) and is_integer(key) and
-                                          key >= 0 and key < tuple_size(value),
-    do: owner_term(elem(value, key), path)
+
+  defp owner_term(value, [key | path])
+       when is_tuple(value) and is_integer(key) and
+              key >= 0 and key < tuple_size(value),
+       do: owner_term(elem(value, key), path)
+
   defp owner_term(value, [key | path]) when is_list(value) and is_integer(key),
     do: owner_term(Enum.at(value, key), path)
+
   defp owner_term(value, [key | path]) when is_map(value),
     do: owner_term(Map.get(value, key), path)
+
   defp owner_term(_value, _path), do: :missing_native_owner_term
 
   # Callback returns can be valid temporary versions without ever reaching ETS.

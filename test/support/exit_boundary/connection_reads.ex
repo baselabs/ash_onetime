@@ -11,28 +11,35 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     {cancellations, cancellation_errors} = cancellations(native)
     writes = for write <- native.writes, do: {write.command.index, :write, write}
     requests = for read <- native.reads, do: {read.source.index, :request, read}
-    replies = for read <- native.reads, do: {read.returned.index, :reply, read}
+    replies = for read <- native.reads, do: {read.delivered.index, :reply, read}
     active = for delivery <- native.active, do: {delivery.delivered.index, :active, delivery}
+
+    initial = %{
+      connections: %{},
+      errors: cancellation_errors,
+      demands: [],
+      versions: [],
+      readback: readback,
+      protocols: protocols,
+      framing: Map.get(native, :connection_framing, %{}),
+      cancellations: cancellations,
+      startups: startups(native, cancellations),
+      pings: ping_calls(native),
+      historical: Map.get(native, :historical, %{})
+    }
+
+    connections = Map.new(protocols, fn {port, _protocol} ->
+      {port, initial_connection(initial, port)}
+    end)
+
+    initial = %{initial | connections: connections}
+    before = Map.get(native, :event_offset, 0)
 
     state =
       (writes ++ requests ++ replies ++ active)
+      |> Enum.filter(fn {index, _kind, _instance} -> index >= before end)
       |> Enum.sort_by(&elem(&1, 0))
-      |> Enum.reduce(
-        %{
-          connections: %{},
-          errors: cancellation_errors,
-          demands: [],
-          versions: [],
-          readback: readback,
-          protocols: protocols,
-          framing: Map.get(native, :connection_framing, %{}),
-          cancellations: cancellations,
-          startups: startups(native, cancellations),
-          pings: ping_calls(native),
-          historical: Map.get(native, :historical, %{})
-        },
-        &event/2
-      )
+      |> Enum.reduce(initial, &event/2)
 
     connections =
       Map.new(state.connections, fn {port, connection} -> {port, finish(connection)} end)
@@ -138,10 +145,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
           connection = %{connection | protocol: protocol}
 
           version = %{
-            index: read.returned.index,
+            index: read.delivered.index,
             port: read.port,
             framing: connection.framing,
-            protocol: protocol
+            protocol: retained_protocol(connection)
           }
 
           state
@@ -253,11 +260,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       end)
 
     connection = %{connection | framing: framing, protocol: protocol}
-    version = %{index: chunk.index, port: port, framing: framing, protocol: protocol}
+    version = %{index: chunk.index, port: port, framing: framing,
+                protocol: retained_protocol(connection)}
 
     state
     |> put_in([:connections, port], connection)
     |> Map.update!(:versions, &[version | &1])
+  end
+
+  defp retained_protocol(connection) do
+    messages = connection.protocol.messages ++ Enum.reverse(Map.get(connection, :historical_messages, []))
+    %{connection.protocol | messages: messages}
   end
 
   defp connection(state, port) do
@@ -307,8 +320,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
         {_, :return_from, _, {:ok, port}} <- [pair.returned.event],
         not is_map_key(cancellations, port),
         into: %{},
-        do: {port, %{source: pair.source.index, opened: pair.returned.index,
-                     pid: pair.source.pid, port: port}}
+        do:
+          {port,
+           %{
+             source: pair.source.index,
+             opened: pair.returned.index,
+             pid: pair.source.pid,
+             port: port
+           }}
   end
 
   # CancelRequest is a startup-format exchange on its own socket. Its authority

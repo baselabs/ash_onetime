@@ -399,17 +399,24 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   # operation from a mismatch in the successful native program.
   defp option_failure_context(state, source) do
     case Map.get(state.pairs, source.index) do
-      nil -> %{outer: :missing_native_return}
+      nil ->
+        %{outer: :missing_native_return}
+
       pair ->
         controls =
           for {_index, nested} <- state.pairs,
               nested.source.pid == source.pid,
               nested.source.index > source.index,
               nested.returned.index < pair.returned.index,
-              nested.source.mfa in [{:erlang, :port_control, 3},
-                                    {:erts_internal, :port_control, 3}],
-              do: %{index: nested.source.index, mfa: nested.source.mfa,
-                    result: native_result_kind(return_value(nested))}
+              nested.source.mfa in [
+                {:erlang, :port_control, 3},
+                {:erts_internal, :port_control, 3}
+              ],
+              do: %{
+                index: nested.source.index,
+                mfa: nested.source.mfa,
+                result: native_result_kind(return_value(nested))
+              }
 
         %{outer: native_result_kind(return_value(pair)), controls: controls}
     end

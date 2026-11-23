@@ -3135,7 +3135,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       cut? = function_exported?(Historical, :cut, 3)
       assert cut?, "the full committed connection-history cut is absent"
       cut = Function.capture(Historical, :cut, 3)
-      proof = %{native: native, reads: reads, decoders: decoders, states: states}
+      proof = %{
+        native: native,
+        reads: reads,
+        decoders: decoders,
+        states: states,
+        native_roots: historical.connections,
+        program_events: events
+      }
 
       writes =
         for {_index, pair} <- native.pairs,
@@ -3455,9 +3462,17 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert same_completion?,
                "retained partial bytes and the remaining real chunks must recover full framing"
 
+        assert map_size(checkpoint.connection_decoder_program.executing) > 0,
+               "the real partial cut must retain the Query that owns its row decoder"
+
+        assert Enum.any?(checkpoint.connection_state_program.frames, fn {_pid, frames} ->
+                 frames != []
+               end),
+               "the real partial cut must retain its still-executing owner frames"
+
         side = observation_side(context, run, %{}, row!(:issue, :execute), checkpoint)
-        continued = %{side | run: %{run | events: Enum.drop(run.events, before)}}
-        resumed = ConnectionHistory.build(continued)
+        continued_side = %{side | run: %{run | events: Enum.drop(run.events, before)}}
+        resumed = ConnectionHistory.build(continued_side)
 
         for error <- resumed.errors do
           Diagnostics.emit(
@@ -3468,6 +3483,25 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
         assert resumed.errors == [],
                "a cut inside the real decoder program must retain its pending native owners"
+
+        rejected =
+          ComparatorMutants.with_mutant(:stream_pending_program, fn ->
+            ConnectionHistory.build(continued_side)
+          end)
+
+        assert rejected.native.errors == []
+        assert rejected.reads.errors == []
+        assert Enum.any?(rejected.decoders.errors, &(&1.rule == :decoder_protocol))
+        assert ConnectionHistory.build(continued_side).errors == []
+
+        original_cursor =
+          decoders.versions |> Enum.filter(&(&1.port == port)) |> List.last()
+
+        resumed_cursor =
+          resumed.decoders.versions |> Enum.filter(&(&1.port == port)) |> List.last()
+
+        assert Map.take(resumed_cursor.cursor, [:offset, :buffer, :rows, :types]) ===
+                 Map.take(original_cursor.cursor, [:offset, :buffer, :rows, :types])
 
         complete = Map.fetch!(reads.connections, port)
         continued = Map.fetch!(resumed.reads.connections, port)
@@ -3690,7 +3724,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       )
 
     corrupted_events = Enum.with_index(corrupted.events, &Map.put(&1, :index, &2))
-    corrupted_native = NativeTransport.build(%{events: corrupted_events}, corrupted.native_history)
+
+    corrupted_native =
+      NativeTransport.build(%{events: corrupted_events}, corrupted.native_history)
+
     assert corrupted_native.errors == []
     corrupted_reads = ConnectionReads.build(corrupted_native)
     assert corrupted_reads.errors == []
@@ -3785,8 +3822,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert reads.errors == []
 
         assert Enum.any?(reads.connections, fn
-                 {_port, %{protocol: %{startup: %{phase: :ready, identity: {_backend, _key}}}}} -> true
-                 _ -> false
+                 {_port, %{protocol: %{startup: %{phase: :ready, identity: {_backend, _key}}}}} ->
+                   true
+
+                 _ ->
+                   false
                end)
       end
     end

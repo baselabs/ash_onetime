@@ -40,10 +40,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       replay_sends: MapSet.new(),
       replay_receives: MapSet.new(),
       errors: [],
-      events: indexed.events,
+      events: Map.get(indexed, :connection_program_events, indexed.events),
       pairs: native.pairs,
+      returns: Map.new(native.pairs, fn {index, pair} -> {pair.returned.index, index} end),
       streams: streams.connections
     }
+
+    saved = Map.get(indexed, :connection_decoder_program, %{})
+    observations = Map.merge(Map.get(saved, :factory_observations, %{}), initial.factory_observations)
+    initial = initial |> Map.merge(saved) |> Map.put(:factory_observations, observations)
+    continuation = %{initial: initial, events: indexed.events, replies: replies}
 
     state = Enum.reduce(indexed.events, initial, &event(&1, &2, replies))
     state = decoder_programs(state)
@@ -62,8 +68,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
         Map.new(historical, fn {pid, history} -> {pid, Map.get(history, :reload_factory)} end),
       protocol_copies: protocol_copies(indexed, historical),
       replays: Enum.reverse(state.replays),
+      continuation: continuation,
       errors: Enum.reverse(state.errors)
     }
+  end
+
+  # Retain the actual reducer state before the cut, including open decoder
+  # calls and their independently computed results. Native return terms and
+  # the next capture's pair index are supplied only when those returns arrive.
+  def checkpoint(%{continuation: input}, before) do
+    input.events
+    |> Enum.take_while(&(&1.index < before))
+    |> Enum.reduce(input.initial, &event(&1, &2, input.replies))
+    |> Map.drop([:native, :events, :pairs, :returns, :streams, :programs])
   end
 
   # Every direct event stays in this index, including arrivals and events that
@@ -1020,18 +1037,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   defp cached_query_origin(_state, _call), do: nil
 
   defp commit_cursor(source, state) do
-    case Map.pop(state.pending_cursors, source.index) do
+    call = Map.get(state.returns, source.index)
+
+    case Map.pop(state.pending_cursors, call) do
       {nil, _pending} ->
         state
 
-      {%{port: port, cursor: cursor, returned_buffer: buffer}, pending} ->
+      {%{port: port, cursor: cursor, returned_buffer: buffer, instance: instance}, pending} ->
         version = %{index: source.index, port: port, cursor: cursor, returned_buffer: buffer}
+        pair = Map.fetch!(state.pairs, call)
+        consumed = instance.stop - instance.start
+        remaining = byte_size(instance.tail)
+        copies = buffer_copies(pair, consumed, remaining, instance.expected)
+        instance = Map.merge(instance, %{returned: source, copies: copies})
 
         state
+        |> exact(pair.source, :decoder_result, returned(pair), instance.expected)
         |> Map.put(:pending_cursors, pending)
         |> put_in([:cursors, port], cursor)
         |> Map.update!(:versions, &[version | &1])
         |> Map.update!(:timeline, &[Map.put(version, :kind, :decoder_return) | &1])
+        |> Map.update!(:instances, &[instance | &1])
     end
   end
 
@@ -1318,7 +1344,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
   defp validate_result(pair, port, cursor, :message, state) do
     {expected, consumed} = message_result(cursor.buffer)
-    state = exact(state, pair.source, :decoder_result, returned(pair), expected)
     retain(state, pair, port, cursor, consumed, cursor.rows, expected)
   end
 
@@ -1337,16 +1362,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     expected =
       Postgrex.Types.decode_rows(cursor.buffer, expected_types, cursor.rows, cursor.types)
 
-    state = exact(state, pair.source, :decoder_result, returned(pair), expected)
     {rest, rows} = row_result(expected)
     consumed = byte_size(cursor.buffer) - byte_size(IO.iodata_to_binary(rest))
     state = retain(state, pair, port, cursor, consumed, rows, expected)
-    [instance | rest] = state.instances
-
-    %{
-      state
-      | instances: [Map.put(instance, :descriptor, Map.take(origin, [:index, :path])) | rest]
-    }
+    update_in(state.pending_cursors[pair.source.index].instance,
+      &Map.put(&1, :descriptor, Map.take(origin, [:index, :path])))
   end
 
   defp message_result(<<tag, size::signed-32, bytes::binary>> = buffer)
@@ -1403,14 +1423,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     instance = %{
       port: port,
       source: pair.source,
-      returned: pair.returned,
       start: cursor.offset,
       stop: cursor.offset + consumed,
       input: cursor.buffer,
       tail: rest,
       provenance: provenance,
-      expected: expected,
-      copies: buffer_copies(pair, consumed, remaining, expected)
+      expected: expected
     }
 
     offset = cursor.offset + consumed
@@ -1426,9 +1444,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
         {:more, _required} -> cursor.buffer
       end
 
-    pending = %{port: port, cursor: cursor, returned_buffer: returned_buffer}
-    state = put_in(state.pending_cursors[pair.returned.index], pending)
-    %{state | instances: [instance | state.instances]}
+    pending = %{port: port, cursor: cursor, returned_buffer: returned_buffer, instance: instance}
+    put_in(state.pending_cursors[pair.source.index], pending)
   end
 
   defp buffer_copies(pair, consumed, remaining, expected) do

@@ -2,6 +2,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
   alias AshOnetime.Test.ExitBoundary.ConnectionDecoders
   alias AshOnetime.Test.ExitBoundary.ConnectionHistory
   alias AshOnetime.Test.ExitBoundary.ConnectionProtocol
+  alias AshOnetime.Test.ExitBoundary.ConnectionStates
   alias AshOnetime.Test.ExitBoundary.ConnectionTls
   alias AshOnetime.Test.ExitBoundary.NativeTransport
   alias AshOnetime.Test.Repo
@@ -240,14 +241,28 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
     }
 
     checkpoint =
-      Map.put(checkpoint, :connection_owners,
-        Map.new(for {owner, %{machine: machine}} <- owners, machine != nil, do: {owner, machine}))
+      Map.put(
+        checkpoint,
+        :connection_owners,
+        Map.new(for {owner, %{machine: machine}} <- owners, machine != nil, do: {owner, machine})
+      )
 
     checkpoint =
-      Map.put(checkpoint, :connection_holder_origins,
+      Map.put(
+        checkpoint,
+        :connection_holder_origins,
         Map.filter(proof.states.holder_origins, fn {_holder, origin} ->
           Map.get(origin, :holder_origin_index, -1) < before
-        end))
+        end)
+      )
+
+    checkpoint =
+      checkpoint
+      |> Map.put(:connection_native_roots, proof.native_roots)
+      |> Map.put(:connection_program_events,
+        Enum.take_while(proof.program_events, &(&1.index < before)))
+      |> Map.put(:connection_decoder_program, ConnectionDecoders.checkpoint(proof.decoders, before))
+      |> Map.put(:connection_state_program, ConnectionStates.checkpoint(proof.states, before))
 
     {:ok, Map.put(checkpoint, :event_offset, before)}
   end

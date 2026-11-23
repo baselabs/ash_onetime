@@ -479,6 +479,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_pending_program) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_decoders.ex",
+        original: "    saved = Map.get(indexed, :connection_decoder_program, %{})\n",
+        mutated: "    saved = %{}\n"
+      }
+    ]
+  end
+
   def edits(:stream_state_holder_update) do
     [
       %{
@@ -2121,8 +2131,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   defp postgrex_edits(:cancel_owner_copy) do
     [
-      {"    terminate(s)\n",
-       "    terminate(%{s | null: {:native_cancel_copy, s.null}})\n"}
+      {"    terminate(s)\n", "    terminate(%{s | null: {:native_cancel_copy, s.null}})\n"}
     ]
   end
 

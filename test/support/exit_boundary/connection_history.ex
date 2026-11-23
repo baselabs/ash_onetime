@@ -61,14 +61,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       query_cache: historical.query_cache,
       connection_decoders: historical.connection_decoders,
       connection_owners: Map.get(historical, :connection_owners, %{}),
-      connection_holder_origins: Map.get(historical, :connection_holder_origins, historical.connections)
+      connection_holder_origins:
+        Map.get(historical, :connection_holder_origins, historical.connections),
+      connection_decoder_program: Map.get(historical, :connection_decoder_program, %{}),
+      connection_state_program: Map.get(historical, :connection_state_program, %{})
     }
+
+    program_events = Map.get(historical, :connection_program_events, []) ++ indexed.events
+    indexed = Map.put(indexed, :connection_program_events, program_events)
+    program = %{indexed | events: program_events}
+    roots = Map.get(historical, :connection_native_roots, historical.connections)
 
     initial_state = side.run.initial_state
 
     native =
-      indexed
-      |> native_history(historical.connections, side.run.tls_bindings || [])
+      program
+      |> native_history(roots, side.run.tls_bindings || [])
+      |> Map.put(:historical, historical.connections)
+      |> Map.put(:event_offset, Map.get(historical, :event_offset, 0))
       |> Map.put(:connection_framing, historical.connection_framing)
 
     # This labels exact frontend writes for statement ordinals only. It grants
@@ -125,7 +135,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
               |> Map.fetch!(:index)
             end
 
-          source = Enum.find(indexed.events, &(&1.index == index))
+          source = Enum.find(program_events, &(&1.index == index))
 
           %{
             index: index,
@@ -138,6 +148,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
 
     %{
       indexed: indexed,
+      program_events: program_events,
+      native_roots: roots,
       native: native,
       reads: reads,
       decoders: decoders,
