@@ -27,6 +27,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
           protocols: protocols,
           framing: Map.get(native, :connection_framing, %{}),
           cancellations: cancellations,
+          startups: startups(native, cancellations),
           pings: ping_calls(native),
           historical: Map.get(native, :historical, %{})
         },
@@ -276,16 +277,38 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
   end
 
   defp initial_connection(state, port) do
-    protocol = Map.get(state.protocols, port, ConnectionProtocol.new())
+    startup = Map.get(state.startups, port)
+
+    {framing, protocol} =
+      if startup do
+        {Wire.frame_state(:connection_startup), ConnectionProtocol.startup(startup)}
+      else
+        {Wire.frame_state(), ConnectionProtocol.new()}
+      end
+
+    protocol = Map.get(state.protocols, port, protocol)
 
     %{
-      framing: Map.get(state.framing, port, Wire.frame_state()),
+      framing: Map.get(state.framing, port, framing),
       # A cut may have outstanding frontend operations. Retain their request
       # ownership, portals and counters; only this capture's emitted messages
       # start empty. Earlier messages remain in the retained history.
       protocol: %{protocol | messages: []},
       historical_messages: Enum.reverse(protocol.messages)
     }
+  end
+
+  # A successful native connect inside Postgrex's connection constructor owns
+  # the startup exchange. No read or checked Protocol return supplies this root.
+  defp startups(native, cancellations) do
+    for {_index, pair} <- native.pairs,
+        pair.source.mfa == {:gen_tcp, :connect, 4},
+        {Postgrex.Protocol, :connect, 1} in pair.source.stack,
+        {_, :return_from, _, {:ok, port}} <- [pair.returned.event],
+        not is_map_key(cancellations, port),
+        into: %{},
+        do: {port, %{source: pair.source.index, opened: pair.returned.index,
+                     pid: pair.source.pid, port: port}}
   end
 
   # CancelRequest is a startup-format exchange on its own socket. Its authority

@@ -76,6 +76,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
+  def observe_startup(corruption \\ nil) do
+    ExitBoundary.observe(
+      fn -> :ok end,
+      fn _ ->
+        %{sock: {module, socket}} = connect()
+
+        try do
+          if corruption == :extra_read do
+            {:error, :timeout} = module.recv(socket, 0, 0)
+          end
+
+          :ok
+        after
+          :ok = module.close(socket)
+        end
+      end,
+      %{host: [], callbacks: []}
+    )
+  end
+
   # Exercise the actual Holder API on a real, single-connection Postgrex pool.
   # The deliberately altered write is restored before the next callback runs.
   def observe_holder(corruption \\ nil) do

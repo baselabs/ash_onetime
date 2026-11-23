@@ -174,7 +174,9 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
           end)
 
         historical = Map.fetch!(side.historical.connections, holder)
-        port = NativeTransport.physical_port(%{historical: side.historical.connections}, protocol.sock)
+
+        port =
+          NativeTransport.physical_port(%{historical: side.historical.connections}, protocol.sock)
 
         [
           %{

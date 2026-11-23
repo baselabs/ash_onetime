@@ -390,9 +390,37 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
         failure(state, source, reason, %{options: Enum.map(options, &option_name/1)})
 
       _ ->
-        failure(state, source, :native_option_program)
+        failure(state, source, :native_option_program, option_failure_context(state, source))
     end
   end
+
+  # Keep the first failed native boundary visible without logging socket data.
+  # A close can fail before the successful driver program exists; its own
+  # return and nested exception coordinates distinguish that from a bad model.
+  defp option_failure_context(state, source) do
+    case Map.get(state.pairs, source.index) do
+      nil -> %{outer: :missing_native_return}
+      pair ->
+        controls =
+          for {_index, nested} <- state.pairs,
+              nested.source.pid == source.pid,
+              nested.source.index > source.index,
+              nested.returned.index < pair.returned.index,
+              nested.source.mfa in [{:erlang, :port_control, 3},
+                                    {:erts_internal, :port_control, 3}],
+              do: %{index: nested.source.index, mfa: nested.source.mfa,
+                    result: native_result_kind(return_value(nested))}
+
+        %{outer: native_result_kind(return_value(pair)), controls: controls}
+    end
+  end
+
+  defp native_result_kind({:ok, :ok}), do: :ok
+  defp native_result_kind({:ok, [1]}), do: :driver_ok
+  defp native_result_kind({:ok, {:error, reason}}) when is_atom(reason), do: {:error, reason}
+  defp native_result_kind({:ok, value}) when is_reference(value), do: :deferred
+  defp native_result_kind({:error, reason}) when is_atom(reason), do: {:exception, reason}
+  defp native_result_kind(_result), do: :other_native_result
 
   defp option_events(calls, expected) when calls === expected, do: :ok
 

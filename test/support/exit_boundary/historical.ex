@@ -50,6 +50,17 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
                status: status
              })}
 
+    owners =
+      connections
+      |> Enum.map(fn {_holder, connection} -> connection.owner end)
+      |> Enum.uniq()
+      |> Map.new(&{&1, :sys.get_state(&1)})
+
+    connections =
+      Map.new(connections, fn {holder, connection} ->
+        {holder, Map.put(connection, :owner_machine, Map.fetch!(owners, connection.owner))}
+      end)
+
     cache_expiries =
       if :ets.whereis(AshOnetime.Cache.Ets) == :undefined,
         do: %{},
@@ -171,6 +182,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
 
     catalogs = Map.new(protocols, fn {port, protocol} -> {port, protocol.statements} end)
     origins = descriptor_cut(historical.query_origins, proof, before)
+    owners = committed_before(proof.states.owner_commits, :owner, before)
 
     connections =
       for {holder, commit} <- rows,
@@ -178,7 +190,8 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
             commit.row
           ],
           into: %{} do
-        previous = Map.fetch!(historical.connections, holder)
+        previous = Map.fetch!(proof.states.holder_origins, holder)
+        machine = Map.get(owners, owner)
         cache = cache_cut(protocol.queries, tables)
 
         descriptors = active_descriptors(origins, protocol, cache.rows, previous.port)
@@ -194,6 +207,13 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
             query_cache: cache,
             descriptors: descriptors
           })
+
+        connection =
+          if machine do
+            Map.put(connection, :owner_machine, {machine.machine.name, machine.machine.data})
+          else
+            connection
+          end
 
         {holder, connection}
       end
@@ -305,7 +325,9 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
 
   defp pool_clock(
          %{
-           source: %{event: {_, :call, {:ets, :give_away, [holder, pool, {:checkin, _queue, clock}]}}},
+           source: %{
+             event: {_, :call, {:ets, :give_away, [holder, pool, {:checkin, _queue, clock}]}}
+           },
            returned: %{event: {_, :return_from, _, true}}
          },
          clocks,

@@ -2119,6 +2119,13 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  defp postgrex_edits(:cancel_owner_copy) do
+    [
+      {"    terminate(s)\n",
+       "    terminate(%{s | null: {:native_cancel_copy, s.null}})\n"}
+    ]
+  end
+
   defp postgrex_edits(:send_buffer_copy) do
     original = """
         with :ok <- msg_send(%{s | buffer: nil}, msgs, buffer) |> handle_disconnect_retry(),

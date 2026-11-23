@@ -3477,7 +3477,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             Map.take(continued.framing.directions[direction], [:offset, :received]) ===
               Map.take(complete.framing.directions[direction], [:offset, :received])
 
-          assert same_coordinates?, "a pending continuation must preserve both physical directions"
+          assert same_coordinates?,
+                 "a pending continuation must preserve both physical directions"
         end
       end
     after
@@ -3682,6 +3683,49 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
     end
 
+    corrupted =
+      ComparatorMutants.with_postgrex_mutant(
+        :cancel_owner_copy,
+        &ConnectionNative.observe_cancel/0
+      )
+
+    corrupted_events = Enum.with_index(corrupted.events, &Map.put(&1, :index, &2))
+    corrupted_native = NativeTransport.build(%{events: corrupted_events}, corrupted.native_history)
+    assert corrupted_native.errors == []
+    corrupted_reads = ConnectionReads.build(corrupted_native)
+    assert corrupted_reads.errors == []
+
+    corrupted_decoders =
+      ConnectionDecoders.build(
+        %{events: corrupted_events},
+        corrupted_native,
+        corrupted_reads,
+        corrupted.native_history
+      )
+
+    assert corrupted_decoders.errors == []
+
+    check_owner = fn ->
+      ConnectionStates.build(
+        %{events: corrupted_events},
+        corrupted_native,
+        corrupted_decoders,
+        corrupted.native_history,
+        {:initial, corrupted.initial_state}
+      )
+    end
+
+    assert [%{rule: :state_input_copy, at: %{mfa: {Postgrex.Protocol, :terminate, 1}}}] =
+             check_owner.().errors
+
+    for mutant <- [:stream_state_copy, :stream_buffer_copy, :stream_helper_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, check_owner)
+      expected = if mutant == :stream_state_copy, do: [], else: [:state_input_copy]
+      assert Enum.map(checked.errors, & &1.rule) == expected
+    end
+
+    assert Enum.map(check_owner.().errors, & &1.rule) == [:state_input_copy]
+
     restored = ConnectionNative.observe_cancel()
     events = Enum.with_index(restored.events, &Map.put(&1, :index, &2))
     native = NativeTransport.build(%{events: events}, restored.native_history)
@@ -3715,6 +3759,43 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Enum.all?(decoders.protocol_copies, fn copy ->
              MapSet.member?(covered, {copy.index, copy.path})
            end)
+  end
+
+  @tag :connection_streams
+  test "Connection streams: startup reads belong to their native authentication exchange" do
+    for corruption <- [nil, :extra_read] do
+      run = ConnectionNative.observe_startup(corruption)
+      assert run.result == :ok
+      events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+      native = NativeTransport.build(%{events: events})
+      assert native.errors == []
+      reads = ConnectionReads.build(native)
+
+      if corruption do
+        assert Enum.map(reads.errors, & &1.rule) == [:receive_required]
+
+        for mutant <- [:stream_length, :stream_timeout, :stream_required] do
+          checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionReads.build(native) end)
+          expected = if mutant == :stream_required, do: [], else: [:receive_required]
+          assert Enum.map(checked.errors, & &1.rule) == expected
+        end
+
+        assert Enum.map(ConnectionReads.build(native).errors, & &1.rule) == [:receive_required]
+      else
+        assert reads.errors == []
+
+        assert Enum.any?(reads.connections, fn
+                 {_port, %{protocol: %{startup: %{phase: :ready, identity: {_backend, _key}}}}} -> true
+                 _ -> false
+               end)
+      end
+    end
+
+    restored = ConnectionNative.observe_startup()
+    events = Enum.with_index(restored.events, &Map.put(&1, :index, &2))
+    native = NativeTransport.build(%{events: events})
+    assert native.errors == []
+    assert ConnectionReads.build(native).errors == []
   end
 
   for lifecycle <- [:idle_ping, :reconnect] do

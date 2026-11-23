@@ -33,6 +33,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     :handle_rollback,
     :handle_status,
     :handle_info,
+    :disconnect,
     :checkin,
     :checkout,
     :ping
@@ -69,7 +70,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     :reload_spawn,
     :reload_init
   ]
-  @copies [:msg_send, :msg_recv, :rows_recv, :redescribe]
+  @copies [
+    :msg_send,
+    :msg_recv,
+    :rows_recv,
+    :redescribe,
+    :cancel_request,
+    :cancel_send_recv,
+    :cancel_recv,
+    :terminate,
+    :sock_close,
+    :delete_parameters,
+    :queries_delete
+  ]
   @owners @callbacks ++ @constructors ++ @scopes ++ @copies
   @last_state @callbacks ++ [:handle_prepare_execute]
   @status_consumers [
@@ -114,6 +127,34 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     ping_recv: 3,
     activate: 1
   }
+  @owner_loop_current [
+    :loop,
+    :loop_hibernate,
+    :loop_wakeup,
+    :loop_msg,
+    :loop_msg_event,
+    :loop_event,
+    :loop_state_callback,
+    :loop_state_callback_result,
+    :loop_actions,
+    :loop_actions_list,
+    :loop_actions_reply,
+    :loop_actions_next_event,
+    :loop_state_enter,
+    :loop_state_change,
+    :loop_state_transition,
+    :loop_keep_state,
+    :loop_next_events,
+    :loop_timeouts,
+    :loop_timeouts_cancel,
+    :loop_timeouts_register,
+    :loop_timeouts_update,
+    :loop_t0q,
+    :loop_done
+  ]
+  @owner_loop_next @owner_loop_current --
+                     [:loop, :loop_hibernate, :loop_wakeup, :loop_msg, :loop_msg_event,
+                      :loop_event, :loop_t0q, :loop_done]
 
   # An owner version is a native return, or the pre-observation holder state.
   # Copies must bind to that version before a buffer can leave exact comparison.
@@ -143,6 +184,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     initial = %{
       holders: holders,
+      holder_origins: historical,
+      owner_machines: owner_machines(historical),
+      owner_commits: Enum.map(owner_machines(historical), fn {owner, machine} ->
+        %{owner: owner, index: -1, machine: machine}
+      end),
+      owner_pending: %{},
+      owner_messages: %{},
+      owner_received: %{},
+      owner_factories: %{},
+      owner_results: %{},
       ports: ports,
       rows: rows,
       commits:
@@ -191,6 +242,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     %{
       commits: Enum.reverse(state.commits),
       table_commits: Enum.reverse(state.table_commits),
+      holder_origins: state.holder_origins,
+      owner_machines: state.owner_machines,
+      owner_commits: Enum.reverse(state.owner_commits),
       versions: Enum.reverse(state.versions),
       copies: Enum.reverse(state.copies),
       buffers: Enum.reverse(state.buffers),
@@ -237,8 +291,398 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     state = reload_event(source, state)
     state = factory_event(source, state)
     state = type_service_event(source, state)
+    state = owner_event(source, state)
     callback_event(source, state)
   end
+
+  # A borrowed Holder and the connection process keep independent versions.
+  # The process root is a pre-observation sys:get_state result, never the row
+  # or callback whose copy is being checked.
+  defp owner_machines(historical) do
+    for {holder, %{owner: owner, owner_machine: {name, data}}} <- historical,
+        %{mod: Postgrex.Protocol, state: %Postgrex.Protocol{} = protocol} <- [data],
+        into: %{} do
+      version = %{holder: holder, protocol: protocol, origin: {:historical_owner, owner}}
+      {owner, %{name: name, data: data, version: version}}
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :call, {:gen_statem, :cast, [owner, message]}}} = source,
+         state
+       ) when is_tuple(message) and tuple_size(message) in [3, 4] do
+    tag = elem(message, 0)
+    holder = elem(message, 1)
+
+    case {tag, Map.get(state.holders, holder), Map.get(state.owner_machines, owner)} do
+      {tag, version, machine} when tag in [:ping, :disconnect, :stop] and
+                                  not is_nil(version) and not is_nil(machine) ->
+        expected = put_elem(message, tuple_size(message) - 1, version.protocol)
+        state = exact(state, source, :state_owner_destination, owner, state.holder_origins[holder].owner)
+        state = exact(state, source, :state_owner_message, message, expected)
+        pair = Map.fetch!(state.pairs, source.index)
+        context = %{source: source, returned: pair.returned, owner: owner, version: version,
+                    message: expected}
+
+        state
+        |> put_in([:owner_messages, source.index], context)
+        |> owner_protocol_copy(source, [2, 2, 1, tuple_size(message) - 1], version)
+
+      _ -> state
+    end
+  end
+
+  defp owner_event(%{event: {pid, :receive, {:"$gen_cast", message}}} = source, state)
+       when is_tuple(message) and tuple_size(message) in [3, 4] do
+    context =
+      state.owner_messages
+      |> Map.values()
+      |> Enum.filter(&(&1.owner == pid and &1.source.index < source.index))
+      |> Enum.sort_by(& &1.source.index)
+      |> Enum.find(&(elem(&1.message, 1) === elem(message, 1)))
+
+    case context do
+      nil -> state
+      context ->
+        state
+        |> exact(source, :state_owner_message, message, context.message)
+        |> owner_protocol_copy(source, [2, 1, tuple_size(message) - 1], context.version)
+        |> put_in([:owner_received, pid], context)
+        |> update_in([:owner_messages], &Map.delete(&1, context.source.index))
+    end
+  end
+
+  defp owner_event(%{event: {_, :call, {:gen_statem, function, _arguments}}} = source, state) do
+    case Map.get(state.owner_machines, source.pid) do
+      nil -> owner_message_program(state, source)
+      machine -> owner_loop(state, source, function, machine)
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :call, {DBConnection.Connection, :handle_event, arguments}}} = source,
+         state
+       ) do
+    case Map.get(state.owner_machines, source.pid) do
+      nil -> state
+      machine ->
+        state = exact(state, source, :state_owner_machine, Enum.at(arguments, 3), machine.data)
+        state = owner_protocol_copy(state, source, [2, 2, 3, :state], machine.version)
+
+        case {arguments, state.owner_received[source.pid]} do
+          {[:cast, message, :no_state, _data], %{message: expected, version: version}}
+          when elem(message, 0) in [:ping, :disconnect, :stop] ->
+            state
+            |> exact(source, :state_owner_message, message, expected)
+            |> owner_protocol_copy(source, [2, 2, 1, tuple_size(message) - 1], version)
+
+          _ -> state
+        end
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :call, {DBConnection.Connection, :pool_update, [protocol, data]}}} = source,
+         state
+       ) do
+    case {state.owner_machines[source.pid], state.completed[source.pid]} do
+      {machine, version} when not is_nil(machine) and not is_nil(version) ->
+        state
+        |> exact(source, :state_owner_machine, data, machine.data)
+        |> exact(source, :state_owner_update, protocol, version.protocol)
+        |> owner_protocol_copy(source, [2, 2, 0], version)
+        |> owner_protocol_copy(source, [2, 2, 1, :state], machine.version)
+
+      _ -> failure(state, source, :state_owner_update_origin)
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :call, {DBConnection.Holder, function, arguments}}} = source,
+         state
+       ) when function in [:new, :update] and length(arguments) == 5 do
+    case {state.owner_machines[source.pid], state.completed[source.pid]} do
+      {machine, version} when not is_nil(machine) and not is_nil(version) ->
+        expected = [machine.data.pool, machine.data.tag, Postgrex.Protocol, version.protocol,
+                    machine.data.connected_at]
+        state = exact(state, source, :state_holder_factory, arguments, expected)
+        state = owner_protocol_copy(state, source, [2, 2, 3], version)
+
+        if function == :new do
+          context = %{source: source, machine: machine, version: version, holder: nil}
+          put_in(state.owner_factories[source.pid], context)
+        else
+          state
+        end
+
+      _ -> state
+    end
+  end
+
+  defp owner_event(%{event: {_, :return_from, {:ets, :new, 2}, holder}} = source, state) do
+    case {state.owner_factories[source.pid], pair_returned(state, source)} do
+      {%{holder: nil} = factory, %{source: call}} ->
+        expected = {source.pid, :call,
+                    {:ets, :new, [DBConnection.Holder,
+                                 [:public, :ordered_set, decentralized_counters: true]]}}
+
+        state
+        |> exact(source, :state_holder_factory_table, call.event, expected)
+        |> put_in([:owner_factories, source.pid], %{factory | holder: holder})
+
+      _ -> state
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :call, {:ets, :setopts, [holder, options]}}} = source,
+         state
+       ) do
+    case state.owner_factories[source.pid] do
+      %{holder: ^holder, machine: machine} ->
+        expected = {:heir, machine.data.pool, machine.data.tag}
+        exact(state, source, :state_holder_factory_heir, options, expected)
+
+      _ -> state
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :call, {:ets, :give_away, [holder, pool, message]}}} = source,
+         state
+       ) do
+    case state.owner_factories[source.pid] do
+      %{holder: ^holder, machine: machine, source: factory} ->
+        clock =
+          state.pairs
+          |> Map.values()
+          |> Enum.filter(fn pair ->
+            pair.source.pid == source.pid and
+              pair.source.mfa == {:erlang, :monotonic_time, 0} and
+              pair.source.index > factory.index and pair.returned.index < source.index
+          end)
+          |> Enum.max_by(& &1.returned.index, fn -> nil end)
+
+        case clock do
+          %{returned: %{event: {_, :return_from, _, value}}} ->
+            state
+            |> exact(source, :state_holder_factory_pool, pool, machine.data.pool)
+            |> exact(source, :state_holder_factory_checkin, message,
+                     {:checkin, machine.data.tag, value})
+
+          _ -> failure(state, source, :state_holder_factory_clock_origin)
+        end
+
+      _ -> state
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :return_from, {DBConnection.Holder, :new, 5}, holder}} = source,
+         state
+       ) do
+    case state.owner_factories[source.pid] do
+      %{holder: expected} -> exact(state, source, :state_holder_factory_return, holder, expected)
+      _ -> state
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :call, {:ets, :insert_new, [holder, row]}}} = source,
+         state
+       ) do
+    case state.owner_factories[source.pid] do
+      %{holder: ^holder, machine: machine, version: version} ->
+        expected = {:conn, source.pid, Postgrex.Protocol, version.protocol, nil,
+                    machine.data.connected_at, nil, :ok}
+
+        state
+        |> exact(source, :state_holder_factory_row, row, expected)
+        |> owner_protocol_copy(source, [2, 2, 1, 3], version)
+
+      _ -> state
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :return_from, {:ets, :insert_new, 2}, true}} = source,
+         state
+       ) do
+    case {state.owner_factories[source.pid], pair_returned(state, source)} do
+      {%{holder: holder, machine: machine, version: version},
+       %{source: %{event: {_, :call, {:ets, :insert_new, [holder, _row]}}}}} ->
+        version = %{version | holder: holder}
+        previous = Map.fetch!(state.holder_origins, machine.version.holder)
+        origin = %{previous | owner: source.pid, pool: machine.data.pool,
+                             protocol: version.protocol,
+                             owner_machine: {machine.name, machine.data}}
+
+        state
+        |> put_in([:holders, holder], version)
+        |> put_in([:holder_origins, holder], origin)
+
+      _ -> state
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :return_from, {DBConnection.Connection, :pool_update, 2}, result}} = source,
+         state
+       ) do
+    case {state.owner_machines[source.pid], state.owner_factories[source.pid]} do
+      {machine, %{holder: holder, version: version}} when not is_nil(machine) ->
+        data = %{machine.data | client: {holder, :pool}, state: version.protocol}
+        expected = {:keep_state, data, :hibernate}
+        version = %{version | holder: holder, origin: {source.index, [3, 1, :state]}}
+        pending = %{machine | data: data, version: version}
+
+        state
+        |> exact(source, :state_owner_result, result, expected)
+        |> owner_protocol_copy(source, [3, 1, :state], version)
+        |> put_in([:owner_pending, source.pid], pending)
+        |> put_in([:owner_results, source.pid], expected)
+
+      _ -> failure(state, source, :state_owner_result_origin)
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :return_from, {DBConnection.Connection, :handle_event, 4}, result}} = source,
+         state
+       ) do
+    case state.owner_pending[source.pid] do
+      nil -> state
+      pending ->
+        state
+        |> exact(source, :state_owner_result, result, state.owner_results[source.pid])
+        |> owner_protocol_copy(source, [3, 1, :state], pending.version)
+    end
+  end
+
+  defp owner_event(source, state), do: owner_message_program(state, source)
+
+  defp owner_loop(state, source, function, machine) do
+    {state, machine} =
+      if function == :loop_done do
+        case Map.pop(state.owner_pending, source.pid) do
+          {nil, _pending} -> {state, machine}
+          {next, pending} ->
+            state = %{state | owner_pending: pending}
+            commit = %{owner: source.pid, index: source.index, machine: next}
+            state = Map.update!(state, :owner_commits, &[commit | &1])
+            state = update_in(state.owner_received, &Map.delete(&1, source.pid))
+            {put_in(state.owner_machines[source.pid], next), next}
+        end
+      else
+        {state, machine}
+      end
+
+    next = Map.get(state.owner_pending, source.pid, machine)
+
+    state =
+      cond do
+        function in @owner_loop_current ->
+          owner_protocol_copy(state, source, [2, 2, 2, 1, 1, :state], machine.version)
+
+        function in [:reply_then_terminate, :do_reply_then_terminate, :terminate] ->
+          owner_protocol_copy(state, source, [2, 2, 5, 1, 1, :state], machine.version)
+
+        true -> state
+      end
+
+    state =
+      if function in @owner_loop_next do
+        version =
+          if function in [:loop_state_callback, :loop_state_callback_result],
+            do: machine.version, else: next.version
+
+        owner_protocol_copy(state, source, [2, 2, 4, 1, :state], version)
+      else
+        state
+      end
+
+    state =
+      if function == :loop_state_callback_result and state.owner_pending[source.pid] do
+        owner_protocol_copy(state, source, [2, 2, 10, 1, :state], next.version)
+      else
+        state
+      end
+
+    owner_loop_message(state, source, function)
+  end
+
+  defp owner_loop_message(state, source, function) do
+    case state.owner_received[source.pid] do
+      nil -> state
+      context ->
+        base = case function do
+          function when function in [:loop_msg, :loop_msg_event] -> [2, 2, 3, 1]
+          function when function in [:loop_event, :loop_state_callback, :loop_state_callback_result,
+                                    :loop_actions, :loop_actions_list, :loop_actions_reply,
+                                    :loop_actions_next_event, :loop_state_enter, :loop_state_change,
+                                    :loop_state_transition] -> [2, 2, 3, 0, 1]
+          _ -> nil
+        end
+
+        state =
+          if base do
+            path = base ++ [tuple_size(context.message) - 1]
+            owner_protocol_copy(state, source, path, context.version)
+          else
+            state
+          end
+
+        if source.mfa == {:gen_statem, :loop_state_callback, 11} do
+          owner_protocol_copy(state, source,
+            [2, 2, 10, 1, tuple_size(context.message) - 1], context.version)
+        else
+          state
+        end
+    end
+  end
+
+  defp owner_message_program(state, source) do
+    context = Enum.find_value(state.owner_messages, fn {_index, context} ->
+      if source.pid == context.source.pid and source.index > context.source.index and
+           source.index < context.returned.index, do: context
+    end)
+
+    case {context, source.event} do
+      {nil, _} -> state
+      {context, {_, :call, {module, :send, [_owner, _message]}}}
+      when module in [:gen_statem, :erlang] ->
+        owner_protocol_copy(state, source,
+          [2, 2, 1, 1, tuple_size(context.message) - 1], context.version)
+
+      {context, {_, :send, _message, _owner}} ->
+        owner_protocol_copy(state, source,
+          [2, 1, tuple_size(context.message) - 1], context.version)
+
+      {context, {_, :return_from, {:erlang, :send, 2}, _message}} ->
+        owner_protocol_copy(state, source,
+          [3, 1, tuple_size(context.message) - 1], context.version)
+
+      _ -> state
+    end
+  end
+
+  defp owner_protocol_copy(state, source, path, version) do
+    actual = owner_term(source.event, path)
+
+    state
+    |> exact(source, :state_owner_copy, actual, version.protocol)
+    |> copy(source, path, version)
+  end
+
+  defp owner_term(value, []), do: value
+  defp owner_term(value, [key | path]) when is_tuple(value) and is_integer(key) and
+                                          key >= 0 and key < tuple_size(value),
+    do: owner_term(elem(value, key), path)
+  defp owner_term(value, [key | path]) when is_list(value) and is_integer(key),
+    do: owner_term(Enum.at(value, key), path)
+  defp owner_term(value, [key | path]) when is_map(value),
+    do: owner_term(Map.get(value, key), path)
+  defp owner_term(_value, _path), do: :missing_native_owner_term
 
   # Callback returns can be valid temporary versions without ever reaching ETS.
   # A committed row changes only at a successful native mutation's own return.
@@ -286,7 +730,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       if is_nil(row), do: Map.delete(state.rows, holder), else: Map.put(state.rows, holder, row)
 
     commit = %{holder: holder, index: index, origin: origin, row: row}
-    %{state | rows: rows, commits: [commit | state.commits]}
+    holders = if is_nil(row), do: Map.delete(state.holders, holder), else: state.holders
+    %{state | rows: rows, holders: holders, commits: [commit | state.commits]}
   end
 
   # The cache is an ETS set. Keep complete rows from the initial native table,
@@ -1479,13 +1924,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          state
        )
        when function in @owners do
-    argument =
-      if function in @last_state and function != :ping, do: length(arguments) - 1, else: 0
+    argument = protocol_argument(function, length(arguments))
 
     protocol = Enum.at(arguments, argument)
     frames = Map.get(state.frames, pid, [])
 
-    case input_version(protocol, frames, Map.get(state.lookups, pid), state.ports) do
+    case callback_owner(state, source, function, protocol, frames) do
       {:ok, expected} ->
         state = status_input(state, source, function, arguments)
         state = buffer_input(state, source, function, arguments, expected)
@@ -1531,6 +1975,30 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp callback_event(_source, state), do: state
+
+  defp callback_owner(state, source, :ping, protocol, []) do
+    case state.owner_received[source.pid] do
+      %{message: {:ping, _holder, _state}, version: version} -> {:ok, version}
+      _ -> input_version(protocol, [], Map.get(state.lookups, source.pid), state.ports)
+    end
+  end
+
+  defp callback_owner(state, source, :disconnect, protocol, []) do
+    case state.owner_machines[source.pid] do
+      %{version: version} -> {:ok, version}
+      _ -> input_version(protocol, [], Map.get(state.lookups, source.pid), state.ports)
+    end
+  end
+
+  defp callback_owner(state, source, _function, protocol, frames),
+    do: input_version(protocol, frames, Map.get(state.lookups, source.pid), state.ports)
+
+  defp protocol_argument(:cancel_request, 3), do: 2
+
+  defp protocol_argument(function, arity) when function in @last_state and function != :ping,
+    do: arity - 1
+
+  defp protocol_argument(_function, _arity), do: 0
 
   defp input_version(_protocol, [frame | _], _lookup, _ports),
     do: {:ok, %{frame.owner | protocol: frame.current}}

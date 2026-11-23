@@ -1147,9 +1147,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
   defp decoder_event(
          %{
-           event:
-             {_, :call,
-              {Postgrex.Protocol, :activate, [%{sock: socket} = protocol, buffer]}}
+           event: {_, :call, {Postgrex.Protocol, :activate, [%{sock: socket} = protocol, buffer]}}
          } = e,
          state
        )
