@@ -1,6 +1,15 @@
 defmodule AshOnetime.Test.ExitBoundary.Allocation do
   @moduledoc false
-  alias AshOnetime.Test.ExitBoundary.{Compiled, Origins, References, Registry, Root, Scenarios}
+  alias AshOnetime.Test.ExitBoundary.{
+    Compiled,
+    ConnectionHistory,
+    Historical,
+    Origins,
+    References,
+    Registry,
+    Root,
+    Scenarios
+  }
   alias AshOnetime.Test.Repo
 
   @checkpoint {Scenarios, :allocation_checkpoint, 0}
@@ -63,14 +72,29 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
   # The observation self-test supplies whole, independent native captures. The
   # lease parser and the accumulated map below are the ones used by pair/5.
   def captured_pairs(captures) do
-    pairs =
+    histories =
       Enum.map(captures, fn {run, twin} ->
-        [a] = leases(run, Origins.build(run))
-        [b] = leases(twin, Origins.build(twin))
-        {a, b}
+        {run, twin, ConnectionHistory.build(run), ConnectionHistory.build(twin)}
       end)
 
-    bind_pairs(%{forward: %{}, reverse: %{}, errors: []}, pairs)
+    errors =
+      for {_run, _twin, left, right} <- histories,
+          proof <- [left, right],
+          error <- proof.errors,
+          do: {:allocation_raw_history, error}
+
+    if errors == [] do
+      pairs =
+        Enum.map(histories, fn {run, twin, _left, _right} ->
+          [a] = leases(run, Origins.build(run))
+          [b] = leases(twin, Origins.build(twin))
+          {a, b}
+        end)
+
+      bind_pairs(%{forward: %{}, reverse: %{}, errors: []}, pairs)
+    else
+      %{forward: %{}, reverse: %{}, errors: errors}
+    end
   end
 
   defp bind_pairs(initial, pairs) do
@@ -402,12 +426,15 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
 
     s = leaf(s, {:ets, :update_element, 3}, [holder, :conn, [{5, lock}, {7, timer}]], true)
 
-    historical = Map.fetch!(side.historical.connections, holder)
-    protocol = preceding_protocol(indexed.events, source.index, holder, historical.protocol)
+    {:ok, checkpoint} =
+      Historical.cut(side.historical, side.connection_history, hd(s.events).index)
+
+    committed = Map.fetch!(checkpoint.connections, holder)
+    protocol = committed.protocol
     ensure(s, source, :checkpoint_outside_transaction, protocol.postgres, :idle)
 
     conn_row = [
-      {:conn, historical.owner, Postgrex.Protocol, protocol, lock, historical.clock, timer, :ok}
+      {:conn, committed.owner, Postgrex.Protocol, protocol, lock, committed.clock, timer, :ok}
     ]
 
     s = leaf(s, {:ets, :lookup, 2}, [holder, :conn], conn_row)
@@ -442,17 +469,6 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     s = leaf(s, {:ets, :lookup, 2}, [holder, :conn], row)
     s = leaf(s, {Postgrex.Protocol, :handle_status, 2}, [opts, protocol], {:idle, protocol})
     leaf(s, {:ets, :update_element, 3}, [holder, :conn, {4, protocol}], true)
-  end
-
-  defp preceding_protocol(events, before, holder, historical) do
-    Enum.reduce(events, historical, fn
-      %{index: n, event: {_, :call, {:ets, :update_element, [^holder, :conn, {4, protocol}]}}}, _
-      when n < before ->
-        protocol
-
-      _, current ->
-        current
-    end)
   end
 
   defp validate_logger!(s, e, log, meta) do

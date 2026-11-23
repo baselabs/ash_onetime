@@ -4032,11 +4032,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              end)
            end)
 
-    indexed = Origins.build(pair.run)
+    history = ConnectionHistory.build(pair.run)
+    assert history.errors == []
+    side = Map.put(pair.run, :connection_history, history)
+    indexed = Origins.build(side)
     scheduled = Scheduling.build(indexed)
     indexed = %{indexed | events: scheduled.events}
-    permitted = PermittedTrace.match(pair.run, indexed)
-    readback = Readback.check(pair.run, indexed, permitted.bound)
+    permitted = PermittedTrace.match(side, indexed)
+    readback = Readback.check(side, indexed, permitted.bound)
 
     root = {AshOnetime.Store, :committed_completion, 2}
     start = Enum.find(indexed.events, &(&1.mfa == root and elem(&1.event, 1) == :call))
@@ -4124,7 +4127,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     row = row!(:external_issue, :execute)
     values = Values.set()[:va]
     pair = observe(context, row, values)
-    proof = Allocation.check(pair.twin, Origins.build(pair.twin))
+    history = ConnectionHistory.build(pair.twin)
+    assert history.errors == []
+    side = Map.put(pair.twin, :connection_history, history)
+    proof = Allocation.check(side, Origins.build(side))
     errors = Diagnostics.safe(proof.errors)
     assert errors == []
     assert MapSet.size(proof.claimed) == 66
@@ -4172,8 +4178,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         ] do
       Compiled.with_source(source, path, fn ->
         captured = observe(context, row, values)
-        indexed = Origins.build(captured.twin)
-        rejected = Allocation.check(captured.twin, indexed)
+        history = ConnectionHistory.build(captured.twin)
+        assert history.errors == []
+        side = Map.put(captured.twin, :connection_history, history)
+        indexed = Origins.build(side)
+        rejected = Allocation.check(side, indexed)
         assert Enum.map(rejected.errors, & &1.rule) == [rule]
         assert rejected.claimed == MapSet.new()
 
@@ -4204,9 +4213,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
 
     restored = observe(context, row, values)
+    history = ConnectionHistory.build(restored.twin)
+    assert history.errors == []
+    side = Map.put(restored.twin, :connection_history, history)
 
     errors =
-      Allocation.check(restored.twin, Origins.build(restored.twin)).errors
+      Allocation.check(side, Origins.build(side)).errors
       |> Diagnostics.safe()
 
     assert errors == []
@@ -4389,6 +4401,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     opposite = borrower_capture(context, :parent_first)
 
     compare = fn run, twin ->
+      left = ConnectionHistory.build(run)
+      right = ConnectionHistory.build(twin)
+      assert left.errors == [] and right.errors == []
+
       Allocation.pair(
         %{forward: %{}, reverse: %{}, errors: []},
         run,

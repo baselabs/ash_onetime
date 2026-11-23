@@ -1,7 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.Readback do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary
-  alias AshOnetime.Test.ExitBoundary.{ClockExpressions, Comparator, Historical, Origins}
+  alias AshOnetime.Test.ExitBoundary.{Comparator, Historical, Origins}
   @root {AshOnetime.Store, :committed_completion, 2}
 
   # OPEN's read is checked against a second real, read-only execution with the
@@ -73,56 +73,67 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
             &match?(%{event: {_, :call, {AshOnetime.Store, :committed_completion, _}}}, &1)
           ).index
 
-        clocks = ClockExpressions.build(indexed, side)
-        prepared = Map.get_lazy(side, :readback_reference, fn -> capture(side, bound) end)
-        historical = prepared.historical
-        reference = prepared.run
-        reference_events = reference.events |> origins_for_interval(side) |> interval()
+        with {:ok, checkpoint} <- Historical.cut(side.historical, side.connection_history, start) do
+          prepared = Map.get_lazy(side, :readback_reference, fn -> capture(side, bound) end)
+          historical = prepared.historical
+          reference = prepared.run
+          reference_events = reference.events |> origins_for_interval(side) |> interval()
 
-        reference = %{
-          reference
-          | events: Enum.map(reference_events, &Map.drop(&1, [:index, :role, :phase]))
-        }
-
-        run = %{
-          side.run
-          | events: Enum.map(observed, &Map.drop(&1, [:index, :role, :phase])),
-            result: result(observed),
-            residue: 0
-        }
-
-        run_side =
-          %{
-            side
-            | run: run,
-              delta: %{},
-              historical: %{side.historical | pool_clocks: Map.fetch!(clocks.checkpoints, start)}
+          reference = %{
+            reference
+            | events: Enum.map(reference_events, &Map.drop(&1, [:index, :role, :phase]))
           }
-          |> Map.put(:origin_phase_override, :open)
-          |> Map.put(:claim_origins, [bound.c_admit])
 
-        twin_side =
-          %{side | run: reference, delta: %{}, historical: historical}
-          |> Map.put(:origin_phase_override, :open)
-          |> Map.put(:claim_origins, [bound.c_admit])
+          run = %{
+            side.run
+            | events: Enum.map(observed, &Map.drop(&1, [:index, :role, :phase])),
+              result: result(observed),
+              residue: 0
+          }
 
-        result =
-          Comparator.compare(%{run: run_side, twin: twin_side, row: side.row},
-            readback_reference?: true
-          )
+          run_side =
+            %{
+              side
+              | run: run,
+                delta: %{},
+                historical: checkpoint
+            }
+            |> Map.put(:origin_phase_override, :open)
+            |> Map.put(:claim_origins, [bound.c_admit])
 
-        errors = Enum.map(result.errors, &reference_error(&1, observed))
+          twin_side =
+            %{side | run: reference, delta: %{}, historical: historical}
+            |> Map.put(:origin_phase_override, :open)
+            |> Map.put(:claim_origins, [bound.c_admit])
 
-        sources =
-          for {key, origin} <- Origins.build(run_side).origins, into: %{} do
-            {Enum.fetch!(observed, origin.index).index,
-             %{
-               key: key,
-               value: origin.value
-             }}
-          end
+          result =
+            Comparator.compare(%{run: run_side, twin: twin_side, row: side.row},
+              readback_reference?: true
+            )
 
-        %{claimed: MapSet.new(observed, & &1.index), errors: errors, sources: sources}
+          errors = Enum.map(result.errors, &reference_error(&1, observed))
+
+          sources =
+            for {key, origin} <- Origins.build(run_side).origins, into: %{} do
+              {Enum.fetch!(observed, origin.index).index,
+               %{
+                 key: key,
+                 value: origin.value
+               }}
+            end
+
+          %{claimed: MapSet.new(observed, & &1.index), errors: errors, sources: sources}
+        else
+          {:error, failure} ->
+            at = Map.take(hd(observed), [:role, :mfa, :stack]) |> Map.put(:run_index, start)
+
+            %{
+              claimed: MapSet.new(),
+              errors: [
+                %{at: at, rule: failure.rule, path: [], run: failure, twin: :committed_history_cut}
+              ]
+            }
+        end
     end
   end
 
