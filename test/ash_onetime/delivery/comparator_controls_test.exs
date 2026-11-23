@@ -3554,6 +3554,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             for direction <- [:frontend, :backend] do
               full = Map.fetch!(complete.framing.directions, direction)
               current = Map.fetch!(connection.framing.directions, direction)
+
               same_coordinates? =
                 Map.take(current, [:offset, :received]) ===
                   Map.take(full, [:offset, :received])
