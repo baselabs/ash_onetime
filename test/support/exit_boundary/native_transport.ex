@@ -343,7 +343,8 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
          {:ok, signals} <- option_controls(state.event_index, outer, port, encoded),
          events <- in_interval(state.event_index, outer, &(&1.pid == source.pid)),
          calls <- Enum.flat_map(events, &program_event/1),
-         :ok <- option_events(calls, option_program(port, options, encoded, encoder, native_return)) do
+         expected = option_program(port, options, encoded, encoder, native_return),
+         :ok <- option_events(calls, expected) do
       indexes = for event <- events, program_event(event) != [], do: event.index
 
       option = %{
