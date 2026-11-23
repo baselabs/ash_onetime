@@ -3626,6 +3626,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           :idle_ping -> assert current_socket === previous_socket
           :reconnect -> refute current_socket === previous_socket
         end
+
         side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
         proof = ConnectionHistory.build(side)
         assert proof.native.errors == []

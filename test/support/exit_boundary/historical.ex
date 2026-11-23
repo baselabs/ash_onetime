@@ -157,6 +157,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
   defp committed_cut(historical, proof, before) do
     rows = committed_before(proof.states.commits, :holder, before)
     tables = committed_before(proof.states.table_commits, :table, before)
+
     protocols =
       stream_cut(historical.connection_protocols, proof.reads.versions, before, :protocol)
 
