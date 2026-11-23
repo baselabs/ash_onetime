@@ -4131,6 +4131,46 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: backend ownership follows each pipelined frontend request" do
+    {native, streams} = native_connection(:pipeline, nil)
+    assert native.errors == []
+    assert streams.errors == []
+    [connection] = Map.values(streams.connections)
+    frontend = Enum.filter(connection.protocol.messages, &(&1.direction == :frontend))
+    backend = Enum.filter(connection.protocol.messages, &(&1.direction == :backend))
+    assert Enum.map(frontend, & &1.request) == [0, 1]
+    assert Enum.frequencies_by(backend, & &1.request) == %{0 => 4, 1 => 4}
+
+    rows =
+      for %{request: request, decoded: {:data_row, columns}} <- backend,
+          {:data_column, _, _, _, _, _, _, 23, _, value} <- columns,
+          do: {request, value}
+
+    assert rows == [{0, 17}, {1, 29}]
+
+    rejected =
+      ComparatorMutants.with_mutant(:stream_request_owner, fn ->
+        ConnectionReads.build(native)
+      end)
+
+    assert rejected.errors == []
+    [wrong_connection] = Map.values(rejected.connections)
+    wrong_backend = Enum.filter(wrong_connection.protocol.messages, &(&1.direction == :backend))
+    assert Enum.frequencies_by(wrong_backend, & &1.request) == %{0 => 8}
+
+    assert Enum.map(wrong_backend, &Map.delete(&1, :request)) ===
+             Enum.map(backend, &Map.delete(&1, :request))
+
+    assert ConnectionReads.build(native) === streams
+    {fresh_native, fresh_streams} = native_connection(:pipeline, nil)
+    assert fresh_native.errors == []
+    assert fresh_streams.errors == []
+    [fresh_connection] = Map.values(fresh_streams.connections)
+    fresh_backend = Enum.filter(fresh_connection.protocol.messages, &(&1.direction == :backend))
+    assert Enum.frequencies_by(fresh_backend, & &1.request) == %{0 => 4, 1 => 4}
+  end
+
+  @tag :connection_streams
   test "Connection streams: logical rendering consumes only proved native programs" do
     run = ConnectionNative.observe(:pipeline)
     assert run.result == :ok

@@ -425,6 +425,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_request_owner) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_protocol.ex",
+        original: "        operation -> operation.request\n",
+        mutated: "        operation -> 0\n"
+      }
+    ]
+  end
+
   def edits(:stream_tls_binding) do
     [
       %{
