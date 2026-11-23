@@ -1233,6 +1233,45 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: native type-service casts retain their completed dispatch" do
+    check = fn ->
+      run = ConnectionNative.observe_startup()
+      assert run.result == :ok
+
+      owners =
+        for {pid, %{callback: {Postgrex.TypeServer, :handle_call, 3}}} <-
+              run.snapshot.services,
+            do: pid
+
+      completed =
+        Enum.filter(run.snapshot.service_receipts, fn receipt ->
+          receipt.pid in owners and match?({:"$gen_cast", {:done, _}}, receipt.message)
+        end)
+
+      assert completed != []
+
+      for receipt <- completed do
+        assert receipt.registered?
+        assert receipt.called && receipt.returned
+        pid = receipt.pid
+        assert {^pid, :call, {Postgrex.TypeServer, :handle_cast, _arguments}} = receipt.called
+        assert {^pid, :return_from, {Postgrex.TypeServer, :handle_cast, 2}, _result} =
+                 receipt.returned
+        assert receipt.received_stamp < receipt.called_stamp
+        assert receipt.called_stamp < receipt.returned_stamp
+      end
+    end
+
+    check.()
+
+    ComparatorMutants.with_mutant(:stream_service_cast_dispatch, fn ->
+      assert_raise ExUnit.AssertionError, check
+    end)
+
+    check.()
+  end
+
+  @tag :connection_streams
   test "Connection streams: native row type copies have their own descriptor origin" do
     captured =
       ComparatorMutants.with_postgrex_mutant(:row_type_copy, fn -> cached_decoders(nil) end)
