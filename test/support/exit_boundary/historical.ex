@@ -298,20 +298,24 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
     |> Map.values()
     |> Enum.filter(&(&1.returned.index < before))
     |> Enum.sort_by(& &1.returned.index)
-    |> Enum.reduce(historical.pool_clocks, fn pair, clocks ->
-      case {pair.source.event, pair.returned.event} do
-        {{_, :call, {:ets, :give_away, [holder, pool, {:checkin, _queue, clock}]}},
-         {_, :return_from, _, true}} ->
-          case Map.fetch(origins, holder) do
-            {:ok, %{pool: ^pool}} -> Map.put(clocks, holder, clock)
-            _ -> clocks
-          end
-
-        _ ->
-          clocks
-      end
-    end)
+    |> Enum.reduce(historical.pool_clocks, &pool_clock(&1, &2, origins))
   end
+
+  defp pool_clock(
+         %{
+           source: %{event: {_, :call, {:ets, :give_away, [holder, pool, {:checkin, _queue, clock}]}}},
+           returned: %{event: {_, :return_from, _, true}}
+         },
+         clocks,
+         origins
+       ) do
+    case Map.fetch(origins, holder) do
+      {:ok, %{pool: ^pool}} -> Map.put(clocks, holder, clock)
+      _ -> clocks
+    end
+  end
+
+  defp pool_clock(_pair, clocks, _origins), do: clocks
 
   defp transport(%{sock: {:gen_tcp, port}}) do
     owner =

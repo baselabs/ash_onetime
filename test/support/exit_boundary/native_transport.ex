@@ -33,24 +33,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
     state =
       profile_component(profile, :native_calls, fn ->
-        Enum.reduce(indexed.events, initial, fn
-          %{event: {_, :call, {:gen_tcp, :recv, [port, length, timeout]}}} = source, state
-          when is_port(port) ->
-            read(source, port, length, timeout, state)
-
-          %{event: {_, :call, {:gen_tcp, :send, [port, data]}}} = source, state
-          when is_port(port) ->
-            write(source, port, data, state)
-
-          %{event: {_, :call, {:prim_inet, :setopts, [port, options]}}} = source, state
-          when is_port(port) and is_list(options) ->
-            if active_option?(options),
-              do: option(source, port, options, state),
-              else: state
-
-          _, state ->
-            state
-        end)
+        Enum.reduce(indexed.events, initial, &native_event/2)
       end)
 
     state = profile_component(profile, :native_option_sources, fn -> option_sources(state) end)
@@ -71,6 +54,29 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       errors: Enum.reverse(state.errors)
     }
   end
+
+  defp native_event(
+         %{event: {_, :call, {:gen_tcp, :recv, [port, length, timeout]}}} = source,
+         state
+       )
+       when is_port(port),
+       do: read(source, port, length, timeout, state)
+
+  defp native_event(%{event: {_, :call, {:gen_tcp, :send, [port, data]}}} = source, state)
+       when is_port(port),
+       do: write(source, port, data, state)
+
+  defp native_event(
+         %{event: {_, :call, {:prim_inet, :setopts, [port, options]}}} = source,
+         state
+       )
+       when is_port(port) and is_list(options) do
+    if active_option?(options),
+      do: option(source, port, options, state),
+      else: state
+  end
+
+  defp native_event(_source, state), do: state
 
   # Temporary native subcomponent timing, enabled only by the owning TLS
   # experiment. Event selection, arguments and validation remain identical.
@@ -441,7 +447,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     do: optimized_option(options, rest, accumulator, <<22, 2::32>>)
 
   defp option_values([{:active, count} | rest] = options, accumulator)
-       when is_integer(count) and count >= -32768 and count < 32768,
+       when is_integer(count) and count >= -32_768 and count < 32_768,
        do: optimized_option(options, rest, accumulator, <<22, 3::32, count::signed-16>>)
 
   defp option_values([{name, value} | rest] = options, accumulator) do
