@@ -2959,6 +2959,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                 cache_statement: "pending_native_description"
               )
 
+              SQL.query!(
+                context.repo,
+                "SELECT repeat('x', 1048576) AS partial_frame_history",
+                [],
+                cache_statement: "partial_native_frame"
+              )
+
               :ok
             end)
           end,
@@ -3275,6 +3282,72 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
         assert same_completion?,
                "the retained prefix and remaining real messages must recover the full protocol"
+      end
+
+      chunks =
+        (for write <- native.writes,
+             do: %{
+               port: write.port,
+               index: write.command.index,
+               direction: :frontend,
+               bytes: write.bytes,
+               source_offset: write.header_size,
+               copies: write.copies,
+               phase: :shared
+             }) ++
+          (for read <- native.reads,
+               match?({:ok, _}, read.result),
+               do: %{
+                 port: read.port,
+                 index: read.delivered.index,
+                 direction: :backend,
+                 bytes: read.bytes,
+                 copies: read.copies,
+                 phase: :backend
+               }) ++
+          (for delivery <- native.active,
+               do: %{
+                 port: delivery.port,
+                 index: delivery.delivered.index,
+                 direction: :backend,
+                 bytes: delivery.bytes,
+                 copies: delivery.copies,
+                 phase: :backend
+               })
+
+      partial =
+        for read <- native.reads,
+            prefix =
+              chunks
+              |> Enum.filter(&(&1.port == read.port and &1.index < read.source.index))
+              |> Enum.sort_by(& &1.index)
+              |> Enum.reduce(Wire.frame_state(), fn chunk, state ->
+                Wire.push_frame(state, chunk)
+              end),
+            get_in(prefix.directions, [:backend, :buffer]) not in [nil, <<>>],
+            do: {read.port, read.source.index, prefix}
+
+      assert partial != [], "the real large DataRow must cross a native receive boundary"
+
+      for {port, before, prefix} <- partial do
+        assert {:ok, checkpoint} = cut.(historical, proof, before)
+        framing? = Map.has_key?(checkpoint, :connection_framing)
+        assert framing?, "the cut must retain partial framing and every native byte span"
+        retained = Map.fetch!(checkpoint.connection_framing, port)
+        same_framing? = retained === prefix
+        assert same_framing?, "the cut must retain the complete directional framing prefix"
+
+        resumed =
+          chunks
+          |> Enum.filter(&(&1.port == port and &1.index >= before))
+          |> Enum.sort_by(& &1.index)
+          |> Enum.reduce(retained, fn chunk, state -> Wire.push_frame(state, chunk) end)
+          |> Wire.finish_frames()
+
+        same_completion? = resumed === Map.fetch!(reads.connections, port).framing
+
+        assert same_completion?,
+               "retained partial bytes and the remaining real chunks must recover full framing"
       end
     after
       send(observer, :stop)
