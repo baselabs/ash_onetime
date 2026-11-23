@@ -496,6 +496,8 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {DBConnection, :log, :_},
         {DBConnection.Holder, :checkout, :_},
         {DBConnection.Holder, :checkin, :_},
+        {DBConnection.Holder, :disconnect, 2},
+        {DBConnection.Holder, :stop, 2},
         {DBConnection.Holder, :new, :_},
         {DBConnection.Holder, :update, :_},
         {DBConnection.Holder, :delete, 1},
