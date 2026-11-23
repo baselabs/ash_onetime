@@ -3049,7 +3049,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :connection_streams
   @tag prepare: :named
-  test "Connection streams: a failed Ecto cache candidate cannot become a query origin", context do
+  test "Connection streams: a failed Ecto cache candidate cannot become a query origin",
+       context do
     Repo.put_dynamic_repo(context.repo)
     historical = Historical.capture(context.prefix)
     cache_table = historical.query_cache.table
@@ -3195,7 +3196,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         comparator_order_observer(parent, parent_monitor, [{stamp, {:return, mfa, nil}} | events])
 
       {:trace_ts, _pid, :exception_from, mfa, _reason, stamp} ->
-        comparator_order_observer(parent, parent_monitor, [{stamp, {:exception, mfa, false}} | events])
+        comparator_order_observer(parent, parent_monitor, [
+          {stamp, {:exception, mfa, false}} | events
+        ])
 
       {:snapshot, ^parent, token} ->
         ordered = events |> Enum.sort_by(&elem(&1, 0)) |> Enum.map(&elem(&1, 1))
