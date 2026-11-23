@@ -4224,15 +4224,43 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              for(
                {_, pair} <- pairs,
                pair.source.pid == receiver,
-               pair.source.mfa == {:tls_gen_connection_1_3, :initial_state, 9},
+               pair.source.mfa in [
+                 {:tls_gen_connection_1_3, :initial_state, 9},
+                 {:tls_dtls_gen_connection, :initial_state, 9}
+               ],
                do: pair
              )
 
     assert {^receiver, :call,
-            {:tls_gen_connection_1_3, :initial_state,
+            {constructor, :initial_state,
              [:client, ^sender, table, host, remote_port, port, options, caller, callbacks]}} =
              created.source.event
 
+    {client, expected_constructor} =
+      if Map.fetch!(elem(options, 0), :versions) == [{3, 4}],
+        do: {:tls_client_connection_1_3, :tls_gen_connection_1_3},
+        else: {:tls_client_connection, :tls_dtls_gen_connection}
+
+    assert constructor == expected_constructor
+
+    assert [client_init] =
+             for(
+               %{event: {^receiver, :call, {^client, :init, [arguments]}}} = source <- indexed,
+               arguments === [
+                 :client,
+                 sender,
+                 table,
+                 host,
+                 remote_port,
+                 port,
+                 options,
+                 caller,
+                 callbacks
+               ],
+               do: source
+             )
+
+    assert client_init.index < created.source.index
     assert is_reference(table) and is_port(port)
     assert {^receiver, :return_from, _, initial} = created.returned.event
 
@@ -4276,7 +4304,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     same_initial? = input === initial
     assert same_initial?, "SSL configuration must consume its own native constructor return"
     assert created.returned.index < configured.source.index
-    assert {^receiver, :return_from, _, configured_state} = configured.returned.event
+    assert {^receiver, :return_from, _, _configured_state} = configured.returned.event
 
     entries =
       for %{event: {pid, :call, {:gen_statem, :enter, arguments}}} = source <- indexed,
@@ -4288,7 +4316,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
               [
                 ^dynamic_supervisor,
                 [],
-                :tls_client_connection_1_3,
+                ^client,
                 ^receiver,
                 :infinity,
                 :initial_hello,
@@ -4298,7 +4326,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            ] =
              Enum.filter(entries, &(elem(&1, 0) == receiver))
 
-    same_configured? = entered === configured_state
+    expected_entry =
+      cold_tls_entry_state(
+        pairs,
+        receiver,
+        client,
+        configured,
+        {host, remote_port, ssl_options, entry.index}
+      )
+
+    same_configured? = entered === expected_entry
     assert same_configured?, "the cold receiver must enter with its configured native state"
     assert configured.returned.index < entry.index
 
@@ -4397,6 +4434,62 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     restored = ConnectionNative.observe_tls_startup()
     restored_side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
     assert ConnectionHistory.build(restored_side).errors == []
+  end
+
+  defp cold_tls_entry_state(
+         _pairs,
+         _receiver,
+         :tls_client_connection_1_3,
+         configured,
+         _context
+       ) do
+    {_, :return_from, _, state} = configured.returned.event
+    state
+  end
+
+  defp cold_tls_entry_state(
+         pairs,
+         receiver,
+         :tls_client_connection,
+         configured,
+         {host, port, options, before}
+       ) do
+    {_, :return_from, _, state} = configured.returned.event
+    environment = elem(state, 2)
+    alternatives = elem(elem(state, 3), 7)
+
+    assert [certificates] =
+             for(
+               {_, pair} <- pairs,
+               pair.source.event ==
+                 {receiver, :call, {:ssl_certificate, :available_cert_key_pairs, [alternatives]}},
+               configured.returned.index < pair.source.index,
+               pair.returned.index < before,
+               do: pair
+             )
+
+    {^receiver, :return_from, _, certificate_pairs} = certificates.returned.event
+
+    assert [selection] =
+             for(
+               {_, pair} <- pairs,
+               pair.source.event ==
+                 {receiver, :call,
+                  {:ssl_session, :client_select_session,
+                   [
+                     {host, port, options},
+                     elem(environment, 13),
+                     elem(environment, 14),
+                     elem(state, 8),
+                     certificate_pairs
+                   ]}},
+               certificates.returned.index < pair.source.index,
+               pair.returned.index < before,
+               do: pair
+             )
+
+    {^receiver, :return_from, _, session} = selection.returned.event
+    put_elem(state, 8, session)
   end
 
   @tag :connection_streams
