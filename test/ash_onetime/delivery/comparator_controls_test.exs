@@ -6269,6 +6269,45 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert_green(restored)
   end
 
+  @tag :connection_streams
+  test "OPEN reference eligibility is fixed before a real action can omit OPEN", context do
+    path = "lib/ash_onetime/delivery.ex"
+    original = File.read!(path)
+    site = "        with :complete <- Store.committed_completion(target, claim),\n"
+    assert length(:binary.matches(original, site)) == 1
+
+    mutated =
+      String.replace(
+        original,
+        site,
+        "        with :complete <- if(rem(byte_size(envelope) - 65, 2) == 1, do: :complete, else: Store.committed_completion(target, claim)),\n",
+        global: false
+      )
+
+    row = row!(:issue, :execute)
+    assert Registry.allocation_checkpoint?(row)
+
+    Compiled.with_source(mutated, path, fn ->
+      pair = observe(context, row, Values.set()[:vd])
+      assert Search.hits(pair.run) == []
+
+      refute Enum.any?(
+               pair.run.run.events,
+               &match?(%{event: {_, :call, {AshOnetime.Store, :committed_completion, _}}}, &1)
+             )
+
+      assert Map.has_key?(pair.run, :readback_reference),
+             "a prescribed OPEN reference cannot disappear with the observed OPEN"
+
+      assert pair.run.allocation_checkpoint?
+      assert pair.run.readback_reference.run.result == :complete
+      assert pair.run.readback_reference.historical.repo == pair.run.historical.repo
+      refute Map.has_key?(pair.twin, :readback_reference)
+    end)
+
+    assert File.read!(path) === original
+  end
+
   @tag :allocation_checkpoint
   test "value-conditioned OPEN existence cannot choose its own allocation obligation", context do
     path = "lib/ash_onetime/delivery.ex"
