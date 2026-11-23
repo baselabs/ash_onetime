@@ -3,57 +3,54 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
   alias AshOnetime.Test.ExitBoundary.References
 
   def build(indexed, side) do
-    historical = indexed.query_cache
-    ids = for {_, _, _, {id, query}} <- historical.rows, into: %{}, do: {statement(query), id}
-    generated = for {_, %{value: value}} <- indexed.origins, is_integer(value), do: value
-    initial = %{ids: ids, cache_events: MapSet.new(), pending: %{}, errors: []}
+    history = side.connection_history
+    historical = history.indexed.query_cache
 
-    result = Enum.reduce(indexed.events, initial, &event(&1, &2, historical.table, generated))
+    ids =
+      for {_, status, _, {id, query}} <- historical.rows,
+          status in [:cache, :cached],
+          into: %{},
+          do: {statement(query), id}
+
+    generated = for {_, %{value: value}} <- indexed.origins, is_integer(value), do: value
+
+    cache_events =
+      for {_index,
+           %{
+             source: %{event: {_, :call, {:ets, _, [table | _]}}} = source,
+             returned: returned
+           }} <- history.native.pairs,
+          table == historical.table,
+          index <- [source.index, returned.index],
+          into: MapSet.new(),
+          do: index
+
+    result =
+      Enum.reduce(history.states.table_commits, %{ids: ids, errors: []}, fn commit, state ->
+        if commit.table == historical.table and is_integer(commit.origin) do
+          source = Map.fetch!(history.native.pairs, commit.origin).source
+
+          case source.event do
+            {_, :call, {:ets, :insert_new, [_, {_, :cache, _, {id, query}}]}} ->
+              if id in generated,
+                do: %{state | ids: Map.put(state.ids, statement(query), id)},
+                else: %{state | errors: [{source, id, :missing_unique_integer_origin} | state.errors]}
+
+            _ ->
+              state
+          end
+        else
+          state
+        end
+      end)
 
     names =
       Map.new(result.ids, fn {sql, id} ->
         {sql, References.query_name(id, side.historical.repo_metadata)}
       end)
 
-    Map.put(result, :names, names)
+    result |> Map.put(:names, names) |> Map.put(:cache_events, cache_events)
   end
-
-  defp event(
-         %{event: {pid, :call, {:ets, function, [table | args]}}} = e,
-         state,
-         expected_table,
-         generated
-       )
-       when table == expected_table do
-    state = %{
-      state
-      | cache_events: MapSet.put(state.cache_events, e.index),
-        pending: Map.put(state.pending, {pid, e.mfa}, true)
-    }
-
-    case {function, args} do
-      {:insert_new, [{_, :cache, _, {id, query}}]} ->
-        if id in generated,
-          do: %{state | ids: Map.put(state.ids, statement(query), id)},
-          else: %{state | errors: [{e, id, :missing_unique_integer_origin} | state.errors]}
-
-      _ ->
-        state
-    end
-  end
-
-  defp event(%{event: {pid, tag, mfa, _}} = e, state, _, _)
-       when tag in [:return_from, :exception_from] do
-    if Map.has_key?(state.pending, {pid, mfa}),
-      do: %{
-        state
-        | cache_events: MapSet.put(state.cache_events, e.index),
-          pending: Map.delete(state.pending, {pid, mfa})
-      },
-      else: state
-  end
-
-  defp event(_, state, _, _), do: state
 
   def expected_name(origins, query), do: Map.fetch(origins.names, statement(query))
   defp statement(%Postgrex.Query{statement: sql}), do: IO.iodata_to_binary(sql)

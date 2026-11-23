@@ -3050,6 +3050,47 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           for {_name, _ref, %Postgrex.Query{} = query} <- tables[table] do
             described? = Enum.any?(connection.descriptors, &(&1.query === query))
 
+            if not described? do
+              factories =
+                for {index, output} <- decoders.query_outputs,
+                    output.query.ref === query.ref do
+                  input? =
+                    case output.origin do
+                      {factory, _} -> Map.has_key?(decoders.query_inputs, factory)
+                      _ -> false
+                    end
+
+                  %{
+                    index: index,
+                    input?: input?,
+                    fields:
+                      for({field, value} <- Map.from_struct(query),
+                        Map.fetch!(output.query, field) !== value,
+                        do: field
+                      )
+                  }
+                end
+
+              origins =
+                for origin <- checkpoint.query_origins,
+                    origin.query.ref === query.ref do
+                  %{
+                    same_socket?: origin.sock === connection.protocol.sock,
+                    same_types?: origin.query.types === connection.protocol.types,
+                    fields:
+                      for({field, value} <- Map.from_struct(query),
+                        Map.fetch!(origin.query, field) !== value,
+                        do: field
+                      )
+                  }
+                end
+
+              IO.puts(
+                "CONNECTION_CUT_DESCRIPTOR_ORIGINS: " <>
+                  Diagnostics.render(%{phase: phase, factories: factories, origins: origins})
+              )
+            end
+
             assert described?,
                    "the full cut must retain the committed cache row's native descriptor"
           end
@@ -3121,6 +3162,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert is_integer(run.result)
     side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    history = ConnectionHistory.build(side)
+    assert history.errors == []
+    side = Map.put(side, :connection_history, history)
     indexed = Origins.build(side)
     queries = QueryOrigins.build(indexed, side)
     assert queries.errors == []
@@ -4635,6 +4679,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     pair = observe(context, row!(:rotate, :execute), Values.set()[:va])
 
     for side <- [pair.run, pair.twin] do
+      history = ConnectionHistory.build(side)
+      assert history.errors == []
+      side = Map.put(side, :connection_history, history)
       indexed = Origins.build(side)
       events = indexed.events
       contexts = DatabaseOrigins.sql_contexts(events)

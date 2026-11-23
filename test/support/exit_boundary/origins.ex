@@ -25,17 +25,6 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
       query_cache: side.historical.query_cache
     }
 
-    used_keys =
-      for %{event: {_, :call, {:ets, :lookup, [table, key]}}} <- side.run.events,
-          table == side.historical.query_cache.table,
-          do: key
-
-    initial =
-      put_in(
-        initial.query_cache.rows,
-        Enum.filter(initial.query_cache.rows, &(elem(&1, 0) in used_keys))
-      )
-
     Enum.reduce(side.run.events, initial, &event(&1, &2, side))
     |> Map.update!(:events, &Enum.reverse/1)
     |> existing_identities(side)
