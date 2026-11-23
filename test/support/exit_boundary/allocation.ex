@@ -21,6 +21,8 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
   # The same accumulated bijection binds each occurrence; it is never reset at
   # a checkin. This makes a later reuse of another holder a real conflict.
   def pair(pairing, run, twin, ri, ti) do
+    run = Map.put_new_lazy(run, :connection_history, fn -> ConnectionHistory.build(run) end)
+    twin = Map.put_new_lazy(twin, :connection_history, fn -> ConnectionHistory.build(twin) end)
     left = leases(run, ri)
     right = leases(twin, ti)
     roles = Enum.uniq(Enum.map(left ++ right, & &1.role))
@@ -42,8 +44,8 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
 
     # Native program order, spawn and uniquely owned send/receive edges provide
     # the partial order. Sorted timestamps provide no cross-process edge here.
-    rc = causal(ri.events, left)
-    tc = causal(ti.events, right)
+    rc = causal(run.connection_history.program_events, left)
+    tc = causal(twin.connection_history.program_events, right)
 
     order_errors =
       for {a, b} <- paired,
@@ -134,7 +136,13 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
 
     unless history.errors == [], do: raise("allocation requires the whole valid raw history")
 
-    indexed.events
+    # Rendering may change qualified field copies and consume native transport
+    # instructions. Lease facts still come from the original complete program;
+    # only the already-established structural role comes from Origins.
+    before = Map.get(side.historical, :event_offset, 0)
+    events = Enum.filter(history.program_events, &(&1.index >= before))
+
+    events
     |> Enum.flat_map(fn
       %{
         event:
@@ -142,10 +150,11 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
            {:ok, {:pool_ref, ^pool, queue, timer, holder, lock} = ref, Postgrex.Protocol, _,
             protocol}}
       } = source ->
+        source = Map.put(source, :role, Map.fetch!(indexed.roles, caller))
         terminal = lease_terminal(history.native.pairs, source, ref, pool, queue, holder)
 
         conn_ref =
-          Enum.find_value(indexed.events, fn
+          Enum.find_value(events, fn
             %{
               index: n,
               event:
