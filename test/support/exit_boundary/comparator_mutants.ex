@@ -515,8 +515,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/connection_states.ex",
         original: "    |> exact(source, :state_owner_copy, actual, version.protocol)\n",
-        mutated:
-          "    |> exact(source, :state_owner_copy, version.protocol, version.protocol)\n"
+        mutated: "    |> exact(source, :state_owner_copy, version.protocol, version.protocol)\n"
       },
       %{
         path: "test/support/exit_boundary/connection_states.ex",

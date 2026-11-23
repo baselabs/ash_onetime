@@ -803,6 +803,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
         for direction <- [:frontend, :backend] do
           stream = Map.fetch!(idle.framing.directions, direction)
+
           assert Map.take(stream, [:buffer, :offset, :received, :provenance]) ==
                    %{buffer: <<>>, offset: 0, received: 0, provenance: []}
         end
@@ -3838,7 +3839,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
                  _ ->
                    false
-               end), "startup admission requires the actual traced connection constructor"
+               end),
+               "startup admission requires the actual traced connection constructor"
 
         assert reads.errors == []
 
@@ -3890,6 +3892,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     test "Connection streams: native #{lifecycle} retains the renewed holder's cut origin",
          context do
       lifecycle = unquote(lifecycle)
+
       {run, historical, original, renewed, row, token} =
         native_renewal_observation(context, lifecycle)
 
