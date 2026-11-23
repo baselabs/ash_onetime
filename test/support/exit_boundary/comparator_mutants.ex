@@ -2241,6 +2241,20 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end
   end
 
+  defp postgrex_edits(:ssl_negotiation_length) do
+    [
+      {"    case :gen_tcp.recv(sock, 1, :infinity) do\n",
+       "    case :gen_tcp.recv(sock, 0, :infinity) do\n"}
+    ]
+  end
+
+  defp postgrex_edits(:ssl_negotiation_timeout) do
+    [
+      {"    case :gen_tcp.recv(sock, 1, :infinity) do\n",
+       "    case :gen_tcp.recv(sock, 1, 60_000) do\n"}
+    ]
+  end
+
   defp postgrex_edits(:startup_peer_copy) do
     original =
       "    msg = msg_startup(params: [user: user, database: database] ++ params)\n\n    case msg_send(s, msg, \"\") do\n"

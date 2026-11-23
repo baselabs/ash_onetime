@@ -4097,6 +4097,60 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: native SSL negotiation retains its exact cleartext prefix" do
+    {native, reads} = ssl_upgrade_prefix(ConnectionNative.observe_tls_startup())
+    assert native.errors == []
+    assert reads.errors == []
+    [connection] = Map.values(reads.connections)
+    assert Enum.map(connection.protocol.messages, & &1.decoded) ==
+             [{:ssl_request, 80_877_103}, {:ssl_response, ?S}]
+
+    obligations = [
+      {:ssl_negotiation_length, :receive_length, :stream_length},
+      {:ssl_negotiation_timeout, :receive_timeout, :stream_timeout}
+    ]
+
+    for {corruption, rule, _mutant} <- obligations do
+      run =
+        ComparatorMutants.with_postgrex_mutant(
+          corruption,
+          &ConnectionNative.observe_tls_startup/0
+        )
+
+      {native, reads} = ssl_upgrade_prefix(run)
+      assert native.errors == []
+      assert Enum.map(reads.errors, & &1.rule) == [rule]
+
+      for {_corruption, other_rule, mutant} <- obligations do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionReads.build(native) end)
+        expected = if other_rule == rule, do: [], else: [rule]
+        assert Enum.map(checked.errors, & &1.rule) == expected
+      end
+
+      assert Enum.map(ConnectionReads.build(native).errors, & &1.rule) == [rule]
+      {restored_native, restored} = ssl_upgrade_prefix(ConnectionNative.observe_tls_startup())
+      assert restored_native.errors == []
+      assert restored.errors == []
+    end
+  end
+
+  defp ssl_upgrade_prefix(run) do
+    assert run.result == :ok
+    indexed = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+
+    assert [upgrade] =
+             for {_, pair} <- NativeTransport.pairs(indexed),
+                 pair.source.mfa == {:ssl, :connect, 3},
+                 do: pair
+
+    # This is a real capture prefix at the actual TLS boundary. Every raw
+    # event is unchanged; the full cold constructor/worker proof follows it.
+    prefix = Enum.take_while(indexed, &(&1.index < upgrade.source.index))
+    native = NativeTransport.build(%{events: prefix})
+    {native, ConnectionReads.build(native)}
+  end
+
+  @tag :connection_streams
   test "Connection streams: cold TLS derives its workers from the native startup chain",
        context do
     Repo.put_dynamic_repo(context.repo)
