@@ -3977,6 +3977,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Enum.any?(private, fn {_receipt, program} -> program.kind == :startup_ack end),
            "the real type-service startup ack needs its own completed native program"
 
+    assert Enum.any?(private, fn {receipt, program} ->
+             program.kind == :shutdown_monitor_timeout and receipt.message == :timeout
+           end),
+           "the real monitor-child receive timeout needs its completed native program"
+
     assert Enum.all?(private, fn {receipt, _program} ->
              is_nil(receipt.called) and is_nil(receipt.returned)
            end),

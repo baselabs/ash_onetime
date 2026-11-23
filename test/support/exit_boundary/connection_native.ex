@@ -120,7 +120,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp retire_type_services(types, retirement \\ :shutdown) do
     for pid <- native_type_servers(types) do
       Process.unlink(pid)
-      if retirement == :timed_shutdown, do: :ok = :sys.suspend(pid)
+      if retirement == :timed_shutdown, do: true = :erlang.suspend_process(pid)
       :ok = DynamicSupervisor.terminate_child(Postgrex.TypeSupervisor, pid)
     end
   end

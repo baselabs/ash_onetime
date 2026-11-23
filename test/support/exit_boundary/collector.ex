@@ -799,7 +799,46 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     end
   end
 
+  defp service_program(%{message: :timeout} = receipt, context) do
+    pid = receipt.pid
+
+    matches =
+      for pair <- service_calls(context, pid, DynamicSupervisor, :monitor_child),
+          {^pid, :call, {_, _, [child]}} <- [pair.source.event],
+          pair.returned.event ===
+            {pid, :return_from, {DynamicSupervisor, :monitor_child, 1}, :ok},
+          pair.source.stamp < receipt.received_stamp,
+          receipt.received_stamp < pair.returned.stamp,
+          {:ok, _ref, monitor} <- [service_monitor(context, pid, child, pair)],
+          monitor.returned.stamp < receipt.received_stamp,
+          service_unlinked?(context, pid, child, pair, monitor, receipt),
+          do: pair
+
+    case matches do
+      [pair] ->
+        service_program_result(
+          :shutdown_monitor_timeout,
+          pair,
+          receipt,
+          {:shutdown_monitor_timeout, pair.source.stamp}
+        )
+
+      _ ->
+        :error
+    end
+  end
+
   defp service_program(_receipt, _context), do: :error
+
+  defp service_unlinked?(context, pid, child, parent, monitor, receipt) do
+    Enum.any?(service_calls(context, pid, :erlang, :unlink), fn pair ->
+      monitor.returned.index < pair.source.index and
+        pair.returned.stamp < receipt.received_stamp and
+        pair.returned.index < parent.returned.index and
+        pair.source.event === {pid, :call, {:erlang, :unlink, [child]}} and
+        pair.returned.event === {pid, :return_from, {:erlang, :unlink, 1}, true}
+    end)
+  end
 
   defp service_flush(receipt, ref, context) do
     pid = receipt.pid

@@ -87,9 +87,9 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
 
     if errors == [] do
       pairs =
-        Enum.map(histories, fn {run, twin, _left, _right} ->
-          [a] = leases(run, Origins.build(run))
-          [b] = leases(twin, Origins.build(twin))
+        Enum.map(histories, fn {run, twin, left, right} ->
+          [a] = leases(Map.put(run, :connection_history, left), Origins.build(run))
+          [b] = leases(Map.put(twin, :connection_history, right), Origins.build(twin))
           {a, b}
         end)
 
@@ -130,6 +130,9 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
 
   def leases(side, indexed) do
     pool = side.historical.repo_metadata.pid
+    history = Map.get_lazy(side, :connection_history, fn -> ConnectionHistory.build(side) end)
+
+    unless history.errors == [], do: raise("allocation requires the whole valid raw history")
 
     indexed.events
     |> Enum.flat_map(fn
@@ -173,10 +176,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
               nil
           end)
 
-        historical = Map.fetch!(side.historical.connections, holder)
-
-        port =
-          NativeTransport.physical_port(%{historical: side.historical.connections}, protocol.sock)
+        {owner, port} = lease_origin(history, source, holder, pool, protocol)
 
         [
           %{
@@ -191,7 +191,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
             holder: holder,
             lock: lock,
             conn_ref: conn_ref,
-            owner: historical.owner,
+            owner: owner,
             backend: protocol.connection_id,
             port: port
           }
@@ -205,6 +205,28 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
       {Map.put(lease, :ordinal, ordinal), Map.put(counts, lease.role, ordinal + 1)}
     end)
     |> elem(0)
+  end
+
+  # A lease can acquire a holder born after arming. Resolve its owner and
+  # physical connection from that holder's validated native creation and the
+  # last committed row at this occurrence, never from a later live ETS read.
+  defp lease_origin(history, source, holder, pool, protocol) do
+    origin = Map.fetch!(history.states.holder_origins, holder)
+
+    commit =
+      history.states.commits
+      |> Enum.filter(&(&1.holder == holder and &1.index < source.index))
+      |> Enum.max_by(& &1.index)
+
+    {:conn, owner, Postgrex.Protocol, committed, _lock, _clock, _deadline, _status} = commit.row
+    port = NativeTransport.physical_port(history.native, protocol.sock)
+
+    unless Map.get(origin, :holder_origin_index, -1) < source.index and
+             origin.owner == owner and origin.pool == pool and origin.port == port and
+             committed === protocol,
+           do: raise("the native lease does not match its holder origin and committed row")
+
+    {owner, port}
   end
 
   defp errors_for_leases(leases) do
