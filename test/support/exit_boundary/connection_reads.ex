@@ -28,9 +28,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       historical: Map.get(native, :historical, %{})
     }
 
-    connections = Map.new(protocols, fn {port, _protocol} ->
-      {port, initial_connection(initial, port)}
-    end)
+    connections =
+      Map.new(protocols, fn {port, _protocol} ->
+        {port, initial_connection(initial, port)}
+      end)
 
     initial = %{initial | connections: connections}
     before = Map.get(native, :event_offset, 0)
@@ -262,8 +263,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       end)
 
     connection = %{connection | framing: framing, protocol: protocol}
-    version = %{index: chunk.index, port: port, framing: framing,
-                protocol: retained_protocol(connection)}
+
+    version = %{
+      index: chunk.index,
+      port: port,
+      framing: framing,
+      protocol: retained_protocol(connection)
+    }
 
     state
     |> put_in([:connections, port], connection)
@@ -271,7 +277,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
   end
 
   defp retained_protocol(connection) do
-    messages = connection.protocol.messages ++ Enum.reverse(Map.get(connection, :historical_messages, []))
+    messages =
+      connection.protocol.messages ++ Enum.reverse(Map.get(connection, :historical_messages, []))
+
     %{connection.protocol | messages: messages}
   end
 

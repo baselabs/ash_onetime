@@ -505,6 +505,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {DBConnection.Connection, :pool_update, 2},
         {AshOnetime.Test.ExitBoundary.Scenarios, :allocation_checkpoint, 0},
         {AshOnetime.Test.ExitBoundary.Scenarios, :"-allocation_checkpoint/0-fun-0-", 0},
+        {Postgrex.Protocol, :connect, 1},
         {Postgrex.Protocol, :handle_prepare, :_},
         {Postgrex.Protocol, :disconnect, 2},
         {Postgrex.Protocol, :cancel_request, :_},

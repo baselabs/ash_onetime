@@ -259,9 +259,14 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
     checkpoint =
       checkpoint
       |> Map.put(:connection_native_roots, proof.native_roots)
-      |> Map.put(:connection_program_events,
-        Enum.take_while(proof.program_events, &(&1.index < before)))
-      |> Map.put(:connection_decoder_program, ConnectionDecoders.checkpoint(proof.decoders, before))
+      |> Map.put(
+        :connection_program_events,
+        Enum.take_while(proof.program_events, &(&1.index < before))
+      )
+      |> Map.put(
+        :connection_decoder_program,
+        ConnectionDecoders.checkpoint(proof.decoders, before)
+      )
       |> Map.put(:connection_state_program, ConnectionStates.checkpoint(proof.states, before))
 
     {:ok, Map.put(checkpoint, :event_offset, before)}

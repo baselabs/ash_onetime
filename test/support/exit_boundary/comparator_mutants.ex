@@ -499,6 +499,22 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_owner_copy) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: "    |> exact(source, :state_owner_copy, actual, version.protocol)\n",
+        mutated:
+          "    |> exact(source, :state_owner_copy, version.protocol, version.protocol)\n"
+      },
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: "    actual = owner_term(source.event, path)\n",
+        mutated: "    _actual = owner_term(source.event, path)\n"
+      }
+    ]
+  end
+
   def edits(:stream_monitor_source) do
     [
       %{
@@ -2086,13 +2102,42 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   # server traffic, descriptors and captures remain native. The source file and
   # disk BEAM never change; restore the loaded owner before returning the capture.
   def with_postgrex_mutant(rule, callback) do
-    {:module, Postgrex.Protocol} = :code.ensure_loaded(Postgrex.Protocol)
-    {Postgrex.Protocol, original, beam_path} = :code.get_object_code(Postgrex.Protocol)
     path = Path.join(Mix.Project.deps_path(), "postgrex/lib/postgrex/protocol.ex")
+    with_source_owner(Postgrex.Protocol, path, postgrex_edits(rule), callback)
+  end
+
+  # Corrupt the actual public owner handoff, then undo that one private-field
+  # change on entry. The native ping, factory and captured events stay real.
+  def with_connection_owner_copy(callback) do
+    root = Path.join(Mix.Project.deps_path(), "db_connection/lib/db_connection")
+
+    holder = [
+      {"      DBConnection.Connection.ping({conn, holder}, state)\n",
+       "      DBConnection.Connection.ping({conn, holder}, %{state | null: {:native_owner_copy, state.null}})\n"}
+    ]
+
+    connection = [
+      {"  def ping({pid, ref}, state) do\n",
+       "  def ping({pid, ref}, state) do\n    state = case state.null do\n      {:native_owner_copy, null} -> %{state | null: null}\n      _ -> state\n    end\n"}
+    ]
+
+    with_source_owner(DBConnection.Holder, Path.join(root, "holder.ex"), holder, fn ->
+      with_source_owner(
+        DBConnection.Connection,
+        Path.join(root, "connection.ex"),
+        connection,
+        callback
+      )
+    end)
+  end
+
+  defp with_source_owner(module, path, edits, callback) do
+    {:module, ^module} = :code.ensure_loaded(module)
+    {^module, original, beam_path} = :code.get_object_code(module)
     source = File.read!(path)
 
     mutant =
-      Enum.reduce(postgrex_edits(rule), source, fn {original, changed}, text ->
+      Enum.reduce(edits, source, fn {original, changed}, text ->
         unless length(:binary.matches(text, original)) == 1,
           do: raise("native owner mutant requires one exact source site")
 
@@ -2103,16 +2148,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     try do
       modules = Code.compile_string(mutant, path)
-      {Postgrex.Protocol, binary} = List.keyfind(modules, Postgrex.Protocol, 0)
-      :ok = ConnectionHistory.owner_loaded(Postgrex.Protocol)
-      Compiled.with_object(Postgrex.Protocol, binary, callback)
+      {^module, binary} = List.keyfind(modules, module, 0)
+      :ok = ConnectionHistory.owner_loaded(module)
+      Compiled.with_object(module, binary, callback)
     after
       try do
-        true = :code.soft_purge(Postgrex.Protocol)
-        {:module, Postgrex.Protocol} = :code.load_binary(Postgrex.Protocol, beam_path, original)
-        true = :code.soft_purge(Postgrex.Protocol)
-        :ok = ConnectionHistory.owner_loaded(Postgrex.Protocol)
-        {Postgrex.Protocol, ^original, ^beam_path} = :code.get_object_code(Postgrex.Protocol)
+        true = :code.soft_purge(module)
+        {:module, ^module} = :code.load_binary(module, beam_path, original)
+        true = :code.soft_purge(module)
+        :ok = ConnectionHistory.owner_loaded(module)
+        {^module, ^original, ^beam_path} = :code.get_object_code(module)
 
         unless File.read!(path) === source,
           do: raise("native owner source changed during its in-memory mutation")

@@ -3135,6 +3135,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       cut? = function_exported?(Historical, :cut, 3)
       assert cut?, "the full committed connection-history cut is absent"
       cut = Function.capture(Historical, :cut, 3)
+
       proof = %{
         native: native,
         reads: reads,
@@ -3819,6 +3820,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
         assert Enum.map(ConnectionReads.build(native).errors, & &1.rule) == [:receive_required]
       else
+        assert Enum.any?(native.pairs, fn
+                 {_index, %{source: %{mfa: {:gen_tcp, :connect, 4}, stack: stack}}} ->
+                   {Postgrex.Protocol, :connect, 1} in stack
+
+                 _ ->
+                   false
+               end), "startup admission requires the actual traced connection constructor"
+
         assert reads.errors == []
 
         assert Enum.any?(reads.connections, fn
@@ -3843,168 +3852,83 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     test "Connection streams: native #{lifecycle} retains the renewed holder's cut origin",
          context do
       lifecycle = unquote(lifecycle)
-      parent = self()
-      token = make_ref()
+      {run, historical, original, renewed, row, token} =
+        native_renewal_observation(context, lifecycle)
 
-      {observer, monitor} =
-        spawn_monitor(fn ->
-          parent_monitor = Process.monitor(parent)
-          holder_observer(parent, token, parent_monitor)
+      assert renewed != original
+      refute Map.has_key?(historical.connections, renewed)
+      previous_socket = historical.connections[original].protocol.sock
+      current_socket = elem(row, 3).sock
+
+      case lifecycle do
+        :idle_ping -> assert current_socket === previous_socket
+        :reconnect -> refute current_socket === previous_socket
+      end
+
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
+      assert proof.native.errors == []
+      assert proof.reads.errors == []
+      assert proof.decoders.errors == []
+
+      for error <- proof.states.errors do
+        Diagnostics.emit(
+          "CONNECTION_RENEWAL_OWNER_FAILURE",
+          Map.take(error, [:index, :at, :rule, :path, :context])
+        )
+      end
+
+      assert proof.states.errors == [],
+             "a native holder renewal must retain its owner origin before cutting"
+
+      [barrier] =
+        Enum.filter(proof.indexed.events, fn
+          %{event: {_, :receive, {:native_holder_cut, ^token, :renewed, :observed}}} -> true
+          _ -> false
         end)
 
-      try do
-        run =
-          ExitBoundary.observe(
-            fn ->
-              options =
-                Repo.config()
-                |> Keyword.delete(:name)
-                |> Keyword.put(:pool, DBConnection.ConnectionPool)
-                |> Keyword.put(:pool_size, 1)
-                |> Keyword.put(:idle_interval, 5_000)
-                |> Keyword.put(:types, Postgrex.DefaultTypes)
+      assert {:ok, checkpoint} = Historical.cut(historical, proof, barrier.index)
+      connection = Map.fetch!(checkpoint.connections, renewed)
 
-              {:ok, pool} = Postgrex.start_link(options)
+      expected =
+        {:conn, connection.owner, Postgrex.Protocol, connection.protocol, connection.lock,
+         connection.clock, connection.deadline, connection.status}
 
-              try do
-                %{rows: [[17]]} = Postgrex.query!(pool, "SELECT 17::int4 AS holder_renewal", [])
-
-                {:ok, pool_ref, Postgrex.Protocol, _checkin, _protocol} =
-                  DBConnection.Holder.checkout(pool, [self()], [])
-
-                Repo.put_dynamic_repo(context.repo)
-                historical = Historical.capture(context.prefix)
-
-                [{holder, connection}] =
-                  Enum.filter(historical.connections, fn {_holder, connection} ->
-                    connection.pool == pool
-                  end)
-
-                send(parent, {:native_renewal_initial, token, historical, holder})
-                %{pool: pool, owner: connection.owner, pool_ref: pool_ref}
-              catch
-                kind, reason ->
-                  GenServer.stop(pool)
-                  :erlang.raise(kind, reason, __STACKTRACE__)
-              end
-            end,
-            fn %{pool: pool, owner: owner, pool_ref: pool_ref} ->
-              try do
-                send(observer, {:native_holder_factory_watch, token, self(), owner})
-
-                receive do
-                  {:native_holder_factory_watch, ^token, :armed} -> :ok
-                after
-                  5_000 -> raise "the independent holder factory observer did not arm"
-                end
-
-                case lifecycle do
-                  :idle_ping ->
-                    :ok = DBConnection.Holder.checkin(pool_ref)
-
-                  :reconnect ->
-                    :ok =
-                      DBConnection.Holder.disconnect(pool_ref, %DBConnection.ConnectionError{
-                        message: "native reconnect witness",
-                        severity: :debug
-                      })
-                end
-
-                renewed =
-                  receive do
-                    {:native_holder_factory, ^token, holder} -> holder
-                  after
-                    15_000 -> raise "the native pool did not complete its holder renewal"
-                  end
-
-                %{rows: [[53]]} = Postgrex.query!(pool, "SELECT 53::int4 AS holder_renewal", [])
-                DBConnection.get_connection_metrics(pool)
-                send(observer, {:native_holder_cut, token, self(), renewed, :renewed})
-
-                receive do
-                  {:native_holder_cut, ^token, :renewed, :observed} -> :ok
-                after
-                  5_000 -> raise "the renewed holder's independent live read did not finish"
-                end
-
-                :ok
-              after
-                GenServer.stop(pool)
-              end
-            end,
-            %{host: [], callbacks: [], preexisting: fn state -> [state.pool, state.owner] end}
-          )
-
-        assert run.result == :ok
-
-        {historical, original} =
-          receive do
-            {:native_renewal_initial, ^token, historical, holder} -> {historical, holder}
-          after
-            0 -> flunk("the native renewal must retain its pre-observation holder history")
-          end
-
-        {renewed, row} =
-          receive do
-            {:native_holder_snapshot, ^token, :renewed, holder, row} -> {holder, row}
-          after
-            0 -> flunk("the native renewal must retain the independent committed holder row")
-          end
-
-        assert renewed != original
-        refute Map.has_key?(historical.connections, renewed)
-        previous_socket = historical.connections[original].protocol.sock
-        current_socket = elem(row, 3).sock
-
-        case lifecycle do
-          :idle_ping -> assert current_socket === previous_socket
-          :reconnect -> refute current_socket === previous_socket
-        end
-
-        side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
-        proof = ConnectionHistory.build(side)
-        assert proof.native.errors == []
-        assert proof.reads.errors == []
-        assert proof.decoders.errors == []
-
-        for error <- proof.states.errors do
-          Diagnostics.emit(
-            "CONNECTION_RENEWAL_OWNER_FAILURE",
-            Map.take(error, [:index, :at, :rule, :path, :context])
-          )
-        end
-
-        assert proof.states.errors == [],
-               "a native holder renewal must retain its owner origin before cutting"
-
-        [barrier] =
-          Enum.filter(proof.indexed.events, fn
-            %{event: {_, :receive, {:native_holder_cut, ^token, :renewed, :observed}}} -> true
-            _ -> false
-          end)
-
-        assert {:ok, checkpoint} = Historical.cut(historical, proof, barrier.index)
-        connection = Map.fetch!(checkpoint.connections, renewed)
-
-        expected =
-          {:conn, connection.owner, Postgrex.Protocol, connection.protocol, connection.lock,
-           connection.clock, connection.deadline, connection.status}
-
-        same_row? = row === expected
-        assert same_row?, "the new holder cut must equal all eight independently read row fields"
-        refute Map.has_key?(checkpoint.connections, original)
-      after
-        send(observer, :stop)
-
-        receive do
-          {:DOWN, ^monitor, :process, ^observer, reason} -> assert reason == :normal
-        after
-          5_000 ->
-            Process.exit(observer, :kill)
-            flunk("the independent holder factory observer did not stop")
-        end
-      end
+      same_row? = row === expected
+      assert same_row?, "the new holder cut must equal all eight independently read row fields"
+      refute Map.has_key?(checkpoint.connections, original)
     end
+  end
+
+  @tag :connection_streams
+  test "Connection streams: a native owner handoff has its own sole copy guard", context do
+    observe = fn -> native_renewal_observation(context, :idle_ping) end
+    {positive, historical, _, _, _, _} = observe.()
+    side = observation_side(context, positive, %{}, row!(:issue, :execute), historical)
+    assert ConnectionHistory.build(side).errors == []
+
+    {corrupted, historical, _, _, _, _} =
+      ComparatorMutants.with_connection_owner_copy(observe)
+
+    side = observation_side(context, corrupted, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+    assert proof.native.errors == []
+    assert proof.reads.errors == []
+    assert proof.decoders.errors == []
+
+    assert [%{rule: :state_owner_copy, at: %{mfa: {DBConnection.Connection, :ping, 2}}}] =
+             proof.states.errors
+
+    for mutant <- [:stream_owner_copy, :stream_state_copy, :stream_helper_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
+      expected = if mutant == :stream_owner_copy, do: [], else: proof.errors
+      assert checked.errors == expected
+    end
+
+    assert ConnectionHistory.build(side).errors == proof.errors
+    {restored, historical, _, _, _, _} = observe.()
+    side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+    assert ConnectionHistory.build(side).errors == []
   end
 
   @tag :connection_streams
@@ -4263,6 +4187,129 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       {:native_tables_cut, ^token, ^phase, :observed} -> :ok
     after
       5_000 -> raise "the native cache observer did not acknowledge its live read"
+    end
+  end
+
+  defp native_renewal_observation(context, lifecycle) do
+    parent = self()
+    token = make_ref()
+
+    {observer, monitor} =
+      spawn_monitor(fn ->
+        parent_monitor = Process.monitor(parent)
+        holder_observer(parent, token, parent_monitor)
+      end)
+
+    try do
+      run =
+        ExitBoundary.observe(
+          fn ->
+            options =
+              Repo.config()
+              |> Keyword.delete(:name)
+              |> Keyword.put(:pool, DBConnection.ConnectionPool)
+              |> Keyword.put(:pool_size, 1)
+              |> Keyword.put(:idle_interval, 5_000)
+              |> Keyword.put(:types, Postgrex.DefaultTypes)
+
+            {:ok, pool} = Postgrex.start_link(options)
+
+            try do
+              %{rows: [[17]]} = Postgrex.query!(pool, "SELECT 17::int4 AS holder_renewal", [])
+
+              {:ok, pool_ref, Postgrex.Protocol, _checkin, _protocol} =
+                DBConnection.Holder.checkout(pool, [self()], [])
+
+              Repo.put_dynamic_repo(context.repo)
+              historical = Historical.capture(context.prefix)
+
+              [{holder, connection}] =
+                Enum.filter(historical.connections, fn {_holder, connection} ->
+                  connection.pool == pool
+                end)
+
+              send(parent, {:native_renewal_initial, token, historical, holder})
+              %{pool: pool, owner: connection.owner, pool_ref: pool_ref}
+            catch
+              kind, reason ->
+                GenServer.stop(pool)
+                :erlang.raise(kind, reason, __STACKTRACE__)
+            end
+          end,
+          fn %{pool: pool, owner: owner, pool_ref: pool_ref} ->
+            try do
+              send(observer, {:native_holder_factory_watch, token, self(), owner})
+
+              receive do
+                {:native_holder_factory_watch, ^token, :armed} -> :ok
+              after
+                5_000 -> raise "the independent holder factory observer did not arm"
+              end
+
+              case lifecycle do
+                :idle_ping ->
+                  :ok = DBConnection.Holder.checkin(pool_ref)
+
+                :reconnect ->
+                  :ok =
+                    DBConnection.Holder.disconnect(pool_ref, %DBConnection.ConnectionError{
+                      message: "native reconnect witness",
+                      severity: :debug
+                    })
+              end
+
+              renewed =
+                receive do
+                  {:native_holder_factory, ^token, holder} -> holder
+                after
+                  15_000 -> raise "the native pool did not complete its holder renewal"
+                end
+
+              %{rows: [[53]]} = Postgrex.query!(pool, "SELECT 53::int4 AS holder_renewal", [])
+              DBConnection.get_connection_metrics(pool)
+              send(observer, {:native_holder_cut, token, self(), renewed, :renewed})
+
+              receive do
+                {:native_holder_cut, ^token, :renewed, :observed} -> :ok
+              after
+                5_000 -> raise "the renewed holder's independent live read did not finish"
+              end
+
+              :ok
+            after
+              GenServer.stop(pool)
+            end
+          end,
+          %{host: [], callbacks: [], preexisting: fn state -> [state.pool, state.owner] end}
+        )
+
+      assert run.result == :ok
+
+      {historical, original} =
+        receive do
+          {:native_renewal_initial, ^token, historical, holder} -> {historical, holder}
+        after
+          0 -> flunk("the native renewal must retain its pre-observation holder history")
+        end
+
+      {renewed, row} =
+        receive do
+          {:native_holder_snapshot, ^token, :renewed, holder, row} -> {holder, row}
+        after
+          0 -> flunk("the native renewal must retain the independent committed holder row")
+        end
+
+      {run, historical, original, renewed, row, token}
+    after
+      send(observer, :stop)
+
+      receive do
+        {:DOWN, ^monitor, :process, ^observer, reason} -> assert reason == :normal
+      after
+        5_000 ->
+          Process.exit(observer, :kill)
+          flunk("the independent holder factory observer did not stop")
+      end
     end
   end
 

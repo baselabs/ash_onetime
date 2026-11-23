@@ -47,7 +47,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     }
 
     saved = Map.get(indexed, :connection_decoder_program, %{})
-    observations = Map.merge(Map.get(saved, :factory_observations, %{}), initial.factory_observations)
+
+    observations =
+      Map.merge(Map.get(saved, :factory_observations, %{}), initial.factory_observations)
+
     initial = initial |> Map.merge(saved) |> Map.put(:factory_observations, observations)
     continuation = %{initial: initial, events: indexed.events, replies: replies}
 
@@ -1365,8 +1368,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     {rest, rows} = row_result(expected)
     consumed = byte_size(cursor.buffer) - byte_size(IO.iodata_to_binary(rest))
     state = retain(state, pair, port, cursor, consumed, rows, expected)
-    update_in(state.pending_cursors[pair.source.index].instance,
-      &Map.put(&1, :descriptor, Map.take(origin, [:index, :path])))
+
+    update_in(
+      state.pending_cursors[pair.source.index].instance,
+      &Map.put(&1, :descriptor, Map.take(origin, [:index, :path]))
+    )
   end
 
   defp message_result(<<tag, size::signed-32, bytes::binary>> = buffer)
