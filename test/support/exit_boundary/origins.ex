@@ -8,10 +8,17 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
   def build(side) do
     initial = %{
       roles:
-        Map.new(side.run.snapshot.services || %{}, fn {pid, binding} ->
+        (side.run.snapshot.services || %{})
+        |> Enum.reject(fn {_pid, binding} -> Map.get(binding, :kind) == :state_machine end)
+        |> Map.new(fn {pid, binding} ->
           {pid, {:service, binding.name}}
         end)
         |> Map.put(side.run.snapshot.root, :caller),
+      native_workers:
+        for({pid, %{kind: :state_machine} = binding} <- side.run.snapshot.services || %{},
+          into: %{},
+          do: {pid, {binding.port, binding.worker}}
+        ),
       role_counts: %{},
       counts: %{},
       origins: %{},
@@ -147,36 +154,40 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
   defp identities(term) when is_tuple(term), do: term |> Tuple.to_list() |> identities()
   defp identities(_), do: []
 
+  defp role(identity, %{roles: roles} = state) when is_map_key(roles, identity),
+    do: {Map.fetch!(roles, identity), state}
+
+  defp role(identity, %{native_workers: workers} = state) when is_map_key(workers, identity) do
+    {port, worker} = Map.fetch!(workers, identity)
+    {connection, state} = role(port, state)
+    role = {:tls_worker, connection, worker}
+    {role, put_in(state.roles[identity], role)}
+  end
+
   defp role(identity, state) do
-    case Map.fetch(state.roles, identity) do
-      {:ok, role} ->
-        {role, state}
+    registered = if is_pid(identity), do: Process.info(identity, :registered_name)
 
-      :error ->
-        registered = if is_pid(identity), do: Process.info(identity, :registered_name)
+    kind =
+      cond do
+        is_port(identity) -> :port
+        is_reference(identity) -> :historical_ref
+        true -> :preexisting
+      end
 
-        kind =
-          cond do
-            is_port(identity) -> :port
-            is_reference(identity) -> :historical_ref
-            true -> :preexisting
-          end
+    n = Map.get(state.role_counts, kind, 0)
 
-        n = Map.get(state.role_counts, kind, 0)
+    role =
+      case registered do
+        {:registered_name, name} when is_atom(name) -> {:registered, name}
+        _ -> {kind, n}
+      end
 
-        role =
-          case registered do
-            {:registered_name, name} when is_atom(name) -> {:registered, name}
-            _ -> {kind, n}
-          end
-
-        {role,
-         %{
-           state
-           | roles: Map.put(state.roles, identity, role),
-             role_counts: Map.put(state.role_counts, kind, n + 1)
-         }}
-    end
+    {role,
+     %{
+       state
+       | roles: Map.put(state.roles, identity, role),
+         role_counts: Map.put(state.role_counts, kind, n + 1)
+     }}
   end
 
   def pair(run, twin, permitted) do

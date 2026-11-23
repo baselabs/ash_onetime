@@ -623,6 +623,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     complete_bindings? = MapSet.new(used_bindings, & &1.socket) === MapSet.new(used_sockets)
     assert complete_bindings?, "every used plaintext socket needs its independently bound history"
 
+    armed_bindings = Enum.filter(run.tls_bindings, &(&1.socket in used_sockets))
+    armed? = MapSet.new(armed_bindings, & &1.socket) === MapSet.new(used_sockets)
+    assert armed?, "each persistent TLS socket needs its own pre-arm machine roots"
+
+    for binding <- armed_bindings, worker <- [binding.owner, binding.sender] do
+      assert Map.has_key?(binding.states, worker)
+      assert Map.has_key?(binding.machines, worker)
+    end
+
     for binding <- used_bindings, worker <- [binding.owner, binding.sender] do
       traced? = Enum.any?(run.events, &(&1.pid == worker and elem(&1.event, 1) == :call))
 

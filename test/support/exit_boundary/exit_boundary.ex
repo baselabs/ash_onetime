@@ -10,7 +10,7 @@ defmodule AshOnetime.Test.ExitBoundary do
   # module loaded during the run is one the run itself caused (E18), not one a dependency
   # happened to load lazily (a query builder's first use, a protocol's implementation).
 
-  alias AshOnetime.Test.ExitBoundary.{Capture, Collector, Diagnostics, Root}
+  alias AshOnetime.Test.ExitBoundary.{Capture, Collector, ConnectionTls, Diagnostics, Root}
 
   @deadline 10_000
 
@@ -27,7 +27,8 @@ defmodule AshOnetime.Test.ExitBoundary do
       :fixture,
       :backtrace_depth,
       :pattern_probe,
-      :initial_state
+      :initial_state,
+      :tls_bindings
     ]
   end
 
@@ -48,7 +49,8 @@ defmodule AshOnetime.Test.ExitBoundary do
       send(root, {:setup, test, setup, invoke, control, preexisting})
       {initial_state, preexisting} = await_ready(root, monitor)
 
-      services = observation_services(spec, initial_state)
+      tls = ConnectionTls.pooled_services()
+      services = Map.merge(tls.services, observation_services(spec, initial_state))
 
       service_frames =
         Enum.map(services, fn
@@ -56,9 +58,11 @@ defmodule AshOnetime.Test.ExitBoundary do
           {_name, callback} -> callback
         end)
 
+      spec = Map.update(spec, :frames, service_frames, &(&1 ++ service_frames))
+
       frames =
         Capture.frames(spec.host, spec.callbacks) ++
-          Map.get(spec, :frames, []) ++ service_frames
+          Map.fetch!(spec, :frames)
 
       # U10 attaches both native patterns before releasing the same root. The
       # passive session drains its own fences after the controlling session has
@@ -87,6 +91,8 @@ defmodule AshOnetime.Test.ExitBoundary do
 
       case Collector.snapshot(collector, @deadline) do
         {:ok, snapshot} ->
+          events = Capture.annotate(snapshot, spec)
+
           pattern_probe =
             if probe do
               case Collector.snapshot(probe, @deadline) do
@@ -102,10 +108,11 @@ defmodule AshOnetime.Test.ExitBoundary do
             result: result,
             residue: snapshot.residue,
             backtrace_depth: 64,
-            events: Capture.annotate(snapshot, spec),
+            events: events,
             snapshot: snapshot,
             pattern_probe: pattern_probe,
             initial_state: initial_state,
+            tls_bindings: Enum.map(tls.bindings, &ConnectionTls.freeze_debug(events, &1)),
             fixture: %{control: control, observer: test, collector: collector}
           }
 

@@ -347,6 +347,13 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   # spawned descendant remains in the same trace session.
   defp service_bindings(declared) do
     Map.new(declared, fn
+      {name, %{kind: :state_machine, pid: pid} = binding} ->
+        unless pid in [binding.owner, binding.sender] and
+                 Port.info(binding.port, :connected) == {:connected, binding.owner},
+          do: raise("a persistent native connection worker is unavailable")
+
+        {pid, Map.put(binding, :name, name)}
+
       {name, %{pid: pid, callback: callback, table: table}} ->
         unless is_pid(pid) and :ets.info(table, :owner) == pid,
           do: raise("a declared native type-table owner is unavailable")
@@ -363,6 +370,11 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
         {pid, %{name: name, callback: callback}}
     end)
   end
+
+  defp service_bound?(pid, %{kind: :state_machine} = binding),
+    do:
+      pid in [binding.owner, binding.sender] and
+        Port.info(binding.port, :connected) == {:connected, binding.owner}
 
   defp service_bound?(pid, %{table: table}), do: :ets.info(table, :owner) == pid
   defp service_bound?(pid, %{name: name}), do: Process.whereis(name) == pid
@@ -390,6 +402,11 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
             pending = Map.update(state.service_pending, pid, [receipt], &(&1 ++ [receipt]))
             %{state | service_pending: pending}
 
+          {{_, _, 3}, {:"$gen_call", {_caller, _tag}, _request}}
+          when binding.kind == :state_machine ->
+            pending = Map.update(state.service_pending, pid, [receipt], &(&1 ++ [receipt]))
+            %{state | service_pending: pending}
+
           _ ->
             state
         end
@@ -401,10 +418,19 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
   defp service_event(state, {pid, :call, {module, function, [message | _] = args}} = event) do
     case Map.fetch(state.services, pid) do
-      {:ok, %{callback: {^module, ^function, arity}}} when arity == length(args) ->
+      {:ok, %{callback: {^module, ^function, arity}} = binding} when arity == length(args) ->
         envelope =
-          case {function, args} do
-            {:handle_call, [request, from, _state]} -> {:"$gen_call", from, request}
+          case {Map.get(binding, :kind), function, args} do
+            {:state_machine, _, [{:call, from}, request, _data]} ->
+              {:"$gen_call", from, request}
+
+            {:state_machine, _, [:cast, request, _data]} ->
+              {:"$gen_cast", request}
+
+            {:state_machine, _, [:info, request, _data]} ->
+              request
+
+            {_, :handle_call, [request, from, _state]} -> {:"$gen_call", from, request}
             _ -> message
           end
 

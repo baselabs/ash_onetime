@@ -152,6 +152,43 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
+  # Pool workers predate a caller's observation. Bind their public socket and
+  # native machine roots before arming, and trace their actual callbacks as
+  # persistent services rather than waiting for shared processes to exit.
+  def pooled_services do
+    sockets =
+      for table <- :ets.all(),
+          :ets.info(table, :name) == DBConnection.Holder,
+          {:conn, _owner, Postgrex.Protocol, %{sock: {:ssl, socket}}, _, _, _, _} <-
+            :ets.lookup(table, :conn),
+          do: socket
+
+    bindings = Enum.map(Enum.uniq(sockets), &bind/1)
+
+    services =
+      for binding <- bindings,
+          {worker, pid} <- [receiver: binding.owner, sender: binding.sender],
+          into: %{} do
+        root = Map.fetch!(binding.machines, pid)
+        :state_functions = elem(root.params, 1)
+        [module | _] = elem(root.params, 4)
+        {state, _data} = Map.fetch!(binding.states, pid)
+
+        {{:tls_worker, binding.port, worker},
+         %{
+           kind: :state_machine,
+           pid: pid,
+           port: binding.port,
+           owner: binding.owner,
+           sender: binding.sender,
+           worker: worker,
+           callback: {module, state, 3}
+         }}
+      end
+
+    %{bindings: bindings, services: services}
+  end
+
   def validate(binding) do
     local = :ssl.sockname(binding.socket)
     peer = :ssl.peername(binding.socket)
