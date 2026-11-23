@@ -309,6 +309,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_event(
+         %{event: {_, :call, {DBConnection.Connection, :ping, [{owner, holder}, _protocol]}}} = source,
+         state
+       ),
+       do: owner_public_copy(state, source, owner, holder, 1)
+
+  defp owner_event(
+         %{event: {_, :call, {DBConnection.Connection, function,
+                            [{owner, holder}, _error, _protocol]}}} = source,
+         state
+       ) when function in [:disconnect, :stop],
+       do: owner_public_copy(state, source, owner, holder, 2)
+
+  defp owner_event(
          %{event: {_, :call, {:gen_statem, :cast, [owner, message]}}} = source,
          state
        ) when is_tuple(message) and tuple_size(message) in [3, 4] do
@@ -576,6 +589,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_event(source, state), do: owner_message_program(state, source)
+
+  defp owner_public_copy(state, source, owner, holder, argument) do
+    case {state.holders[holder], state.holder_origins[holder]} do
+      {version, %{owner: expected}} when not is_nil(version) ->
+        state
+        |> exact(source, :state_owner_destination, owner, expected)
+        |> owner_protocol_copy(source, [2, 2, argument], version)
+
+      _ -> failure(state, source, :state_owner_public_origin)
+    end
+  end
 
   defp owner_loop(state, source, function, machine) do
     {state, machine} =
