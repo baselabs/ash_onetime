@@ -85,7 +85,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   def observe_pool_startup(mode \\ :default) do
     ExitBoundary.observe(
-      fn -> :ok end,
+      fn ->
+        if mode == {:connect_failure, :stop}, do: Process.flag(:trap_exit, true)
+        :ok
+      end,
       fn _ ->
         options =
           Repo.config()
@@ -96,12 +99,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         {:ok, pool} = Postgrex.start_link(options)
 
         try do
-          %{rows: [[17]]} =
-            Postgrex.query!(pool, "SELECT 17::int4 AS connection_owner_birth", [])
-
-          :ok
+          pool_startup_query(pool, mode)
         after
-          GenServer.stop(pool)
+          stop_startup_pool(pool)
         end
       end,
       %{
@@ -149,6 +149,36 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp pool_startup_options(options, :after_connect_mfa),
     do: Keyword.put(options, :after_connect, {__MODULE__, :after_connect_pool_owner, []})
+
+  defp pool_startup_options(options, {:connect_failure, type})
+       when type in [:default, :stop, :rand, :exp, :rand_exp] do
+    database = "ash_onetime_missing_" <> Integer.to_string(System.unique_integer([:positive]))
+    options = Keyword.put(options, :database, database)
+    options = if type == :default, do: options, else: Keyword.put(options, :backoff_type, type)
+    if type == :stop, do: Keyword.put(options, :max_restarts, 0), else: options
+  end
+
+  defp pool_startup_query(pool, {:connect_failure, _type}) do
+    # The authoritative server rejects an absent database. No credential or
+    # service is substituted, and every actual retry and timeout is captured.
+    case Postgrex.query(pool, "SELECT 17::int4 AS connection_owner_birth", [], timeout: 3_500) do
+      {:error, %DBConnection.ConnectionError{}} -> :ok
+      {:ok, _} -> raise "the failure fixture unexpectedly obtained a real connection"
+    end
+  catch
+    :exit, {_reason, {DBConnection.Holder, :checkout, [^pool, _options]}} -> :ok
+  end
+
+  defp pool_startup_query(pool, _mode) do
+    %{rows: [[17]]} = Postgrex.query!(pool, "SELECT 17::int4 AS connection_owner_birth", [])
+    :ok
+  end
+
+  defp stop_startup_pool(pool) do
+    GenServer.stop(pool)
+  catch
+    :exit, {:noproc, _call} -> :ok
+  end
 
   # These are ordinary supported configuration callbacks. Their calls, returns,
   # real query and native Task handoff remain inside the same observation.

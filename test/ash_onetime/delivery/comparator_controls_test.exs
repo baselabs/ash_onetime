@@ -4800,6 +4800,64 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  for type <- [:default, :stop, :rand, :exp, :rand_exp] do
+    @tag :connection_streams
+    test "Connection streams: native connection failure retains #{type} backoff state", context do
+      Repo.put_dynamic_repo(context.repo)
+      historical = Historical.capture(context.prefix)
+      type = unquote(type)
+      run = ConnectionNative.observe_pool_startup({:connect_failure, type})
+      assert run.result == :ok
+
+      rejected? =
+        Enum.any?(run.events, fn
+          %{
+            event:
+              {_, :return_from, {Postgrex.Protocol, :connect, 1},
+               {:error, %Postgrex.Error{postgres: %{pg_code: "3D000"}}}}
+          } ->
+            true
+
+          _ ->
+            false
+        end)
+
+      assert rejected?, "the real PostgreSQL server must reject the absent database"
+
+      retry? =
+        Enum.any?(run.events, fn
+          %{event: {_, :return_from, {DBConnection.Backoff, :backoff, 1}, _}} -> true
+          _ -> false
+        end)
+
+      if type == :stop, do: refute(retry?), else: assert(retry?)
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
+
+      for error <- proof.errors do
+        Diagnostics.emit(
+          "CONNECTION_POOL_BACKOFF_FAILURE",
+          Map.take(error, [:index, :at, :rule, :path, :context])
+        )
+      end
+
+      assert proof.errors == [], "failed connections must retain their complete native owner state"
+
+      owners =
+        for %{event: {pid, :call, {DBConnection.Connection, :init, [_]}}} <- run.events,
+            uniq: true,
+            do: pid
+
+      assert owners != []
+
+      for owner <- owners do
+        refute Map.has_key?(historical.connection_owners, owner)
+        assert MapSet.member?(run.snapshot.down, owner)
+        assert Enum.any?(proof.states.owner_commits, &(&1.owner == owner and &1.machine == nil))
+      end
+    end
+  end
+
   for lifecycle <- [:idle_ping, :reconnect] do
     @tag :connection_streams
     test "Connection streams: native #{lifecycle} retains the renewed holder's cut origin",
