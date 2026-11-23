@@ -4102,6 +4102,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert native.errors == []
     assert reads.errors == []
     [connection] = Map.values(reads.connections)
+
     assert Enum.map(connection.protocol.messages, & &1.decoded) ==
              [{:ssl_request, 80_877_103}, {:ssl_response, ?S}]
 
@@ -4139,9 +4140,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     indexed = Enum.with_index(run.events, &Map.put(&1, :index, &2))
 
     assert [upgrade] =
-             for {_, pair} <- NativeTransport.pairs(indexed),
-                 pair.source.mfa == {:ssl, :connect, 3},
-                 do: pair
+             for(
+               {_, pair} <- NativeTransport.pairs(indexed),
+               pair.source.mfa == {:ssl, :connect, 3},
+               do: pair
+             )
 
     # This is a real capture prefix at the actual TLS boundary. Every raw
     # event is unchanged; the full cold constructor/worker proof follows it.
@@ -4208,18 +4211,22 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     pairs = NativeTransport.pairs(indexed)
 
     assert [tree] =
-             for {_, pair} <- pairs,
-                 pair.source.pid == supervisor,
-                 pair.source.mfa == {:tls_dyn_connection_sup, :start_link, 2},
-                 do: pair
+             for(
+               {_, pair} <- pairs,
+               pair.source.pid == supervisor,
+               pair.source.mfa == {:tls_dyn_connection_sup, :start_link, 2},
+               do: pair
+             )
 
     assert {^supervisor, :return_from, _, {:ok, dynamic_supervisor}} = tree.returned.event
 
     assert [created] =
-             for {_, pair} <- pairs,
-                 pair.source.pid == receiver,
-                 pair.source.mfa == {:tls_gen_connection_1_3, :initial_state, 9},
-                 do: pair
+             for(
+               {_, pair} <- pairs,
+               pair.source.pid == receiver,
+               pair.source.mfa == {:tls_gen_connection_1_3, :initial_state, 9},
+               do: pair
+             )
 
     assert {^receiver, :call,
             {:tls_gen_connection_1_3, :initial_state,
@@ -4230,31 +4237,37 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert {^receiver, :return_from, _, initial} = created.returned.event
 
     assert [table_origin] =
-             for {_, pair} <- pairs,
-                 pair.source.event == {receiver, :call, {:ets, :new, [:tls_socket, []]}},
-                 pair.returned.event == {receiver, :return_from, {:ets, :new, 2}, table},
-                 do: pair
+             for(
+               {_, pair} <- pairs,
+               pair.source.event == {receiver, :call, {:ets, :new, [:tls_socket, []]}},
+               pair.returned.event == {receiver, :return_from, {:ets, :new, 2}, table},
+               do: pair
+             )
 
     assert table_origin.returned.index < created.source.index
 
     assert [socket_origin] =
-             for {_, pair} <- pairs,
-                 pair.source.pid == receiver,
-                 {^receiver, :call,
-                  {:tls_socket, :socket,
-                   [[^receiver, ^sender], :gen_tcp, ^port, :tls_gen_connection, ^table, _trackers]}} <-
-                   [pair.source.event],
-                 do: pair
+             for(
+               {_, pair} <- pairs,
+               pair.source.pid == receiver,
+               {^receiver, :call,
+                {:tls_socket, :socket,
+                 [[^receiver, ^sender], :gen_tcp, ^port, :tls_gen_connection, ^table, _trackers]}} <-
+                 [pair.source.event],
+               do: pair
+             )
 
     assert created.source.index < socket_origin.source.index
     assert socket_origin.returned.index < created.returned.index
     assert {^receiver, :return_from, _, socket} = socket_origin.returned.event
 
     assert [configured] =
-             for {_, pair} <- pairs,
-                 pair.source.pid == receiver,
-                 pair.source.mfa == {:ssl_gen_statem, :init_ssl_config, 3},
-                 do: pair
+             for(
+               {_, pair} <- pairs,
+               pair.source.pid == receiver,
+               pair.source.mfa == {:ssl_gen_statem, :init_ssl_config, 3},
+               do: pair
+             )
 
     assert {^receiver, :call, {:ssl_gen_statem, :init_ssl_config, [ssl_options, :client, input]}} =
              configured.source.event
@@ -4272,8 +4285,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert [
              {^receiver, entry,
-              [^dynamic_supervisor, [], :tls_client_connection_1_3, ^receiver, :infinity,
-               :initial_hello, entered, []]}
+              [
+                ^dynamic_supervisor,
+                [],
+                :tls_client_connection_1_3,
+                ^receiver,
+                :infinity,
+                :initial_hello,
+                entered,
+                []
+              ]}
            ] =
              Enum.filter(entries, &(elem(&1, 0) == receiver))
 
@@ -4282,17 +4303,27 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert configured.returned.index < entry.index
 
     assert [sender_init] =
-             for {_, pair} <- pairs,
-                 pair.source.pid == sender,
-                 pair.source.mfa == {:tls_sender, :init, 1},
-                 do: pair
+             for(
+               {_, pair} <- pairs,
+               pair.source.pid == sender,
+               pair.source.mfa == {:tls_sender, :init, 1},
+               do: pair
+             )
 
     assert {^sender, :return_from, _, {:ok, :init, sender_state}} = sender_init.returned.event
 
     assert [
              {^sender, sender_entry,
-              [^dynamic_supervisor, [], :tls_sender, ^sender, :infinity,
-               :init, sender_entered, []]}
+              [
+                ^dynamic_supervisor,
+                [],
+                :tls_sender,
+                ^sender,
+                :infinity,
+                :init,
+                sender_entered,
+                []
+              ]}
            ] =
              Enum.filter(entries, &(elem(&1, 0) == sender))
 
@@ -4301,32 +4332,38 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert sender_init.returned.index < sender_entry.index
 
     assert [factory] =
-             for {_, pair} <- pairs,
-                 pair.source.pid == caller,
-                 {^caller, :call,
-                  {:tls_gen_connection, :start_fsm,
-                   [^host, ^remote_port, ^port, _options, ^caller, ^callbacks, _timeout]}} <-
-                   [pair.source.event],
-                 do: pair
+             for(
+               {_, pair} <- pairs,
+               pair.source.pid == caller,
+               {^caller, :call,
+                {:tls_gen_connection, :start_fsm,
+                 [^host, ^remote_port, ^port, _options, ^caller, ^callbacks, _timeout]}} <-
+                 [pair.source.event],
+               do: pair
+             )
 
     assert factory.source.index < created.source.index
     assert entry.index < factory.returned.index
 
     assert [handoff] =
-             for {_, pair} <- pairs,
-                 pair.source.event ==
-                   {caller, :call, {:gen_tcp, :controlling_process, [port, receiver]}},
-                 pair.returned.event ==
-                   {caller, :return_from, {:gen_tcp, :controlling_process, 2}, :ok},
-                 do: pair
+             for(
+               {_, pair} <- pairs,
+               pair.source.event ==
+                 {caller, :call, {:gen_tcp, :controlling_process, [port, receiver]}},
+               pair.returned.event ==
+                 {caller, :return_from, {:gen_tcp, :controlling_process, 2}, :ok},
+               do: pair
+             )
 
     assert socket_origin.returned.index < handoff.source.index
 
     assert [connected] =
-             for {_, pair} <- pairs,
-                 {^caller, :call, {:ssl, :connect, [^port, _options, _timeout]}} <-
-                   [pair.source.event],
-                 do: pair
+             for(
+               {_, pair} <- pairs,
+               {^caller, :call, {:ssl, :connect, [^port, _options, _timeout]}} <-
+                 [pair.source.event],
+               do: pair
+             )
 
     assert connected.source.index < factory.source.index
     assert handoff.returned.index < connected.returned.index
