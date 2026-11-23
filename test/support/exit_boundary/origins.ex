@@ -15,7 +15,8 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
         end)
         |> Map.put(side.run.snapshot.root, :caller),
       native_workers:
-        for({pid, %{kind: :state_machine} = binding} <- side.run.snapshot.services || %{},
+        for(
+          {pid, %{kind: :state_machine} = binding} <- side.run.snapshot.services || %{},
           into: %{},
           do: {pid, {binding.port, binding.worker}}
         ),

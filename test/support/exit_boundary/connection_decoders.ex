@@ -151,7 +151,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
   defp active_inputs(context, pairs) do
     versions = Map.new(context.state.timeline, &{&1.index, &1})
-    initial = historical_cursors(context.state.native.historical)
+    initial = initial_cursors(context.state.native.historical)
 
     active =
       for delivery <- context.state.native.active,

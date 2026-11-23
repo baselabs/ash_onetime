@@ -262,7 +262,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     initial =
       case Map.fetch(state.cancellations, port) do
         {:ok, origin} ->
-          %{framing: Wire.frame_state(:startup), protocol: ConnectionProtocol.cancellation(origin)}
+          %{
+            framing: Wire.frame_state(:startup),
+            protocol: ConnectionProtocol.cancellation(origin)
+          }
 
         :error ->
           initial_connection(state, port)

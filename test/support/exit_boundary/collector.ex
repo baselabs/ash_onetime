@@ -350,7 +350,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       {name, %{kind: :state_machine, pid: pid} = binding} ->
         unless pid in [binding.owner, binding.sender] and
                  Port.info(binding.port, :connected) == {:connected, binding.owner},
-          do: raise("a persistent native connection worker is unavailable")
+               do: raise("a persistent native connection worker is unavailable")
 
         {pid, Map.put(binding, :name, name)}
 
@@ -430,8 +430,11 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
             {:state_machine, _, [:info, request, _data]} ->
               request
 
-            {_, :handle_call, [request, from, _state]} -> {:"$gen_call", from, request}
-            _ -> message
+            {_, :handle_call, [request, from, _state]} ->
+              {:"$gen_call", from, request}
+
+            _ ->
+              message
           end
 
         service_call(state, pid, envelope, event)
