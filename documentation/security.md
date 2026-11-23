@@ -280,11 +280,21 @@ length is `49 + sum(4 + byte_size(value))` bytes and is visible wherever the env
 This is not a constant-time delivery protocol.
 
 The observation boundary covers event content, multiplicity and order within each process.
+Transport chunk boundaries and the extra native receive calls, controls and replies they
+require depend on timing and are outside that boundary. Logical PostgreSQL message content,
+multiplicity and order remain compared in both directions across the whole physical connection.
 Native interiors (the crypto NIF, ETS, atomics and PostgreSQL below its wire messages and
 rows) are outside it; arguments and returns crossing into native code remain observable.
 Memory use, reductions, garbage collection and scheduler statistics are also outside it.
 Tests cover a finite set of value tuples; they cannot establish independence for every
 possible function of values that takes the same result on all tested tuples.
+
+Transparency compares the caller-visible result, committed rows and post-drain residue with
+a fresh non-delivery Ash twin plus its declared caller allocation checkpoint. On paths whose
+prescribed trace requires the committed read, that checkpoint performs one real main-pool
+checkout and checkin outside a transaction, immediately after ordinary Ash returns. Its
+callback returns a fixed literal and runs no SQL. The comparison retains one physical
+connection identity across every lease, including the checkpoint and committed read.
 
 Outside the guarantees: the producer that creates the value, the caller after the return, and
 code with access to the running node. Live introspection of the VM (`Process.info/2` with
