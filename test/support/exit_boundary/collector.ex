@@ -994,7 +994,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     cancelled =
       Enum.any?(service_calls(context, pid, :erlang, :cancel_timer), fn pair ->
         timer.returned.stamp < pair.source.stamp and
-          pair.returned.stamp < receipt.received_stamp and
+          pair.returned.stamp < parent.returned.stamp and
           pair.source.event === {pid, :call, {:erlang, :cancel_timer, [ref]}} and
           pair.returned.event === {pid, :return_from, {:erlang, :cancel_timer, 1}, false} and
           Enum.all?(targets, fn {child, _spec} ->
