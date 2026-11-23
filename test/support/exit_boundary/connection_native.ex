@@ -83,7 +83,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     startup_observation(corruption, types, :keep)
   end
 
-  def observe_pool_startup do
+  def observe_pool_startup(mode \\ :default) do
     ExitBoundary.observe(
       fn -> :ok end,
       fn _ ->
@@ -91,6 +91,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           Repo.config()
           |> Keyword.drop([:name, :pool, :pool_size])
           |> Keyword.put(:types, Postgrex.DefaultTypes)
+          |> pool_startup_options(mode)
 
         {:ok, pool} = Postgrex.start_link(options)
 
@@ -108,7 +109,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         callbacks: [],
         services: %{
           DBConnection.Watcher => {DBConnection.Watcher, :handle_call, 3},
-          DBConnection.ConnectionPool.Supervisor => {DynamicSupervisor, :handle_call, 3}
+          DBConnection.ConnectionPool.Supervisor => {DynamicSupervisor, :handle_call, 3},
+          DBConnection.Task => {DynamicSupervisor, :handle_call, 3}
         },
         frames: [
           {DBConnection.ConnectionPool, :init, 1},
@@ -119,12 +121,44 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           {DBConnection.Connection, :start_link, 4},
           {DBConnection.Connection, :init, 1},
           {DBConnection.Connection, :callback_mode, 0},
+          {DBConnection.Task, :run_child, 4},
+          {DBConnection.Task, :init, 3},
+          {DBConnection.Task, :checkout, 3},
+          {Task.Supervisor, :start_child, 4},
+          {Task.Supervisor, :start_child, 5},
+          {__MODULE__, :configure_pool_owner, 1},
+          {__MODULE__, :after_connect_pool_owner, 1},
           {DBConnection.Backoff, :new, 1},
           {DBConnection.Backoff, :reset, 1},
           {DBConnection.Backoff, :backoff, 1}
         ]
       }
     )
+  end
+
+  defp pool_startup_options(options, :default), do: options
+
+  defp pool_startup_options(options, :configure_function),
+    do: Keyword.put(options, :configure, &__MODULE__.configure_pool_owner/1)
+
+  defp pool_startup_options(options, :configure_mfa),
+    do: Keyword.put(options, :configure, {__MODULE__, :configure_pool_owner, []})
+
+  defp pool_startup_options(options, :after_connect_function),
+    do: Keyword.put(options, :after_connect, &__MODULE__.after_connect_pool_owner/1)
+
+  defp pool_startup_options(options, :after_connect_mfa),
+    do: Keyword.put(options, :after_connect, {__MODULE__, :after_connect_pool_owner, []})
+
+  # These are ordinary supported configuration callbacks. Their calls, returns,
+  # real query and native Task handoff remain inside the same observation.
+  def configure_pool_owner(options), do: Keyword.put(options, :timeout, 17_000)
+
+  def after_connect_pool_owner(connection) do
+    %{rows: [[19]]} =
+      Postgrex.query!(connection, "SELECT 19::int4 AS connection_after_connect", [])
+
+    :ok
   end
 
   defp startup_observation(corruption, types, retirement) do

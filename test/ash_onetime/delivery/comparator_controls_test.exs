@@ -4726,6 +4726,58 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            end)
   end
 
+  for mode <- [
+        :configure_function,
+        :configure_mfa,
+        :after_connect_function,
+        :after_connect_mfa
+      ] do
+    @tag :connection_streams
+    test "Connection streams: a born pool retains native #{mode} configuration", context do
+      Repo.put_dynamic_repo(context.repo)
+      historical = Historical.capture(context.prefix)
+      mode = unquote(mode)
+      run = ConnectionNative.observe_pool_startup(mode)
+      assert run.result == :ok
+      assert run.initial_state == :ok
+
+      callback =
+        if mode in [:configure_function, :configure_mfa],
+          do: :configure_pool_owner,
+          else: :after_connect_pool_owner
+
+      invoked? =
+        Enum.any?(run.events, fn
+          %{event: {_, :call, {ConnectionNative, ^callback, [_]}}} -> true
+          _ -> false
+        end)
+
+      assert invoked?, "the native pool must execute its declared configuration callback"
+
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
+
+      for error <- proof.errors do
+        Diagnostics.emit(
+          "CONNECTION_POOL_CONFIGURATION_FAILURE",
+          Map.take(error, [:index, :at, :rule, :path, :context])
+        )
+      end
+
+      assert proof.errors == [],
+             "configuration and after-connect Tasks need their own native state origins"
+
+      born = Enum.filter(proof.states.owner_commits, &(&1.index >= 0 and &1.machine != nil))
+      assert born != []
+
+      for owner <- Enum.uniq(Enum.map(born, & &1.owner)) do
+        refute Map.has_key?(historical.connection_owners, owner)
+        assert MapSet.member?(run.snapshot.down, owner)
+        assert Enum.any?(proof.states.owner_commits, &(&1.owner == owner and &1.machine == nil))
+      end
+    end
+  end
+
   for lifecycle <- [:idle_ping, :reconnect] do
     @tag :connection_streams
     test "Connection streams: native #{lifecycle} retains the renewed holder's cut origin",
