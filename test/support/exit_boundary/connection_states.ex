@@ -190,6 +190,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     tables = initial_tables(indexed, historical)
     machines = Map.get(indexed, :connection_owners, owner_machines(historical))
+    births = owner_births(indexed.events, native.pairs)
 
     {type_roots, type_events} =
       ConnectionTypes.program(Map.get(indexed, :connection_type_roots, %{}))
@@ -198,6 +199,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       holders: holders,
       holder_origins: Map.get(indexed, :connection_holder_origins, historical),
       owner_machines: machines,
+      owner_births: births.entries,
       owner_commits:
         Enum.map(machines, fn {owner, machine} ->
           %{owner: owner, index: -1, machine: machine}
@@ -249,7 +251,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       terms: [],
       buffer_values: %{},
       term_values: %{},
-      errors: [],
+      errors: births.errors,
       pairs: native.pairs,
       returns: Map.new(native.pairs, fn {_index, pair} -> {pair.returned.index, pair} end),
       decoders: decoders,
@@ -340,6 +342,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     state = startup_event(source, state)
     state = factory_event(source, state)
     state = type_service_event(source, state)
+    state = owner_birth_event(source, state)
     state = owner_event(source, state)
     callback_event(source, state)
   end
@@ -862,6 +865,124 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
+  # A new owner has no historical Holder. Its first machine is constructed
+  # forward from its real factory inputs, and becomes available only when the
+  # native callback-mode program completes. Neither a later sys state nor an
+  # initializer's checked output supplies the expected data.
+  defp owner_births(events, pairs) do
+    pairs
+    |> Map.values()
+    |> Enum.filter(&(&1.source.mfa == {DBConnection.Connection, :init, 1}))
+    |> Enum.reduce(%{entries: %{}, errors: []}, fn init, births ->
+      case owner_birth(events, pairs, init) do
+        {:ok, index, machine} ->
+          put_in(births.entries[index], {init.source.pid, machine})
+
+        :error ->
+          error = %{
+            index: init.source.index,
+            at: Map.take(init.source, [:mfa, :role, :stack]),
+            rule: :state_owner_birth_origin,
+            actual: false,
+            expected: true
+          }
+
+          %{births | errors: [error | births.errors]}
+      end
+    end)
+  end
+
+  defp owner_birth(events, pairs, init) do
+    pid = init.source.pid
+    calls = Map.values(pairs)
+
+    with [factory] <-
+           Enum.filter(calls, fn pair ->
+             pair.source.mfa == {DBConnection.Connection, :start_link, 4} and
+               pair.source.index < init.source.index and
+               init.returned.index < pair.returned.index and
+               pair.returned.event ==
+                 {pair.source.pid, :return_from, {DBConnection.Connection, :start_link, 4},
+                  {:ok, pid}}
+           end),
+         {parent, :call, {_, _, [Postgrex.Protocol, options, pool, tag]}} <- factory.source.event,
+         true <- Enum.any?(events, &match?(%{event: {^parent, :spawn, ^pid, _}}, &1)),
+         arguments = {Postgrex.Protocol, %DBConnection.SensitiveData{data: options}, pool, tag},
+         [native] <-
+           Enum.filter(calls, fn pair ->
+             pair.source.index > factory.source.index and
+               pair.returned.index < factory.returned.index and
+               pair.source.event ===
+                 {parent, :call,
+                  {:gen_statem, :start_link,
+                   [DBConnection.Connection, arguments, Keyword.take(options, [:debug, :spawn_opt])]}}
+           end),
+         true <- native.returned.event === {parent, :return_from, {:gen_statem, :start_link, 3}, {:ok, pid}},
+         true <-
+           init.source.event ===
+             {pid, :call, {DBConnection.Connection, :init, [arguments]}},
+         data = owner_initial_data(options, pool, tag),
+         actions = {:next_event, :internal, {:connect, :init}},
+         true <-
+           init.returned.event ===
+             {pid, :return_from, {DBConnection.Connection, :init, 1},
+              {:ok, :no_state, data, actions}},
+         [entry] <-
+           Enum.filter(events, fn source ->
+             source.index > init.returned.index and
+               source.event ===
+                 {pid, :call,
+                  {:gen_statem, :enter,
+                   [parent, [], DBConnection.Connection, pid, :infinity, :no_state, data, actions]}}
+           end),
+         before = {:params, :state_functions, false, parent, [:gen_statem], pid, :infinity},
+         params = put_elem(put_elem(before, 1, :handle_event_function), 4, [DBConnection.Connection]),
+         [mode] <-
+           Enum.filter(calls, fn pair ->
+             pair.source.index > entry.index and
+               pair.source.event ===
+                 {pid, :call, {:gen_statem, :get_callback_mode, [before, [DBConnection.Connection]]}} and
+               pair.returned.event ===
+                 {pid, :return_from, {:gen_statem, :get_callback_mode, 2}, params}
+           end) do
+      version = %{holder: nil, protocol: nil, origin: {:owner_birth, init.source.index}}
+      {:ok, mode.returned.index, %{name: :no_state, data: data, version: version, params: params}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp owner_initial_data(options, pool, tag) do
+    %{
+      mod: Postgrex.Protocol,
+      opts: options,
+      state: nil,
+      client: :closed,
+      pool: pool,
+      tag: tag,
+      timer: nil,
+      connected_at: nil,
+      backoff: DBConnection.Backoff.new(options),
+      connection_listeners: Keyword.get(options, :connection_listeners, []),
+      after_connect: Keyword.get(options, :after_connect),
+      after_connect_timeout: Keyword.get(options, :after_connect_timeout, 15_000)
+    }
+  end
+
+  defp owner_birth_event(source, state) do
+    case Map.fetch(state.owner_births, source.index) do
+      {:ok, {owner, machine}} ->
+        commit = %{owner: owner, index: source.index, machine: machine}
+
+        state
+        |> put_in([:owner_machines, owner], machine)
+        |> Map.update!(:owner_commits, &[commit | &1])
+
+      :error ->
+        state
+    end
+  end
+
   defp owner_event(
          %{event: {_, :call, {DBConnection.Connection, :ping, [{owner, holder}, _protocol]}}} =
            source,
@@ -963,7 +1084,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         state
 
       machine ->
-        state = exact(state, source, :state_owner_machine, Enum.at(arguments, 3), machine.data)
+        state = owner_data_copy(state, source, [2, 2, 3], machine)
         state = owner_protocol_copy(state, source, [2, 2, 3, :state], machine.version)
 
         case {arguments, state.owner_received[source.pid]} do
@@ -980,13 +1101,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_event(
-         %{event: {_, :call, {DBConnection.Connection, :pool_update, [protocol, data]}}} = source,
+         %{event: {_, :call, {DBConnection.Connection, :pool_update, [protocol, _data]}}} = source,
          state
        ) do
     case {state.owner_machines[source.pid], state.completed[source.pid]} do
       {machine, version} when not is_nil(machine) and not is_nil(version) ->
         state
-        |> exact(source, :state_owner_machine, data, machine.data)
+        |> owner_data_copy(source, [2, 2, 1], machine)
         |> exact(source, :state_owner_update, protocol, version.protocol)
         |> owner_protocol_copy(source, [2, 2, 0], version)
         |> owner_protocol_copy(source, [2, 2, 1, :state], machine.version)
@@ -1130,7 +1251,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       {%{holder: holder, machine: machine, version: version},
        %{source: %{event: {_, :call, {:ets, :insert_new, [holder, _row]}}}}} ->
         version = %{version | holder: holder}
-        previous = Map.fetch!(state.holder_origins, machine.version.holder)
+        previous = Map.get(state.holder_origins, machine.version.holder, %{})
 
         case renewed_transport(state, source, version.protocol, previous) do
           {:ok, transport} ->
@@ -1372,10 +1493,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     state =
       cond do
         function in @owner_loop_current ->
-          owner_protocol_copy(state, source, [2, 2, 2, 1, 1, :state], machine.version)
+          state
+          |> owner_data_copy(source, [2, 2, 2, 1, 1], machine)
+          |> owner_protocol_copy(source, [2, 2, 2, 1, 1, :state], machine.version)
 
         function in [:reply_then_terminate, :do_reply_then_terminate, :terminate] ->
-          owner_protocol_copy(state, source, [2, 2, 5, 1, 1, :state], machine.version)
+          state
+          |> owner_data_copy(source, [2, 2, 5, 1, 1], machine)
+          |> owner_protocol_copy(source, [2, 2, 5, 1, 1, :state], machine.version)
 
         true ->
           state
@@ -1383,24 +1508,53 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     state =
       if function in @owner_loop_next do
-        version =
+        expected =
           if function in [:loop_state_callback, :loop_state_callback_result],
-            do: machine.version,
-            else: next.version
+            do: machine,
+            else: next
 
-        owner_protocol_copy(state, source, [2, 2, 4, 1, :state], version)
+        state
+        |> owner_data_copy(source, [2, 2, 4, 1], expected)
+        |> owner_protocol_copy(source, [2, 2, 4, 1, :state], expected.version)
       else
         state
       end
 
     state =
       if function == :loop_state_callback_result and state.owner_pending[source.pid] do
-        owner_protocol_copy(state, source, [2, 2, 10, 1, :state], next.version)
+        state
+        |> owner_data_copy(source, [2, 2, 10, 1], next)
+        |> owner_protocol_copy(source, [2, 2, 10, 1, :state], next.version)
+      else
+        state
+      end
+
+    state =
+      if Map.has_key?(machine, :params) and function in @owner_loop_current do
+        exact(state, source, :state_owner_params, owner_term(source.event, [2, 2, 0]), machine.params)
       else
         state
       end
 
     owner_loop_message(state, source, function)
+  end
+
+  defp owner_data_copy(state, source, path, machine) do
+    case owner_term(source.event, path) do
+      actual when is_map(actual) ->
+        # The Protocol field has its own sole-catcher copy proof below. Check
+        # every other machine field here without duplicating that obligation.
+        exact(
+          state,
+          source,
+          :state_owner_machine,
+          Map.delete(actual, :state),
+          Map.delete(machine.data, :state)
+        )
+
+      _ ->
+        failure(state, source, :state_owner_machine)
+    end
   end
 
   defp owner_loop_commit(state, source, :loop_done, machine) do
