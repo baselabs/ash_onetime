@@ -2868,9 +2868,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                   _ -> false
                 end)
 
-              {_, :cached, _, {_id, query}} = cached
-              candidate = put_elem(cached, 3, {System.unique_integer([:positive]), query})
-              false = :ets.insert_new(cache_table, candidate)
+              {key, :cached, selection, {_id, query}} = cached
+              prepared = {System.unique_integer([:positive]), IO.iodata_to_binary(query.statement)}
+              false = :ets.insert_new(cache_table, {key, :cache, selection, prepared})
 
               table_barrier(observer, token, tables, holders, :ecto)
 
@@ -3066,10 +3066,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
               _ -> false
             end)
 
-          {_, :cached, _, {_id, query}} = cached
+          {key, :cached, selection, {_id, query}} = cached
           candidate_id = System.unique_integer([:positive])
-          candidate = put_elem(cached, 3, {candidate_id, query})
-          false = :ets.insert_new(cache_table, candidate)
+          prepared = {candidate_id, IO.iodata_to_binary(query.statement)}
+          false = :ets.insert_new(cache_table, {key, :cache, selection, prepared})
           candidate_id
         end,
         %{host: [], callbacks: []}
