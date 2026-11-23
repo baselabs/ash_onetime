@@ -701,6 +701,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   defp service_program_event(state, {_, :return_from, {module, function, _arity}, _})
        when (module == :erlang and function in [:demonitor, :spawn_opt]) or
               (module == :proc_lib and function in [:sync_start, :init_ack]) or
+              (module == :gen_server and function == :call) or
               (module == DynamicSupervisor and
                  function in [:monitor_child, :terminate_children]) do
     Map.update!(state, :service_program_generation, &(&1 + 1))
@@ -873,7 +874,87 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     end
   end
 
+  defp service_program(%{message: {tag, result}} = receipt, context) do
+    pid = receipt.pid
+
+    matches =
+      for pair <- service_calls(context, pid, :gen_server, :call),
+          {^pid, :call, {:gen_server, :call, [destination, request, _timeout]}} <-
+            [pair.source.event],
+          pair.returned.event ===
+            {pid, :return_from, {:gen_server, :call, 3}, result},
+          pair.source.stamp < receipt.received_stamp,
+          receipt.received_stamp < pair.returned.stamp,
+          monitor <- service_calls(context, pid, :erlang, :monitor),
+          {^pid, :return_from, _, ref} <- [monitor.returned.event],
+          is_reference(ref),
+          {:ok, target} <- [service_reply_monitor(monitor, pid, tag, ref)],
+          pair.source.stamp < monitor.source.stamp,
+          monitor.returned.stamp < receipt.received_stamp,
+          service_reply_target?(context, pid, destination, target, pair, monitor),
+          service_reply_sent?(context, pid, target, request, tag, monitor, receipt),
+          service_reply_demonitored?(context, pid, ref, receipt, pair),
+          do: {pair, monitor}
+
+    case matches do
+      [{pair, monitor}] ->
+        service_program_result(
+          :gen_call_reply,
+          pair,
+          receipt,
+          {:gen_call_reply, monitor.source.stamp}
+        )
+
+      _ ->
+        :error
+    end
+  end
+
   defp service_program(_receipt, _context), do: :error
+
+  defp service_reply_monitor(monitor, pid, tag, ref) do
+    case {monitor.source.event, tag} do
+      {{^pid, :call, {:erlang, :monitor, [:process, target]}}, ^ref} ->
+        {:ok, target}
+
+      {{^pid, :call, {:erlang, :monitor, [:process, target, [{:alias, :demonitor}]]}},
+       [:alias | ^ref]} ->
+        {:ok, target}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp service_reply_target?(_context, _pid, target, target, _pair, _monitor), do: true
+
+  defp service_reply_target?(context, pid, name, target, parent, monitor) when is_atom(name) do
+    Enum.any?(service_calls(context, pid, :erlang, :whereis), fn pair ->
+      parent.source.stamp < pair.source.stamp and
+        pair.returned.stamp < monitor.source.stamp and
+        pair.source.event === {pid, :call, {:erlang, :whereis, [name]}} and
+        pair.returned.event === {pid, :return_from, {:erlang, :whereis, 1}, target}
+    end)
+  end
+
+  defp service_reply_target?(_context, _pid, _destination, _target, _parent, _monitor),
+    do: false
+
+  defp service_reply_sent?(context, pid, target, request, tag, monitor, receipt) do
+    Enum.any?(context.events, fn event ->
+      monitor.returned.stamp < event.stamp and event.stamp < receipt.received_stamp and
+        event.event === {pid, :send, {:"$gen_call", {pid, tag}, request}, target}
+    end)
+  end
+
+  defp service_reply_demonitored?(context, pid, ref, receipt, parent) do
+    Enum.any?(service_calls(context, pid, :erlang, :demonitor), fn pair ->
+      receipt.received_stamp < pair.source.stamp and
+        pair.returned.stamp < parent.returned.stamp and
+        pair.source.event === {pid, :call, {:erlang, :demonitor, [ref, [:flush]]}} and
+        pair.returned.event === {pid, :return_from, {:erlang, :demonitor, 2}, true}
+    end)
+  end
 
   defp service_shutdown_timer_target?(context, receipt, parent, timer, child, spec) do
     pid = receipt.pid
@@ -881,7 +962,14 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     with {:ok, ref, monitor} <- service_monitor(context, pid, child, parent),
          true <- service_unlinked?(context, pid, child, parent, monitor, receipt),
          true <-
-           service_exit?(context, pid, child, :shutdown, monitor.returned.stamp, timer.source.stamp),
+           service_exit?(
+             context,
+             pid,
+             child,
+             :shutdown,
+             monitor.returned.stamp,
+             timer.source.stamp
+           ),
          [down] <-
            for(
              %{event: {^pid, :receive, {:DOWN, ^ref, :process, ^child, _}}} = event <-

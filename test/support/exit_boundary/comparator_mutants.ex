@@ -831,6 +831,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_service_gen_call_reply) do
+    [
+      %{
+        path: "test/support/exit_boundary/collector.ex",
+        original:
+          "        service_program_result(\n          :gen_call_reply,\n          pair,\n          receipt,\n          {:gen_call_reply, monitor.source.stamp}\n        )\n",
+        mutated: "        _ = {pair, monitor}\n        :error\n"
+      }
+    ]
+  end
+
   def edits(:diagnostic_record_complete) do
     [
       %{

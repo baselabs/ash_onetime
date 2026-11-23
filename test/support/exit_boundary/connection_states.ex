@@ -1991,7 +1991,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp native_type_model(state, %{pid: pid, mfa: {Postgrex.TypeServer, :update, 3}} = source) do
     with %{server: server, ref: ref, types: types} <- state.type_locks[pid],
          infos when infos != [] <- Enum.map(reload_catalog_rows(state, source), &elem(&1, 1)),
-         infos <- if(is_map_key(state.starting, pid), do: infos, else: Enum.sort_by(infos, & &1.oid)),
+         infos <-
+           if(is_map_key(state.starting, pid), do: infos, else: Enum.sort_by(infos, & &1.oid)),
          request <- {:update, ref, infos},
          {:ok, callback, from, :go, completion} <-
            type_server_request(state, source, server, request),

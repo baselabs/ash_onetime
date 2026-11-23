@@ -4076,6 +4076,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert run.result == :ok
     assert run.initial_state == :ok
 
+    private_replies =
+      for receipt <- run.snapshot.service_receipts,
+          %{kind: :gen_call_reply} <- [Map.get(receipt, :native_program)],
+          do: receipt
+
+    assert private_replies != [],
+           "cold native services must retain their own synchronous reply programs"
+
+    for receipt <- private_replies do
+      assert is_nil(receipt.called) and is_nil(receipt.returned)
+      assert receipt.native_program.source_stamp < receipt.received_stamp
+      assert receipt.received_stamp < receipt.native_program.returned_stamp
+    end
+
     factories =
       for %{event: {supervisor, :call, {:tls_dyn_connection_sup, :start_link, _}}} <- run.events,
           do: supervisor
@@ -4119,6 +4133,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert proof.errors == [],
            "every TLS worker and plaintext socket needs its actual native birth origin"
+
+    ComparatorMutants.with_mutant(:stream_service_gen_call_reply, fn ->
+      assert_raise ExUnit.AssertionError, &ConnectionNative.observe_tls_startup/0
+    end)
+
+    restored = ConnectionNative.observe_tls_startup()
+    restored_side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+    assert ConnectionHistory.build(restored_side).errors == []
   end
 
   @tag :connection_streams
