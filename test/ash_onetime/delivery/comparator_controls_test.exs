@@ -3147,7 +3147,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         1 = :trace.function(session, mfa, [{:_, [], [{:exception_trace}]}], [:local])
       end
 
-      1 = :trace.process(session, self(), true, [:call, :strict_monotonic_timestamp])
+      1 = :trace.process(session, self(), true, [:call, :arity, :strict_monotonic_timestamp])
       _result = Comparator.compare(pair)
       1 = :trace.process(session, self(), false, [:call])
       fence = :trace.delivered(session, :all)
@@ -3183,8 +3183,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   # results may contain the entire private observation and never leave here.
   defp comparator_order_observer(parent, parent_monitor, events) do
     receive do
-      {:trace_ts, _pid, :call, {module, function, arguments}, stamp} ->
-        event = {:call, {module, function, length(arguments)}, nil}
+      {:trace_ts, _pid, :call, {module, function, arity}, stamp} when is_integer(arity) ->
+        event = {:call, {module, function, arity}, nil}
         comparator_order_observer(parent, parent_monitor, [{stamp, event} | events])
 
       {:trace_ts, _pid, :return_from, mfa, %{errors: errors}, stamp} ->
