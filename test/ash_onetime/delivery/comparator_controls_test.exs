@@ -4229,6 +4229,27 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert is_reference(table) and is_port(port)
     assert {^receiver, :return_from, _, initial} = created.returned.event
 
+    assert [table_origin] =
+             for {_, pair} <- pairs,
+                 pair.source.event == {receiver, :call, {:ets, :new, [:tls_socket, []]}},
+                 pair.returned.event == {receiver, :return_from, {:ets, :new, 2}, table},
+                 do: pair
+
+    assert table_origin.returned.index < created.source.index
+
+    assert [socket_origin] =
+             for {_, pair} <- pairs,
+                 pair.source.pid == receiver,
+                 {^receiver, :call,
+                  {:tls_socket, :socket,
+                   [[^receiver, ^sender], :gen_tcp, ^port, :tls_gen_connection, ^table, _trackers]}} <-
+                   [pair.source.event],
+                 do: pair
+
+    assert created.source.index < socket_origin.source.index
+    assert socket_origin.returned.index < created.returned.index
+    assert {^receiver, :return_from, _, socket} = socket_origin.returned.event
+
     assert [configured] =
              for {_, pair} <- pairs,
                  pair.source.pid == receiver,
@@ -4290,6 +4311,28 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert factory.source.index < created.source.index
     assert entry.index < factory.returned.index
+
+    assert [handoff] =
+             for {_, pair} <- pairs,
+                 pair.source.event ==
+                   {caller, :call, {:gen_tcp, :controlling_process, [port, receiver]}},
+                 pair.returned.event ==
+                   {caller, :return_from, {:gen_tcp, :controlling_process, 2}, :ok},
+                 do: pair
+
+    assert socket_origin.returned.index < handoff.source.index
+
+    assert [connected] =
+             for {_, pair} <- pairs,
+                 {^caller, :call, {:ssl, :connect, [^port, _options, _timeout]}} <-
+                   [pair.source.event],
+                 do: pair
+
+    assert connected.source.index < factory.source.index
+    assert handoff.returned.index < connected.returned.index
+    assert {^caller, :return_from, _, {:ok, connected_socket}} = connected.returned.event
+    same_socket? = connected_socket === socket
+    assert same_socket?, "the public SSL socket must retain its actual native constructor origin"
 
     side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
     proof = ConnectionHistory.build(side)
