@@ -38,6 +38,8 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
             {table,
              %{
                owner: owner,
+               pool: :ets.info(table, :heir),
+               history_owner_traced?: ConnectionHistory.traced?(owner),
                port_owner: port_owner(protocol),
                protocol: protocol,
                lock: lock,

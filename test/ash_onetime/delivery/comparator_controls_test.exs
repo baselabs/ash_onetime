@@ -3130,6 +3130,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                   Diagnostics.render(%{
                     phase: phase,
                     baseline?: baseline?,
+                    same_pool?: connection.pool === historical.repo_metadata.pid,
+                    owner_traced?: connection.history_owner_traced?,
                     preparations: preparations,
                     insertions: insertions,
                     factories: factories,
