@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.Historical do
   alias AshOnetime.Test.ExitBoundary.ConnectionHistory
   alias AshOnetime.Test.ExitBoundary.ConnectionProtocol
+  alias AshOnetime.Test.ExitBoundary.ConnectionTls
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
   import Postgrex.Messages, only: [row_field: 1]
@@ -36,17 +37,16 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
           into: %{},
           do:
             {table,
-             %{
+             Map.merge(transport(protocol), %{
                owner: owner,
                pool: :ets.info(table, :heir),
                history_owner_traced?: ConnectionHistory.traced?(owner),
-               port_owner: port_owner(protocol),
                protocol: protocol,
                lock: lock,
                clock: clock,
                deadline: deadline,
                status: status
-             }}
+             })}
 
     cache_expiries =
       if :ets.whereis(AshOnetime.Cache.Ets) == :undefined,
@@ -64,7 +64,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
     connections = Map.new(connections, fn {holder, c} -> {holder, descriptors(c, origins)} end)
 
     catalogs =
-      for {_, %{protocol: %{sock: {:gen_tcp, port}}, descriptors: descriptors}} <- connections,
+      for {_, %{port: port, descriptors: descriptors}} <- connections,
           into: %{} do
         statements =
           Map.new(descriptors, fn origin ->
@@ -173,7 +173,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
         previous = Map.fetch!(historical.connections, holder)
         cache = cache_cut(protocol.queries, tables)
 
-        descriptors = active_descriptors(origins, protocol, cache.rows)
+        descriptors = active_descriptors(origins, protocol, cache.rows, previous.port)
 
         connection =
           Map.merge(previous, %{
@@ -203,11 +203,10 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
      }}
   end
 
-  defp active_descriptors(origins, protocol, rows) do
+  defp active_descriptors(origins, protocol, rows, port) do
     for origin <- origins,
         origin.sock === protocol.sock and origin.query.types === protocol.types,
         origin.parameters === origin.query.param_oids,
-        {:gen_tcp, port} <- [origin.sock],
         Enum.any?(rows, fn row ->
           elem(row, 0) === origin.query.name and elem(row, 1) === origin.query.ref
         end),
@@ -302,19 +301,25 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
     end)
   end
 
-  defp port_owner(%{sock: {:gen_tcp, port}}) do
-    case Port.info(port, :connected) do
-      {:connected, owner} -> owner
-      nil -> :closed
-    end
+  defp transport(%{sock: {:gen_tcp, port}}) do
+    owner =
+      case Port.info(port, :connected) do
+        {:connected, owner} -> owner
+        nil -> :closed
+      end
+
+    %{port: port, port_owner: owner}
   end
 
-  defp port_owner(_protocol), do: :not_tcp
+  defp transport(%{sock: {:ssl, socket}}) do
+    binding = ConnectionTls.bind(socket)
+    %{port: binding.port, port_owner: binding.owner, tls: binding}
+  end
 
   defp descriptors(%{protocol: protocol} = connection, origins) do
     queries = if protocol.queries, do: readable(protocol.queries), else: []
 
-    descriptors = active_descriptors(origins, protocol, queries)
+    descriptors = active_descriptors(origins, protocol, queries, connection.port)
 
     connection
     |> Map.put(:descriptors, descriptors)
