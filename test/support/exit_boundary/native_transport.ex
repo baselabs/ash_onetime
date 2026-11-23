@@ -129,7 +129,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
         if bound? do
           state
         else
-          failure(state, source, {:native_option_source, option_source_context(state, source)})
+          failure(state, source, :native_option_source, option_source_context(state, source))
         end
 
       _ ->
@@ -1054,7 +1054,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     :binary.bin_to_list(bytes)
   end
 
-  defp failure(state, source, reason) do
+  defp failure(state, source, reason, context \\ nil) do
     rule =
       case source.mfa do
         {:gen_tcp, :send, 2} -> :native_write
@@ -1068,7 +1068,8 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       at: Map.take(source, [:mfa, :role, :stack]),
       rule: rule,
       actual: reason,
-      expected: :own_complete_native_program
+      expected: :own_complete_native_program,
+      context: context
     }
 
     %{state | errors: [error | state.errors]}

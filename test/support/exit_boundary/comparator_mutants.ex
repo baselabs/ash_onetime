@@ -366,7 +366,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/native_transport.ex",
         original:
-          "          failure(state, source, {:native_option_source, option_source_context(state, source)})\n",
+          "          failure(state, source, :native_option_source, option_source_context(state, source))\n",
         mutated: "          _ = option_source_context(state, source)\n          state\n"
       }
     ]
