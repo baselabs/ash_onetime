@@ -13,7 +13,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
     initial = %{
       ports: %{},
-      cursors: historical_cursors(historical),
+      cursors: initial_cursors(historical),
       pending_cursors: %{},
       versions: [],
       timeline: [],
@@ -606,7 +606,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
         do: {origin.query.ref, origin}
   end
 
-  defp historical_cursors(historical) do
+  def initial_cursors(historical) do
     for {holder, %{protocol: %{sock: {:gen_tcp, port}} = protocol}} <- historical,
         into: %{} do
       buffer = if is_binary(protocol.buffer), do: protocol.buffer, else: <<>>

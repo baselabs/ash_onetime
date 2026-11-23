@@ -1,4 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.Historical do
+  alias AshOnetime.Test.ExitBoundary.ConnectionDecoders
   alias AshOnetime.Test.ExitBoundary.ConnectionHistory
   alias AshOnetime.Test.ExitBoundary.ConnectionProtocol
   alias AshOnetime.Test.ExitBoundary.ConnectionTls
@@ -85,6 +86,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
     %{
       prepared_catalogs: catalogs,
       connection_framing: %{},
+      connection_decoders: ConnectionDecoders.initial_cursors(connections),
       connection_protocols:
         Map.new(catalogs, fn {port, statements} ->
           {port, ConnectionProtocol.new(statements)}
@@ -162,6 +164,10 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
       stream_cut(historical.connection_protocols, proof.reads.versions, before, :protocol)
 
     framing = stream_cut(historical.connection_framing, proof.reads.versions, before, :framing)
+
+    decoders =
+      stream_cut(historical.connection_decoders, proof.decoders.timeline, before, :cursor)
+
     catalogs = Map.new(protocols, fn {port, protocol} -> {port, protocol.statements} end)
     origins = descriptor_cut(historical.query_origins, proof, before)
 
@@ -198,6 +204,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
          query_cache: cache_cut(historical.query_cache.table, tables),
          prepared_catalogs: catalogs,
          connection_framing: framing,
+         connection_decoders: decoders,
          connection_protocols: protocols,
          query_origins: origins,
          pool_clocks: pool_clock_cut(historical, connections, proof.native.pairs, before)
