@@ -402,7 +402,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert native.reads != [] and native.writes != []
     unbound = ConnectionReads.build(native)
     assert Enum.any?(unbound.errors, &(&1.rule == :protocol_message))
-    result = ConnectionReads.build(native, MapSet.new(), %{history.port => prepared.statements})
+    result = ConnectionReads.build(native, MapSet.new(), %{history.port => prepared})
     assert result.errors == []
     assert map_size(result.connections) == 1
 
@@ -470,6 +470,33 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           origin <- Map.get(connection, :descriptors, []),
           IO.iodata_to_binary(origin.query.statement) == sql,
           do: origin
+
+    if descriptors == [] do
+      origins =
+        for origin <- historical.query_origins,
+            IO.iodata_to_binary(origin.query.statement) == sql,
+            do: %{mfa: origin.mfa, parameters?: origin.parameters === origin.query.param_oids}
+
+      cached =
+        for {_holder, connection} <- historical.connections,
+            {_name, _ref, %Postgrex.Query{} = query} <- connection.query_cache.rows,
+            IO.iodata_to_binary(query.statement) == sql do
+          %{
+            owner_traced?: connection.history_owner_traced?,
+            same_pool?: connection.pool === historical.repo_metadata.pid,
+            origin?: Enum.any?(historical.query_origins, &(&1.query.ref === query.ref))
+          }
+        end
+
+      IO.puts(
+        "CONNECTION_HISTORY_CATALOG_SOURCE: " <>
+          Diagnostics.render(%{
+            patterns: ConnectionHistory.function_coverage(),
+            origins: origins,
+            cached: cached
+          })
+      )
+    end
 
     assert descriptors != []
 
@@ -2897,7 +2924,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       indexed = %{events: events, query_cache: historical.query_cache}
       native = NativeTransport.build(indexed, historical.connections)
       assert native.errors == []
-      reads = ConnectionReads.build(native, MapSet.new(), historical.prepared_catalogs)
+      reads = ConnectionReads.build(native, MapSet.new(), historical.connection_protocols)
       assert reads.errors == []
 
       decoders =
@@ -3604,8 +3631,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     native = NativeTransport.build(%{events: indexed}, historical)
     assert native.errors == []
 
-    streams =
-      ConnectionReads.build(native, MapSet.new(), %{origin.port => %{query.name => catalog}})
+    protocol = ConnectionProtocol.new(%{query.name => catalog})
+    streams = ConnectionReads.build(native, MapSet.new(), %{origin.port => protocol})
 
     assert streams.errors == []
     decoders = ConnectionDecoders.build(%{events: indexed}, native, streams, historical, [origin])
@@ -4069,7 +4096,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert reads.errors == []
     decoders = ConnectionDecoders.build(indexed, native, reads, historical)
     assert decoders.errors == []
-    states = ConnectionStates.build(indexed, native, decoders, historical)
+    states =
+      ConnectionStates.build(indexed, native, decoders, historical, {:initial, run.initial_state})
     assert states.errors == []
 
     proof = %{

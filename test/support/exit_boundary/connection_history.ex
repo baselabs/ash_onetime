@@ -24,6 +24,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
 
   def traced?(pid), do: GenServer.call(__MODULE__, {:traced, pid})
 
+  def function_coverage, do: GenServer.call(__MODULE__, :function_coverage)
+
   # Build one authoritative history for the complete raw capture, before origin
   # pairing, scheduling moves or interval selection.
   def build(side) do
@@ -45,7 +47,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
           into: MapSet.new(),
           do: write.command.index
 
-    reads = ConnectionReads.build(native, readback, historical.prepared_catalogs)
+    reads = ConnectionReads.build(native, readback, historical.connection_protocols)
 
     decoders =
       ConnectionDecoders.build(
@@ -141,6 +143,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   end
 
   @impl true
+  def handle_call(:function_coverage, _from, state) do
+    coverage =
+      Enum.map(
+        [
+          handle_prepare: 3,
+          handle_prepare_execute: 4,
+          recv_parse_describe: 4,
+          redescribe: 6,
+          msg_recv: 3,
+          msg_recv: 4
+        ],
+        fn {function, arity} ->
+          mfa = {Postgrex.Protocol, function, arity}
+          %{mfa: mfa, traced?: :trace.info(state.session, mfa, :traced) == {:traced, :local}}
+        end
+      )
+
+    {:reply, coverage, state}
+  end
+
   def handle_call({:traced, pid}, _from, state) do
     traced? =
       case :trace.info(state.session, pid, :flags) do

@@ -84,6 +84,10 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
 
     %{
       prepared_catalogs: catalogs,
+      connection_protocols:
+        Map.new(catalogs, fn {port, statements} ->
+          {port, ConnectionProtocol.new(statements)}
+        end),
       query_origins: origins,
       query_preparations: preparations,
       query_cache: query_cache,
@@ -152,7 +156,8 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
   defp committed_cut(historical, proof, before) do
     rows = committed_before(proof.states.commits, :holder, before)
     tables = committed_before(proof.states.table_commits, :table, before)
-    catalogs = catalog_cut(historical.prepared_catalogs, proof.reads.connections, before)
+    protocols = protocol_cut(historical.connection_protocols, proof.reads.connections, before)
+    catalogs = Map.new(protocols, fn {port, protocol} -> {port, protocol.statements} end)
     origins = descriptor_cut(historical.query_origins, proof, before)
 
     connections =
@@ -187,6 +192,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
        | connections: connections,
          query_cache: cache_cut(historical.query_cache.table, tables),
          prepared_catalogs: catalogs,
+         connection_protocols: protocols,
          query_origins: origins,
          pool_clocks: pool_clock_cut(historical, proof.native.pairs, before)
      }}
@@ -217,19 +223,19 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
     %{table: table, rows: commit.rows, present?: commit.present?}
   end
 
-  # Replay the already-validated messages at their actual native boundaries.
-  # Catalog changes belong to successful server replies, never to Parse/Close
-  # call arguments or a later driver's prepared-query return.
-  defp catalog_cut(initial, connections, before) do
-    Enum.reduce(connections, initial, fn {port, connection}, catalogs ->
+  # Keep the entire causal prefix, including pending frontend requests, portals,
+  # error recovery and occurrence counters. A ready catalog cannot represent a
+  # connection awaiting a reply. Only fully received frames precede the cut.
+  defp protocol_cut(initial, connections, before) do
+    Enum.reduce(connections, initial, fn {port, connection}, protocols ->
       protocol =
         connection.protocol.messages
         |> Enum.filter(fn frame -> Enum.all?(frame.provenance, &(&1.index < before)) end)
-        |> Enum.reduce(ConnectionProtocol.new(Map.get(initial, port, %{})), fn frame, state ->
+        |> Enum.reduce(Map.get(initial, port, ConnectionProtocol.new()), fn frame, state ->
           ConnectionProtocol.push(state, frame)
         end)
 
-      Map.put(catalogs, port, protocol.statements)
+      Map.put(protocols, port, protocol)
     end)
   end
 
