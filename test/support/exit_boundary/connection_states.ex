@@ -1071,19 +1071,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         version = %{version | holder: holder}
         previous = Map.fetch!(state.holder_origins, machine.version.holder)
 
-        origin =
-          %{
-            previous
-            | owner: source.pid,
-              pool: machine.data.pool,
-              protocol: version.protocol,
-              owner_machine: {machine.name, machine.data}
-          }
-          |> Map.put(:holder_origin_index, source.index)
+        case renewed_transport(state, source, version.protocol, previous) do
+          {:ok, transport} ->
+            origin =
+              previous
+              |> Map.drop([:tls])
+              |> Map.merge(transport)
+              |> Map.merge(%{
+                owner: source.pid,
+                pool: machine.data.pool,
+                protocol: version.protocol,
+                owner_machine: {machine.name, machine.data},
+                holder_origin_index: source.index
+              })
 
-        state
-        |> put_in([:holders, holder], version)
-        |> put_in([:holder_origins, holder], origin)
+            state
+            |> put_in([:holders, holder], version)
+            |> put_in([:holder_origins, holder], origin)
+
+          :error ->
+            failure(state, source, :state_holder_transport_origin)
+        end
 
       _ ->
         state
@@ -1118,12 +1126,124 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
        ) do
     case state.owner_pending[source.pid] do
       nil ->
-        state
+        owner_callback_transition(state, source, result)
 
       pending ->
         state
         |> exact(source, :state_owner_result, result, state.owner_results[source.pid])
         |> owner_protocol_copy(source, [3, 1, :state], pending.version)
+    end
+  end
+
+  defp owner_callback_transition(state, source, actual) do
+    with machine when not is_nil(machine) <- state.owner_machines[source.pid],
+         %{source: call} <- pair_returned(state, source),
+         {:ok, next, expected} <- owner_transition(state, call, source, machine) do
+      state
+      |> exact(source, :state_owner_result, actual, expected)
+      |> owner_protocol_copy(source, [3, 1, :state], next.version)
+      |> put_in([:owner_pending, source.pid], next)
+      |> put_in([:owner_results, source.pid], expected)
+    else
+      _ -> state
+    end
+  end
+
+  defp owner_transition(
+         state,
+         %{event: {pid, :call, {_, _, [:cast, {:disconnect, holder, error, _}, :no_state, _]}}},
+         _returned,
+         machine
+       ) do
+    with %{message: {:disconnect, ^holder, ^error, _}, version: version} <-
+           state.owner_received[pid],
+         {^holder, _} <- machine.data.client do
+      data = %{machine.data | state: version.protocol}
+      next = %{machine | data: data, version: version}
+      {:ok, next, {:keep_state, data, {:next_event, :internal, {:disconnect, {:log, error}}}}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp owner_transition(
+         _state,
+         %{event: {_, :call, {_, _, [:internal, {:disconnect, _}, :no_state, _]}}},
+         returned,
+         machine
+       ) do
+    with {_, phase} <- machine.data.client,
+         true <- not is_nil(machine.data.backoff) and phase != :after_connect do
+      data = %{machine.data | state: nil, client: :closed, timer: nil, connected_at: nil}
+      version = %{machine.version | protocol: nil, origin: {:owner_disconnected, returned.index}}
+      next = %{machine | data: data, version: version}
+      {:ok, next, {:keep_state, data, {:next_event, :internal, {:connect, :disconnect}}}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp owner_transition(
+         state,
+         %{event: {_, :call, {_, _, [:internal, {:connect, _}, :no_state, _]}}} = call,
+         returned,
+         machine
+       ) do
+    owner_connect_transition(state, call, returned, machine)
+  end
+
+  defp owner_transition(_state, _call, _returned, _machine), do: :error
+
+  defp owner_connect_transition(state, call, returned, machine) do
+    with nil <- Keyword.get(machine.data.opts, :configure),
+         nil <- machine.data.after_connect,
+         [connect] <- native_type_calls(state, call, returned, {Postgrex.Protocol, :connect, 1}),
+         {_, :call, {_, _, [options]}} <- connect.source.event,
+         true <- options === machine.data.opts,
+         [reference] <-
+           native_type_calls(state, connect.returned, returned, {:erlang, :make_ref, 0}),
+         {_, :return_from, _, ref} <- reference.returned.event,
+         [clock] <-
+           native_type_calls(state, reference.returned, returned, {:erlang, :monotonic_time, 0}),
+         {_, :return_from, _, connected_at} <- clock.returned.event,
+         version when not is_nil(version) <- state.completed[call.pid] do
+      backoff = machine.data.backoff && DBConnection.Backoff.reset(machine.data.backoff)
+
+      data = %{
+        machine.data
+        | state: version.protocol,
+          client: {ref, :connect},
+          connected_at: connected_at,
+          backoff: backoff
+      }
+
+      {:ok, %{machine | data: data, version: version}, {:keep_state, data}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp renewed_transport(_state, _source, %{sock: socket}, %{protocol: %{sock: socket}} = previous),
+    do: {:ok, Map.take(previous, [:port, :port_owner, :tls])}
+
+  defp renewed_transport(state, source, %{sock: {:gen_tcp, port}}, _previous) do
+    connections =
+      for {_index, pair} <- state.pairs,
+          pair.source.pid == source.pid and pair.returned.index < source.index,
+          pair.source.mfa == {:gen_tcp, :connect, 4},
+          {_, :return_from, _, {:ok, ^port}} <- [pair.returned.event],
+          do: pair
+
+    case connections do
+      [connection] -> {:ok, %{port: port, port_owner: connection.source.pid}}
+      _ -> :error
+    end
+  end
+
+  defp renewed_transport(state, _source, %{sock: {:ssl, socket}}, _previous) do
+    case Enum.find(Map.get(state.native, :tls_bindings, []), &(&1.socket === socket)) do
+      nil -> :error
+      binding -> {:ok, %{port: binding.port, port_owner: binding.owner, tls: binding}}
     end
   end
 

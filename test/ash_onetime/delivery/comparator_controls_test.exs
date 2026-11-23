@@ -1255,8 +1255,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert receipt.called && receipt.returned
         pid = receipt.pid
         assert {^pid, :call, {Postgrex.TypeServer, :handle_cast, _arguments}} = receipt.called
+
         assert {^pid, :return_from, {Postgrex.TypeServer, :handle_cast, 2}, _result} =
                  receipt.returned
+
         assert receipt.received_stamp < receipt.called_stamp
         assert receipt.called_stamp < receipt.returned_stamp
       end

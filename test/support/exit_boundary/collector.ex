@@ -390,6 +390,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
         Port.info(binding.port, :connected) == {:connected, binding.owner}
 
   defp service_bound?(pid, %{table: table}), do: :ets.info(table, :owner) == pid
+
   defp service_bound?(pid, %{registration: {registry, key}}),
     do: key in Registry.keys(registry, pid)
 

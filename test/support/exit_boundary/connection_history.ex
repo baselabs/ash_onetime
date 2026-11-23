@@ -122,40 +122,43 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       )
 
     errors =
-      Enum.map(native.errors ++ types.errors ++ reads.errors ++ decoders.errors ++ states.errors, fn
-        %{index: index} = error when is_integer(index) ->
-          error
+      Enum.map(
+        native.errors ++ types.errors ++ reads.errors ++ decoders.errors ++ states.errors,
+        fn
+          %{index: index} = error when is_integer(index) ->
+            error
 
-        error ->
-          connection = Map.fetch!(reads.connections, error.port)
-          offset = Map.get(error, :offset)
+          error ->
+            connection = Map.fetch!(reads.connections, error.port)
+            offset = Map.get(error, :offset)
 
-          frame =
-            Enum.find(connection.framing.messages, &(&1.start == offset)) ||
-              List.last(connection.framing.messages)
+            frame =
+              Enum.find(connection.framing.messages, &(&1.start == offset)) ||
+                List.last(connection.framing.messages)
 
-          index =
-            if frame do
-              frame.provenance |> Enum.map(& &1.index) |> Enum.max()
-            else
-              (native.writes ++ native.reads ++ native.active)
-              |> Enum.filter(&(&1.port == error.port))
-              |> Enum.sort_by(& &1.source.index)
-              |> List.last()
-              |> Map.fetch!(:source)
-              |> Map.fetch!(:index)
-            end
+            index =
+              if frame do
+                frame.provenance |> Enum.map(& &1.index) |> Enum.max()
+              else
+                (native.writes ++ native.reads ++ native.active)
+                |> Enum.filter(&(&1.port == error.port))
+                |> Enum.sort_by(& &1.source.index)
+                |> List.last()
+                |> Map.fetch!(:source)
+                |> Map.fetch!(:index)
+              end
 
-          source = Enum.find(program_events, &(&1.index == index))
+            source = Enum.find(program_events, &(&1.index == index))
 
-          %{
-            index: index,
-            at: Map.take(source, [:mfa, :role, :stack]),
-            rule: error.rule,
-            actual: Map.get(error, :actual, Map.take(error, [:direction, :offset, :received])),
-            expected: Map.get(error, :expected, :complete_protocol_frame)
-          }
-      end)
+            %{
+              index: index,
+              at: Map.take(source, [:mfa, :role, :stack]),
+              rule: error.rule,
+              actual: Map.get(error, :actual, Map.take(error, [:direction, :offset, :received])),
+              expected: Map.get(error, :expected, :complete_protocol_frame)
+            }
+        end
+      )
 
     %{
       indexed: indexed,

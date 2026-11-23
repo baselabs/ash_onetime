@@ -34,13 +34,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTypes do
     |> Enum.reduce(%{roots: roots, births: [], errors: []}, fn pair, history ->
       case birth(indexed.events, pairs, services, pair) do
         {:ok, owner, root} ->
-          %{history | roots: Map.put(history.roots, owner, root), births: history.births ++ [root]}
+          %{
+            history
+            | roots: Map.put(history.roots, owner, root),
+              births: history.births ++ [root]
+          }
 
         :error ->
           error = %{
             index: pair.source.index,
             at: Map.take(pair.source, [:mfa, :role, :stack]),
-            rule: :type_service_birth
+            rule: :type_service_birth,
+            actual: false,
+            expected: true
           }
 
           %{history | errors: history.errors ++ [error]}
