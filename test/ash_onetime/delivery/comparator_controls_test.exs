@@ -3538,6 +3538,50 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         actual = Map.take(checkpoint.pool_clocks, Map.keys(expected))
         same_clocks? = actual === expected
         assert same_clocks?, "the cut must retain every pool's own committed checkin clocks"
+
+        if value == 29 do
+          # Keep the recorded events intact. The cut is the initial state for
+          # this actual suffix, including all other pools and native owners.
+          suffix = Enum.drop(run.events, barrier.index)
+          continued = %{side | run: %{run | events: suffix}, historical: checkpoint}
+          resumed = ConnectionHistory.build(continued)
+          assert resumed.errors == []
+          assert map_size(resumed.reads.connections) > 0
+
+          for {port, connection} <- resumed.reads.connections do
+            complete = Map.fetch!(proof.reads.connections, port)
+
+            for direction <- [:frontend, :backend] do
+              full = Map.fetch!(complete.framing.directions, direction)
+              current = Map.fetch!(connection.framing.directions, direction)
+              same_coordinates? =
+                Map.take(current, [:offset, :received]) ===
+                  Map.take(full, [:offset, :received])
+
+              assert same_coordinates?,
+                     "a continued stream must retain its physical byte coordinates across leases"
+            end
+
+            original_cursor =
+              proof.decoders.versions
+              |> Enum.filter(&(&1.port == port))
+              |> List.last()
+
+            continued_cursor =
+              resumed.decoders.versions
+              |> Enum.filter(&(&1.port == port))
+              |> List.last()
+
+            assert original_cursor && continued_cursor
+
+            same_cursor? =
+              Map.take(continued_cursor.cursor, [:offset, :buffer, :rows, :types]) ===
+                Map.take(original_cursor.cursor, [:offset, :buffer, :rows, :types])
+
+            assert same_cursor?,
+                   "a continued decoder must retain its original byte coordinate and native values"
+          end
+        end
       end
     after
       send(observer, :stop)
