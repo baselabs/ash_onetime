@@ -608,6 +608,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       )
 
     assert %{rows: [[29]]} = run.result
+
+    used_sockets =
+      for %{event: {_, :call, {:ssl, :send, [socket, _bytes]}}} <- run.events,
+          do: socket
+
+    assert used_sockets != [], "the TLS witness must use the actual public plaintext boundary"
+
+    for {_holder, %{protocol: %{sock: {:ssl, socket}}, tls: binding}} <- historical.connections,
+        socket in used_sockets,
+        worker <- [binding.owner, binding.sender] do
+      traced? = Enum.any?(run.events, &(&1.pid == worker and elem(&1.event, 1) == :call))
+      assert traced?, "each used TLS connection must retain both actual persistent worker programs"
+    end
+
     side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
     proof = ConnectionHistory.build(side)
     assert proof.errors == [], "MAIN must prove the real TLS plaintext and worker programs"
