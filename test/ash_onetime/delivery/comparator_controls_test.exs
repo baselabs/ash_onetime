@@ -3642,7 +3642,28 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     events = Enum.with_index(restored.events, &Map.put(&1, :index, &2))
     native = NativeTransport.build(%{events: events}, restored.native_history)
     assert native.errors == []
-    assert ConnectionReads.build(native).errors == []
+    reads = ConnectionReads.build(native)
+    assert reads.errors == []
+
+    decoders = ConnectionDecoders.build(%{events: events}, native, reads, restored.native_history)
+    assert decoders.errors == []
+
+    states =
+      ConnectionStates.build(
+        %{events: events},
+        native,
+        decoders,
+        restored.native_history,
+        {:initial, restored.initial_state}
+      )
+
+    assert states.errors == [], "cancellation must preserve every original Protocol owner copy"
+    assert decoders.protocol_copies != []
+    covered = MapSet.new(states.copies, &{&1.index, &1.path})
+
+    assert Enum.all?(decoders.protocol_copies, fn copy ->
+             MapSet.member?(covered, {copy.index, copy.path})
+           end)
   end
 
   for lifecycle <- [:idle_ping, :reconnect] do
