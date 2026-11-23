@@ -4271,30 +4271,32 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :connection_streams
   test "Connection streams: every active control has its own native option origin" do
-    run = ConnectionNative.observe(:active, :unbound_active_control)
-    assert run.result == :ok
+    for corruption <- [:unbound_active_control, :unbound_mode_active_control] do
+      run = ConnectionNative.observe(:active, corruption)
+      assert run.result == :ok
 
-    events =
-      run.events
-      |> Enum.with_index()
-      |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
+      events =
+        run.events
+        |> Enum.with_index()
+        |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
 
-    indexed = %{events: events}
-    native = NativeTransport.build(indexed)
-    assert Enum.map(native.options, & &1.mode) == [:once, false]
-    assert Enum.map(native.errors, & &1.actual) == [:native_option_source]
-    assert Enum.map(native.errors, & &1.rule) == [:native_option]
+      indexed = %{events: events}
+      native = NativeTransport.build(indexed)
+      assert Enum.map(native.options, & &1.mode) == [:once, false]
+      assert Enum.map(native.errors, & &1.actual) == [:native_option_source]
+      assert Enum.map(native.errors, & &1.rule) == [:native_option]
 
-    for mutant <- [:stream_length, :stream_timeout, :stream_required, :stream_active_source] do
-      checked = ComparatorMutants.with_mutant(mutant, fn -> NativeTransport.build(indexed) end)
-      expected = if mutant == :stream_active_source, do: [], else: [:native_option_source]
-      assert Enum.map(checked.errors, & &1.actual) == expected
+      for mutant <- [:stream_length, :stream_timeout, :stream_required, :stream_active_source] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> NativeTransport.build(indexed) end)
+        expected = if mutant == :stream_active_source, do: [], else: [:native_option_source]
+        assert Enum.map(checked.errors, & &1.actual) == expected
+      end
+
+      assert Enum.map(NativeTransport.build(indexed).errors, & &1.actual) == [:native_option_source]
+      {restored, _streams} = native_connection(:active, nil)
+      assert restored.errors == []
+      IO.puts("CONNECTION_STREAM_NATIVE_ISOLATION: stream_active_source RED; exact restore GREEN")
     end
-
-    assert Enum.map(NativeTransport.build(indexed).errors, & &1.actual) == [:native_option_source]
-    {restored, _streams} = native_connection(:active, nil)
-    assert restored.errors == []
-    IO.puts("CONNECTION_STREAM_NATIVE_ISOLATION: stream_active_source RED; exact restore GREEN")
   end
 
   @tag :connection_streams

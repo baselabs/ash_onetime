@@ -42,9 +42,11 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
           when is_port(port) ->
             write(source, port, data, state)
 
-          %{event: {_, :call, {:prim_inet, :setopts, [port, [active: mode]]}}} = source, state
-          when is_port(port) and (mode in [:once, false] or is_integer(mode)) ->
-            option(source, port, mode, state)
+          %{event: {_, :call, {:prim_inet, :setopts, [port, options]}}} = source, state
+          when is_port(port) and is_list(options) ->
+            if active_option?(options),
+              do: option(source, port, options, state),
+              else: state
 
           _, state ->
             state
@@ -122,8 +124,8 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
          state
        )
        when is_port(port) and command == @control_magic + 7 do
-    case IO.iodata_to_binary(data) do
-      <<22, _::binary>> ->
+    case active_option_bytes?(IO.iodata_to_binary(data)) do
+      true ->
         bound? = Enum.any?(state.options, &(source.index in &1.indexes))
 
         if bound? do
@@ -132,12 +134,18 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
           failure(state, source, :native_option_source, option_source_context(state, source))
         end
 
-      _ ->
+      false ->
         state
     end
   end
 
   defp option_source(_source, state), do: state
+
+  defp active_option?(options), do: Enum.any?(options, &match?({:active, _}, &1))
+
+  defp active_option_bytes?(<<22, _::binary>>), do: true
+  defp active_option_bytes?(<<24, _mode::32, rest::binary>>), do: active_option_bytes?(rest)
+  defp active_option_bytes?(_bytes), do: false
 
   # Select code coordinates and option names only. An initialization program can
   # carry other socket options; its raw arguments never belong in diagnostics.
@@ -324,11 +332,10 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   # The once fast path and the passive enum path have different native programs.
   # Build each from the option supplied to this instance, including every helper
   # argument and return. No helper's result is inferred from a different call.
-  defp option(source, port, mode, state) do
-    encoded = option_bytes(mode)
-    args = [port, @control_magic + 7, encoded]
-
-    with {:ok, outer} <- Map.fetch(state.pairs, source.index),
+  defp option(source, port, options, state) do
+    with {:ok, encoded, encoder} <- option_encoding(options),
+         args = [port, @control_magic + 7, encoded],
+         {:ok, outer} <- Map.fetch(state.pairs, source.index),
          {:ok, :ok} <- return_value(outer),
          {:ok, internal} <- unique_call(state, outer, {:erts_internal, :port_control, 3}, args),
          {:ok, [1], deferred} <- driver_reply(state, outer, internal, port),
@@ -336,12 +343,12 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
          {:ok, signals} <- option_controls(state.event_index, outer, port, encoded),
          events <- in_interval(state.event_index, outer, &(&1.pid == source.pid)),
          calls <- Enum.flat_map(events, &program_event/1),
-         :ok <- option_events(calls, option_program(port, mode, encoded, native_return)) do
+         :ok <- option_events(calls, option_program(port, options, encoded, encoder, native_return)) do
       indexes = for event <- events, program_event(event) != [], do: event.index
 
       option = %{
         port: port,
-        mode: mode,
+        mode: Keyword.fetch!(options, :active),
         source: source,
         returned: outer.returned,
         requested: signals.requested,
@@ -357,10 +364,6 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       _ -> failure(state, source, :native_option_program)
     end
   end
-
-  defp option_bytes(:once), do: [<<22, 2::32>>]
-  defp option_bytes(false), do: [22, [0, 0, 0, 0]]
-  defp option_bytes(count), do: [<<22, 3::32, count::signed-16>>]
 
   defp option_events(calls, expected) when calls === expected, do: :ok
 
@@ -407,55 +410,89 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     end
   end
 
-  defp option_program(port, mode, encoded, native_return) do
+  defp option_program(port, options, encoded, encoder, native_return) do
     args = [port, @control_magic + 7, encoded]
     internal = program(:erts_internal, :port_control, args, native_return)
     erlang = program(:erlang, :port_control, args, [1], internal)
     control = program(:prim_inet, :ctl_cmd, [port, 7, encoded], {:ok, []}, erlang)
-    encoder = option_encoder(mode, encoded)
-    program(:prim_inet, :setopts, [port, [active: mode]], :ok, encoder ++ control)
+    program(:prim_inet, :setopts, [port, options], :ok, encoder ++ control)
   end
 
-  defp option_encoder(mode, encoded) when mode == :once or is_integer(mode) do
-    tail = program(:prim_inet, :enc_opt_val, [[], encoded], encoded)
-    body = program(:prim_inet, :enc_opt_val, [[active: mode], []], encoded, tail)
-    program(:prim_inet, :encode_opt_val, [[active: mode]], {:ok, encoded}, body)
+  # OTP encodes the complete option list in reverse order. The startup/cancel
+  # connection's mode and active options share one control request; validating
+  # just a singleton active option cannot establish that native program.
+  defp option_encoding(options) do
+    with {:ok, encoded, body} <- option_values(options, []) do
+      {:ok, encoded, program(:prim_inet, :encode_opt_val, [options], {:ok, encoded}, body)}
+    end
   end
 
-  defp option_encoder(false, encoded) do
-    type = {:enum, [{false, 0}, {true, 1}, {:once, 2}, {:multi, 3}]}
-    table = elem(type, 1)
-    enum = program(:prim_inet, :enum_val, [false, table], {:value, 0})
-    lookup = program(:prim_inet, :type_opt_1, [:active], type)
-    lookup = program(:prim_inet, :type_opt, [:set, :active], type, lookup)
-    check = program(:prim_inet, :type_value_2, [type, false], true, enum)
+  defp option_values([], accumulator),
+    do:
+      {:ok, accumulator, program(:prim_inet, :enc_opt_val, [[], accumulator], accumulator)}
+
+  defp option_values([{:active, :once} | rest] = options, accumulator),
+    do: optimized_option(options, rest, accumulator, <<22, 2::32>>)
+
+  defp option_values([{:active, count} | rest] = options, accumulator)
+       when is_integer(count) and count >= -32768 and count < 32768,
+       do: optimized_option(options, rest, accumulator, <<22, 3::32, count::signed-16>>)
+
+  defp option_values([{name, value} | rest] = options, accumulator) do
+    with {:ok, tag, table} <- option_enum(name),
+         {^value, number} <- List.keyfind(table, value, 0),
+         bytes = uint32(number),
+         next = [tag, bytes | accumulator],
+         {:ok, encoded, tail} <- option_values(rest, next) do
+      scalar = option_scalar(name, value, tag, table, number, bytes)
+
+      body =
+        program(
+          :prim_inet,
+          :enc_opt_val,
+          [rest, accumulator, name, value],
+          encoded,
+          scalar ++ tail
+        )
+
+      {:ok, encoded, program(:prim_inet, :enc_opt_val, [options, accumulator], encoded, body)}
+    else
+      _ -> {:error, :native_option_encoder}
+    end
+  end
+
+  defp option_values(_options, _accumulator), do: {:error, :native_option_encoder}
+
+  defp optimized_option(options, rest, accumulator, bytes) do
+    with {:ok, encoded, tail} <- option_values(rest, [bytes | accumulator]) do
+      {:ok, encoded, program(:prim_inet, :enc_opt_val, [options, accumulator], encoded, tail)}
+    end
+  end
+
+  defp option_enum(:active), do: {:ok, 22, [{false, 0}, {true, 1}, {:once, 2}, {:multi, 3}]}
+  defp option_enum(:mode), do: {:ok, 24, [list: 0, binary: 1]}
+  defp option_enum(_name), do: :unsupported
+
+  defp option_scalar(name, value, tag, table, number, bytes) do
+    type = {:enum, table}
+    enum = program(:prim_inet, :enum_val, [value, table], {:value, number})
+    lookup = program(:prim_inet, :type_opt_1, [name], type)
+    lookup = program(:prim_inet, :type_opt, [:set, name], type, lookup)
+    check = program(:prim_inet, :type_value_2, [type, value], true, enum)
 
     check =
       Enum.reduce([:type_value_1, :type_value_default, :type_value], check, fn function, child ->
-        program(:prim_inet, function, [:set, type, false], true, child)
+        program(:prim_inet, function, [:set, type, value], true, child)
       end)
 
-    value = program(:prim_inet, :enc_value_2, [type, false], [0, 0, 0, 0], enum)
+    encoded = program(:prim_inet, :enc_value_2, [type, value], bytes, enum)
 
-    value =
-      Enum.reduce([:enc_value_1, :enc_value_default, :enc_value], value, fn function, child ->
-        program(:prim_inet, function, [:set, type, false], [0, 0, 0, 0], child)
+    encoded =
+      Enum.reduce([:enc_value_1, :enc_value_default, :enc_value], encoded, fn function, child ->
+        program(:prim_inet, function, [:set, type, value], bytes, child)
       end)
 
-    name = program(:prim_inet, :enc_opt, [:active], 22)
-    tail = program(:prim_inet, :enc_opt_val, [[], encoded], encoded)
-
-    body =
-      program(
-        :prim_inet,
-        :enc_opt_val,
-        [[], [], :active, false],
-        encoded,
-        lookup ++ check ++ name ++ value ++ tail
-      )
-
-    body = program(:prim_inet, :enc_opt_val, [[active: false], []], encoded, body)
-    program(:prim_inet, :encode_opt_val, [[active: false]], {:ok, encoded}, body)
+    lookup ++ check ++ program(:prim_inet, :enc_opt, [name], tag) ++ encoded
   end
 
   defp program(module, function, args, result, children \\ []) do

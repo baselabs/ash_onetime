@@ -896,7 +896,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp execute(%{sock: {module, socket}}, mode, corruption)
        when mode in [:active, :historical_active, :active_counted] and
-              corruption in [nil, :unbound_active_control, :passive_source] do
+              corruption in [
+                nil,
+                :unbound_active_control,
+                :unbound_mode_active_control,
+                :passive_source
+              ] do
     if mode == :active, do: :ok = :inet.setopts(socket, active: :once)
     if mode == :active_counted, do: :ok = :inet.setopts(socket, active: 1)
     :ok = module.send(socket, query(17))
@@ -906,8 +911,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         if mode == :active_counted, do: passive_notification(socket, corruption)
         :ok = :inet.setopts(socket, active: false)
 
-        if corruption == :unbound_active_control do
-          [1] = :erlang.port_control(socket, 0x03F1A300 + 7, <<22, 0::32>>)
+        case corruption do
+          :unbound_active_control ->
+            [1] = :erlang.port_control(socket, 0x03F1A300 + 7, <<22, 0::32>>)
+
+          :unbound_mode_active_control ->
+            [1] = :erlang.port_control(socket, 0x03F1A300 + 7, <<24, 1::32, 22, 0::32>>)
+
+          _ ->
+            :ok
         end
 
         drain(module, socket, 1, bytes, true, nil)
