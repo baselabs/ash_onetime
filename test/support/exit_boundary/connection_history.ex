@@ -15,10 +15,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   # Opaque decoder types are retained as the Query their owner returned.
   def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
 
-  def snapshot do
+  def snapshot(kind \\ :origins) when kind in [:origins, :preparations] do
     case Process.get({__MODULE__, :pid}) do
       nil -> raise "the connection history observer was not started"
-      pid -> GenServer.call(pid, :snapshot, 30_000)
+      pid -> GenServer.call(pid, {:snapshot, kind}, 30_000)
     end
   end
 
@@ -115,7 +115,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
     Code.ensure_loaded!(Postgrex.Protocol)
     session = :trace.session_create(:ash_onetime_connection_history, self(), [])
 
-    for function <- [:handle_prepare, :handle_prepare_execute, :redescribe, :msg_recv] do
+    for function <- [
+          :handle_prepare,
+          :handle_prepare_execute,
+          :recv_parse_describe,
+          :redescribe,
+          :msg_recv
+        ] do
       :trace.function(
         session,
         {Postgrex.Protocol, function, :_},
@@ -127,20 +133,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
     flags = [:call, :procs, :strict_monotonic_timestamp]
     :trace.process(session, :new, true, flags)
     1 = :trace.process(session, owner, true, flags)
-    {:ok, %{session: session, events: [], frames: %{}, origins: %{}, waiting: %{}}}
+    {:ok,
+     %{session: session, events: [], frames: %{}, origins: %{}, preparations: %{}, waiting: %{}}}
   end
 
   @impl true
-  def handle_call(:snapshot, from, state) do
+  def handle_call({:snapshot, kind}, from, state) do
     fence = :trace.delivered(state.session, :all)
-    {:noreply, put_in(state.waiting[fence], from)}
+    {:noreply, put_in(state.waiting[fence], {from, kind})}
   end
 
   @impl true
   def handle_info({:trace_delivered, :all, fence}, state) do
-    {from, waiting} = Map.pop(state.waiting, fence)
+    {request, waiting} = Map.pop(state.waiting, fence)
     state = Enum.reduce(Enum.sort_by(state.events, &elem(&1, 0)), state, &record/2)
-    if from, do: GenServer.reply(from, Map.values(state.origins))
+    if request do
+      {from, kind} = request
+      GenServer.reply(from, Map.values(Map.fetch!(state, kind)))
+    end
     {:noreply, %{state | events: [], waiting: waiting}}
   end
 
@@ -178,6 +188,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
           {Postgrex.Protocol, :handle_prepare_execute, [_query, _params, _opts, %{sock: sock}]}}
        ),
        do: {pid, :prepare, sock}
+
+  defp select(
+         {pid, :call,
+          {Postgrex.Protocol, :recv_parse_describe, [%{sock: sock}, _status, _query, _buffer]}}
+       ),
+       do: {pid, :prepare, sock}
+
+  defp select(
+         {pid, :return_from, {Postgrex.Protocol, :recv_parse_describe, 4},
+          {:ok, %Postgrex.Query{} = query, %{sock: sock}, _buffer}}
+       ),
+       do: {pid, :parsed, {sock, query}}
+
+  defp select({pid, tag, {Postgrex.Protocol, :recv_parse_describe, 4}, _result})
+       when tag in [:return_from, :exception_from],
+       do: {pid, :refused, nil}
 
   defp select(
          {pid, :return_from, {Postgrex.Protocol, :redescribe, 6},
@@ -255,6 +281,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
     retain_origin(state, frame, stamp, sock, query, {Postgrex.Protocol, :handle_prepare, 3})
   end
 
+  defp record({stamp, {pid, :parsed, {sock, query}}}, state) do
+    {frame, state} = pop(state, pid)
+
+    retain_origin(
+      state,
+      frame,
+      stamp,
+      sock,
+      query,
+      {Postgrex.Protocol, :recv_parse_describe, 4},
+      :preparations
+    )
+  end
+
   defp record({stamp, {pid, :described, {sock, query}}}, state) do
     frame = state.frames |> Map.get(pid, []) |> List.first()
     retain_origin(state, frame, stamp, sock, query, {Postgrex.Protocol, :redescribe, 6})
@@ -265,7 +305,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   defp record({_stamp, {pid, :exit, _}}, state),
     do: %{state | frames: Map.delete(state.frames, pid)}
 
-  defp retain_origin(state, frame, stamp, sock, query, mfa) do
+  defp retain_origin(state, frame, stamp, sock, query, mfa, collection \\ :origins) do
     key = {sock, query.ref}
 
     case frame do
@@ -281,7 +321,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
           description_origins: Map.take(frame, [{:origin, :parameters}, {:origin, :columns}])
         }
 
-        put_in(state.origins[key], origin)
+        put_in(state, [collection, key], origin)
 
       _ ->
         # A cached return supplies no new server facts. Keep every owner version

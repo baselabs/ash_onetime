@@ -58,6 +58,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
     metadata = Ecto.Repo.Registry.lookup(Repo.get_dynamic_repo())
     query_cache = %{table: metadata.cache, rows: readable(metadata.cache)}
     origins = ConnectionHistory.snapshot()
+    preparations = ConnectionHistory.snapshot(:preparations)
     connections = Map.new(connections, fn {holder, c} -> {holder, descriptors(c, origins)} end)
 
     catalogs =
@@ -82,6 +83,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
     %{
       prepared_catalogs: catalogs,
       query_origins: origins,
+      query_preparations: preparations,
       query_cache: query_cache,
       payload_children: Enum.map(payload_children, &hd/1),
       cache_expiries: cache_expiries,

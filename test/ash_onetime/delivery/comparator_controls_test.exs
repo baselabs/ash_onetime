@@ -3056,6 +3056,18 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             described? = Enum.any?(connection.descriptors, &(&1.query === query))
 
             if not described? do
+              preparations =
+                for origin <- historical.query_preparations,
+                    origin.query.ref === query.ref do
+                  %{
+                    mfa: origin.mfa,
+                    same_socket?: origin.sock === connection.protocol.sock,
+                    same_types?: origin.query.types === connection.protocol.types,
+                    same_parameters?: origin.parameters === query.param_oids,
+                    same_query?: origin.query === query
+                  }
+                end
+
               baseline? =
                 Enum.any?(historical.connections, fn {_holder, original} ->
                   original.query_cache.table === table and
@@ -3118,6 +3130,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                   Diagnostics.render(%{
                     phase: phase,
                     baseline?: baseline?,
+                    preparations: preparations,
                     insertions: insertions,
                     factories: factories,
                     origins: origins
@@ -3147,13 +3160,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
               operation.kind == :describe_statement and
                 operation.context.sql == "SELECT $1::int4 AS pending_cache_history"
             end),
-            do: read.source.index
+            do: {read.port, read.source.index, prefix}
 
       assert pending != [], "the native prefix must await its inferred parameter description"
 
-      for before <- pending do
-        assert {:error, %{rule: :cut_pending_protocol, index: ^before}} =
-                 cut.(historical, proof, before)
+      for {port, before, prefix} <- pending do
+        assert {:ok, checkpoint} = cut.(historical, proof, before)
+        retained? = Map.has_key?(checkpoint, :connection_protocols)
+
+        assert retained?, "the full cut must retain pending frontend protocol state"
+
+        same_pending? =
+          Map.fetch!(checkpoint.connection_protocols, port).pending === prefix.pending
+
+        assert same_pending?, "the cut cannot replace a pending description with a ready catalog"
       end
     after
       send(observer, :stop)
