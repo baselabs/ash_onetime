@@ -2847,20 +2847,34 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         ExitBoundary.observe(
           fn -> Repo.put_dynamic_repo(context.repo) end,
           fn _ ->
-            SQL.query!(context.repo, "SELECT 23::int4 AS native_cache_history", [],
-              cache_statement: "native_committed_history"
-            )
+            Repo.checkout(fn ->
+              SQL.query!(context.repo, "SELECT 23::int4 AS native_cache_history", [],
+                cache_statement: "native_committed_history"
+              )
 
-            table_barrier(observer, token, tables, :native)
+              table_barrier(observer, token, tables, Map.keys(historical.connections), :native)
 
-            Repo.all(from(c in "pg_class", prefix: "pg_catalog", select: count(c.oid)))
+              Repo.all(from(c in "pg_class", prefix: "pg_catalog", select: count(c.oid)))
 
-            table_barrier(observer, token, tables, :ecto)
+              # Compete for an existing real Ecto cache key. The unsuccessful
+              # candidate must never replace the independently observed row.
+              cached =
+                Enum.find(:ets.tab2list(historical.query_cache.table), fn
+                  {_, :cached, _, {_, %Postgrex.Query{}}} -> true
+                  _ -> false
+                end)
 
-            Repo.all(from(c in "pg_class", prefix: "pg_catalog", select: count(c.relname)))
+              {_, :cached, _, {_id, query}} = cached
+              candidate = put_elem(cached, 3, {System.unique_integer([:positive]), query})
+              false = :ets.insert_new(historical.query_cache.table, candidate)
 
-            table_barrier(observer, token, tables, :later)
-            :ok
+              table_barrier(observer, token, tables, Map.keys(historical.connections), :ecto)
+
+              Repo.all(from(c in "pg_class", prefix: "pg_catalog", select: count(c.relname)))
+
+              table_barrier(observer, token, tables, Map.keys(historical.connections), :later)
+              :ok
+            end)
           end,
           %{host: [], callbacks: []}
         )
@@ -2939,6 +2953,78 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                  "a cache cut must equal the independent live read and exclude later writes"
         end
       end
+
+      cut? = function_exported?(Historical, :cut, 3)
+      assert cut?, "the full committed connection-history cut is absent"
+      cut = Function.capture(Historical, :cut, 3)
+      proof = %{native: native, reads: reads, decoders: decoders, states: states}
+
+      for {phase, tables} <- snapshots do
+        [barrier] =
+          Enum.filter(events, fn
+            %{event: {_, :receive, {:native_tables_cut, ^token, ^phase, :observed}}} -> true
+            _ -> false
+          end)
+
+        assert {:ok, checkpoint} = cut.(historical, proof, barrier.index)
+        same_cache? = Enum.sort(checkpoint.query_cache.rows) === tables[ecto]
+        assert same_cache?, "the full cut must use the committed Ecto cache at its own barrier"
+
+        holder_rows =
+          receive do
+            {:native_holder_tables_snapshot, ^token, ^phase, rows} -> rows
+          after
+            0 -> flunk("the independent observer did not retain every full holder table")
+          end
+
+        for {holder, [row]} <- holder_rows do
+          connection = Map.fetch!(checkpoint.connections, holder)
+
+          expected =
+            {:conn, connection.owner, Postgrex.Protocol, connection.protocol, connection.lock,
+             connection.clock, connection.deadline, connection.status}
+
+          same_holder? = row === expected
+          assert same_holder?, "the full cut must retain all eight independently read holder fields"
+        end
+
+        {backend, catalog_rows} =
+          receive do
+            {:native_catalog_snapshot, ^token, ^phase, backend, rows} -> {backend, rows}
+          after
+            0 -> flunk("the real connection did not retain its server-side prepared catalog")
+          end
+
+        [connection] =
+          for {_holder, connection} <- checkpoint.connections,
+              connection.protocol.connection_id == backend,
+              do: connection
+
+        {:gen_tcp, port} = connection.protocol.sock
+
+        catalog =
+          checkpoint.prepared_catalogs
+          |> Map.fetch!(port)
+          |> Enum.reject(fn {name, _context} -> name == "" end)
+          |> Map.new(fn {name, context} -> {name, {context.sql, context.parameter_types}} end)
+
+        server_catalog = Map.new(catalog_rows, fn [name, sql, types] -> {name, {sql, types}} end)
+        same_catalog? = catalog === server_catalog
+        assert same_catalog?, "the full cut must equal the actual server's prepared catalog"
+
+        for {_holder, connection} <- checkpoint.connections,
+            table = connection.query_cache.table,
+            not is_nil(table) do
+          same_native? = Enum.sort(connection.query_cache.rows) === tables[table]
+          assert same_native?,
+                 "the full cut must use each committed native cache at its own barrier"
+
+          for {_name, _ref, %Postgrex.Query{} = query} <- tables[table] do
+            described? = Enum.any?(connection.descriptors, &(&1.query === query))
+            assert described?, "the full cut must retain the committed cache row's native descriptor"
+          end
+        end
+      end
     after
       send(observer, :stop)
 
@@ -2952,8 +3038,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  defp table_barrier(observer, token, tables, phase) do
-    send(observer, {:native_tables_cut, token, self(), tables, phase})
+  defp table_barrier(observer, token, tables, holders, phase) do
+    %{connection_id: backend, rows: catalog} =
+      SQL.query!(
+        Repo.get_dynamic_repo(),
+        "SELECT name, statement, parameter_types::oid[] FROM pg_prepared_statements ORDER BY name",
+        []
+      )
+
+    send(observer, {:native_tables_cut, token, self(), tables, holders, backend, catalog, phase})
 
     receive do
       {:native_tables_cut, ^token, ^phase, :observed} -> :ok
@@ -2970,9 +3063,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         send(caller, {:native_holder_cut, token, phase, :observed})
         holder_observer(parent, token, parent_monitor)
 
-      {:native_tables_cut, ^token, caller, tables, phase} ->
+      {:native_tables_cut, ^token, caller, tables, holders, backend, catalog, phase} ->
         rows = Map.new(tables, &{&1, Enum.sort(:ets.tab2list(&1))})
+        holder_rows = Map.new(holders, &{&1, :ets.lookup(&1, :conn)})
         send(parent, {:native_tables_snapshot, token, phase, rows})
+        send(parent, {:native_holder_tables_snapshot, token, phase, holder_rows})
+        send(parent, {:native_catalog_snapshot, token, phase, backend, catalog})
         send(caller, {:native_tables_cut, token, phase, :observed})
         holder_observer(parent, token, parent_monitor)
 

@@ -138,6 +138,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           into: %{},
           do: {holder, {:conn, owner, Postgrex.Protocol, protocol, lock, clock, deadline, status}}
 
+    tables =
+      historical
+      |> Enum.flat_map(fn {_holder, connection} ->
+        case Map.get(connection, :query_cache) do
+          %{table: table, rows: rows} when not is_nil(table) -> [{table, rows}]
+          _ -> []
+        end
+      end)
+      |> Map.new()
+
+    tables =
+      case Map.get(indexed, :query_cache) do
+        %{table: table, rows: rows} -> Map.put(tables, table, rows)
+        _ -> tables
+      end
+
     initial = %{
       holders: holders,
       ports: ports,
@@ -146,6 +162,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         for(
           {holder, row} <- rows,
           do: %{holder: holder, index: -1, origin: {:historical, holder}, row: row}
+        ),
+      tables: tables,
+      table_commits:
+        for(
+          {table, rows} <- tables,
+          do: %{table: table, index: -1, origin: {:historical, table}, rows: rows, present?: true}
         ),
       lookups: %{},
       completed: %{},
@@ -181,6 +203,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     %{
       commits: Enum.reverse(state.commits),
+      table_commits: Enum.reverse(state.table_commits),
       versions: Enum.reverse(state.versions),
       copies: Enum.reverse(state.copies),
       buffers: Enum.reverse(state.buffers),
@@ -207,6 +230,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp event(source, state) do
     state = committed_row(source, state)
+    state = committed_table(source, state)
     state = commit(source, state)
     state = holder_event(source, state)
     state = fixture_event(source, state)
@@ -267,6 +291,77 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     commit = %{holder: holder, index: index, origin: origin, row: row}
     %{state | rows: rows, commits: [commit | state.commits]}
+  end
+
+  # The cache is an ETS set. Keep complete rows from the initial native table,
+  # then apply only the writes whose own BIF returned successfully. A helper
+  # return or a failed insert_new cannot advance this committed history.
+  defp committed_table(%{event: {_, :return_from, {:ets, :new, 2}, table}} = source, state) do
+    case pair_returned(state, source) do
+      %{
+        source: %{event: {_, :call, {:ets, :new, [Postgrex.Protocol, [:set, :public]]}}} = call
+      } ->
+        retain_table(state, table, [], source.index, call.index)
+
+      _ ->
+        state
+    end
+  end
+
+  defp committed_table(%{event: {_, :return_from, {:ets, function, _}, true}} = source, state)
+       when function in [
+              :insert,
+              :insert_new,
+              :update_element,
+              :delete,
+              :delete_object,
+              :delete_all_objects
+            ] do
+    with %{source: %{event: {_, :call, {:ets, ^function, [table | arguments]}}} = call} <-
+           pair_returned(state, source),
+         {:ok, rows} <- Map.fetch(state.tables, table) do
+      rows = table_write(function, arguments, rows)
+      present? = function != :delete or arguments != []
+      retain_table(state, table, rows, source.index, call.index, present?)
+    else
+      _ -> state
+    end
+  end
+
+  defp committed_table(_source, state), do: state
+
+  defp table_write(function, [objects], rows) when function in [:insert, :insert_new] do
+    objects = if is_list(objects), do: objects, else: [objects]
+    keys = MapSet.new(objects, &elem(&1, 0))
+    Enum.reject(rows, &MapSet.member?(keys, elem(&1, 0))) ++ objects
+  end
+
+  defp table_write(:update_element, [key, updates], rows) do
+    updates = if is_list(updates), do: updates, else: [updates]
+
+    Enum.map(rows, fn row ->
+      if elem(row, 0) === key do
+        Enum.reduce(updates, row, fn {field, value}, row -> put_elem(row, field - 1, value) end)
+      else
+        row
+      end
+    end)
+  end
+
+  defp table_write(:delete, [key], rows), do: Enum.reject(rows, &(elem(&1, 0) === key))
+  defp table_write(:delete_object, [object], rows), do: Enum.reject(rows, &(&1 === object))
+  defp table_write(function, [], _rows) when function in [:delete, :delete_all_objects], do: []
+
+  defp retain_table(state, table, rows, index, origin, present? \\ true) do
+    commit = %{table: table, index: index, origin: origin, rows: rows, present?: present?}
+    tables =
+      if present?, do: Map.put(state.tables, table, rows), else: Map.delete(state.tables, table)
+
+    %{
+      state
+      | tables: tables,
+        table_commits: [commit | state.table_commits]
+    }
   end
 
   # The true table-owner BIF identifies shared services without making them
