@@ -76,11 +76,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  def observe_startup(corruption \\ nil) do
+  def observe_startup(corruption \\ nil, types \\ Postgrex.DefaultTypes) do
     ExitBoundary.observe(
       fn -> :ok end,
       fn _ ->
-        %{sock: {module, socket}} = connect()
+        %{sock: {module, socket}} = connect(nil, nil, types)
 
         try do
           if corruption == :extra_read do
@@ -94,6 +94,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       end,
       %{host: [], callbacks: []}
     )
+  end
+
+  # This genuine type module has no other consumers. Its first connection must
+  # create the native service during observation; no expected state is seeded.
+  def observe_fresh_startup do
+    types = AshOnetime.Test.ExitBoundary.StartupTypes
+    unless native_type_servers(types) == [], do: raise("the fresh type service already exists")
+
+    try do
+      observe_startup(nil, types)
+    after
+      for pid <- native_type_servers(types) do
+        :ok = DynamicSupervisor.terminate_child(Postgrex.TypeSupervisor, pid)
+      end
+
+      unless native_type_servers(types) == [], do: raise("the fresh type service was not removed")
+    end
+  end
+
+  defp native_type_servers(types) do
+    for {_id, pid, :worker, [Postgrex.TypeServer]} <-
+          DynamicSupervisor.which_children(Postgrex.TypeSupervisor),
+        is_pid(pid),
+        %Postgrex.TypeServer{types: {^types, _table}} <- [:sys.get_state(pid)],
+        do: pid
   end
 
   # Exercise the actual Holder API on a real, single-connection Postgrex pool.
@@ -913,8 +938,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     :ok = module.close(socket)
   end
 
-  defp connect(prepare \\ nil, shape \\ nil) do
-    options = Keyword.put(Repo.config(), :types, Postgrex.DefaultTypes)
+  defp connect(prepare \\ nil, shape \\ nil, types \\ Postgrex.DefaultTypes) do
+    options = Keyword.put(Repo.config(), :types, types)
     options = if prepare, do: Keyword.put(options, :prepare, prepare), else: options
     options = if shape == :strict, do: Keyword.put(options, :transactions, :strict), else: options
     {:ok, protocol} = Postgrex.Protocol.connect(options)

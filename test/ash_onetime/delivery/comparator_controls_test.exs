@@ -3920,6 +3920,25 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: a new native type service constructs its own startup roots", context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+    run = ConnectionNative.observe_fresh_startup()
+    assert run.result == :ok
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+    assert proof.native.errors == []
+    assert proof.reads.errors == []
+
+    for error <- proof.decoders.errors ++ proof.states.errors do
+      Diagnostics.emit("CONNECTION_FRESH_TYPE_ORIGIN_FAILURE", Map.take(error, [:index, :at, :rule, :path, :context]))
+    end
+
+    assert proof.decoders.errors == []
+    assert proof.states.errors == []
+  end
+
+  @tag :connection_streams
   test "Connection streams: a startup Protocol copy retains its constructor peer", context do
     Repo.put_dynamic_repo(context.repo)
     historical = Historical.capture(context.prefix)
