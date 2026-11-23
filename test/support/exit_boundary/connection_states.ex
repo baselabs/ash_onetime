@@ -354,6 +354,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp retain_table(state, table, rows, index, origin, present? \\ true) do
     commit = %{table: table, index: index, origin: origin, rows: rows, present?: present?}
+
     tables =
       if present?, do: Map.put(state.tables, table, rows), else: Map.delete(state.tables, table)
 

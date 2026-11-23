@@ -2985,7 +2985,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              connection.clock, connection.deadline, connection.status}
 
           same_holder? = row === expected
-          assert same_holder?, "the full cut must retain all eight independently read holder fields"
+
+          assert same_holder?,
+                 "the full cut must retain all eight independently read holder fields"
         end
 
         {backend, catalog_rows} =
@@ -3016,12 +3018,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             table = connection.query_cache.table,
             not is_nil(table) do
           same_native? = Enum.sort(connection.query_cache.rows) === tables[table]
+
           assert same_native?,
                  "the full cut must use each committed native cache at its own barrier"
 
           for {_name, _ref, %Postgrex.Query{} = query} <- tables[table] do
             described? = Enum.any?(connection.descriptors, &(&1.query === query))
-            assert described?, "the full cut must retain the committed cache row's native descriptor"
+
+            assert described?,
+                   "the full cut must retain the committed cache row's native descriptor"
           end
         end
       end
@@ -3035,6 +3040,143 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           Process.exit(observer, :kill)
           flunk("the native cache observer did not stop")
       end
+    end
+  end
+
+  @tag :connection_streams
+  @tag prepare: :named
+  test "Connection streams: a failed Ecto cache candidate cannot become a query origin", context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+
+    run =
+      ExitBoundary.observe(
+        fn -> Repo.put_dynamic_repo(context.repo) end,
+        fn _ ->
+          Repo.all(from(c in "pg_class", prefix: "pg_catalog", select: count(c.oid)))
+
+          cached =
+            Enum.find(:ets.tab2list(historical.query_cache.table), fn
+              {_, :cached, _, {_, %Postgrex.Query{}}} -> true
+              _ -> false
+            end)
+
+          {_, :cached, _, {_id, query}} = cached
+          candidate_id = System.unique_integer([:positive])
+          candidate = put_elem(cached, 3, {candidate_id, query})
+          false = :ets.insert_new(historical.query_cache.table, candidate)
+          candidate_id
+        end,
+        %{host: [], callbacks: []}
+      )
+
+    assert is_integer(run.result)
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    indexed = Origins.build(side)
+    queries = QueryOrigins.build(indexed, side)
+    assert queries.errors == []
+    refute run.result in Map.values(queries.ids)
+  end
+
+  @tag :connection_streams
+  test "Connection streams: raw ledgers finish before projected consumers", context do
+    pair = observe(context, row!(:issue, :execute), Values.set()[:va])
+
+    proofs = [
+      {NativeTransport, :build, 3},
+      {ConnectionReads, :build, 3},
+      {ConnectionDecoders, :build, 5},
+      {ConnectionStates, :build, 5}
+    ]
+
+    consumers = [{Scheduling, :build, 1}, {Readback, :check, 3}, {Allocation, :check, 2}]
+    events = comparator_call_order(pair, proofs ++ consumers)
+    first = Enum.find_index(events, fn {kind, mfa, _} -> kind == :call and mfa in consumers end)
+    assert is_integer(first)
+    preceding = Enum.take(events, first)
+
+    for mfa <- proofs do
+      completed = Enum.filter(preceding, &match?({:return, ^mfa, true}, &1))
+
+      assert length(completed) == 2,
+             "both raw connection ledgers must finish before any projected consumer"
+    end
+  end
+
+  defp comparator_call_order(pair, functions) do
+    parent = self()
+    token = make_ref()
+
+    {observer, monitor} =
+      spawn_monitor(fn ->
+        parent_monitor = Process.monitor(parent)
+        comparator_order_observer(parent, parent_monitor, [])
+      end)
+
+    session = :trace.session_create(:ash_onetime_comparator_order, observer, [])
+
+    try do
+      for {module, _function, _arity} = mfa <- functions do
+        Code.ensure_loaded!(module)
+        1 = :trace.function(session, mfa, [{:_, [], [{:exception_trace}]}], [:local])
+      end
+
+      1 = :trace.process(session, self(), true, [:call, :strict_monotonic_timestamp])
+      _result = Comparator.compare(pair)
+      1 = :trace.process(session, self(), false, [:call])
+      fence = :trace.delivered(session, :all)
+
+      receive do
+        {:trace_delivered, :all, ^fence} -> :ok
+      after
+        5_000 -> flunk("the comparator order trace did not reach its native fence")
+      end
+
+      send(observer, {:snapshot, self(), token})
+
+      receive do
+        {^token, events} -> events
+      after
+        5_000 -> flunk("the comparator order observer did not return its native events")
+      end
+    after
+      :trace.session_destroy(session)
+      send(observer, :stop)
+
+      receive do
+        {:DOWN, ^monitor, :process, ^observer, reason} -> assert reason == :normal
+      after
+        5_000 ->
+          Process.exit(observer, :kill)
+          flunk("the comparator order observer did not stop")
+      end
+    end
+  end
+
+  # Retain only source-owned MFAs and success flags. Captured arguments and
+  # results may contain the entire private observation and never leave here.
+  defp comparator_order_observer(parent, parent_monitor, events) do
+    receive do
+      {:trace_ts, _pid, :call, {module, function, arguments}, stamp} ->
+        event = {:call, {module, function, length(arguments)}, nil}
+        comparator_order_observer(parent, parent_monitor, [{stamp, event} | events])
+
+      {:trace_ts, _pid, :return_from, mfa, %{errors: errors}, stamp} ->
+        event = {:return, mfa, errors == []}
+        comparator_order_observer(parent, parent_monitor, [{stamp, event} | events])
+
+      {:trace_ts, _pid, :exception_from, mfa, _reason, stamp} ->
+        comparator_order_observer(parent, parent_monitor, [{stamp, {:exception, mfa, false}} | events])
+
+      {:snapshot, ^parent, token} ->
+        ordered = events |> Enum.sort_by(&elem(&1, 0)) |> Enum.map(&elem(&1, 1))
+        send(parent, {token, ordered})
+
+      :stop ->
+        :ok
+
+      {:DOWN, ^parent_monitor, :process, ^parent, _reason} ->
+        :ok
     end
   end
 
