@@ -615,9 +615,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert used_sockets != [], "the TLS witness must use the actual public plaintext boundary"
 
-    for {_holder, %{protocol: %{sock: {:ssl, socket}}, tls: binding}} <- historical.connections,
-        socket in used_sockets,
-        worker <- [binding.owner, binding.sender] do
+    used_bindings =
+      for {_holder, %{protocol: %{sock: {:ssl, socket}}, tls: binding}} <- historical.connections,
+          socket in used_sockets,
+          do: binding
+
+    complete_bindings? = MapSet.new(used_bindings, & &1.socket) === MapSet.new(used_sockets)
+    assert complete_bindings?, "every used plaintext socket needs its independently bound history"
+
+    for binding <- used_bindings, worker <- [binding.owner, binding.sender] do
       traced? = Enum.any?(run.events, &(&1.pid == worker and elem(&1.event, 1) == :call))
       assert traced?, "each used TLS connection must retain both actual persistent worker programs"
     end
