@@ -3992,6 +3992,46 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert proof.decoders.errors == []
     assert proof.states.errors == []
 
+    assert {:ok, before_birth} = Historical.cut(historical, proof, birth.index)
+
+    for program <- [
+          before_birth.connection_decoder_program,
+          before_birth.connection_state_program
+        ] do
+      refute Map.has_key?(program.type_roots, birth.owner),
+             "a prefix cannot acquire the future native Types.new return"
+    end
+
+    fetch =
+      Enum.find(proof.indexed.events, fn
+        %{event: {_, :call, {Postgrex.TypeServer, :fetch, [server]}}} -> server == birth.owner
+        _ -> false
+      end)
+
+    assert fetch
+    assert {:ok, after_birth} = Historical.cut(historical, proof, fetch.index)
+
+    for program <- [
+          after_birth.connection_decoder_program,
+          after_birth.connection_state_program
+        ] do
+      root = Map.fetch!(program.type_roots, birth.owner)
+      assert root.index == birth.index
+      assert root.types === birth.types
+      assert is_nil(root.retired), "a prefix cannot acquire the future service retirement"
+    end
+
+    continued_side = %{
+      side
+      | historical: after_birth,
+        run: %{run | events: Enum.drop(run.events, fetch.index)}
+    }
+
+    continued = ConnectionHistory.build(continued_side)
+    assert continued.errors == []
+    same_cursors? = continued.decoders.cursors === proof.decoders.cursors
+    assert same_cursors?, "the unchanged startup suffix must finish every original decoder"
+
     without_origin =
       ComparatorMutants.with_mutant(:stream_startup_type_root, fn ->
         ConnectionHistory.build(side)

@@ -374,6 +374,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
            callback: callback,
            callbacks: service_callbacks(callback),
            table: table,
+           registration_keys: Registry.keys(Postgrex.TypeManager, pid),
            initial_state: initial_state
          }}
 

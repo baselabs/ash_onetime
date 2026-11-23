@@ -1934,6 +1934,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     with %{types: {^module, _table} = types} = root <- state.type_roots[server],
          true <- Map.get(root, :index, -1) < source.index,
          true <- is_nil(Map.get(root, :retired)) or root.retired > source.index,
+         true <- {module, context.endpoint} in root.registration_keys,
          [location] <-
            native_type_calls(state, context.source, source, {Postgrex.TypeSupervisor, :locate, 2}),
          {_, :call, {_, _, [^module, endpoint]}} <- location.source.event,

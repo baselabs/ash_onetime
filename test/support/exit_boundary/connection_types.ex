@@ -22,10 +22,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTypes do
   # return is retained only after its primitive origin has been checked.
   def history(indexed, pairs, services) do
     roots =
-      for {owner, %{table: table, initial_state: %Postgrex.TypeServer{types: types} = root}} <-
+      for {owner,
+           %{
+             table: table,
+             registration_keys: keys,
+             initial_state: %Postgrex.TypeServer{types: types} = root
+           }} <-
             services,
           into: %{},
-          do: {owner, %{table: table, types: types, state: root, index: -1}}
+          do: {owner, %{table: table, types: types, state: root, index: -1, registration_keys: keys}}
 
     pairs
     |> Map.values()
@@ -83,6 +88,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTypes do
          types: types,
          state: root,
          key: key,
+         registration_keys: [key],
          index: types_new.returned.index,
          registration: registration,
          factory: factory.source.index,

@@ -118,6 +118,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp retire_type_services(types) do
     for pid <- native_type_servers(types) do
+      Process.unlink(pid)
       :ok = DynamicSupervisor.terminate_child(Postgrex.TypeSupervisor, pid)
     end
   end
@@ -558,21 +559,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
             :ok = module.close(socket)
           end
         end,
-        %{
-          host: [],
-          callbacks: [],
-          services: fn %{types: {module, table}} ->
-            owner = :ets.info(table, :owner)
-
-            %{
-              {:native_type_owner, module} => %{
-                pid: owner,
-                table: table,
-                callback: {Postgrex.TypeServer, :handle_call, 3}
-              }
-            }
-          end
-        }
+        %{host: [], callbacks: []}
       )
 
     receive do
