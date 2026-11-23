@@ -2110,8 +2110,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
        [{:atom, message_location, :native_foreign_tls_initialization}, initialization]}
 
     call =
-      {:call, call_location, remote,
-       [pid, {:tuple, message_location, [caller, changed]}]}
+      {:call, call_location, remote, [pid, {:tuple, message_location, [caller, changed]}]}
 
     clause = {:clause, location, arguments, guards, [call]}
     {{:function, annotation, :initialize, 2, [clause]}, sites + 1}
@@ -2130,9 +2129,11 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     tagged =
       {:tuple, location,
-       [peer,
-        {:tuple, location,
-         [{:atom, location, :native_foreign_tls_initialization}, initialization]}]}
+       [
+         peer,
+         {:tuple, location,
+          [{:atom, location, :native_foreign_tls_initialization}, initialization]}
+       ]}
 
     restored = {:tuple, location, [peer, initialization]}
 
@@ -2267,20 +2268,71 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     end)
   end
 
-  # Keep the real Watcher, supervisor, PostgreSQL and reply value. Only the
-  # native reply's sending process changes to a real, traced descendant.
+  # Watcher is the client of this private gen.call. Keep the real supervisor,
+  # child and reply, but send its reply through a real traced Task descendant.
   def with_service_reply_sender(callback) do
-    path = Path.join(Mix.Project.deps_path(), "db_connection/lib/db_connection/watcher.ex")
-
-    edits = [
-      {"  def handle_call({:watch, supervisor, args}, {caller_pid, _ref}, {caller_refs, started_refs}) do\n",
-       "  def handle_call({:watch, supervisor, args}, {caller_pid, reply_ref}, {caller_refs, started_refs}) do\n"},
-      {"        {:reply, {:ok, caller_ref}, {caller_refs, started_refs}}\n",
-       "        {:ok, _} = Task.start(fn -> GenServer.reply({caller_pid, reply_ref}, {:ok, caller_ref}) end)\n        {:noreply, {caller_refs, started_refs}}\n"}
-    ]
-
-    with_source_owner(DBConnection.Watcher, path, edits, callback)
+    with_owner_mutant(DynamicSupervisor, 1, &service_reply_form/2, callback)
   end
+
+  defp service_reply_form({:function, annotation, :handle_call, 3, clauses}, sites) do
+    {clauses, sites} =
+      Enum.map_reduce(clauses, sites, fn
+        {:clause, location,
+         [{:tuple, _, [{:atom, _, :start_child}, _]} = request, _from, state], guards, body},
+        sites ->
+          from = {:var, location, :NativeReplyFrom}
+          watcher = {:var, location, :NativeReplyWatcher}
+          tag = {:var, location, :_NativeReplyTag}
+          reply = {:var, location, :NativeReplyValue}
+          next = {:var, location, :NativeReplyState}
+          other = {:var, location, :NativeReplyOther}
+          target =
+            {:call, location,
+             {:remote, location, {:atom, location, :erlang}, {:atom, location, :whereis}},
+             [{:atom, location, DBConnection.Watcher}]}
+          original = {:block, location, body}
+          input = {:tuple, location, [target, from, original]}
+          pattern =
+            {:tuple, location,
+             [
+               watcher,
+               {:tuple, location, [watcher, tag]},
+               {:tuple, location, [{:atom, location, :reply}, reply, next]}
+             ]}
+
+          send_reply =
+            {:call, location,
+             {:remote, location, {:atom, location, :gen}, {:atom, location, :reply}}, [from, reply]}
+
+          function = {:fun, location, {:clauses, [{:clause, location, [], [], [send_reply]}]}}
+
+          task =
+            {:call, location,
+             {:remote, location, {:atom, location, Task}, {:atom, location, :start}}, [function]}
+
+          result = {:tuple, location, [{:atom, location, :noreply}, next]}
+
+          unchanged =
+            {:tuple, location,
+             [{:var, location, :_NativeReplyName}, {:var, location, :_NativeReplyTo}, other]}
+
+          changed =
+            {:case, location, input,
+             [
+               {:clause, location, [pattern], [], [task, result]},
+               {:clause, location, [unchanged], [], [other]}
+             ]}
+
+          {{:clause, location, [request, from, state], guards, [changed]}, sites + 1}
+
+        clause, sites ->
+          {clause, sites}
+      end)
+
+    {{:function, annotation, :handle_call, 3, clauses}, sites}
+  end
+
+  defp service_reply_form(form, sites), do: {form, sites}
 
   defp with_source_owner(module, path, edits, callback) do
     {:module, ^module} = :code.ensure_loaded(module)

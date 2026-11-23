@@ -4468,7 +4468,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       completed =
         Enum.find(indexed, fn
-          %{index: index, event: {^pid, :call, {:gen_statem, :loop_state_callback_result, values}}}
+          %{
+            index: index,
+            event: {^pid, :call, {:gen_statem, :loop_state_callback_result, values}}
+          }
           when index > dispatch.index ->
             length(values) == 11
 

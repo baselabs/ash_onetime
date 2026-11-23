@@ -900,7 +900,6 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
             monitor,
             receipt
           ),
-          service_reply_origin?(context, pid, target, tag, monitor, receipt),
           service_reply_demonitored?(context, pid, ref, receipt, pair),
           do: {pair, monitor}
 
@@ -953,33 +952,6 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       monitor.returned.stamp < event.stamp and event.stamp < receipt.received_stamp and
         event.event === {pid, :send, request, target}
     end)
-  end
-
-  defp service_reply_origin?(context, pid, target, tag, monitor, receipt) do
-    destination =
-      case tag do
-        [:alias | ref] when is_reference(ref) -> ref
-        ref when is_reference(ref) -> pid
-      end
-
-    requests =
-      for %{event: {^pid, :send, {_, {^pid, ^tag}, _}, ^target}} = event <- context.events,
-          monitor.returned.stamp < event.stamp and event.stamp < receipt.received_stamp,
-          do: event
-
-    replies =
-      for %{event: {_, :send, message, ^destination}} = event <- context.events,
-          message === receipt.message,
-          monitor.returned.stamp < event.stamp and event.stamp < receipt.received_stamp,
-          do: event
-
-    case {requests, replies} do
-      {[request], [%{event: {^target, :send, _, _}} = reply]} ->
-        request.stamp < reply.stamp
-
-      _ ->
-        false
-    end
   end
 
   defp service_reply_demonitored?(context, pid, ref, receipt, parent) do

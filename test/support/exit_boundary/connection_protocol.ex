@@ -139,6 +139,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
     emit(state, frame, {:exact_payload, ?p, frame.payload}, nil)
   end
 
+  defp frontend(
+         %{tag: ?X, payload: <<>>} = frame,
+         %{startup: %{phase: :failed} = startup, pending: []} = state
+       ) do
+    state = %{state | startup: %{startup | phase: :terminated}}
+    emit(state, frame, {:exact_payload, ?X, <<>>}, nil)
+  end
+
   defp frontend(frame, %{startup: %{phase: phase}} = state) when phase != :ready,
     do: fail(state, frame, :startup_frontend, frame.tag, :declared_startup_message)
 
