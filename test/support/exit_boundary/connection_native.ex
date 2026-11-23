@@ -65,7 +65,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           send(observer, {tag, %{self() => %{protocol: protocol, port_owner: owner}}})
           protocol
         end,
-        fn protocol -> Postgrex.Protocol.disconnect(nil, protocol) end,
+        fn protocol ->
+          reason = %Postgrex.Error{message: "native cancellation"}
+          Postgrex.Protocol.disconnect(reason, protocol)
+        end,
         %{host: [], callbacks: []}
       )
 

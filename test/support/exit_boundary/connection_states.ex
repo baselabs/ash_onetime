@@ -3624,24 +3624,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp startup_query(state, source, context, version) do
-    types = Postgrex.Types.new(Keyword.fetch!(context.options, :types))
+    [size] =
+      for pair <- native_type_calls(state, context.source, source, {:ets, :info, 2}),
+          {_, :call, {_, _, [table, :size]}} <- [pair.source.event],
+          {_, actual_table} = version.protocol.types,
+          table == actual_table,
+          do: pair
 
-    try do
-      [size] =
-        for pair <- native_type_calls(state, context.source, source, {:ets, :info, 2}),
-            {_, :call, {_, _, [table, :size]}} <- [pair.source.event],
-            {_, actual_table} = version.protocol.types,
-            table == actual_table,
-            do: pair
+    {_, :return_from, _, 0} = size.returned.event
+    server_version = Postgrex.Utils.parse_version(version.protocol.parameters["server_version"])
 
-      {_, :return_from, _, 0} = size.returned.event
-      server_version = Postgrex.Utils.parse_version(version.protocol.parameters["server_version"])
-      input = %{types: types, disable_composite_types: version.protocol.disable_composite_types}
-      {:msg_query, Postgrex.Types.bootstrap_query(server_version, input)}
-    after
-      {_module, table} = types
-      :ets.delete(table)
-    end
+    # The short-lived owner retires the independently created table without
+    # inspecting Postgrex's opaque state or borrowing the observed table.
+    query =
+      Task.async(fn ->
+        types = Postgrex.Types.new(Keyword.fetch!(context.options, :types))
+        input = %{types: types, disable_composite_types: version.protocol.disable_composite_types}
+        Postgrex.Types.bootstrap_query(server_version, input)
+      end)
+      |> Task.await()
+
+    {:msg_query, query}
   end
 
   defp callback_messages(state, source, actual) do
