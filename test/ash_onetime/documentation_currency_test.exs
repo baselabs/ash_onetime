@@ -42,7 +42,9 @@ defmodule AshOnetime.DocumentationCurrencyTest do
   end
 
   test "mix.exs declares a plain release or exactly the dev pre-release" do
-    assert @parsed_version.pre in [[], ["dev"]] and is_nil(@parsed_version.build),
+    parsed = Mix.Project.config() |> Keyword.fetch!(:version) |> Version.parse!()
+
+    assert parsed.pre in [[], ["dev"]] and is_nil(parsed.build),
            "mix.exs version must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-dev; got #{@version}"
   end
 
@@ -50,7 +52,7 @@ defmodule AshOnetime.DocumentationCurrencyTest do
     unreleased = Regex.scan(~r/^## Unreleased — (.+)$/m, @changelog, capture: :all_but_first)
     dates = for [release, date] <- @dated_releases, release == @release, do: date
 
-    if @parsed_version.pre == ["dev"] do
+    if development?() do
       assert unreleased == [[@release]],
              "development requires exactly one Unreleased heading naming #{@release}"
 
@@ -85,7 +87,7 @@ defmodule AshOnetime.DocumentationCurrencyTest do
     tags = MapSet.new(tags, &hd/1)
 
     history =
-      if @parsed_version.pre == [] do
+      unless development?() do
         # The current release qualifies before publication creates its Hex release and tag.
         refute MapSet.member?(published, @release),
                "current release v#{@release} is already on Hex"
@@ -130,7 +132,7 @@ defmodule AshOnetime.DocumentationCurrencyTest do
   test "targeted development guides point to published HexDocs and released guides do not",
        context do
     for {path, source} <- context.documents do
-      if @parsed_version.pre == ["dev"] do
+      if development?() do
         if Regex.match?(@target_claim, source) do
           assert source =~ @development_notice,
                  "#{path} must carry the exact development notice: #{@development_notice}"
@@ -143,7 +145,7 @@ defmodule AshOnetime.DocumentationCurrencyTest do
   end
 
   test "README identifies development before its first usage or install content", context do
-    if @parsed_version.pre == ["dev"] do
+    if development?() do
       source = Map.fetch!(context.documents, "README.md")
       {notice_offset, _length} = :binary.match(source, @development_notice)
       [{content_offset, _length}] = Regex.run(~r/^## /m, source, return: :index)
@@ -155,7 +157,7 @@ defmodule AshOnetime.DocumentationCurrencyTest do
 
   test "docs source links use the release tag or the development branch" do
     docs = Mix.Project.config() |> Keyword.fetch!(:docs)
-    expected = if @parsed_version.pre == [], do: "v#{@version}", else: "main"
+    expected = if development?(), do: "main", else: "v#{@version}"
     assert Keyword.fetch!(docs, :source_ref) == expected
   end
 
@@ -176,15 +178,20 @@ defmodule AshOnetime.DocumentationCurrencyTest do
       autoredirect: false
     ]
 
-    request = {String.to_charlist(@hex_url), []}
+    headers = [
+      {~c"accept", ~c"application/json"},
+      {~c"user-agent", ~c"ash_onetime-release-records"}
+    ]
+
+    request = {String.to_charlist(@hex_url), headers}
 
     body =
       case :httpc.request(:get, request, options, body_format: :binary) do
         {:ok, {{_protocol, 200, _reason}, _headers, body}} ->
           body
 
-        {:ok, {{_protocol, status, _reason}, _headers, _body}} ->
-          flunk("GET #{@hex_url} failed: HTTP #{status}")
+        {:ok, {{_protocol, status, _reason}, _headers, body}} ->
+          flunk("GET #{@hex_url} failed: HTTP #{status}: #{inspect(String.slice(body, 0, 500))}")
 
         {:error, reason} ->
           flunk("GET #{@hex_url} failed: #{inspect(reason)}")
@@ -204,6 +211,11 @@ defmodule AshOnetime.DocumentationCurrencyTest do
 
       version
     end)
+  end
+
+  defp development? do
+    parsed = Mix.Project.config() |> Keyword.fetch!(:version) |> Version.parse!()
+    parsed.pre == ["dev"]
   end
 
   defp difference(left, right) do
