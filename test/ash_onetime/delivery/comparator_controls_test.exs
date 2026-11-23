@@ -3897,6 +3897,49 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       same_row? = row === expected
       assert same_row?, "the new holder cut must equal all eight independently read row fields"
       refute Map.has_key?(checkpoint.connections, original)
+
+      retired =
+        Enum.find(proof.states.commits, &(&1.holder == original and is_nil(&1.row)))
+
+      created =
+        Enum.find(proof.states.commits, &(&1.holder == renewed and not is_nil(&1.row)))
+
+      assert retired && created
+
+      gap =
+        Enum.find(proof.indexed.events, fn source ->
+          retired.index < source.index and source.index < created.index
+        end)
+
+      assert gap, "the native renewal must expose its real interval without a holder row"
+      assert {:ok, pending} = Historical.cut(historical, proof, gap.index)
+      refute Map.has_key?(pending.connections, original)
+      refute Map.has_key?(pending.connections, renewed)
+      owner = historical.connections[original].owner
+      assert Map.has_key?(pending.connection_owners, owner)
+
+      continued_side = %{
+        side
+        | historical: pending,
+          run: %{run | events: Enum.drop(run.events, gap.index)}
+      }
+
+      continued = ConnectionHistory.build(continued_side)
+
+      for error <- continued.errors do
+        Diagnostics.emit(
+          "CONNECTION_PENDING_OWNER_FAILURE",
+          Map.take(error, [:index, :at, :rule, :path, :context])
+        )
+      end
+
+      assert continued.errors == [],
+             "the unchanged native suffix must finish its owner without a borrowed holder root"
+
+      same_commits? = continued.states.commits === proof.states.commits
+      same_owners? = continued.states.owner_machines === proof.states.owner_machines
+      assert same_commits?, "the owner continuation must recover every original holder commit"
+      assert same_owners?, "the owner continuation must recover every original final owner"
     end
   end
 
