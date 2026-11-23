@@ -20,6 +20,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.FailureTrace
   alias AshOnetime.Test.ExitBoundary.Historical
+  alias AshOnetime.Test.ExitBoundary.HostCall
   alias AshOnetime.Test.ExitBoundary.NativeTransport
   alias AshOnetime.Test.ExitBoundary.Origins
   alias AshOnetime.Test.ExitBoundary.PathFrameWitnesses
@@ -2869,7 +2870,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                 end)
 
               {key, :cached, selection, {_id, query}} = cached
-              prepared = {System.unique_integer([:positive]), IO.iodata_to_binary(query.statement)}
+
+              prepared =
+                {System.unique_integer([:positive]), IO.iodata_to_binary(query.statement)}
+
               false = :ets.insert_new(cache_table, {key, :cache, selection, prepared})
 
               table_barrier(observer, token, tables, holders, :ecto)
@@ -3137,6 +3141,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     # Every raw projection boundary in the current comparator, including the
     # registered rules. A new consumer must join this same ordering obligation.
     consumers = [
+      {Origins, :build, 1},
+      {Declarations, :pair, 2},
       {Scheduling, :build, 1},
       {PermittedTrace, :match, 2},
       {References, :operation_slots, 2},
@@ -3145,6 +3151,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       {Readback, :check, 3},
       {Refusals, :check, 2},
       {Origins, :pair, 3},
+      {Origins, :permitted_sources, 2},
+      {HostCall, :indexes, 1},
       {Registry, :compute, 2},
       {Allocation, :check, 2},
       {Allocation, :pair, 5},

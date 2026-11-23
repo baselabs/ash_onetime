@@ -153,7 +153,9 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
 
     connections =
       for {holder, commit} <- rows,
-          {:conn, owner, Postgrex.Protocol, protocol, lock, clock, deadline, status} <- [commit.row],
+          {:conn, owner, Postgrex.Protocol, protocol, lock, clock, deadline, status} <- [
+            commit.row
+          ],
           into: %{} do
         previous = Map.fetch!(historical.connections, holder)
         cache = cache_cut(protocol.queries, tables)

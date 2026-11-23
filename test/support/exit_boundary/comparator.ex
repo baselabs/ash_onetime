@@ -34,14 +34,73 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         compare(%{run: run.prior, twin: twin.prior, row: run.prior.row})
       end
 
-    run = inherit(run, prior, :run)
-    twin = inherit(twin, prior, :twin)
+    if prior && not prior.raw_valid? do
+      %{prior | errors: Enum.map(prior.errors, &Map.update!(&1, :at, fn at -> {:prior, at} end))}
+    else
+      run = inherit(run, prior, :run)
+      twin = inherit(twin, prior, :twin)
 
-    matches = match_sides(run, twin, reference?)
-    compare_matched(matches, row, reference?, prior)
+      # These indexes retain every captured event and the complete authoritative
+      # baseline. No registry rule, scheduling move or OPEN interval has run.
+      ri = raw_index(run)
+      ti = raw_index(twin)
+      rc = connection_streams(ri, run.historical, run.run.initial_state)
+      tc = connection_streams(ti, twin.historical, twin.run.initial_state)
+
+      if rc.errors == [] and tc.errors == [] do
+        matches = match_sides(run, twin, reference?, {rc, tc})
+        compare_matched(matches, row, reference?, prior)
+      else
+        raw_failure(ri, ti, rc, tc, prior)
+      end
+    end
   end
 
-  defp match_sides(run, twin, reference?) do
+  defp raw_index(side) do
+    %{
+      events: Enum.with_index(side.run.events, &Map.put(&1, :index, &2)),
+      query_cache: side.historical.query_cache
+    }
+  end
+
+  defp raw_failure(ri, ti, rc, tc, prior) do
+    errors =
+      for {side, proof} <- [run_index: rc, twin_index: tc],
+          error <- proof.errors do
+        %{
+          at: Map.put(error.at, side, error.index),
+          rule: :connection_stream,
+          path: [error.rule],
+          run: error.actual,
+          twin: error.expected
+        }
+      end
+
+    errors =
+      if prior,
+        do: Enum.map(prior.errors, &Map.update!(&1, :at, fn at -> {:prior, at} end)) ++ errors,
+        else: errors
+
+    %{
+      raw_valid?: false,
+      errors: Enum.sort_by(errors, &error_order/1),
+      bindings: %{},
+      origin_count: 0,
+      clock_count: 0,
+      events: {length(ri.events), length(ti.events)},
+      pairing: nil,
+      readback_sources: %{},
+      databases: nil,
+      derivations: nil,
+      clocks: nil,
+      connections: {rc, tc}
+    }
+  end
+
+  defp match_sides(run, twin, reference?, {rc, tc} = connections) do
+    run = Map.put(run, :connection_history, rc)
+    twin = Map.put(twin, :connection_history, tc)
+
     declarations =
       if reference?,
         do: %{errors: [], declarations: []},
@@ -49,7 +108,6 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
     ri = Origins.build(run)
     ti = Origins.build(twin)
-    native = {ri, ti}
     rs = Scheduling.build(ri)
     ts = Scheduling.build(ti)
     ri = %{ri | events: rs.events}
@@ -117,7 +175,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       readback: readback,
       checkpoint: checkpoint,
       refusal: refusal,
-      native: native
+      connections: connections
     }
   end
 
@@ -136,7 +194,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       readback: readback,
       checkpoint: checkpoint,
       refusal: refusal,
-      native: {raw_ri, raw_ti}
+      connections: {rconnections, tconnections}
     } = matches
 
     claimed =
@@ -272,12 +330,6 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         )
       end)
 
-    rconnections =
-      connection_streams(raw_ri, run.historical, readback.claimed, run.run.initial_state)
-
-    tconnections =
-      connection_streams(raw_ti, twin.historical, MapSet.new(), twin.run.initial_state)
-
     state =
       Enum.reduce(
         [run_index: rconnections, twin_index: tconnections],
@@ -384,6 +436,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       end
 
     %{
+      raw_valid?: true,
       errors: state.errors |> Enum.reverse() |> Enum.sort_by(&error_order/1),
       bindings: permitted.bound,
       origin_count: map_size(ri.origins),
@@ -398,8 +451,18 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     }
   end
 
-  defp connection_streams(indexed, historical, readback, initial_state) do
+  defp connection_streams(indexed, historical, initial_state) do
     native = NativeTransport.build(indexed, historical.connections)
+
+    # This labels exact frontend writes for statement ordinals only. It grants
+    # no event allowance. Backend ownership remains the protocol machine's exact
+    # request association; Readback must independently prove the complete call.
+    readback =
+      for write <- native.writes,
+          {AshOnetime.Store, :committed_completion, 2} in write.source.stack,
+          into: MapSet.new(),
+          do: write.command.index
+
     reads = ConnectionReads.build(native, readback, historical.prepared_catalogs)
 
     decoders =
