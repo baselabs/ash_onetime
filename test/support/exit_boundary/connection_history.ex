@@ -13,21 +13,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   # Start before the fixture opens its pools. Only successful native prepare
   # returns and their own server descriptions can create a historical descriptor.
   # Opaque decoder types are retained as the Query their owner returned.
-  def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
+  def start_link(options) do
+    owner = Keyword.fetch!(options, :owner)
+    GenServer.start_link(__MODULE__, owner, Keyword.delete(options, :owner))
+  end
 
   def snapshot(kind \\ :origins) when kind in [:origins, :preparations] do
-    case Process.get({__MODULE__, :pid}) do
-      nil -> raise "the connection history observer was not started"
-      pid -> GenServer.call(pid, {:snapshot, kind}, 30_000)
-    end
+    GenServer.call(__MODULE__, {:snapshot, kind}, 30_000)
   end
 
-  def traced?(pid) do
-    case Process.get({__MODULE__, :pid}) do
-      nil -> raise "the connection history observer was not started"
-      observer -> GenServer.call(observer, {:traced, pid})
-    end
-  end
+  def traced?(pid), do: GenServer.call(__MODULE__, {:traced, pid})
 
   # Build one authoritative history for the complete raw capture, before origin
   # pairing, scheduling moves or interval selection.

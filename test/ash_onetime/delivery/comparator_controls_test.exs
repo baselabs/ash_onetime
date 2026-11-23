@@ -435,7 +435,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp history_failure_log do
     ExUnit.CaptureLog.capture_log(fn ->
       history =
-        start_supervised!({ConnectionHistory, self()},
+        start_supervised!({ConnectionHistory, owner: self()},
           id: make_ref(),
           restart: :temporary
         )

@@ -3,10 +3,17 @@ defmodule AshOnetime.Test.Application do
 
   use Application
 
+  alias AshOnetime.Test.ExitBoundary.ConnectionHistory
+
   @impl Application
   def start(_type, _args) do
-    Supervisor.start_link([AshOnetime.Test.Repo],
-      strategy: :one_for_one,
+    children = [
+      {ConnectionHistory, owner: self(), name: ConnectionHistory},
+      AshOnetime.Test.Repo
+    ]
+
+    Supervisor.start_link(children,
+      strategy: :rest_for_one,
       name: AshOnetime.Test.Supervisor
     )
   end
