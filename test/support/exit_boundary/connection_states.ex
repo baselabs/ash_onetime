@@ -1115,7 +1115,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_event(
-         %{event: {_, :call, {DBConnection.Connection, :pool_update, [_protocol, _data]}}} = source,
+         %{event: {_, :call, {DBConnection.Connection, :pool_update, [_protocol, _data]}}} =
+           source,
          state
        ) do
     case {owner_pool_machine(state, source), state.completed[source.pid]} do
@@ -1131,8 +1132,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_event(
-         %{event: {pid, :return_from, {DBConnection.Holder, :delete, 1},
-           {Postgrex.Protocol, _protocol}}} = source,
+         %{
+           event:
+             {pid, :return_from, {DBConnection.Holder, :delete, 1},
+              {Postgrex.Protocol, _protocol}}
+         } = source,
          state
        ) do
     with %{holder: holder, origin: {lookup, _}} = version <- state.lookups[pid],
@@ -1164,7 +1168,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         ]
 
         state
-        |> exact(source, :state_owner_task_factory, List.delete_at(arguments, 1), List.delete_at(expected, 1))
+        |> exact(
+          source,
+          :state_owner_task_factory,
+          List.delete_at(arguments, 1),
+          List.delete_at(expected, 1)
+        )
         |> owner_protocol_copy(source, [2, 2, 1], version)
 
       _ ->
@@ -1177,7 +1186,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          state
        ) do
     case state.completed[source.pid] do
-      nil -> state
+      nil ->
+        state
+
       version ->
         state
         |> owner_protocol_copy(source, [2, 2, 3], version)
@@ -1192,7 +1203,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     case owner_holder_factory(state, source) do
       {:ok, machine, version, pool, tag, connected_at} ->
         expected = [pool, tag, Postgrex.Protocol, version.protocol, connected_at]
-        state = exact(state, source, :state_holder_factory, List.delete_at(arguments, 3), List.delete_at(expected, 3))
+
+        state =
+          exact(
+            state,
+            source,
+            :state_holder_factory,
+            List.delete_at(arguments, 3),
+            List.delete_at(expected, 3)
+          )
+
         state = owner_protocol_copy(state, source, [2, 2, 3], version)
 
         if function == :new do
@@ -1303,7 +1323,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           {:conn, source.pid, Postgrex.Protocol, version.protocol, nil, connected_at, nil, :ok}
 
         state
-        |> exact(source, :state_holder_factory_row, owner_holder_fields(row), owner_holder_fields(expected))
+        |> exact(
+          source,
+          :state_holder_factory_row,
+          owner_holder_fields(row),
+          owner_holder_fields(expected)
+        )
         |> owner_protocol_copy(source, [2, 2, 1, 3], version)
 
       _ ->
@@ -1458,12 +1483,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          version when not is_nil(version) <- state.completed[pid],
          [task] <- native_type_calls(state, call, returned, {DBConnection.Task, :run_child, 4}),
          {^pid, :call, {DBConnection.Task, :run_child, task_arguments}} <- task.source.event,
-         true <- List.delete_at(task_arguments, 1) ===
-           [Postgrex.Protocol, machine.data.after_connect,
-            [timeout: machine.data.after_connect_timeout] ++ machine.data.opts],
+         true <-
+           List.delete_at(task_arguments, 1) ===
+             [
+               Postgrex.Protocol,
+               machine.data.after_connect,
+               [timeout: machine.data.after_connect_timeout] ++ machine.data.opts
+             ],
          {_, :return_from, _, {child, reference}} <- task.returned.event,
-         {:ok, timer} <- owner_task_timer(state, task.returned, returned, child, machine.data.after_connect_timeout) do
-      data = %{machine.data | state: version.protocol, client: {reference, :after_connect}, timer: timer}
+         {:ok, timer} <-
+           owner_task_timer(
+             state,
+             task.returned,
+             returned,
+             child,
+             machine.data.after_connect_timeout
+           ) do
+      data = %{
+        machine.data
+        | state: version.protocol,
+          client: {reference, :after_connect},
+          timer: timer
+      }
+
       {:ok, %{machine | data: data, version: version}, {:keep_state, data}}
     else
       _ -> :error
@@ -1485,9 +1527,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp owner_task_timer(state, source, returned, child, timeout) do
     with [timer] <- native_type_calls(state, source, returned, {:erlang, :start_timer, 3}),
-         true <- timer.source.event ===
-           {source.pid, :call, {:erlang, :start_timer,
-             [timeout, source.pid, {DBConnection.Connection, child, timeout}]}},
+         true <-
+           timer.source.event ===
+             {source.pid, :call,
+              {:erlang, :start_timer,
+               [timeout, source.pid, {DBConnection.Connection, child, timeout}]}},
          {_, :return_from, _, reference} when is_reference(reference) <- timer.returned.event do
       {:ok, reference}
     else
@@ -1539,7 +1583,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
             with {:"ETS-TRANSFER", holder, _task, {:checkin, ref, _}} <- message,
                  {^ref, :after_connect} <- machine.data.client,
                  %{holder: ^holder} <- state.lookups[source.pid],
-                 true <- owner_task_timer_cancelled?(state, callback.source, source, machine.data.timer) do
+                 true <-
+                   owner_task_timer_cancelled?(state, callback.source, source, machine.data.timer) do
               backoff = machine.data.backoff && DBConnection.Backoff.reset(machine.data.backoff)
               data = %{machine.data | timer: nil, client: nil, backoff: backoff}
               {:ok, %{machine | data: data}}
@@ -1604,20 +1649,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          {_, :return_from, _, {child, reference}} <- task.returned.event,
          true <- is_pid(child) and is_reference(reference),
          initial = [function, source.pid, %DBConnection.SensitiveData{data: arguments}],
-         [started] <- native_type_calls(state, task.source, source, {Task.Supervisor, :start_child, 4}),
-         true <- started.source.event ===
-           {source.pid, :call, {Task.Supervisor, :start_child,
-             [DBConnection.Task, DBConnection.Task, :init, initial]}},
+         [started] <-
+           native_type_calls(state, task.source, source, {Task.Supervisor, :start_child, 4}),
+         true <-
+           started.source.event ===
+             {source.pid, :call,
+              {Task.Supervisor, :start_child,
+               [DBConnection.Task, DBConnection.Task, :init, initial]}},
          {_, :return_from, _, {:ok, ^child}} <- started.returned.event,
          true <- Enum.any?(state.events, &match?(%{event: {_, :spawn, ^child, _}}, &1)),
-         true <- Enum.any?(state.events, fn event ->
-           event.index > started.source.index and
-             event.event === {child, :call, {DBConnection.Task, :init, initial}}
-         end),
+         true <-
+           Enum.any?(state.events, fn event ->
+             event.index > started.source.index and
+               event.event === {child, :call, {DBConnection.Task, :init, initial}}
+           end),
          [monitor] <- native_type_calls(state, started.returned, source, {:erlang, :monitor, 2}),
-         true <- monitor.source.event === {source.pid, :call, {:erlang, :monitor, [:process, child]}},
+         true <-
+           monitor.source.event === {source.pid, :call, {:erlang, :monitor, [:process, child]}},
          {_, :return_from, _, ^reference} <- monitor.returned.event,
-         [update] <- native_type_calls(state, monitor.returned, task.returned, {DBConnection.Holder, :update, 4}),
+         [update] <-
+           native_type_calls(
+             state,
+             monitor.returned,
+             task.returned,
+             {DBConnection.Holder, :update, 4}
+           ),
          {_, :call, {DBConnection.Holder, :update, [^child, ^reference, Postgrex.Protocol, _]}} <-
            update.source.event,
          [clock] <- native_type_calls(state, update.source, source, {:erlang, :monotonic_time, 0}),
@@ -1645,7 +1701,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp owner_configure_result(state, call, connect, module, function, arguments) do
     callbacks =
-      for pair <- native_type_calls(state, call, connect.source, {module, function, length(arguments)}),
+      for pair <-
+            native_type_calls(state, call, connect.source, {module, function, length(arguments)}),
           pair.source.event === {call.pid, :call, {module, function, arguments}},
           {_, :return_from, _, configured} <- [pair.returned.event],
           is_list(configured),
@@ -1807,8 +1864,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp owner_result_copy(state, source, actual, expected) do
     case actual do
-      value when is_tuple(value) and tuple_size(value) == tuple_size(expected) and
-                   is_map(elem(value, 1)) ->
+      value
+      when is_tuple(value) and tuple_size(value) == tuple_size(expected) and
+             is_map(elem(value, 1)) ->
         actual = put_elem(actual, 1, Map.delete(elem(actual, 1), :state))
         expected = put_elem(expected, 1, Map.delete(elem(expected, 1), :state))
         exact(state, source, :state_owner_result, actual, expected)

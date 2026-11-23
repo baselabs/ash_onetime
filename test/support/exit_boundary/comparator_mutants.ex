@@ -2277,8 +2277,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   defp service_reply_form({:function, annotation, :handle_call, 3, clauses}, sites) do
     {clauses, sites} =
       Enum.map_reduce(clauses, sites, fn
-        {:clause, location,
-         [{:tuple, _, [{:atom, _, :start_child}, _]} = request, _from, state], guards, body},
+        {:clause, location, [{:tuple, _, [{:atom, _, :start_child}, _]} = request, _from, state],
+         guards, body},
         sites ->
           from = {:var, location, :NativeReplyFrom}
           watcher = {:var, location, :NativeReplyWatcher}
@@ -2286,12 +2286,15 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
           reply = {:var, location, :NativeReplyValue}
           next = {:var, location, :NativeReplyState}
           other = {:var, location, :NativeReplyOther}
+
           target =
             {:call, location,
              {:remote, location, {:atom, location, :erlang}, {:atom, location, :whereis}},
              [{:atom, location, DBConnection.Watcher}]}
+
           original = {:block, location, body}
           input = {:tuple, location, [target, from, original]}
+
           pattern =
             {:tuple, location,
              [
@@ -2302,7 +2305,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
           send_reply =
             {:call, location,
-             {:remote, location, {:atom, location, :gen}, {:atom, location, :reply}}, [from, reply]}
+             {:remote, location, {:atom, location, :gen}, {:atom, location, :reply}},
+             [from, reply]}
 
           function = {:fun, location, {:clauses, [{:clause, location, [], [], [send_reply]}]}}
 

@@ -173,9 +173,22 @@ defmodule AshOnetime.Test.ExitBoundary do
         {result, residue}
 
       {:DOWN, ^monitor, :process, ^root, reason} ->
+        Diagnostics.emit("NATIVE_ROOT_RUN_EXIT", Diagnostics.exit_summary(reason))
         raise "the root stopped in the run: #{class(reason)}"
     after
-      @deadline -> raise "the run did not return"
+      @deadline ->
+        case Process.info(root, :current_stacktrace) do
+          {:current_stacktrace, stack} ->
+            Diagnostics.emit(
+              "NATIVE_ROOT_RUN_TIMEOUT",
+              Diagnostics.exit_summary({:timeout, stack})
+            )
+
+          nil ->
+            :ok
+        end
+
+        raise "the run did not return"
     end
   end
 
