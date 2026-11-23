@@ -4096,8 +4096,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert reads.errors == []
     decoders = ConnectionDecoders.build(indexed, native, reads, historical)
     assert decoders.errors == []
+
     states =
       ConnectionStates.build(indexed, native, decoders, historical, {:initial, run.initial_state})
+
     assert states.errors == []
 
     proof = %{
