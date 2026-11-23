@@ -67,80 +67,80 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
         %{claimed: MapSet.new(), errors: []}
 
       observed ->
-        start =
-          Enum.find(
-            observed,
-            &match?(%{event: {_, :call, {AshOnetime.Store, :committed_completion, _}}}, &1)
-          ).index
-
-        with {:ok, checkpoint} <- Historical.cut(side.historical, side.connection_history, start) do
-          prepared = Map.get_lazy(side, :readback_reference, fn -> capture(side, bound) end)
-          historical = prepared.historical
-          reference = prepared.run
-          reference_events = reference.events |> origins_for_interval(side) |> interval()
-
-          reference = %{
-            reference
-            | events: Enum.map(reference_events, &Map.drop(&1, [:index, :role, :phase]))
-          }
-
-          run = %{
-            side.run
-            | events: Enum.map(observed, &Map.drop(&1, [:index, :role, :phase])),
-              result: result(observed),
-              residue: 0
-          }
-
-          run_side =
-            %{
-              side
-              | run: run,
-                delta: %{},
-                historical: checkpoint
-            }
-            |> Map.put(:origin_phase_override, :open)
-            |> Map.put(:claim_origins, [bound.c_admit])
-
-          twin_side =
-            %{side | run: reference, delta: %{}, historical: historical}
-            |> Map.put(:origin_phase_override, :open)
-            |> Map.put(:claim_origins, [bound.c_admit])
-
-          result =
-            Comparator.compare(%{run: run_side, twin: twin_side, row: side.row},
-              readback_reference?: true
-            )
-
-          errors = Enum.map(result.errors, &reference_error(&1, observed))
-
-          sources =
-            for {key, origin} <- Origins.build(run_side).origins, into: %{} do
-              {Enum.fetch!(observed, origin.index).index,
-               %{
-                 key: key,
-                 value: origin.value
-               }}
-            end
-
-          %{claimed: MapSet.new(observed, & &1.index), errors: errors, sources: sources}
-        else
-          {:error, failure} ->
-            at = Map.take(hd(observed), [:role, :mfa, :stack]) |> Map.put(:run_index, start)
-
-            %{
-              claimed: MapSet.new(),
-              errors: [
-                %{
-                  at: at,
-                  rule: failure.rule,
-                  path: [],
-                  run: failure,
-                  twin: :committed_history_cut
-                }
-              ]
-            }
-        end
+        check_interval(side, bound, observed)
     end
+  end
+
+  defp check_interval(side, bound, observed) do
+    start =
+      Enum.find(
+        observed,
+        &match?(%{event: {_, :call, {AshOnetime.Store, :committed_completion, _}}}, &1)
+      ).index
+
+    case Historical.cut(side.historical, side.connection_history, start) do
+      {:ok, checkpoint} -> compare_interval(side, bound, observed, checkpoint)
+      {:error, failure} -> cut_failure(observed, start, failure)
+    end
+  end
+
+  defp compare_interval(side, bound, observed, checkpoint) do
+    prepared = Map.get_lazy(side, :readback_reference, fn -> capture(side, bound) end)
+    historical = prepared.historical
+    reference = prepared.run
+    reference_events = reference.events |> origins_for_interval(side) |> interval()
+
+    reference = %{
+      reference
+      | events: Enum.map(reference_events, &Map.drop(&1, [:index, :role, :phase]))
+    }
+
+    run = %{
+      side.run
+      | events: Enum.map(observed, &Map.drop(&1, [:index, :role, :phase])),
+        result: result(observed),
+        residue: 0
+    }
+
+    run_side =
+      %{
+        side
+        | run: run,
+          delta: %{},
+          historical: checkpoint
+      }
+      |> Map.put(:origin_phase_override, :open)
+      |> Map.put(:claim_origins, [bound.c_admit])
+
+    twin_side =
+      %{side | run: reference, delta: %{}, historical: historical}
+      |> Map.put(:origin_phase_override, :open)
+      |> Map.put(:claim_origins, [bound.c_admit])
+
+    result =
+      Comparator.compare(%{run: run_side, twin: twin_side, row: side.row},
+        readback_reference?: true
+      )
+
+    errors = Enum.map(result.errors, &reference_error(&1, observed))
+
+    sources =
+      for {key, origin} <- Origins.build(run_side).origins, into: %{} do
+        {Enum.fetch!(observed, origin.index).index, %{key: key, value: origin.value}}
+      end
+
+    %{claimed: MapSet.new(observed, & &1.index), errors: errors, sources: sources}
+  end
+
+  defp cut_failure(observed, start, failure) do
+    at = Map.take(hd(observed), [:role, :mfa, :stack]) |> Map.put(:run_index, start)
+
+    %{
+      claimed: MapSet.new(),
+      errors: [
+        %{at: at, rule: failure.rule, path: [], run: failure, twin: :committed_history_cut}
+      ]
+    }
   end
 
   defp reference_error(error, observed) do

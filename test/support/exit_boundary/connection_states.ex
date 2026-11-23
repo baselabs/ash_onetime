@@ -138,21 +138,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           into: %{},
           do: {holder, {:conn, owner, Postgrex.Protocol, protocol, lock, clock, deadline, status}}
 
-    tables =
-      historical
-      |> Enum.flat_map(fn {_holder, connection} ->
-        case Map.get(connection, :query_cache) do
-          %{table: table, rows: rows} when not is_nil(table) -> [{table, rows}]
-          _ -> []
-        end
-      end)
-      |> Map.new()
-
-    tables =
-      case Map.get(indexed, :query_cache) do
-        %{table: table, rows: rows} -> Map.put(tables, table, rows)
-        _ -> tables
-      end
+    tables = initial_tables(indexed, historical)
 
     initial = %{
       holders: holders,
@@ -212,6 +198,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     }
   end
 
+  defp initial_tables(indexed, historical) do
+    tables =
+      for {_holder, %{query_cache: %{table: table, rows: rows}}} <- historical,
+          not is_nil(table),
+          into: %{},
+          do: {table, rows}
+
+    case Map.get(indexed, :query_cache) do
+      %{table: table, rows: rows} -> Map.put(tables, table, rows)
+      _ -> tables
+    end
+  end
+
   defp unbound_copies(state, indexed) do
     covered = MapSet.new(state.copies, &{&1.index, &1.path})
     sources = Map.new(indexed.events, &{&1.index, &1})
@@ -247,36 +246,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
        when function in [:insert, :insert_new, :update_element, :delete] do
     case pair_returned(state, source) do
       %{source: %{event: {_, :call, {:ets, ^function, arguments}}} = call} ->
-        case {function, arguments} do
-          {function,
-           [holder, {:conn, _, Postgrex.Protocol, %Postgrex.Protocol{}, _, _, _, _} = row]}
-          when function in [:insert, :insert_new] ->
-            retain_row(state, holder, row, source.index, call.index)
-
-          {:update_element, [holder, :conn, updates]} ->
-            case Map.fetch(state.rows, holder) do
-              {:ok, row} ->
-                updates = if is_list(updates), do: updates, else: [updates]
-
-                row =
-                  Enum.reduce(updates, row, fn {field, value}, row ->
-                    put_elem(row, field - 1, value)
-                  end)
-
-                retain_row(state, holder, row, source.index, call.index)
-
-              :error ->
-                state
-            end
-
-          {:delete, [holder]} ->
-            if Map.has_key?(state.rows, holder),
-              do: retain_row(state, holder, nil, source.index, call.index),
-              else: state
-
-          _ ->
-            state
-        end
+        row_write(state, source.index, call.index, function, arguments)
 
       _ ->
         state
@@ -284,6 +254,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp committed_row(_source, state), do: state
+
+  defp row_write(
+         state,
+         index,
+         origin,
+         function,
+         [holder, {:conn, _, Postgrex.Protocol, %Postgrex.Protocol{}, _, _, _, _} = row]
+       )
+       when function in [:insert, :insert_new],
+       do: retain_row(state, holder, row, index, origin)
+
+  defp row_write(state, index, origin, :update_element, [holder, :conn, updates]) do
+    case Map.fetch(state.rows, holder) do
+      {:ok, row} -> retain_row(state, holder, update_elements(row, updates), index, origin)
+      :error -> state
+    end
+  end
+
+  defp row_write(state, index, origin, :delete, [holder]) do
+    if Map.has_key?(state.rows, holder),
+      do: retain_row(state, holder, nil, index, origin),
+      else: state
+  end
+
+  defp row_write(state, _index, _origin, _function, _arguments), do: state
 
   defp retain_row(state, holder, row, index, origin) do
     rows =
@@ -337,20 +332,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp table_write(:update_element, [key, updates], rows) do
-    updates = if is_list(updates), do: updates, else: [updates]
-
-    Enum.map(rows, fn row ->
-      if elem(row, 0) === key do
-        Enum.reduce(updates, row, fn {field, value}, row -> put_elem(row, field - 1, value) end)
-      else
-        row
-      end
-    end)
+    Enum.map(rows, &update_cache_row(&1, key, updates))
   end
 
   defp table_write(:delete, [key], rows), do: Enum.reject(rows, &(elem(&1, 0) === key))
   defp table_write(:delete_object, [object], rows), do: Enum.reject(rows, &(&1 === object))
   defp table_write(function, [], _rows) when function in [:delete, :delete_all_objects], do: []
+
+  defp update_cache_row(row, key, updates) when elem(row, 0) === key,
+    do: update_elements(row, updates)
+
+  defp update_cache_row(row, _key, _updates), do: row
+
+  defp update_elements(row, updates) do
+    updates = if is_list(updates), do: updates, else: [updates]
+    Enum.reduce(updates, row, fn {field, value}, row -> put_elem(row, field - 1, value) end)
+  end
 
   defp retain_table(state, table, rows, index, origin, present? \\ true) do
     commit = %{table: table, index: index, origin: origin, rows: rows, present?: present?}

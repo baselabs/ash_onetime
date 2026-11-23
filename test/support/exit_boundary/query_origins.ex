@@ -27,24 +27,7 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
 
     result =
       Enum.reduce(history.states.table_commits, %{ids: ids, errors: []}, fn commit, state ->
-        if commit.table == historical.table and is_integer(commit.origin) do
-          source = Map.fetch!(history.native.pairs, commit.origin).source
-
-          case source.event do
-            {_, :call, {:ets, :insert_new, [_, {_, :cache, _, {id, query}}]}} ->
-              if id in generated,
-                do: %{state | ids: Map.put(state.ids, statement(query), id)},
-                else: %{
-                  state
-                  | errors: [{source, id, :missing_unique_integer_origin} | state.errors]
-                }
-
-            _ ->
-              state
-          end
-        else
-          state
-        end
+        promote_commit(commit, state, historical.table, history.native.pairs, generated)
       end)
 
     names =
@@ -53,6 +36,27 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
       end)
 
     result |> Map.put(:names, names) |> Map.put(:cache_events, cache_events)
+  end
+
+  defp promote_commit(%{table: table, origin: origin}, state, table, pairs, generated)
+       when is_integer(origin) do
+    source = Map.fetch!(pairs, origin).source
+
+    case source.event do
+      {_, :call, {:ets, :insert_new, [_, {_, :cache, _, {id, query}}]}} ->
+        promote(state, source, id, query, generated)
+
+      _ ->
+        state
+    end
+  end
+
+  defp promote_commit(_commit, state, _table, _pairs, _generated), do: state
+
+  defp promote(state, source, id, query, generated) do
+    if id in generated,
+      do: %{state | ids: Map.put(state.ids, statement(query), id)},
+      else: %{state | errors: [{source, id, :missing_unique_integer_origin} | state.errors]}
   end
 
   def expected_name(origins, query), do: Map.fetch(origins.names, statement(query))

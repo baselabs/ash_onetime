@@ -81,8 +81,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/readback.ex",
         original:
-          "        prepared = Map.get_lazy(side, :readback_reference, fn -> capture(side, bound) end)\n",
-        mutated: "        prepared = capture(side, bound)\n"
+          "    prepared = Map.get_lazy(side, :readback_reference, fn -> capture(side, bound) end)\n",
+        mutated: "    prepared = capture(side, bound)\n"
       }
     ]
   end

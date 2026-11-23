@@ -158,19 +158,7 @@ defmodule AshOnetime.Test.TestFormatter do
 
           if rescue_clause && first_line(rescue_clause) <= line &&
                line <= last_line(rescue_clause) do
-            {_body, assertions} =
-              Macro.prewalk(Keyword.fetch!(clauses, :do), [], fn
-                {:assert, metadata,
-                 [{:=, _, [:ok, {{:., _, [{:__aliases__, _, [:Ecto, :Migrator]}, :up]}, _, _}]}]} =
-                    assertion,
-                found ->
-                  {assertion, [{metadata[:line], assertion} | found]}
-
-                body, found ->
-                  {body, found}
-              end)
-
-            {node, assertions ++ matches}
+            {node, migration_assertions(Keyword.fetch!(clauses, :do)) ++ matches}
           else
             {node, matches}
           end
@@ -186,6 +174,22 @@ defmodule AshOnetime.Test.TestFormatter do
   end
 
   defp migration_assertion(_ast, _line, _error), do: nil
+
+  defp migration_assertions(body) do
+    {_body, assertions} =
+      Macro.prewalk(body, [], fn
+        {:assert, metadata,
+         [{:=, _, [:ok, {{:., _, [{:__aliases__, _, [:Ecto, :Migrator]}, :up]}, _, _}]}]} =
+            assertion,
+        found ->
+          {assertion, [{metadata[:line], assertion} | found]}
+
+        node, found ->
+          {node, found}
+      end)
+
+    assertions
+  end
 
   defp first_line(expression) do
     {_expression, line} =

@@ -160,13 +160,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
         previous = Map.fetch!(historical.connections, holder)
         cache = cache_cut(protocol.queries, tables)
 
-        descriptors =
-          for origin <- origins,
-              origin.sock === protocol.sock and origin.query.types === protocol.types,
-              Enum.any?(cache.rows, fn row ->
-                elem(row, 0) === origin.query.name and elem(row, 1) === origin.query.ref
-              end),
-              do: origin
+        descriptors = active_descriptors(origins, protocol, cache.rows)
 
         connection =
           Map.merge(previous, %{
@@ -192,6 +186,15 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
          query_origins: origins,
          pool_clocks: pool_clock_cut(historical, proof.native.pairs, before)
      }}
+  end
+
+  defp active_descriptors(origins, protocol, rows) do
+    for origin <- origins,
+        origin.sock === protocol.sock and origin.query.types === protocol.types,
+        Enum.any?(rows, fn row ->
+          elem(row, 0) === origin.query.name and elem(row, 1) === origin.query.ref
+        end),
+        do: origin
   end
 
   defp committed_before(commits, key, before) do
