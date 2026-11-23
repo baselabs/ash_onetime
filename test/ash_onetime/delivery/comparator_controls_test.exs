@@ -3331,35 +3331,39 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
 
       chunks =
-        (for write <- native.writes,
-             do: %{
-               port: write.port,
-               index: write.command.index,
-               direction: :frontend,
-               bytes: write.bytes,
-               source_offset: write.header_size,
-               copies: write.copies,
-               phase: :shared
-             }) ++
-          (for read <- native.reads,
-               match?({:ok, _}, read.result),
-               do: %{
-                 port: read.port,
-                 index: read.delivered.index,
-                 direction: :backend,
-                 bytes: read.bytes,
-                 copies: read.copies,
-                 phase: :backend
-               }) ++
-          (for delivery <- native.active,
-               do: %{
-                 port: delivery.port,
-                 index: delivery.delivered.index,
-                 direction: :backend,
-                 bytes: delivery.bytes,
-                 copies: delivery.copies,
-                 phase: :backend
-               })
+        for(
+          write <- native.writes,
+          do: %{
+            port: write.port,
+            index: write.command.index,
+            direction: :frontend,
+            bytes: write.bytes,
+            source_offset: write.header_size,
+            copies: write.copies,
+            phase: :shared
+          }
+        ) ++
+          for(
+            read <- native.reads,
+            match?({:ok, _}, read.result),
+            do: %{
+              port: read.port,
+              index: read.delivered.index,
+              direction: :backend,
+              bytes: read.bytes,
+              copies: read.copies,
+              phase: :backend
+            }
+          ) ++
+          for delivery <- native.active,
+              do: %{
+                port: delivery.port,
+                index: delivery.delivered.index,
+                direction: :backend,
+                bytes: delivery.bytes,
+                copies: delivery.copies,
+                phase: :backend
+              }
 
       partial =
         for read <- native.reads,
