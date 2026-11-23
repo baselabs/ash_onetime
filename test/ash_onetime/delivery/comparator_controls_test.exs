@@ -4068,7 +4068,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
-  test "Connection streams: cold TLS derives its workers from the native startup chain", context do
+  test "Connection streams: cold TLS derives its workers from the native startup chain",
+       context do
     Repo.put_dynamic_repo(context.repo)
     historical = Historical.capture(context.prefix)
     run = ConnectionNative.observe_tls_startup()
@@ -4308,11 +4309,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       queue = initial_lease.queue
 
       assert [termination] =
-               for %{event: {^caller, :call, {:ets, :give_away, arguments}}} = source <-
-                     proof.indexed.events,
-                   [^original, ^pool, {^terminal, ^queue, _value}] <- [arguments],
-                   source.index > initial_lease.acquired,
-                   do: source
+               for(
+                 %{event: {^caller, :call, {:ets, :give_away, arguments}}} = source <-
+                   proof.indexed.events,
+                 [^original, ^pool, {^terminal, ^queue, _value}] <- [arguments],
+                 source.index > initial_lease.acquired,
+                 do: source
+               )
 
       assert termination.index < lease.acquired
 
