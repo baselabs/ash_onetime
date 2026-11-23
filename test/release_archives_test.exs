@@ -116,6 +116,24 @@ defmodule AshOnetime.ReleaseArchivesTest do
     assert output =~ "pre-release version #{@version}-dev cannot be published"
   end
 
+  test "served verification refuses build metadata and malformed versions", context do
+    for version <- ["#{@version}+build", "2.0"] do
+      {output, status} =
+        run(context.directory, [
+          "verify-docs",
+          "missing-docs.tar.gz",
+          version,
+          "--repository",
+          context.directory,
+          "--dispatched",
+          context.head
+        ])
+
+      assert status != 0
+      assert output =~ "expected a plain release version, got #{version}"
+    end
+  end
+
   test "refuses an invalid build commit instead of falling back to HEAD", context do
     for commit <- ["", "not-a-commit", String.duplicate("g", 40)] do
       {output, status} = write_release(context, commit)

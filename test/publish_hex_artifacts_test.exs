@@ -51,6 +51,19 @@ defmodule AshOnetime.PublishHexArtifactsTest do
     end
   end
 
+  test "all publication paths refuse build metadata and malformed versions", context do
+    for version <- ["2.0.0+build", "2.0"],
+        arguments <- [
+          ["plan", version, "package.tar", "docs.tar.gz"],
+          ["upload", version, "package.tar", "docs.tar.gz", "missing", "missing"],
+          ["read-back", version, "package.tar", "docs.tar.gz", "false", ".", "commit"]
+        ] do
+      {output, status} = run(context.directory, arguments)
+      assert status != 0
+      assert output =~ "invalid release version; expected a plain release"
+    end
+  end
+
   test "bad arguments print usage without contacting Hex", %{directory: directory} do
     for arguments <- [[], ["upload"], List.replace_at(@arguments, 4, "replace")] do
       {output, status} = run(directory, arguments)
