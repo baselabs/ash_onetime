@@ -13,6 +13,7 @@ defmodule AshOnetime.DocumentationCurrencyTest do
                     capture: :all_but_first
                   )
   @months ~w(January February March April May June July August September October November December)
+  @hex_url "https://hex.pm/api/packages/ash_onetime"
 
   setup_all do
     arguments = ["ls-files", "-z", "--", "*.md", "*.livemd"]
@@ -61,7 +62,17 @@ defmodule AshOnetime.DocumentationCurrencyTest do
     end
   end
 
-  test "dated release history names real repository tags" do
+  test "dated release history and repository tags equal the published Hex releases" do
+    published = published_versions()
+    versions = Enum.map(@dated_releases, &hd/1)
+    dated = MapSet.new(versions)
+
+    assert length(versions) == MapSet.size(dated), "CHANGELOG has duplicate dated releases"
+
+    for [release, date] <- @dated_releases do
+      assert valid_date?(date), "v#{release} requires a valid release date; got #{date}"
+    end
+
     url = Mix.Project.config() |> Keyword.fetch!(:docs) |> Keyword.fetch!(:source_url)
     url = url <> ".git"
     arguments = ["ls-remote", "--tags", "--refs", url]
@@ -70,21 +81,28 @@ defmodule AshOnetime.DocumentationCurrencyTest do
     assert status == 0,
            "git #{Enum.join(arguments, " ")} failed (exit #{status}): #{output}"
 
-    tags = Regex.scan(~r/\trefs\/tags\/(v[^\s]+)$/m, output, capture: :all_but_first)
+    tags = Regex.scan(~r/\trefs\/tags\/v(\d[^\s]+)$/m, output, capture: :all_but_first)
     tags = MapSet.new(tags, &hd/1)
 
-    for [release, date] <- @dated_releases do
-      assert valid_date?(date), "v#{release} requires a valid release date; got #{date}"
-
-      if @parsed_version.pre == [] and release == @release do
-        # The current release qualifies before publication creates its tag.
-        refute MapSet.member?(tags, "v#{release}"),
-               "current release v#{release} is already tagged; choose the next version"
+    history =
+      if @parsed_version.pre == [] do
+        # The current release qualifies before publication creates its Hex release and tag.
+        refute MapSet.member?(published, @release), "current release v#{@release} is already on Hex"
+        refute MapSet.member?(tags, @release), "current release v#{@release} is already tagged"
+        MapSet.delete(dated, @release)
       else
-        assert MapSet.member?(tags, "v#{release}"),
-               "dated CHANGELOG release v#{release} has no release tag at #{url}"
+        dated
       end
-    end
+
+    assert history == published,
+           "dated CHANGELOG releases differ from #{@hex_url}: " <>
+             "missing headings #{difference(published, history)}; " <>
+             "unpublished headings #{difference(history, published)}"
+
+    assert tags == published,
+           "release tags at #{url} differ from #{@hex_url}: " <>
+             "missing tags #{difference(published, tags)}; " <>
+             "unpublished tags #{difference(tags, published)}"
   end
 
   test "every tracked target claim names the release declared in mix.exs", context do
@@ -142,6 +160,47 @@ defmodule AshOnetime.DocumentationCurrencyTest do
     for {path, source} <- documents,
         [claim] <- Regex.scan(pattern, source, capture: :all_but_first),
         do: {path, claim}
+  end
+
+  defp published_versions do
+    assert {:ok, _applications} = Application.ensure_all_started(:inets)
+    assert {:ok, _applications} = Application.ensure_all_started(:ssl)
+
+    options = [
+      ssl: :httpc.ssl_verify_host_options(true),
+      connect_timeout: 10_000,
+      timeout: 30_000,
+      autoredirect: false
+    ]
+
+    request = {String.to_charlist(@hex_url), []}
+
+    body =
+      case :httpc.request(:get, request, options, body_format: :binary) do
+        {:ok, {{_protocol, 200, _reason}, _headers, body}} ->
+          body
+
+        {:ok, {{_protocol, status, _reason}, _headers, _body}} ->
+          flunk("GET #{@hex_url} failed: HTTP #{status}")
+
+        {:error, reason} ->
+          flunk("GET #{@hex_url} failed: #{inspect(reason)}")
+      end
+
+    assert {:ok, %{"releases" => releases}} = Jason.decode(body),
+           "GET #{@hex_url} did not return package release JSON"
+
+    assert is_list(releases) and releases != [], "GET #{@hex_url} returned no release list"
+
+    MapSet.new(releases, fn release ->
+      assert %{"version" => version} = release, "GET #{@hex_url} returned a release without a version"
+      assert {:ok, _version} = Version.parse(version), "GET #{@hex_url} returned an invalid version"
+      version
+    end)
+  end
+
+  defp difference(left, right) do
+    left |> MapSet.difference(right) |> Enum.sort() |> inspect()
   end
 
   defp valid_date?(date) do

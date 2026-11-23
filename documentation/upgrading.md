@@ -11,7 +11,7 @@ This guide targets v2.0.0.
 
 This version is in development and is not yet on Hex; use the [published release documentation on HexDocs](https://hexdocs.pm/ash_onetime/).
 
-The release will use this dependency requirement:
+Dependency requirement:
 
 ```elixir
 {:ash_onetime, "~> 2.0.0"}

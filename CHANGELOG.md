@@ -406,6 +406,33 @@ must update those dependencies. See [Upgrading](documentation/upgrading.md) for 
   Windows developers use WSL2, and CI runs on Linux only. This current guidance supersedes
   the v1.3.1 historical repository description without rewriting that release record.
 
+## v1.4.2 — October 6, 2026
+
+- **Lock:** update AshPostgres from 2.14.2 to 2.14.3 after the dependency-currency
+  gate identified the new patch release. Published dependency requirements are unchanged.
+- **Documentation:** the getting-started, errors, and recipe examples preserve unhandled
+  typed errors for the application’s handler instead of raising on an unlisted code.
+  Release checks exercise every documented code against all four expressions, alongside
+  the complete, safe HTTP mapping in the Phoenix guide.
+
+## v1.4.1 — October 6, 2026
+
+Security dependency-floor backport for the 1.4 line. There is no DSL, public API,
+database schema, persisted response, token wire-format, or migration change.
+
+- Raise the Ash requirement to `>= 3.34.3 and < 4.0.0`.
+  [EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html)
+  affects Ash `>= 3.5.1 and < 3.34.3`; 3.34.3 is the first release outside that range.
+- Raise optional Mint to `~> 1.10 and >= 1.10.2`. Mint 1.10.2 backports
+  [EEF-CVE-2026-91043](https://cna.erlef.org/osv/EEF-CVE-2026-91043.html),
+  [EEF-CVE-2026-92103](https://cna.erlef.org/osv/EEF-CVE-2026-92103.html), and
+  [EEF-CVE-2026-94194](https://cna.erlef.org/osv/EEF-CVE-2026-94194.html).
+- Repair the three Livebooks to use explicit release requirements, real Ed25519 verification,
+  and a real independently committed PostgreSQL receipt ledger. The 1.4 notebook behavior
+  remains the behavior of that line; no later runtime feature is backfilled.
+- Contributor setup uses macOS or Linux; Windows developers use WSL2. See
+  [CONTRIBUTING.md](CONTRIBUTING.md) for the supported setup and executable gates.
+
 ## v1.4.0 — 2026-09-24
 
 **Breaking behavior change (the reason this is a minor, not a patch):** a concurrent
@@ -478,6 +505,28 @@ beneficiaries.
     the receiver-side cross-generation deduplication boundary.
   - `:request_in_progress` documented on the external path; the previously unlisted
     `:worker_timeout` added to the error table.
+
+## v1.3.4 — October 6, 2026
+
+- **Documentation:** result-handling examples preserve unhandled typed errors for the
+  application’s error handler. The release checks exercise every documented code against all four examples;
+  the shared HTTP mapper produces safe public responses.
+
+Security dependency-floor backport for the 1.3 line. There is no DSL, public API,
+database schema, persisted response, token wire-format, or migration change.
+
+- Raise the Ash requirement to `>= 3.34.3 and < 4.0.0`.
+  [EEF-CVE-2026-94201](https://cna.erlef.org/osv/EEF-CVE-2026-94201.html)
+  affects Ash `>= 3.5.1 and < 3.34.3`; 3.34.3 is the first release outside that range.
+- Raise optional Mint to `~> 1.10 and >= 1.10.2`. Mint 1.10.2 backports
+  [EEF-CVE-2026-91043](https://cna.erlef.org/osv/EEF-CVE-2026-91043.html),
+  [EEF-CVE-2026-92103](https://cna.erlef.org/osv/EEF-CVE-2026-92103.html), and
+  [EEF-CVE-2026-94194](https://cna.erlef.org/osv/EEF-CVE-2026-94194.html).
+- Repair the three Livebooks to use explicit release requirements, real Ed25519 verification,
+  and a real independently committed PostgreSQL receipt ledger. The 1.3 notebook behavior
+  remains the behavior of that line; no later runtime feature is backfilled.
+- Contributor setup uses macOS or Linux; Windows developers use WSL2. See
+  [CONTRIBUTING.md](CONTRIBUTING.md) for the supported setup and executable gates.
 
 ## v1.3.2 — 2026-09-20
 
