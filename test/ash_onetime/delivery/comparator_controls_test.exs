@@ -4365,6 +4365,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                )
 
       assert termination.index < lease.acquired
+      assert initial_lease.giveaway == termination.index,
+             "every lease must retain its actual native checkin or disconnect terminal"
 
       if lifecycle == :idle_ping do
         assert is_integer(initial_lease.checkin) and is_integer(initial_lease.giveaway)
