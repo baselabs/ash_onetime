@@ -3847,6 +3847,32 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert ConnectionReads.build(native).errors == []
   end
 
+  @tag :connection_streams
+  test "Connection streams: startup constructs its decoder and Protocol from native origins",
+       context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+    run = ConnectionNative.observe_startup()
+    assert run.result == :ok
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+    assert proof.native.errors == []
+    assert proof.reads.errors == []
+
+    for error <- proof.decoders.errors ++ proof.states.errors do
+      Diagnostics.emit(
+        "CONNECTION_STARTUP_ORIGIN_FAILURE",
+        Map.take(error, [:index, :at, :rule, :path, :context])
+      )
+    end
+
+    assert proof.decoders.errors == [],
+           "a successful native connect must create its own initially empty decoder"
+
+    assert proof.states.errors == [],
+           "every constructor and authentication Protocol copy needs its native source"
+  end
+
   for lifecycle <- [:idle_ping, :reconnect] do
     @tag :connection_streams
     test "Connection streams: native #{lifecycle} retains the renewed holder's cut origin",
