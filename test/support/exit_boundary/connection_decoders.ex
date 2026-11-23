@@ -48,6 +48,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
     {type_roots, type_events} =
       ConnectionTypes.program(Map.get(indexed, :connection_type_roots, %{}))
+
     initial = Map.put(initial, :type_roots, type_roots)
 
     saved = Map.get(indexed, :connection_decoder_program, %{})
@@ -60,6 +61,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       |> Map.merge(saved)
       |> Map.put(:factory_observations, observations)
       |> Map.put(:type_events, type_events)
+
     continuation = %{initial: initial, events: indexed.events, replies: replies}
 
     state = Enum.reduce(indexed.events, initial, &event(&1, &2, replies))

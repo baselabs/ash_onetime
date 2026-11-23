@@ -190,6 +190,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     tables = initial_tables(indexed, historical)
     machines = Map.get(indexed, :connection_owners, owner_machines(historical))
+
     {type_roots, type_events} =
       ConnectionTypes.program(Map.get(indexed, :connection_type_roots, %{}))
 
@@ -260,6 +261,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       initial
       |> Map.merge(Map.get(indexed, :connection_state_program, %{}))
       |> Map.put(:type_events, type_events)
+
     continuation = %{initial: initial, events: indexed.events}
 
     state = Enum.reduce(indexed.events, initial, &event/2)
@@ -284,7 +286,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     input.events
     |> Enum.take_while(&(&1.index < before))
     |> Enum.reduce(input.initial, &event/2)
-    |> Map.drop([:native, :events, :pairs, :returns, :decoders, :fixture, :type_services, :type_events])
+    |> Map.drop([
+      :native,
+      :events,
+      :pairs,
+      :returns,
+      :decoders,
+      :fixture,
+      :type_services,
+      :type_events
+    ])
   end
 
   defp initial_tables(indexed, historical) do

@@ -142,24 +142,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
            {:ok, {:pool_ref, ^pool, queue, timer, holder, lock} = ref, Postgrex.Protocol, _,
             protocol}}
       } = source ->
-        checkin =
-          Enum.find(indexed.events, fn
-            %{event: {^caller, :call, {DBConnection.Holder, :checkin, [^ref]}}} -> true
-            _ -> false
-          end)
-
-        giveaway =
-          Enum.find(indexed.events, fn
-            %{
-              index: n,
-              event: {^caller, :call, {:ets, :give_away, [^holder, ^pool, {:checkin, ^queue, _}]}}
-            }
-            when n > source.index ->
-              true
-
-            _ ->
-              false
-          end)
+        terminal = lease_terminal(history.native.pairs, source, ref, pool, queue, holder)
 
         conn_ref =
           Enum.find_value(indexed.events, fn
@@ -183,8 +166,11 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
             role: source.role,
             source: source,
             acquired: source.index,
-            checkin: if(checkin, do: checkin.index),
-            giveaway: if(giveaway, do: giveaway.index),
+            terminal: if(terminal, do: terminal.kind),
+            terminal_source: if(terminal, do: terminal.source.index),
+            terminal_return: if(terminal, do: terminal.returned.index),
+            checkin: if(terminal && terminal.kind == :checkin, do: terminal.source.index),
+            giveaway: if(terminal, do: terminal.giveaway.index),
             pool: pool,
             queue: queue,
             timer: timer,
@@ -205,6 +191,39 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
       {Map.put(lease, :ordinal, ordinal), Map.put(counts, lease.role, ordinal + 1)}
     end)
     |> elem(0)
+  end
+
+  # A successful native handoff ends the lease. Holder.checkin/1 can still be
+  # called after disconnect/stop, when the caller no longer owns the table;
+  # that later cleanup must not replace the handoff that actually occurred.
+  defp lease_terminal(pairs, source, ref, pool, queue, holder) do
+    caller = source.pid
+
+    terminals =
+      for {_, giveaway} <- pairs,
+          giveaway.source.index > source.index,
+          {^caller, :call, {:ets, :give_away, [^holder, ^pool, {kind, ^queue, _}]}} <-
+            [giveaway.source.event],
+          kind in [:checkin, :disconnect, :stop],
+          giveaway.returned.event === {caller, :return_from, {:ets, :give_away, 3}, true},
+          {_, terminal} <- pairs,
+          terminal.source.index > source.index,
+          terminal.source.index < giveaway.source.index,
+          giveaway.returned.index < terminal.returned.index,
+          {^caller, :call, {DBConnection.Holder, ^kind, [^ref | rest]}} <-
+            [terminal.source.event],
+          arity = if(kind == :checkin, do: 1, else: 2),
+          length(rest) == arity - 1,
+          terminal.returned.event ===
+            {caller, :return_from, {DBConnection.Holder, kind, arity}, :ok},
+          do: %{
+            kind: kind,
+            source: terminal.source,
+            returned: terminal.returned,
+            giveaway: giveaway.source
+          }
+
+    Enum.min_by(terminals, & &1.giveaway.index, fn -> nil end)
   end
 
   # A lease can acquire a holder born after arming. Resolve its owner and
@@ -231,8 +250,9 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
 
   defp errors_for_leases(leases) do
     for lease <- leases,
-        lease.checkin == nil or lease.giveaway == nil or lease.conn_ref == nil,
-        do: difference(lease, :allocation_terminal, :missing, :same_reference_checkin)
+        lease.terminal_source == nil or lease.terminal_return == nil or
+          lease.giveaway == nil or lease.conn_ref == nil,
+        do: difference(lease, :allocation_terminal, :missing, :same_reference_native_handoff)
   end
 
   defp difference(nil, rule, actual, expected),

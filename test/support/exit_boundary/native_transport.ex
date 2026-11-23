@@ -167,7 +167,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
   defp active_option_bytes?(<<22, _::binary>>), do: true
 
-  defp active_option_bytes?(<<tag, _value::32, rest::binary>>) when tag in [23, 24, 30],
+  defp active_option_bytes?(<<tag, _value::32, rest::binary>>) when tag in [21, 23, 24, 30, 32],
     do: active_option_bytes?(rest)
 
   defp active_option_bytes?(_bytes), do: false
@@ -562,6 +562,12 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
   defp option_value(:send_timeout, value) when is_integer(value) and value >= 0,
     do: {:ok, 30, :time, uint32(value), []}
+
+  defp option_value(:header, value) when is_integer(value) and value >= 0,
+    do: {:ok, 21, :uint, uint32(value), []}
+
+  defp option_value(:packet_size, value) when is_integer(value) and value >= 0,
+    do: {:ok, 32, :uint, uint32(value), []}
 
   defp option_value(name, value) do
     with {:ok, tag, table} <- option_enum(name),

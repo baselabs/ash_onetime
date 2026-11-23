@@ -4029,7 +4029,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert root.index == birth.index
       assert root.types === birth.types
       assert is_nil(root.initialized)
-      refute Map.has_key?(root, :state), "a prefix cannot acquire the future TypeServer.init return"
+
+      refute Map.has_key?(root, :state),
+             "a prefix cannot acquire the future TypeServer.init return"
+
       assert is_nil(root.retired)
     end
 
@@ -4391,11 +4394,21 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                )
 
       assert termination.index < lease.acquired
+
       assert initial_lease.giveaway == termination.index,
              "every lease must retain its actual native checkin or disconnect terminal"
 
+      assert initial_lease.terminal == terminal
+      assert initial_lease.acquired < initial_lease.terminal_source
+      assert initial_lease.terminal_source < initial_lease.giveaway
+      assert initial_lease.giveaway < initial_lease.terminal_return
+      assert initial_lease.terminal_return < lease.acquired
+
       if lifecycle == :idle_ping do
         assert is_integer(initial_lease.checkin) and is_integer(initial_lease.giveaway)
+      else
+        assert is_nil(initial_lease.checkin),
+               "a disconnect handoff cannot acquire a later cleanup checkin"
       end
 
       assert lease.holder == renewed
