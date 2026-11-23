@@ -489,6 +489,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_pending_owner_program) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original:
+          "    initial = Map.merge(initial, Map.get(indexed, :connection_state_program, %{}))\n",
+        mutated: "    initial = Map.merge(initial, %{})\n"
+      }
+    ]
+  end
+
   def edits(:stream_state_holder_update) do
     [
       %{

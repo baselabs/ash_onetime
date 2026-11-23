@@ -8,7 +8,11 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
     chunks |> Enum.reduce(frame_state(), &frame_chunk/2) |> finish_frames()
   end
 
-  def frame_state, do: %{directions: %{}, messages: [], errors: []}
+  def frame_state do
+    stream = %{buffer: <<>>, offset: 0, received: 0, provenance: []}
+    %{directions: %{frontend: stream, backend: stream}, messages: [], errors: []}
+  end
+
   def frame_state(:startup), do: Map.put(frame_state(), :format, :startup)
   def frame_state(:connection_startup), do: Map.put(frame_state(), :format, :connection_startup)
   def push_frame(state, chunk), do: frame_chunk(chunk, state)
@@ -43,13 +47,7 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
 
   defp frame_chunk(%{direction: direction, bytes: bytes} = chunk, state)
        when direction in [:frontend, :backend] and is_binary(bytes) do
-    stream =
-      Map.get(state.directions, direction, %{
-        buffer: <<>>,
-        offset: 0,
-        received: 0,
-        provenance: []
-      })
+    stream = Map.fetch!(state.directions, direction)
 
     span = %{
       index: chunk.index,

@@ -792,8 +792,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
 
       if unquote(shape == :cross_connection) do
-        [{port, connection}] = Map.to_list(streams.connections)
+        [{port, connection}] =
+          Enum.filter(streams.connections, fn {_port, connection} ->
+            connection.protocol.messages != []
+          end)
+
         assert port != origin.port
+        idle = Map.fetch!(streams.connections, origin.port)
+        assert idle.protocol.messages == []
+
+        for direction <- [:frontend, :backend] do
+          stream = Map.fetch!(idle.framing.directions, direction)
+          assert Map.take(stream, [:buffer, :offset, :received, :provenance]) ==
+                   %{buffer: <<>>, offset: 0, received: 0, provenance: []}
+        end
 
         assert Enum.any?(connection.protocol.messages, fn message ->
                  message.direction == :frontend and message.tag == ?P
@@ -3961,6 +3973,17 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert continued.errors == [],
              "the unchanged native suffix must finish its owner without a borrowed holder root"
+
+      rejected =
+        ComparatorMutants.with_mutant(:stream_pending_owner_program, fn ->
+          ConnectionHistory.build(continued_side)
+        end)
+
+      assert rejected.native.errors == []
+      assert rejected.reads.errors == []
+      assert rejected.decoders.errors == []
+      assert rejected.states.errors != [], "the pending owner program must be load-bearing"
+      assert ConnectionHistory.build(continued_side).errors == []
 
       same_commits? = continued.states.commits === proof.states.commits
       same_owners? = continued.states.owner_machines === proof.states.owner_machines
