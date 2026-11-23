@@ -476,12 +476,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     %{source: call} = pair_returned(state, source)
     pair = Map.fetch!(state.pairs, call.index)
 
-    with [random] <-
+    with {mechanism, header, _binding} <- context.version.protocol.scram_cb,
+         [random] <-
            native_type_calls(state, call, pair.returned, {:crypto, :strong_rand_bytes, 1}),
          {_, :call, {_, _, [18]}} <- random.source.event,
          {_, :return_from, _, bytes} <- random.returned.event,
          true <- is_binary(bytes) and byte_size(bytes) == 18 do
-      {mechanism, header, _binding} = context.version.protocol.scram_cb
       sasl = [header, "n=,r=", Base.encode64(bytes)]
       message = [mechanism, 0, <<IO.iodata_length(sasl)::signed-32>>, sasl]
       {_, :call, {_, _, arguments}} = call.event
@@ -507,6 +507,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
       put_in(state.starting[source.pid], %{context | password_message: message})
     else
+      nil -> failure(state, source, :state_constructor_auth_origin)
       _ -> failure(state, source, :state_constructor_nonce_origin)
     end
   end
@@ -1802,7 +1803,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     case native_type_model(state, source) do
       {:ok, expected_arguments, result, origin} ->
         state = type_input_copies(state, source, arguments, expected_arguments, origin)
-        put_in(state.type_models[source.index], %{result: result, origin: origin})
+
+        put_in(state.type_models[source.index], %{
+          result: result,
+          origin: origin,
+          arguments: expected_arguments
+        })
 
       :error ->
         failure(state, source, :state_type_native_origin)
@@ -1853,7 +1859,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
        when (module == Postgrex.Types and function in [:owner, :build_type_info]) or
               (module == Postgrex.TypeServer and function in [:fetch, :update]) do
     with %{source: call} <- pair_returned(state, source),
-         %{result: expected, origin: origin} <- state.type_models[call.index] do
+         %{result: expected, origin: origin, arguments: arguments} <- state.type_models[call.index] do
       state = type_return_copies(state, source, actual, expected, origin)
 
       case {module, function, expected} do
@@ -1861,7 +1867,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           put_in(state.type_owners[pid], %{server: server, origin: origin})
 
         {Postgrex.TypeServer, :fetch, {:lock, ref, types}} ->
-          {_, :call, {_, _, [server]}} = call.event
+          [server] = arguments
           lock = %{server: server, ref: ref, types: types, origin: origin}
           put_in(state.type_locks[pid], lock)
 

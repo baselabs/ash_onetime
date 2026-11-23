@@ -265,6 +265,23 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       open_ports: MapSet.size(MapSet.difference(state.opened, state.closed)),
       pending_timers: map_size(open_timers(state)),
       pending_service_callbacks: map_size(state.service_pending),
+      pending_service_instances:
+        for {pid, receipts} <- state.service_pending,
+            receipt <- receipts do
+          binding = Map.fetch!(state.services, pid)
+
+          %{
+            service: elem(binding.callback, 0),
+            request: service_request_kind(receipt.message),
+            registered?: receipt.registered?,
+            callback:
+              case receipt.called do
+                {_, :call, {module, function, arguments}} -> {module, function, length(arguments)}
+                nil -> :not_called
+              end,
+            returned?: not is_nil(receipt.returned)
+          }
+        end,
       live_origins:
         for pid <- live(state) do
           %{
@@ -275,6 +292,18 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       timer_instances:
         Enum.map(open_timers(state), fn {ref, timer} -> timer_diagnostic(ref, timer, state) end)
     }
+  end
+
+  defp service_request_kind({:"$gen_call", _from, request}), do: service_request_tag(:call, request)
+  defp service_request_kind({:"$gen_cast", request}), do: service_request_tag(:cast, request)
+  defp service_request_kind(_message), do: :info
+
+  defp service_request_tag(kind, request) do
+    tag = if is_tuple(request) and tuple_size(request) > 0, do: elem(request, 0), else: request
+
+    if tag in [:fetch, :update, :done, :insert, :delete, :which_children, :start_child, :terminate_child],
+      do: {kind, tag},
+      else: kind
   end
 
   defp timer_diagnostic(ref, timer, state) do
