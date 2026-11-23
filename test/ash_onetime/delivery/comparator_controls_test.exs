@@ -2963,6 +2963,23 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       cut = Function.capture(Historical, :cut, 3)
       proof = %{native: native, reads: reads, decoders: decoders, states: states}
 
+      writes =
+        for {_index, pair} <- native.pairs,
+            {_, :call, {:ets, function, [table | _arguments]}} <- [pair.source.event],
+            table in tables,
+            function in [:insert, :insert_new, :update_element, :delete],
+            {_, :return_from, _, true} <- [pair.returned.event],
+            do: pair
+
+      assert writes != [], "the cut witness must contain successful native cache writes"
+
+      for pair <- writes do
+        assert {:error, %{rule: :cut_inflight_native_write, index: index}} =
+                 cut.(historical, proof, pair.returned.index)
+
+        assert index == pair.source.index
+      end
+
       for {phase, tables} <- snapshots do
         [barrier] =
           Enum.filter(events, fn
@@ -3118,6 +3135,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     ]
 
     events = comparator_call_order(pair, proofs ++ consumers)
+
+    for mfa <- proofs do
+      calls = Enum.count(events, &match?({:call, ^mfa, _}, &1))
+      completed = Enum.filter(events, &match?({:return, ^mfa, _}, &1))
+      successful? = Enum.all?(completed, &match?({:return, ^mfa, true}, &1))
+
+      assert calls >= 2 and length(completed) == calls and successful?,
+             "the ordering witness requires successful raw proofs on both sides"
+    end
+
     first = Enum.find_index(events, fn {kind, mfa, _} -> kind == :call and mfa in consumers end)
     assert is_integer(first)
     preceding = Enum.take(events, first)
