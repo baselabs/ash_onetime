@@ -2818,14 +2818,18 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :connection_streams
   @tag prepare: :named
-  test "Connection streams: history cuts retain native and Ecto committed query caches", context do
+  test "Connection streams: history cuts retain native and Ecto committed query caches",
+       context do
     Repo.put_dynamic_repo(context.repo)
     historical = Historical.capture(context.prefix)
 
     tables =
-      [historical.query_cache.table | Enum.map(historical.connections, fn {_holder, connection} ->
-         connection.protocol.queries
-       end)]
+      [
+        historical.query_cache.table
+        | Enum.map(historical.connections, fn {_holder, connection} ->
+            connection.protocol.queries
+          end)
+      ]
       |> Enum.reject(&is_nil/1)
       |> Enum.uniq()
 
@@ -2849,15 +2853,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
             table_barrier(observer, token, tables, :native)
 
-            Repo.all(
-              from(c in "pg_class", prefix: "pg_catalog", select: count(c.oid))
-            )
+            Repo.all(from(c in "pg_class", prefix: "pg_catalog", select: count(c.oid)))
 
             table_barrier(observer, token, tables, :ecto)
 
-            Repo.all(
-              from(c in "pg_class", prefix: "pg_catalog", select: count(c.relname))
-            )
+            Repo.all(from(c in "pg_class", prefix: "pg_catalog", select: count(c.relname)))
 
             table_barrier(observer, token, tables, :later)
             :ok
@@ -2934,7 +2934,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
           assert committed, "every live-read cut needs its preceding committed cache table"
           same_rows? = Enum.sort(committed.rows) === rows
-          assert same_rows?, "a cache cut must equal the independent live read and exclude later writes"
+
+          assert same_rows?,
+                 "a cache cut must equal the independent live read and exclude later writes"
         end
       end
     after
@@ -5238,6 +5240,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert message.wire_frame.stop - message.wire_frame.start ==
                5 + byte_size(message.wire_frame.payload)
+    end
+
+    associated = Enum.filter(messages, &(not is_nil(&1.wire_frame.context)))
+    requests? = Enum.all?(associated, &Map.has_key?(&1.wire_frame, :request))
+    assert requests?, "logical messages must retain their exact frontend request instance"
+
+    frontend = Enum.filter(associated, &(&1.wire_frame.direction == :frontend))
+
+    for reply <- associated, reply.wire_frame.direction == :backend do
+      requests = Enum.filter(frontend, &(&1.wire_frame.request == reply.wire_frame.request))
+      assert length(requests) == 1
+      [request] = requests
+      assert request.wire_sql == reply.wire_sql
+      assert is_integer(reply.wire_frame.request)
     end
 
     IO.puts(

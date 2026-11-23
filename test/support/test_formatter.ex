@@ -147,8 +147,7 @@ defmodule AshOnetime.Test.TestFormatter do
         {:try, _, [clauses]} = node, matches ->
           rescue_clause = Keyword.get(clauses, :rescue)
 
-          if rescue_clause && first_line(rescue_clause) <= line and
-               line <= last_line(rescue_clause) do
+          if rescue_clause && first_line(rescue_clause) <= line && line <= last_line(rescue_clause) do
             {_body, assertions} =
               Macro.prewalk(Keyword.fetch!(clauses, :do), [], fn
                 {:assert, metadata,
