@@ -765,26 +765,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp startup_binding(state, call, mechanisms, {:ssl, socket}, mode) when mode != :disable do
     if "SCRAM-SHA-256-PLUS" in :binary.split(mechanisms, <<0>>, [:global]) do
-      pair = Map.fetch!(state.pairs, call.index)
-
-      with [certificate] <- native_type_calls(state, call, pair.returned, {:ssl, :peercert, 1}),
-           {_, :call, {:ssl, :peercert, [^socket]}} <- certificate.source.event,
-           {_, :return_from, _, {:ok, der}} <- certificate.returned.event,
-           {:Certificate, _tbs, {_tag, oid, _parameters}, _signature} <-
-             :public_key.pkix_decode_cert(der, :plain),
-           {digest, _sign} when digest != :none <- :public_key.pkix_sign_types(oid) do
-        digest = if digest in [:md5, :sha], do: :sha256, else: digest
-        {:ok, {"SCRAM-SHA-256-PLUS", "p=tls-server-end-point,,", :crypto.hash(digest, der)}}
-      else
-        _ when mode != :require ->
-          {:ok, {"SCRAM-SHA-256", "n,,", ""}}
-
-        _ ->
-          {:error,
-           %Postgrex.Error{
-             message: "channel binding is required but the server certificate has no usable hash"
-           }}
-      end
+      startup_certificate_binding(state, call, socket, mode)
     else
       # No certificate access occurs in this branch of the owning function.
       Postgrex.SCRAM.negotiate_channel_binding(mechanisms, {:ssl, socket}, mode)
@@ -793,6 +774,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp startup_binding(_state, _call, mechanisms, socket, mode),
     do: Postgrex.SCRAM.negotiate_channel_binding(mechanisms, socket, mode)
+
+  defp startup_certificate_binding(state, call, socket, mode) do
+    pair = Map.fetch!(state.pairs, call.index)
+
+    with [certificate] <- native_type_calls(state, call, pair.returned, {:ssl, :peercert, 1}),
+         {_, :call, {:ssl, :peercert, [^socket]}} <- certificate.source.event,
+         {_, :return_from, _, {:ok, der}} <- certificate.returned.event,
+         {:Certificate, _tbs, {_tag, oid, _parameters}, _signature} <-
+           :public_key.pkix_decode_cert(der, :plain),
+         {digest, _sign} when digest != :none <- :public_key.pkix_sign_types(oid) do
+      digest = if digest in [:md5, :sha], do: :sha256, else: digest
+      {:ok, {"SCRAM-SHA-256-PLUS", "p=tls-server-end-point,,", :crypto.hash(digest, der)}}
+    else
+      _ when mode != :require ->
+        {:ok, {"SCRAM-SHA-256", "n,,", ""}}
+
+      _ ->
+        {:error,
+         %Postgrex.Error{
+           message: "channel binding is required but the server certificate has no usable hash"
+         }}
+    end
+  end
 
   # A borrowed Holder and the connection process keep independent versions.
   # The process root is a pre-observation sys:get_state result, never the row

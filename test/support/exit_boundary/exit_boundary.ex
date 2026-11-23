@@ -10,7 +10,14 @@ defmodule AshOnetime.Test.ExitBoundary do
   # module loaded during the run is one the run itself caused (E18), not one a dependency
   # happened to load lazily (a query builder's first use, a protocol's implementation).
 
-  alias AshOnetime.Test.ExitBoundary.{Capture, Collector, ConnectionTls, Diagnostics, Root}
+  alias AshOnetime.Test.ExitBoundary.{
+    Capture,
+    Collector,
+    ConnectionTls,
+    ConnectionTypes,
+    Diagnostics,
+    Root
+  }
 
   @deadline 10_000
 
@@ -133,7 +140,7 @@ defmodule AshOnetime.Test.ExitBoundary do
         services -> services
       end
 
-    Map.merge(AshOnetime.Test.ExitBoundary.ConnectionTypes.services(), declared)
+    Map.merge(ConnectionTypes.services(), declared)
     |> Map.put_new(Postgrex.Parameters, {Postgrex.Parameters, :handle_call, 3})
     |> Map.put_new(Postgrex.TypeSupervisor, {DynamicSupervisor, :handle_call, 3})
   end
