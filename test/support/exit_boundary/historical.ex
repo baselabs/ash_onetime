@@ -61,6 +61,14 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
         {holder, Map.put(connection, :owner_machine, Map.fetch!(owners, connection.owner))}
       end)
 
+    owner_machines =
+      for {holder, %{owner: owner, owner_machine: {name, data}}} <- connections,
+          %{mod: Postgrex.Protocol, state: %Postgrex.Protocol{} = protocol} <- [data],
+          into: %{} do
+        version = %{holder: holder, protocol: protocol, origin: {:historical_owner, owner}}
+        {owner, %{name: name, data: data, version: version}}
+      end
+
     cache_expiries =
       if :ets.whereis(AshOnetime.Cache.Ets) == :undefined,
         do: %{},
@@ -111,6 +119,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
       repo: Repo.get_dynamic_repo(),
       repo_metadata: Ecto.Repo.Registry.lookup(Repo.get_dynamic_repo()),
       connections: connections,
+      connection_owners: owner_machines,
       relations: Map.new(relations, fn [oid, name] -> {oid, name} end),
       pool_clocks:
         for(
@@ -209,7 +218,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
           })
 
         connection =
-          if machine do
+          if machine && machine.machine do
             Map.put(connection, :owner_machine, {machine.machine.name, machine.machine.data})
           else
             connection
@@ -229,6 +238,16 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
         query_origins: origins,
         pool_clocks: pool_clock_cut(historical, connections, proof.native.pairs, before)
     }
+
+    checkpoint =
+      Map.put(checkpoint, :connection_owners,
+        Map.new(for {owner, %{machine: machine}} <- owners, machine != nil, do: {owner, machine}))
+
+    checkpoint =
+      Map.put(checkpoint, :connection_holder_origins,
+        Map.filter(proof.states.holder_origins, fn {_holder, origin} ->
+          Map.get(origin, :holder_origin_index, -1) < before
+        end))
 
     {:ok, Map.put(checkpoint, :event_offset, before)}
   end

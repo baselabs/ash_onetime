@@ -395,8 +395,8 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   end
 
   # Keep the first failed native boundary visible without logging socket data.
-  # A close can fail before the successful driver program exists; its own
-  # return and nested exception coordinates distinguish that from a bad model.
+  # Its own return and nested control coordinates distinguish a failed socket
+  # operation from a mismatch in the successful native program.
   defp option_failure_context(state, source) do
     case Map.get(state.pairs, source.index) do
       nil -> %{outer: :missing_native_return}

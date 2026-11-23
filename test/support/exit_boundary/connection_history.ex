@@ -59,7 +59,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
         |> Enum.with_index(Map.get(historical, :event_offset, 0))
         |> Enum.map(fn {event, index} -> Map.put_new(event, :index, index) end),
       query_cache: historical.query_cache,
-      connection_decoders: historical.connection_decoders
+      connection_decoders: historical.connection_decoders,
+      connection_owners: Map.get(historical, :connection_owners, %{}),
+      connection_holder_origins: Map.get(historical, :connection_holder_origins, historical.connections)
     }
 
     initial_state = side.run.initial_state

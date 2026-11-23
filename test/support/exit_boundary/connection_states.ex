@@ -181,12 +181,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           do: {holder, {:conn, owner, Postgrex.Protocol, protocol, lock, clock, deadline, status}}
 
     tables = initial_tables(indexed, historical)
+    machines = Map.get(indexed, :connection_owners, owner_machines(historical))
 
     initial = %{
       holders: holders,
-      holder_origins: historical,
-      owner_machines: owner_machines(historical),
-      owner_commits: Enum.map(owner_machines(historical), fn {owner, machine} ->
+      holder_origins: Map.get(indexed, :connection_holder_origins, historical),
+      owner_machines: machines,
+      owner_commits: Enum.map(machines, fn {owner, machine} ->
         %{owner: owner, index: -1, machine: machine}
       end),
       owner_pending: %{},
@@ -513,9 +514,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
        %{source: %{event: {_, :call, {:ets, :insert_new, [holder, _row]}}}}} ->
         version = %{version | holder: holder}
         previous = Map.fetch!(state.holder_origins, machine.version.holder)
-        origin = %{previous | owner: source.pid, pool: machine.data.pool,
-                             protocol: version.protocol,
-                             owner_machine: {machine.name, machine.data}}
+        origin =
+          %{previous | owner: source.pid, pool: machine.data.pool,
+                       protocol: version.protocol,
+                       owner_machine: {machine.name, machine.data}}
+          |> Map.put(:holder_origin_index, source.index)
 
         state
         |> put_in([:holders, holder], version)
@@ -556,6 +559,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         state
         |> exact(source, :state_owner_result, result, state.owner_results[source.pid])
         |> owner_protocol_copy(source, [3, 1, :state], pending.version)
+    end
+  end
+
+  defp owner_event(%{event: {pid, :exit, _reason}} = source, state) do
+    if Map.has_key?(state.owner_machines, pid) do
+      commit = %{owner: pid, index: source.index, machine: nil}
+
+      state
+      |> update_in([:owner_machines], &Map.delete(&1, pid))
+      |> update_in([:owner_pending], &Map.delete(&1, pid))
+      |> Map.update!(:owner_commits, &[commit | &1])
+    else
+      state
     end
   end
 
