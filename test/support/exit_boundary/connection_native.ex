@@ -77,10 +77,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   end
 
   def observe_startup(corruption \\ nil, types \\ Postgrex.DefaultTypes) do
-    startup_observation(corruption, types, false)
+    startup_observation(corruption, types, :keep)
   end
 
-  defp startup_observation(corruption, types, retire?) do
+  defp startup_observation(corruption, types, retirement) do
     ExitBoundary.observe(
       fn -> :ok end,
       fn _ ->
@@ -94,7 +94,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           :ok
         after
           :ok = module.close(socket)
-          if retire?, do: retire_type_services(types)
+          if retirement != :keep, do: retire_type_services(types, retirement)
         end
       end,
       %{host: [], callbacks: []}
@@ -103,12 +103,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   # This genuine type module has no other consumers. Its first connection must
   # create the native service during observation; no expected state is seeded.
-  def observe_fresh_startup do
+  def observe_fresh_startup(retirement \\ :shutdown)
+      when retirement in [:shutdown, :timed_shutdown] do
     types = AshOnetime.Test.ExitBoundary.StartupTypes
     unless native_type_servers(types) == [], do: raise("the fresh type service already exists")
 
     try do
-      startup_observation(nil, types, true)
+      startup_observation(nil, types, retirement)
     after
       retire_type_services(types)
 
@@ -116,9 +117,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  defp retire_type_services(types) do
+  defp retire_type_services(types, retirement \\ :shutdown) do
     for pid <- native_type_servers(types) do
       Process.unlink(pid)
+      if retirement == :timed_shutdown, do: :ok = :sys.suspend(pid)
       :ok = DynamicSupervisor.terminate_child(Postgrex.TypeSupervisor, pid)
     end
   end

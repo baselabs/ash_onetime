@@ -4062,6 +4062,44 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert ConnectionHistory.build(side).errors == []
   end
 
+  @tag :connection_streams
+  test "Connection streams: a native supervisor shutdown timer keeps its private receive proof",
+       context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+    run = ConnectionNative.observe_fresh_startup(:timed_shutdown)
+    assert run.result == :ok
+
+    receipts =
+      for receipt <- run.snapshot.service_receipts,
+          %{kind: :shutdown_timer} = program <- [Map.get(receipt, :native_program)],
+          do: {receipt, program}
+
+    assert length(receipts) == 1,
+           "the real suspended type service must force one native shutdown timer receive"
+
+    assert Enum.all?(receipts, fn {receipt, _program} ->
+             is_nil(receipt.called) and is_nil(receipt.returned)
+           end)
+
+    timers =
+      for {_ref, %{state: :fired, terminal: %{native_program: %{kind: :shutdown_timer}}}} <-
+            run.snapshot.timers,
+          do: :native_shutdown
+
+    assert timers == [:native_shutdown],
+           "timer drainage must retain the actual private native completion"
+
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+    assert proof.errors == []
+    assert [birth] = proof.types.births
+    assert is_integer(birth.retired)
+    assert MapSet.member?(run.snapshot.down, birth.owner)
+    assert :ets.info(birth.table) == :undefined
+    assert Registry.lookup(Postgrex.TypeManager, birth.key) == []
+  end
+
   for position <- [0, 1, :return] do
     @tag :connection_streams
     test "Connection streams: native type-service location #{position} retains its constructor origin",
