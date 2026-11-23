@@ -943,7 +943,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
            end),
          before = {:params, :state_functions, false, parent, [:gen_statem], pid, :infinity},
          params =
-           put_elem(put_elem(before, 1, :handle_event_function), 4, [DBConnection.Connection]),
+           before
+           |> put_elem(1, &DBConnection.Connection.handle_event/4)
+           |> put_elem(4, [DBConnection.Connection]),
          [mode] <-
            Enum.filter(calls, fn pair ->
              pair.source.index > entry.index and
