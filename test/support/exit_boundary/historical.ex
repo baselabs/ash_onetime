@@ -200,7 +200,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
          connection_framing: framing,
          connection_protocols: protocols,
          query_origins: origins,
-         pool_clocks: pool_clock_cut(historical, proof.native.pairs, before)
+         pool_clocks: pool_clock_cut(historical, connections, proof.native.pairs, before)
      }}
   end
 
@@ -283,8 +283,8 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
         do: {name, {:table_oid, table}, number, oid, width, modifier, format}
   end
 
-  defp pool_clock_cut(historical, pairs, before) do
-    pool = historical.repo_metadata.pid
+  defp pool_clock_cut(historical, connections, pairs, before) do
+    origins = Map.merge(historical.connections, connections)
 
     pairs
     |> Map.values()
@@ -292,9 +292,12 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
     |> Enum.sort_by(& &1.returned.index)
     |> Enum.reduce(historical.pool_clocks, fn pair, clocks ->
       case {pair.source.event, pair.returned.event} do
-        {{_, :call, {:ets, :give_away, [holder, ^pool, {:checkin, _queue, clock}]}},
+        {{_, :call, {:ets, :give_away, [holder, pool, {:checkin, _queue, clock}]}},
          {_, :return_from, _, true}} ->
-          Map.put(clocks, holder, clock)
+          case Map.fetch(origins, holder) do
+            {:ok, %{pool: ^pool}} -> Map.put(clocks, holder, clock)
+            _ -> clocks
+          end
 
         _ ->
           clocks
