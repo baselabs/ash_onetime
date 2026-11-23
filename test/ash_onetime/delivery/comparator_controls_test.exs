@@ -2822,6 +2822,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
        context do
     Repo.put_dynamic_repo(context.repo)
     historical = Historical.capture(context.prefix)
+    cache_table = historical.query_cache.table
+    holders = Map.keys(historical.connections)
 
     tables =
       [
@@ -2852,27 +2854,27 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                 cache_statement: "native_committed_history"
               )
 
-              table_barrier(observer, token, tables, Map.keys(historical.connections), :native)
+              table_barrier(observer, token, tables, holders, :native)
 
               Repo.all(from(c in "pg_class", prefix: "pg_catalog", select: count(c.oid)))
 
               # Compete for an existing real Ecto cache key. The unsuccessful
               # candidate must never replace the independently observed row.
               cached =
-                Enum.find(:ets.tab2list(historical.query_cache.table), fn
+                Enum.find(:ets.tab2list(cache_table), fn
                   {_, :cached, _, {_, %Postgrex.Query{}}} -> true
                   _ -> false
                 end)
 
               {_, :cached, _, {_id, query}} = cached
               candidate = put_elem(cached, 3, {System.unique_integer([:positive]), query})
-              false = :ets.insert_new(historical.query_cache.table, candidate)
+              false = :ets.insert_new(cache_table, candidate)
 
-              table_barrier(observer, token, tables, Map.keys(historical.connections), :ecto)
+              table_barrier(observer, token, tables, holders, :ecto)
 
               Repo.all(from(c in "pg_class", prefix: "pg_catalog", select: count(c.relname)))
 
-              table_barrier(observer, token, tables, Map.keys(historical.connections), :later)
+              table_barrier(observer, token, tables, holders, :later)
               :ok
             end)
           end,
@@ -3048,6 +3050,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   test "Connection streams: a failed Ecto cache candidate cannot become a query origin", context do
     Repo.put_dynamic_repo(context.repo)
     historical = Historical.capture(context.prefix)
+    cache_table = historical.query_cache.table
 
     run =
       ExitBoundary.observe(
@@ -3056,7 +3059,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           Repo.all(from(c in "pg_class", prefix: "pg_catalog", select: count(c.oid)))
 
           cached =
-            Enum.find(:ets.tab2list(historical.query_cache.table), fn
+            Enum.find(:ets.tab2list(cache_table), fn
               {_, :cached, _, {_, %Postgrex.Query{}}} -> true
               _ -> false
             end)
@@ -3064,7 +3067,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           {_, :cached, _, {_id, query}} = cached
           candidate_id = System.unique_integer([:positive])
           candidate = put_elem(cached, 3, {candidate_id, query})
-          false = :ets.insert_new(historical.query_cache.table, candidate)
+          false = :ets.insert_new(cache_table, candidate)
           candidate_id
         end,
         %{host: [], callbacks: []}
