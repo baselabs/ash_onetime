@@ -87,15 +87,15 @@ defmodule AshOnetime.DocumentationCurrencyTest do
     tags = MapSet.new(tags, &hd/1)
 
     history =
-      unless development?() do
+      if development?() do
+        dated
+      else
         # The current release qualifies before publication creates its Hex release and tag.
         refute MapSet.member?(published, @release),
                "current release v#{@release} is already on Hex"
 
         refute MapSet.member?(tags, @release), "current release v#{@release} is already tagged"
         MapSet.delete(dated, @release)
-      else
-        dated
       end
 
     assert history == published,
