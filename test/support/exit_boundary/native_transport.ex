@@ -429,8 +429,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   end
 
   defp option_values([], accumulator),
-    do:
-      {:ok, accumulator, program(:prim_inet, :enc_opt_val, [[], accumulator], accumulator)}
+    do: {:ok, accumulator, program(:prim_inet, :enc_opt_val, [[], accumulator], accumulator)}
 
   defp option_values([{:active, :once} | rest] = options, accumulator),
     do: optimized_option(options, rest, accumulator, <<22, 2::32>>)

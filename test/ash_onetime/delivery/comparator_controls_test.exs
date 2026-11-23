@@ -625,7 +625,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     for binding <- used_bindings, worker <- [binding.owner, binding.sender] do
       traced? = Enum.any?(run.events, &(&1.pid == worker and elem(&1.event, 1) == :call))
-      assert traced?, "each used TLS connection must retain both actual persistent worker programs"
+
+      assert traced?,
+             "each used TLS connection must retain both actual persistent worker programs"
     end
 
     side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
@@ -4309,7 +4311,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert Enum.map(checked.errors, & &1.actual) == expected
       end
 
-      assert Enum.map(NativeTransport.build(indexed).errors, & &1.actual) == [:native_option_source]
+      assert Enum.map(NativeTransport.build(indexed).errors, & &1.actual) == [
+               :native_option_source
+             ]
+
       {restored, _streams} = native_connection(:active, nil)
       assert restored.errors == []
       IO.puts("CONNECTION_STREAM_NATIVE_ISOLATION: stream_active_source RED; exact restore GREEN")
