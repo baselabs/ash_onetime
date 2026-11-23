@@ -67,6 +67,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       connection_state_program: Map.get(historical, :connection_state_program, %{})
     }
 
+    type_roots =
+      for {owner, %{table: table, initial_state: %Postgrex.TypeServer{types: types} = root}} <-
+            side.run.snapshot.services || %{},
+          into: %{},
+          do: {owner, %{table: table, types: types, state: root}}
+
+    indexed = Map.put(indexed, :connection_type_roots, type_roots)
+    indexed = Map.put(indexed, :connection_services, side.run.snapshot.services || %{})
+
     # Earlier real records finish the validation of calls that cross the cut.
     # They remain program evidence; this observation retains its own events
     # and source indexes for origins and the whole comparison.

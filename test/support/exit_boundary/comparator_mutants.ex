@@ -510,6 +510,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_startup_type_root) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_history.ex",
+        original: "    indexed = Map.put(indexed, :connection_type_roots, type_roots)\n",
+        mutated:
+          "    indexed = Map.put(indexed, :connection_type_roots, Map.drop(type_roots, Map.keys(type_roots)))\n"
+      }
+    ]
+  end
+
   def edits(:stream_state_holder_update) do
     [
       %{
@@ -2185,6 +2196,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         Code.compiler_options(previous)
       end
     end
+  end
+
+  defp postgrex_edits(:startup_peer_copy) do
+    original = "    msg = msg_startup(params: [user: user, database: database] ++ params)\n\n    case msg_send(s, msg, \"\") do\n"
+    mutated = "    msg = msg_startup(params: [user: user, database: database] ++ params)\n\n    case msg_send(%{s | peer: nil}, msg, \"\") do\n"
+    [{original, mutated}]
   end
 
   defp postgrex_edits(:cancel_key) do

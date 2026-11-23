@@ -46,6 +46,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       streams: streams.connections
     }
 
+    initial = Map.put(initial, :type_roots, Map.get(indexed, :connection_type_roots, %{}))
+
     saved = Map.get(indexed, :connection_decoder_program, %{})
 
     observations =
@@ -1089,6 +1091,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp decoder_event(
+         %{event: {_, :return_from, {Postgrex.TypeServer, :fetch, 1}, {:lock, _ref, _types}}} =
+           source,
+         state
+       ) do
+    port = state.ports[source.pid]
+
+    case state.cursors[port] do
+      %{types: nil} = cursor ->
+        initialize_types(state, source, port, cursor)
+
+      _ ->
+        state
+    end
+  end
+
+  defp decoder_event(
          %{event: {_, :return_from, {:gen_tcp, :connect, 4}, {:ok, port}}} = source,
          state
        ) do
@@ -1235,6 +1253,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp decoder_event(_event, state), do: state
+
+  defp initialize_types(state, source, port, cursor) do
+    with %{source: %{event: {_, :call, {_, _, [server]}}}} <- returned_pair(state, source),
+         %{types: types} <- state.type_roots[server] do
+      {_, :return_from, _, {:lock, _ref, actual}} = source.event
+      state = exact(state, source, :decoder_type_origin, actual, types)
+      cursor = %{cursor | types: types}
+      version = %{index: source.index, port: port, cursor: cursor, kind: :type_lock}
+
+      state
+      |> put_in([:cursors, port], cursor)
+      |> Map.update!(:timeline, &[version | &1])
+    else
+      _ -> failure(state, source, :decoder_type_origin, false)
+    end
+  end
 
   defp replay(e, protocol, buffer, port, cursor, state) do
     pair = Map.fetch!(state.pairs, e.index)

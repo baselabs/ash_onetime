@@ -3884,8 +3884,47 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Enum.any?(unrooted.decoders.errors, &(&1.rule == :decoder_history))
     assert ConnectionHistory.build(side).decoders.errors == []
 
+    assert map_size(proof.indexed.connection_type_roots) > 0
+
+    without_types =
+      ComparatorMutants.with_mutant(:stream_startup_type_root, fn ->
+        ConnectionHistory.build(side)
+      end)
+
+    assert without_types.native.errors == []
+    assert without_types.reads.errors == []
+    assert Enum.any?(without_types.decoders.errors, &(&1.rule == :decoder_type_origin))
+    assert ConnectionHistory.build(side).decoders.errors == []
+
     assert proof.states.errors == [],
            "every constructor and authentication Protocol copy needs its native source"
+  end
+
+  @tag :connection_streams
+  test "Connection streams: a startup Protocol copy retains its constructor peer", context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+
+    run = ComparatorMutants.with_postgrex_mutant(:startup_peer_copy, &ConnectionNative.observe_startup/0)
+    assert run.result == :ok
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+    assert proof.native.errors == []
+    assert proof.reads.errors == []
+    assert proof.decoders.errors == []
+
+    assert [%{rule: :state_input_copy, different_fields: [:peer], at: %{mfa: {Postgrex.Protocol, :msg_send, 3}}}] = proof.states.errors
+
+    for mutant <- [:stream_state_copy, :stream_helper_copy, :stream_owner_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
+      expected = if mutant == :stream_state_copy, do: [], else: proof.errors
+      assert checked.errors == expected
+    end
+
+    assert ConnectionHistory.build(side).errors == proof.errors
+    restored = ConnectionNative.observe_startup()
+    side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+    assert ConnectionHistory.build(side).errors == []
   end
 
   for lifecycle <- [:idle_ping, :reconnect] do

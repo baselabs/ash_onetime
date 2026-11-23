@@ -127,10 +127,14 @@ defmodule AshOnetime.Test.ExitBoundary do
   end
 
   defp observation_services(spec, initial_state) do
-    case Map.get(spec, :services, %{}) do
-      factory when is_function(factory, 1) -> factory.(initial_state)
-      services -> services
-    end
+    declared =
+      case Map.get(spec, :services, %{}) do
+        factory when is_function(factory, 1) -> factory.(initial_state)
+        services -> services
+      end
+
+    Map.merge(AshOnetime.Test.ExitBoundary.ConnectionTypes.services(), declared)
+    |> Map.put_new(Postgrex.Parameters, {Postgrex.Parameters, :handle_call, 3})
   end
 
   defp collector_failure(reason) do

@@ -1,6 +1,21 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionTypes do
   @moduledoc false
 
+  # Shared type owners exist outside an invocation's descendants. Bind every
+  # existing table to its actual owner before root release; the collector keeps
+  # that owner's independent pre-observation state and every later dispatch.
+  def services do
+    for table <- :ets.all(),
+        :ets.info(table, :name) == Postgrex.Types,
+        owner = :ets.info(table, :owner),
+        is_pid(owner),
+        key <- Registry.keys(Postgrex.TypeManager, owner),
+        into: %{},
+        do:
+          {{:native_type_owner, key},
+           %{pid: owner, table: table, callback: {Postgrex.TypeServer, :handle_call, 3}}}
+  end
+
   # Expectations cross the native boundary at the owning ETS operation, never
   # at the helper return under examination. Its caller supplies module and OID
   # from the independently decoded description or catalog dependency.

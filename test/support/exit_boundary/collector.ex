@@ -360,9 +360,9 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
         # The synchronous system reply places every pre-arm dispatch before
         # tracing. New ordinary messages then have their own native receipts.
-        _state = :sys.get_state(pid)
+        initial_state = :sys.get_state(pid)
 
-        {pid, %{name: name, callback: callback, table: table}}
+        {pid, %{name: name, callback: callback, table: table, initial_state: initial_state}}
 
       {name, callback} ->
         pid = Process.whereis(name)

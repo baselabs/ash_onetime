@@ -62,13 +62,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
         {holder, Map.put(connection, :owner_machine, Map.fetch!(owners, connection.owner))}
       end)
 
-    owner_machines =
-      for {holder, %{owner: owner, owner_machine: {name, data}}} <- connections,
-          %{mod: Postgrex.Protocol, state: %Postgrex.Protocol{} = protocol} <- [data],
-          into: %{} do
-        version = %{holder: holder, protocol: protocol, origin: {:historical_owner, owner}}
-        {owner, %{name: name, data: data, version: version}}
-      end
+    owner_machines = captured_owners(connections)
 
     cache_expiries =
       if :ets.whereis(AshOnetime.Cache.Ets) == :undefined,
@@ -131,6 +125,15 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
         )
         |> Map.new()
     }
+  end
+
+  defp captured_owners(connections) do
+    for {holder, %{owner: owner, owner_machine: {name, data}}} <- connections,
+        %{mod: Postgrex.Protocol, state: %Postgrex.Protocol{} = protocol} <- [data],
+        into: %{} do
+      version = %{holder: holder, protocol: protocol, origin: {:historical_owner, owner}}
+      {owner, %{name: name, data: data, version: version}}
+    end
   end
 
   # A cut is the state strictly before its captured event. Native writes may

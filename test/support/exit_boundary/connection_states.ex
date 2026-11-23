@@ -204,6 +204,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       owner_received: %{},
       owner_factories: %{},
       owner_results: %{},
+      starting: %{},
+      type_roots: Map.get(indexed, :connection_type_roots, %{}),
+      service_roots: Map.get(indexed, :connection_services, %{}),
       ports: ports,
       rows: rows,
       commits:
@@ -226,7 +229,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       type_models: %{},
       type_locks: %{},
       type_owners: %{},
-      type_services: native_type_services(native.pairs),
+      type_services:
+        MapSet.union(
+          native_type_services(native.pairs),
+          MapSet.new(Map.keys(Map.get(indexed, :connection_type_roots, %{})))
+        ),
       service_queues: %{},
       service_current: %{},
       events: Map.get(indexed, :connection_program_events, indexed.events),
@@ -310,11 +317,294 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     state = holder_event(source, state)
     state = fixture_event(source, state)
     state = reload_event(source, state)
+    state = startup_event(source, state)
     state = factory_event(source, state)
     state = type_service_event(source, state)
     state = owner_event(source, state)
     callback_event(source, state)
   end
+
+  # The constructor starts from its original options. Every subsequent field
+  # comes from a native socket fact, a decoded server message, a pre-observation
+  # service root, or an already validated child factory. No checked Protocol
+  # argument or eventual connect return supplies an expected field.
+  defp startup_event(
+         %{event: {pid, :call, {Postgrex.Protocol, :connect, [options]}}} = source,
+         state
+       ) do
+    timeout = options[:timeout] || 15_000
+
+    protocol = %Postgrex.Protocol{
+      timeout: timeout,
+      ping_timeout: Keyword.get(options, :ping_timeout, timeout),
+      postgres: :idle,
+      transactions: options[:transactions] || :naive,
+      disconnect_on_error_codes: options[:disconnect_on_error_codes] || [],
+      disable_composite_types: options[:disable_composite_types] || false
+    }
+
+    holder = get_in(state.owner_machines, [pid, :version, :holder])
+    version = %{holder: holder, protocol: protocol, origin: {:protocol_constructor, source.index}}
+    context = %{source: source, options: options, version: version, password_message: nil, authenticated?: false, endpoint: nil, phase: :startup}
+    put_in(state.starting[pid], context)
+  end
+
+  defp startup_event(%{event: {pid, :return_from, mfa, result}} = source, state) do
+    case state.starting[pid] do
+      nil -> state
+      context -> startup_return(state, source, context, mfa, result)
+    end
+  end
+
+  defp startup_event(_source, state), do: state
+
+  defp startup_return(state, source, context, {:gen_tcp, :connect, 4}, {:ok, socket}) do
+    case pair_returned(state, source) do
+      %{source: %{stack: stack, event: {_, :call, {_, _, [host, port, _socket_options, _timeout]}}}} ->
+        if {Postgrex.Protocol, :connect, 1} in stack do
+          context = %{context | endpoint: {host, port, Keyword.fetch!(context.options, :database)}}
+          startup_protocol(state, source, context, %{context.version.protocol | sock: {:gen_tcp, socket}})
+        else
+          state
+        end
+
+      _ -> state
+    end
+  end
+
+  defp startup_return(state, source, context, {:prim_inet, :peername, 1}, {:ok, peer}) do
+    %{source: call} = pair_returned(state, source)
+    {_, socket} = context.version.protocol.sock
+    state = exact(state, call, :state_constructor_socket, call.event, {source.pid, :call, {:prim_inet, :peername, [socket]}})
+    startup_protocol(state, source, context, %{context.version.protocol | peer: peer})
+  end
+
+  defp startup_return(state, source, context, {Postgrex.Protocol, :msg_decode, 1}, _result) do
+    case Enum.find(state.decoders.instances, &(&1.returned.index == source.index)) do
+      %{expected: {:ok, {:msg_backend_key, backend, key}, _}} ->
+        startup_protocol(state, source, context, %{context.version.protocol | connection_id: backend, connection_key: key})
+
+      %{expected: {:ok, {:msg_auth, :ok, _}, _}} ->
+        put_in(state.starting[source.pid], %{context | authenticated?: true})
+
+      _ -> state
+    end
+  end
+
+  defp startup_return(state, source, context, {Postgrex.SCRAM, :negotiate_channel_binding, 3}, actual) do
+    %{source: call} = pair_returned(state, source)
+    protocol = context.version.protocol
+
+    case native_message(state, source, protocol) do
+      {:msg_auth, :sasl, mechanisms} ->
+        mode = context.options[:channel_binding] || :prefer
+        arguments = [mechanisms, protocol.sock, mode]
+        {_, :call, {_, _, actual_arguments}} = call.event
+        state = type_input_copies(state, call, actual_arguments, arguments, {:constructor_scram, context.source.index})
+        expected = startup_binding(state, call, mechanisms, protocol.sock, mode)
+        state = helper_copy(state, source, [3], actual, expected, {:constructor_scram, call.index})
+
+        case expected do
+          {:ok, binding} -> startup_protocol(state, source, context, %{protocol | scram_cb: binding})
+          _ -> state
+        end
+
+      _ -> failure(state, source, :state_constructor_auth_origin)
+    end
+  end
+
+  defp startup_return(state, source, context, {Postgrex.SCRAM, :client_first, 1}, actual) do
+    %{source: call} = pair_returned(state, source)
+    pair = Map.fetch!(state.pairs, call.index)
+
+    with [random] <- native_type_calls(state, call, pair.returned, {:crypto, :strong_rand_bytes, 1}),
+         {_, :call, {_, _, [18]}} <- random.source.event,
+         {_, :return_from, _, bytes} <- random.returned.event,
+         true <- is_binary(bytes) and byte_size(bytes) == 18 do
+      {mechanism, header, _binding} = context.version.protocol.scram_cb
+      sasl = [header, "n=,r=", Base.encode64(bytes)]
+      message = [mechanism, 0, <<IO.iodata_length(sasl)::signed-32>>, sasl]
+      {_, :call, {_, _, arguments}} = call.event
+      state = type_input_copies(state, call, arguments, [context.version.protocol.scram_cb], {:constructor_scram, context.source.index})
+      state = helper_copy(state, source, [3], actual, message, {:constructor_nonce, random.returned.index})
+      put_in(state.starting[source.pid], %{context | password_message: message})
+    else
+      _ -> failure(state, source, :state_constructor_nonce_origin)
+    end
+  end
+
+  defp startup_return(state, source, context, {Postgrex.SCRAM, :client_final, 3}, actual) do
+    case native_message(state, source, context.version.protocol) do
+      {:msg_auth, :sasl_cont, data} ->
+        {message, scram} = startup_scram(data, context.version.protocol.scram_cb, context.options)
+        %{source: call} = pair_returned(state, source)
+        {_, :call, {_, _, arguments}} = call.event
+        expected_arguments = [data, context.version.protocol.scram_cb, startup_options(context.options)]
+        state = type_input_copies(state, call, arguments, expected_arguments, {:constructor_scram, context.source.index})
+        state = helper_copy(state, source, [3], actual, {message, scram}, {:constructor_scram, call.index})
+        context = %{context | password_message: message}
+        startup_protocol(state, source, context, %{context.version.protocol | scram: scram})
+
+      _ -> failure(state, source, :state_constructor_auth_origin)
+    end
+  end
+
+  defp startup_return(state, source, context, {Postgrex.SCRAM, :verify_server, 3}, actual) do
+    case native_message(state, source, context.version.protocol) do
+      {:msg_auth, :sasl_fin, data} ->
+        %{source: call} = pair_returned(state, source)
+        {_, :call, {_, _, arguments}} = call.event
+        expected_arguments = [data, context.version.protocol.scram, startup_options(context.options)]
+        state = type_input_copies(state, call, arguments, expected_arguments, {:constructor_scram, context.source.index})
+        expected = startup_verify(data, context.version.protocol.scram, context.options)
+        helper_copy(state, source, [3], actual, expected, {:constructor_scram, call.index})
+
+      _ -> failure(state, source, :state_constructor_auth_origin)
+    end
+  end
+
+  defp startup_return(state, source, context, {Postgrex.TypeServer, :fetch, 1}, _result) do
+    with %{source: call} <- pair_returned(state, source),
+         %{result: {:lock, _ref, types}} <- state.type_models[call.index] do
+      startup_protocol(state, source, %{context | phase: :bootstrap}, %{context.version.protocol | types: types})
+    else
+      _ -> failure(state, source, :state_constructor_type_origin)
+    end
+  end
+
+  defp startup_return(state, source, context, {:ets, :new, 2}, table) do
+    case pair_returned(state, source) do
+      %{source: %{event: {_, :call, {:ets, :new, [Postgrex.Protocol, [:set, :public]]}}}} ->
+        startup_protocol(state, source, context, %{context.version.protocol | queries: table})
+
+      _ -> state
+    end
+  end
+
+  defp startup_return(state, source, context, {Postgrex.Parameters, :insert, 1}, actual) do
+    %{source: call} = pair_returned(state, source)
+    parameters = context.version.protocol.parameters
+    {_, :call, {_, _, arguments}} = call.event
+    state = type_input_copies(state, call, arguments, [parameters], {:constructor_parameters, context.source.index})
+
+    case startup_parameter_reference(state, call, parameters) do
+      {:ok, reference, origin} ->
+        state = helper_copy(state, source, [3], actual, reference, origin)
+        startup_protocol(state, source, context, %{context.version.protocol | parameters: reference})
+
+      :error -> failure(state, source, :state_constructor_parameters_origin)
+    end
+  end
+
+  defp startup_return(state, source, context, {Postgrex.Protocol, :connect, 1}, {:ok, actual}) do
+    version = context.version
+
+    state
+    |> exact(source, :state_constructor_result, actual, version.protocol)
+    |> copy(source, [3, 1], version)
+    |> put_in([:ports, version.protocol.sock], version)
+    |> put_in([:completed, source.pid], version)
+    |> update_in([:starting], &Map.delete(&1, source.pid))
+  end
+
+  defp startup_return(state, _source, _context, _mfa, _result), do: state
+
+  defp startup_protocol(state, source, context, protocol) do
+    version = %{context.version | protocol: protocol, origin: {:constructor_field, source.index}}
+    put_in(state.starting[source.pid], %{context | version: version})
+  end
+
+  defp startup_scram(data, {_mechanism, header, binding}, options) do
+    server = for <<key, "=", value::binary>> <- :binary.split(data, ",", [:global]), into: %{}, do: {key, value}
+    salt = Base.decode64!(server[?s])
+    iterations = String.to_integer(server[?i])
+    nonce = binary_part(server[?r], 0, 24)
+    without_proof = ["c=", Base.encode64(IO.iodata_to_binary([header, binding])), ",r=", server[?r]]
+    prefix = ["n=,r=", nonce, ",r=", server[?r], ",s=", server[?s], ",i=", server[?i], ?,]
+    auth_message = IO.iodata_to_binary([prefix | without_proof])
+    salted = :crypto.pbkdf2_hmac(:sha256, Keyword.fetch!(options, :password), salt, iterations, 32)
+    client_key = :crypto.mac(:hmac, :sha256, salted, "Client Key")
+    signature = :crypto.mac(:hmac, :sha256, :crypto.hash(:sha256, client_key), auth_message)
+    proof = Base.encode64(:crypto.exor(client_key, signature))
+    {[without_proof, ",p=", proof], %{salt: salt, iterations: iterations, auth_message: auth_message}}
+  end
+
+  defp startup_verify(data, scram, options) do
+    server = for <<key, "=", value::binary>> <- :binary.split(data, ",", [:global]), into: %{}, do: {key, value}
+
+    case server do
+      %{?e => error} -> {:error, %Postgrex.Error{message: "error received in SCRAM server final message: #{inspect(error)}"}}
+      %{?v => signature} ->
+        salted = :crypto.pbkdf2_hmac(:sha256, Keyword.fetch!(options, :password), scram.salt, scram.iterations, 32)
+        key = :crypto.mac(:hmac, :sha256, salted, "Server Key")
+        expected = :crypto.mac(:hmac, :sha256, key, scram.auth_message)
+        if expected == Base.decode64!(signature), do: :ok, else: {:error, %Postgrex.Error{message: "cannot verify SCRAM server signature"}}
+      _ -> {:error, %Postgrex.Error{message: "unsupported SCRAM server final message: #{inspect(server)}"}}
+    end
+  end
+
+  defp startup_options(options) do
+    {ssl, options} = Keyword.pop(options, :ssl, false)
+    options = if ssl == true, do: Keyword.delete(options, :ssl_opts), else: options
+    parameters = options[:parameters] || []
+
+    parameters =
+      case options[:search_path] do
+        path when is_list(path) -> Keyword.put(parameters, :search_path, Enum.intersperse(path, ", "))
+        nil -> parameters
+      end
+
+    Keyword.put(options, :parameters, parameters)
+  end
+
+  defp startup_parameter_reference(state, source, parameters) do
+    servers = for {pid, %{name: Postgrex.Parameters}} <- state.service_roots, do: pid
+
+    with [server] <- servers,
+         {:ok, callback, from, reference, _completion} <- type_server_request(state, source, server, {:insert, parameters}, Postgrex.Parameters),
+         [{^reference, monitor}] <- type_lock_monitors(state, callback, server, source.pid),
+         {:ok, insert} <- startup_parameter_insert(state, callback, from, parameters, reference) do
+      {:ok, reference, {:constructor_parameter_monitor, monitor, insert}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp startup_parameter_insert(state, callback, from, parameters, reference) do
+    with [insert] <- native_type_calls(state, callback.source, callback.returned, {:ets, :insert_new, 2}),
+         {_, :call, {:ets, :insert_new, [Postgrex.Parameters, {^reference, ^parameters}]}} <- insert.source.event,
+         {_, :return_from, _, true} <- insert.returned.event,
+         {_, :call, {_, _, [{:insert, ^parameters}, ^from, Postgrex.Parameters]}} <- callback.source.event,
+         {_, :return_from, _, {:reply, ^reference, Postgrex.Parameters}} <- callback.returned.event do
+      {:ok, insert.source.index}
+    else
+      _ -> :error
+    end
+  end
+
+  defp startup_binding(state, call, mechanisms, {:ssl, socket}, mode) when mode != :disable do
+    if "SCRAM-SHA-256-PLUS" in :binary.split(mechanisms, <<0>>, [:global]) do
+      pair = Map.fetch!(state.pairs, call.index)
+
+      with [certificate] <- native_type_calls(state, call, pair.returned, {:ssl, :peercert, 1}),
+           {_, :call, {:ssl, :peercert, [^socket]}} <- certificate.source.event,
+           {_, :return_from, _, {:ok, der}} <- certificate.returned.event,
+           {:Certificate, _tbs, {_tag, oid, _parameters}, _signature} <- :public_key.pkix_decode_cert(der, :plain),
+           {digest, _sign} when digest != :none <- :public_key.pkix_sign_types(oid) do
+        digest = if digest in [:md5, :sha], do: :sha256, else: digest
+        {:ok, {"SCRAM-SHA-256-PLUS", "p=tls-server-end-point,,", :crypto.hash(digest, der)}}
+      else
+        _ when mode != :require -> {:ok, {"SCRAM-SHA-256", "n,,", ""}}
+        _ -> {:error, %Postgrex.Error{message: "channel binding is required but the server certificate has no usable hash"}}
+      end
+    else
+      # No certificate access occurs in this branch of the owning function.
+      Postgrex.SCRAM.negotiate_channel_binding(mechanisms, {:ssl, socket}, mode)
+    end
+  end
+
+  defp startup_binding(_state, _call, mechanisms, socket, mode),
+    do: Postgrex.SCRAM.negotiate_channel_binding(mechanisms, socket, mode)
 
   # A borrowed Holder and the connection process keep independent versions.
   # The process root is a pre-observation sys:get_state result, never the row
@@ -679,22 +969,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_loop(state, source, function, machine) do
-    {state, machine} =
-      if function == :loop_done do
-        case Map.pop(state.owner_pending, source.pid) do
-          {nil, _pending} ->
-            {state, machine}
-
-          {next, pending} ->
-            state = %{state | owner_pending: pending}
-            commit = %{owner: source.pid, index: source.index, machine: next}
-            state = Map.update!(state, :owner_commits, &[commit | &1])
-            state = update_in(state.owner_received, &Map.delete(&1, source.pid))
-            {put_in(state.owner_machines[source.pid], next), next}
-        end
-      else
-        {state, machine}
-      end
+    {state, machine} = owner_loop_commit(state, source, function, machine)
 
     next = Map.get(state.owner_pending, source.pid, machine)
 
@@ -731,6 +1006,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     owner_loop_message(state, source, function)
   end
+
+  defp owner_loop_commit(state, source, :loop_done, machine) do
+    case Map.pop(state.owner_pending, source.pid) do
+      {nil, _pending} ->
+        {state, machine}
+
+      {next, pending} ->
+        state = %{state | owner_pending: pending}
+        commit = %{owner: source.pid, index: source.index, machine: next}
+        state = Map.update!(state, :owner_commits, &[commit | &1])
+        state = update_in(state.owner_received, &Map.delete(&1, source.pid))
+        {put_in(state.owner_machines[source.pid], next), next}
+    end
+  end
+
+  defp owner_loop_commit(state, _source, _function, machine), do: {state, machine}
 
   defp owner_loop_message(state, source, function) do
     case state.owner_received[source.pid] do
@@ -1215,8 +1506,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           put_in(state.type_owners[pid], %{server: server, origin: origin})
 
         {Postgrex.TypeServer, :fetch, {:lock, ref, types}} ->
-          owner = Map.fetch!(state.type_owners, pid)
-          lock = %{server: owner.server, ref: ref, types: types, origin: origin}
+          {_, :call, {_, _, [server]}} = call.event
+          lock = %{server: server, ref: ref, types: types, origin: origin}
           put_in(state.type_locks[pid], lock)
 
         _ ->
@@ -1280,8 +1571,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp native_type_model(state, %{pid: pid, mfa: {Postgrex.TypeServer, :fetch, 1}} = source) do
-    with %{server: server} <- state.type_owners[pid],
-         {:ok, types} <- native_type_state(state, source),
+    with {:ok, server, types} <- type_server_origin(state, source, pid),
          {:ok, callback, from, reply, completion} <-
            type_server_request(state, source, server, :fetch),
          {^server, :call, {_, _, [:fetch, ^from, %{types: ^types}]}} <- callback.source.event,
@@ -1303,6 +1593,36 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          {^server, :call, {_, _, [^request, ^from, %{types: ^types, lock: ^ref}]}} <-
            callback.source.event do
       {:ok, [server, ref, infos], :go, {:native_type_update, callback.source.index, completion}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp type_server_origin(state, source, pid) do
+    case state.starting[pid] do
+      nil ->
+        with %{server: server} <- state.type_owners[pid],
+             {:ok, types} <- native_type_state(state, source) do
+          {:ok, server, types}
+        else
+          _ -> :error
+        end
+
+      context ->
+        constructor_type_server_origin(state, source, context)
+    end
+  end
+
+  defp constructor_type_server_origin(state, source, context) do
+    module = Keyword.fetch!(context.options, :types)
+    {_, :call, {_, _, [server]}} = source.event
+
+    with %{types: {^module, _table} = types} <- state.type_roots[server],
+         [location] <- native_type_calls(state, context.source, source, {Postgrex.TypeSupervisor, :locate, 2}),
+         {_, :call, {_, _, [^module, endpoint]}} <- location.source.event,
+         true <- endpoint == context.endpoint,
+         {_, :return_from, _, ^server} <- location.returned.event do
+      {:ok, server, types}
     else
       _ -> :error
     end
@@ -1335,7 +1655,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         do: {ref, pair.source.index}
   end
 
-  defp type_server_request(state, source, server, request) do
+  defp type_server_request(state, source, server, request, module \\ Postgrex.TypeServer) do
     pair = Map.fetch!(state.pairs, source.index)
     caller = source.pid
 
@@ -1348,7 +1668,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     with [{sent, from, envelope}] <- requests,
          [received] <- Enum.filter(state.events, &(&1.event === {server, :receive, envelope})),
          true <- sent.index < received.index,
-         [callback] <- type_server_callbacks(state, pair, received, server, request, from),
+         [callback] <- type_server_callbacks(state, pair, received, server, request, from, module),
          {_, tag} <- from,
          [{reply_event, result}] <-
            for(
@@ -1370,10 +1690,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
-  defp type_server_callbacks(state, pair, received, server, request, from) do
+  defp type_server_callbacks(state, pair, received, server, request, from, module) do
     for {_index, callback} <- state.pairs,
         callback.source.index > received.index and callback.source.index < pair.returned.index,
-        {^server, :call, {Postgrex.TypeServer, :handle_call, [^request, ^from, _]}} <-
+        {^server, :call, {^module, :handle_call, [^request, ^from, _]}} <-
           [callback.source.event],
         do: callback
   end
@@ -1571,6 +1891,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp status_options(_frame), do: :error
+
+  defp status_input(state, source, :handle_msg, [_protocol, actual, _message])
+       when is_map_key(state.starting, source.pid) do
+    context = state.starting[source.pid]
+    options = startup_options(context.options)
+    options = if context.authenticated?, do: Keyword.delete(options, :password), else: options
+    lock = state.type_locks[source.pid]
+
+    expected = %{
+      opts: options,
+      types_mod: context.options[:types],
+      types_key: if(context.options[:types], do: context.endpoint),
+      types_lock: if(lock, do: {lock.server, lock.ref}),
+      prepare: context.options[:prepare] || :named,
+      messages: [],
+      ssl: nil,
+      ssl_negotiation: context.options[:ssl_negotiation] || :postgres,
+      channel_binding: context.options[:channel_binding] || :prefer,
+      target_server_type: context.options[:target_server_type] || :any
+    }
+
+    helper_copy(state, source, [2, 2, 1], actual, expected, {:constructor_status, context.source.index})
+  end
 
   defp status_input(state, source, function, arguments) when function in @status_consumers do
     with %{source: callback} = frame <- status_callback(state, source.pid),
@@ -2154,6 +2497,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
+  defp callback_owner(state, source, _function, _protocol, [])
+       when is_map_key(state.starting, source.pid),
+       do: {:ok, state.starting[source.pid].version}
+
   defp callback_owner(state, source, _function, protocol, frames),
     do: input_version(protocol, frames, Map.get(state.lookups, source.pid), state.ports)
 
@@ -2174,7 +2521,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp buffer_input(state, source, :msg_send, [_protocol, _messages, buffer], version) do
     cursor? =
-      Enum.any?(source.stack, fn
+      Map.has_key?(state.starting, source.pid) or Enum.any?(source.stack, fn
         {Postgrex.Protocol, function, _} ->
           function in [
             :error_flushed,
@@ -2784,8 +3131,67 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
        ),
        do: reload_query_messages(state, source, messages)
 
+  defp helper_messages(state, source, nil, version, messages)
+       when is_map_key(state.starting, source.pid),
+       do: startup_messages(state, source, version, messages)
+
   defp helper_messages(state, source, _frame, _version, messages),
     do: callback_messages(state, source, messages)
+
+  defp startup_messages(state, source, version, actual) do
+    context = state.starting[source.pid]
+    options = startup_options(context.options)
+
+    {expected, phase} =
+      case context.phase do
+        :startup ->
+          parameters = [user: Keyword.fetch!(options, :username), database: Keyword.fetch!(options, :database)] ++ options[:parameters]
+          {{:msg_startup, parameters}, :authentication}
+
+        :authentication ->
+          {startup_password(state, source, context), :authentication}
+
+        :bootstrap ->
+          {startup_query(state, source, context, version), :initializing}
+      end
+
+    state
+    |> helper_copy(source, [2, 2, 1], actual, expected, {:constructor_message, context.source.index})
+    |> put_in([:starting, source.pid, :phase], phase)
+  end
+
+  defp startup_password(state, source, context) do
+    options = startup_options(context.options)
+
+    case native_message(state, source, context.version.protocol) do
+      {:msg_auth, :cleartext, _} -> {:msg_password, [Keyword.fetch!(options, :password), 0]}
+      {:msg_auth, :md5, salt} ->
+        digest = :erlang.md5([Keyword.fetch!(options, :password), Keyword.fetch!(options, :username)]) |> Base.encode16(case: :lower)
+        digest = :erlang.md5([digest, salt]) |> Base.encode16(case: :lower)
+        {:msg_password, ["md5", digest, 0]}
+      {:msg_auth, type, _} when type in [:sasl, :sasl_cont] -> {:msg_password, context.password_message}
+      _ -> :no_constructor_authentication_origin
+    end
+  end
+
+  defp startup_query(state, source, context, version) do
+    types = Postgrex.Types.new(Keyword.fetch!(context.options, :types))
+
+    try do
+      [size] = for pair <- native_type_calls(state, context.source, source, {:ets, :info, 2}),
+                   {_, :call, {_, _, [table, :size]}} <- [pair.source.event],
+                   {_, actual_table} = version.protocol.types,
+                   table == actual_table,
+                   do: pair
+      {_, :return_from, _, 0} = size.returned.event
+      server_version = Postgrex.Utils.parse_version(version.protocol.parameters["server_version"])
+      input = %{types: types, disable_composite_types: version.protocol.disable_composite_types}
+      {:msg_query, Postgrex.Types.bootstrap_query(server_version, input)}
+    after
+      {_module, table} = types
+      :ets.delete(table)
+    end
+  end
 
   defp callback_messages(state, source, actual) do
     with %{source: callback} = frame <- status_callback(state, source.pid),
@@ -3145,6 +3551,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         failure(state, source, :state_helper_send_origin)
     end
   end
+
+  defp helper_timeout(state, source, actual) when is_map_key(state.starting, source.pid),
+    do: helper_copy(state, source, [2, 2, 1], actual, :infinity, {:constructor_timeout, state.starting[source.pid].source.index})
 
   defp helper_timeout(state, source, actual) do
     callback =
@@ -3654,9 +4063,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp advance_owner(state, pid, _function, version, []) do
-    state
-    |> put_in([:ports, version.protocol.sock], version)
-    |> put_in([:completed, pid], version)
+    state =
+      state
+      |> put_in([:ports, version.protocol.sock], version)
+      |> put_in([:completed, pid], version)
+
+    case state.starting[pid] do
+      nil -> state
+      context -> put_in(state.starting[pid], %{context | version: version})
+    end
   end
 
   defp advance_owner(state, _pid, function, _version, _rest) when function in @copies,
