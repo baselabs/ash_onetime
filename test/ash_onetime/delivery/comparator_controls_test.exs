@@ -3967,6 +3967,21 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     historical = Historical.capture(context.prefix)
     run = ConnectionNative.observe_fresh_startup()
     assert run.result == :ok
+
+    private =
+      for receipt <- run.snapshot.service_receipts,
+          program = Map.get(receipt, :native_program),
+          not is_nil(program),
+          do: {receipt, program}
+
+    assert Enum.any?(private, fn {_receipt, program} -> program.kind == :startup_ack end),
+           "the real type-service startup ack needs its own completed native program"
+
+    assert Enum.all?(private, fn {receipt, _program} ->
+             is_nil(receipt.called) and is_nil(receipt.returned)
+           end),
+           "a native receive must never fabricate a GenServer callback completion"
+
     side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
     proof = ConnectionHistory.build(side)
     assert proof.native.errors == []

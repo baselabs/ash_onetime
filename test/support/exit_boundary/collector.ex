@@ -1,5 +1,6 @@
 defmodule AshOnetime.Test.ExitBoundary.Collector do
   alias AshOnetime.Test.ExitBoundary.Capture
+  alias AshOnetime.Test.ExitBoundary.NativeTransport
   @moduledoc false
 
   # §2.7.8, the observation and the drain. One collector process per run sits outside
@@ -133,6 +134,9 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
             services: services,
             service_receipts: [],
             service_pending: %{},
+            service_programs: MapSet.new(),
+            service_program_generation: 0,
+            service_program_attempt: nil,
             stamp: nil,
             returned?: false,
             published?: false,
@@ -175,6 +179,8 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
   # Phase 1: record until the terminal boundary holds, stop the root, await its exit.
   defp collect(state) do
+    state = settle_service_programs(state)
+
     cond do
       terminal?(state) and not state.stopped? ->
         # The observer takes residue after every descendant and timer has drained.
@@ -210,6 +216,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
     ref = :trace.delivered(state.session, :all)
     state = await_fence(state, :all, ref)
+    state = settle_service_programs(state)
 
     cond do
       state.fence_timeout ->
@@ -298,6 +305,11 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     do: service_request_tag(:call, request)
 
   defp service_request_kind({:"$gen_cast", request}), do: service_request_tag(:cast, request)
+  defp service_request_kind({:ack, _pid, _result}), do: :startup_ack
+  defp service_request_kind({:nack, _pid, _result}), do: :startup_nack
+  defp service_request_kind({:DOWN, _ref, :process, _pid, _reason}), do: :monitor_down
+  defp service_request_kind({:EXIT, _pid, _reason}), do: :linked_exit
+  defp service_request_kind({:timeout, _ref, _message}), do: :timer_expiration
   defp service_request_kind(_message), do: :info
 
   defp service_request_tag(kind, request) do
@@ -375,6 +387,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     |> procs(event)
     |> ports(event)
     |> service_event(event)
+    |> service_program_event(event)
     |> ledger(event)
     |> boundary(event)
     |> settle_service_timers()
@@ -615,6 +628,306 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       end)
 
     %{state | service_receipts: receipts}
+  end
+
+  # Mailbox ingress is retained even when a native selective receive or a
+  # demonitor flush consumes it. Such a receipt has no GenServer callback.
+  # Close it only through its completed, independently captured native program;
+  # its called/returned callback fields remain nil and every raw event remains.
+  defp settle_service_programs(%{returned?: false} = state), do: state
+
+  defp settle_service_programs(%{service_pending: pending} = state)
+       when map_size(pending) == 0,
+       do: state
+
+  defp settle_service_programs(state) do
+    receipts =
+      state.service_pending
+      |> Map.values()
+      |> List.flatten()
+      |> Enum.filter(&is_nil(&1.called))
+      |> Enum.sort_by(& &1.received_stamp)
+
+    attempt = {state.service_program_generation, Enum.map(receipts, & &1.received_stamp)}
+
+    if receipts == [] or state.service_program_attempt == attempt do
+      state
+    else
+      state
+      |> Map.put(:service_program_attempt, attempt)
+      |> settle_service_programs(receipts)
+    end
+  end
+
+  # Rebuild the native index only when a candidate arrives or one of its
+  # primitive programs completes, never for each unrelated traced instruction.
+  defp service_program_event(state, {_, :return_from, {module, function, _arity}, _})
+       when (module == :erlang and function in [:demonitor, :spawn_opt]) or
+              (module == :proc_lib and function in [:sync_start, :init_ack]) or
+              (module == DynamicSupervisor and
+                 function in [:monitor_child, :terminate_children]) do
+    Map.update!(state, :service_program_generation, &(&1 + 1))
+  end
+
+  defp service_program_event(state, _event), do: state
+
+  defp settle_service_programs(state, receipts) do
+    events =
+      state.events
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.with_index(fn {stamp, event}, index ->
+        %{stamp: stamp, event: event, index: index}
+      end)
+
+    context = %{events: events, pairs: NativeTransport.pairs(events)}
+
+    receipts
+    |> Enum.reduce(state, &settle_service_program(&1, &2, context))
+    |> settle_service_timers()
+  end
+
+  defp settle_service_program(receipt, state, context) do
+    with true <- receipt.registered?,
+         {:ok, key, program} <- service_program(receipt, context),
+         false <- MapSet.member?(state.service_programs, key) do
+      remaining =
+        state.service_pending
+        |> Map.fetch!(receipt.pid)
+        |> Enum.reject(&(&1.received_stamp == receipt.received_stamp))
+
+      pending =
+        if remaining == [],
+          do: Map.delete(state.service_pending, receipt.pid),
+          else: Map.put(state.service_pending, receipt.pid, remaining)
+
+      state
+      |> Map.put(:service_pending, pending)
+      |> Map.update!(:service_programs, &MapSet.put(&1, key))
+      |> replace_service_receipt(Map.put(receipt, :native_program, program))
+    else
+      _ -> state
+    end
+  end
+
+  defp service_program(%{message: {:DOWN, ref, :process, child, _}} = receipt, context) do
+    service_flush(receipt, ref, context) ||
+      service_shutdown_down(receipt, ref, child, context) || :error
+  end
+
+  defp service_program(%{message: {:ack, child, value}} = receipt, context) do
+    pid = receipt.pid
+
+    matches =
+      for pair <- service_calls(context, pid, :proc_lib, :sync_start),
+          {^pid, :call, {_, _, [{^child, ref}, _timeout]}} <- [pair.source.event],
+          {^pid, :return_from, _, ^value} <- [pair.returned.event],
+          receipt.received_stamp < pair.returned.stamp,
+          service_spawn?(context, pid, child, ref, pair.source.index),
+          service_ack?(context, receipt, child, value),
+          service_demonitored?(context, pid, ref, pair),
+          do: pair
+
+    case matches do
+      [pair] ->
+        service_program_result(:startup_ack, pair, receipt, {:startup_ack, pair.source.index})
+
+      _ ->
+        :error
+    end
+  end
+
+  defp service_program(%{message: {:EXIT, child, reason}} = receipt, context) do
+    pid = receipt.pid
+
+    matches =
+      for pair <- service_calls(context, pid, DynamicSupervisor, :monitor_child),
+          pair.source.event == {pid, :call, {DynamicSupervisor, :monitor_child, [child]}},
+          pair.returned.event ==
+            {pid, :return_from, {DynamicSupervisor, :monitor_child, 1}, {:error, reason}},
+          receipt.received_stamp < pair.returned.stamp,
+          {:ok, _ref, monitor} <- [service_monitor(context, pid, child, pair)],
+          do: {pair, monitor}
+
+    case matches do
+      [{pair, monitor}] ->
+        service_program_result(
+          :shutdown_exit,
+          pair,
+          receipt,
+          {:shutdown_exit, monitor.source.index}
+        )
+
+      _ ->
+        :error
+    end
+  end
+
+  defp service_program(_receipt, _context), do: :error
+
+  defp service_flush(receipt, ref, context) do
+    pid = receipt.pid
+
+    matches =
+      for pair <- service_calls(context, pid, :erlang, :demonitor),
+          pair.source.event == {pid, :call, {:erlang, :demonitor, [ref, [:flush]]}},
+          pair.returned.event == {pid, :return_from, {:erlang, :demonitor, 2}, true},
+          receipt.received_stamp < pair.returned.stamp,
+          do: pair
+
+    case matches do
+      [pair] ->
+        service_program_result(:monitor_flush, pair, receipt, {:monitor_flush, pair.source.index})
+
+      _ ->
+        nil
+    end
+  end
+
+  defp service_shutdown_down(receipt, ref, child, context) do
+    pid = receipt.pid
+
+    matches =
+      for pair <- service_calls(context, pid, DynamicSupervisor, :terminate_children),
+          {^pid, :call, {_, _, [children, _state]}} <- [pair.source.event],
+          is_map_key(children, child),
+          pair.returned.event ==
+            {pid, :return_from, {DynamicSupervisor, :terminate_children, 2}, :ok},
+          receipt.received_stamp < pair.returned.stamp,
+          {:ok, ^ref, monitor} <- [service_monitor(context, pid, child, pair)],
+          service_shutdown_received?(context, receipt, child, pair, monitor),
+          do: {pair, monitor}
+
+    case matches do
+      [{pair, monitor}] ->
+        service_program_result(
+          :shutdown_down,
+          pair,
+          receipt,
+          {:shutdown_down, monitor.source.index}
+        )
+
+      _ ->
+        nil
+    end
+  end
+
+  defp service_shutdown_received?(context, receipt, child, parent, monitor) do
+    pid = receipt.pid
+    {:DOWN, _ref, :process, ^child, reason} = receipt.message
+    {^pid, :call, {_, _, [children, _state]}} = parent.source.event
+    spec = Map.fetch!(children, child)
+
+    waited? =
+      Enum.any?(service_calls(context, pid, DynamicSupervisor, :wait_child), fn pair ->
+        pair.source.index > monitor.returned.index and
+          pair.returned.index < parent.returned.index and
+          pair.source.stamp > receipt.received_stamp and
+          service_wait_child?(pair, pid, child, spec, reason)
+      end)
+
+    waited? or service_monitor_received?(context, receipt, child, parent, monitor)
+  end
+
+  defp service_wait_child?(pair, pid, child, spec, reason) do
+    case pair.source.event do
+      {^pid, :call, {DynamicSupervisor, :wait_child, [^child, ^spec, ^reason, stacks]}}
+      when is_map(stacks) and is_tuple(spec) and tuple_size(spec) == 5 ->
+        expected = service_shutdown_stack(child, spec, reason, stacks)
+        pair.returned.event ===
+          {pid, :return_from, {DynamicSupervisor, :wait_child, 4}, expected}
+
+      _ ->
+        false
+    end
+  end
+
+  defp service_shutdown_stack(child, {_, _, :brutal_kill, _, _} = spec, reason, stacks) do
+    if reason == :killed, do: stacks, else: Map.put(stacks, child, {spec, reason})
+  end
+
+  defp service_shutdown_stack(child, {_, restart, _, _, _} = spec, reason, stacks) do
+    if match?({:shutdown, _}, reason) or reason == :shutdown or
+         (reason == :normal and restart != :permanent),
+       do: stacks,
+       else: Map.put(stacks, child, {spec, reason})
+  end
+
+  defp service_monitor_received?(context, receipt, child, parent, monitor) do
+    pid = receipt.pid
+
+    Enum.any?(service_calls(context, pid, DynamicSupervisor, :monitor_child), fn pair ->
+      pair.source.index > parent.source.index and pair.returned.index < parent.returned.index and
+        pair.source.index < monitor.source.index and
+        monitor.returned.index < pair.returned.index and
+        receipt.received_stamp < pair.returned.stamp and
+        pair.source.event === {pid, :call, {DynamicSupervisor, :monitor_child, [child]}} and
+        match?({^pid, :return_from, _, {:error, _}}, pair.returned.event)
+    end)
+  end
+
+  defp service_monitor(context, pid, child, parent) do
+    matches =
+      for pair <- service_calls(context, pid, :erlang, :monitor),
+          pair.source.index > parent.source.index,
+          pair.returned.index < parent.returned.index,
+          pair.source.event == {pid, :call, {:erlang, :monitor, [:process, child]}},
+          {^pid, :return_from, _, ref} <- [pair.returned.event],
+          is_reference(ref),
+          do: {ref, pair}
+
+    case matches do
+      [{ref, pair}] -> {:ok, ref, pair}
+      _ -> :error
+    end
+  end
+
+  defp service_calls(context, pid, module, function) do
+    for {_index, %{source: %{event: {^pid, :call, {^module, ^function, _}}}} = pair} <-
+          context.pairs,
+        do: pair
+  end
+
+  defp service_spawn?(context, pid, child, ref, before) do
+    Enum.any?(service_calls(context, pid, :erlang, :spawn_opt), fn pair ->
+      pair.returned.index < before and
+        match?({^pid, :return_from, _, {^child, ^ref}}, pair.returned.event)
+    end)
+  end
+
+  defp service_ack?(context, receipt, child, value) do
+    sent? =
+      Enum.any?(context.events, fn source ->
+        source.stamp < receipt.received_stamp and
+          source.event === {child, :send, {:ack, child, value}, receipt.pid}
+      end)
+
+    sent? and
+      Enum.any?(service_calls(context, child, :proc_lib, :init_ack), fn pair ->
+        match?({^child, :return_from, _, :ok}, pair.returned.event) and
+          (pair.source.event ===
+             {child, :call, {:proc_lib, :init_ack, [receipt.pid, value]}} or
+             pair.source.event === {child, :call, {:proc_lib, :init_ack, [value]}})
+      end)
+  end
+
+  defp service_demonitored?(context, pid, ref, parent) do
+    Enum.any?(service_calls(context, pid, :erlang, :demonitor), fn pair ->
+      parent.source.index < pair.source.index and pair.returned.index < parent.returned.index and
+        pair.source.event === {pid, :call, {:erlang, :demonitor, [ref, [:flush]]}} and
+        pair.returned.event === {pid, :return_from, {:erlang, :demonitor, 2}, true}
+    end)
+  end
+
+  defp service_program_result(kind, pair, receipt, key) do
+    {:ok, key,
+     %{
+       kind: kind,
+       source: pair.source.event,
+       returned: pair.returned.event,
+       source_stamp: pair.source.stamp,
+       returned_stamp: pair.returned.stamp,
+       received: receipt.received
+     }}
   end
 
   defp settle_service_timers(state) do
