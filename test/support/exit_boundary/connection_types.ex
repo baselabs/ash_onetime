@@ -30,7 +30,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTypes do
            }} <-
             services,
           into: %{},
-          do: {owner, %{table: table, types: types, state: root, index: -1, registration_keys: keys}}
+          do:
+            {owner,
+             %{table: table, types: types, state: root, index: -1, registration_keys: keys}}
 
     pairs
     |> Map.values()

@@ -1137,6 +1137,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
+  defp owner_event(%{event: {pid, :exit, _reason}} = source, state) do
+    if Map.has_key?(state.owner_machines, pid) do
+      commit = %{owner: pid, index: source.index, machine: nil}
+
+      state
+      |> update_in([:owner_machines], &Map.delete(&1, pid))
+      |> update_in([:owner_pending], &Map.delete(&1, pid))
+      |> Map.update!(:owner_commits, &[commit | &1])
+    else
+      state
+    end
+  end
+
+  defp owner_event(source, state), do: owner_message_program(state, source)
+
   defp owner_callback_transition(state, source, actual) do
     with machine when not is_nil(machine) <- state.owner_machines[source.pid],
          %{source: call} <- pair_returned(state, source),
@@ -1225,8 +1240,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
-  defp renewed_transport(_state, _source, %{sock: socket}, %{protocol: %{sock: socket}} = previous),
-    do: {:ok, Map.take(previous, [:port, :port_owner, :tls])}
+  defp renewed_transport(
+         _state,
+         _source,
+         %{sock: socket},
+         %{protocol: %{sock: socket}} = previous
+       ),
+       do: {:ok, Map.take(previous, [:port, :port_owner, :tls])}
 
   defp renewed_transport(state, source, %{sock: {:gen_tcp, port}}, _previous) do
     connections =
@@ -1248,21 +1268,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       binding -> {:ok, %{port: binding.port, port_owner: binding.owner, tls: binding}}
     end
   end
-
-  defp owner_event(%{event: {pid, :exit, _reason}} = source, state) do
-    if Map.has_key?(state.owner_machines, pid) do
-      commit = %{owner: pid, index: source.index, machine: nil}
-
-      state
-      |> update_in([:owner_machines], &Map.delete(&1, pid))
-      |> update_in([:owner_pending], &Map.delete(&1, pid))
-      |> Map.update!(:owner_commits, &[commit | &1])
-    else
-      state
-    end
-  end
-
-  defp owner_event(source, state), do: owner_message_program(state, source)
 
   defp owner_public_copy(state, source, owner, holder, argument) do
     case {state.holders[holder], state.holder_origins[holder]} do
@@ -1825,7 +1830,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
       context ->
         expected = [Keyword.fetch!(context.options, :types), context.endpoint]
-        type_input_copies(state, source, arguments, expected, {:type_location, context.source.index})
+
+        type_input_copies(
+          state,
+          source,
+          arguments,
+          expected,
+          {:type_location, context.source.index}
+        )
     end
   end
 
@@ -1859,7 +1871,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
        when (module == Postgrex.Types and function in [:owner, :build_type_info]) or
               (module == Postgrex.TypeServer and function in [:fetch, :update]) do
     with %{source: call} <- pair_returned(state, source),
-         %{result: expected, origin: origin, arguments: arguments} <- state.type_models[call.index] do
+         %{result: expected, origin: origin, arguments: arguments} <-
+           state.type_models[call.index] do
       state = type_return_copies(state, source, actual, expected, origin)
 
       case {module, function, expected} do

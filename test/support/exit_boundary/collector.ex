@@ -294,16 +294,27 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     }
   end
 
-  defp service_request_kind({:"$gen_call", _from, request}), do: service_request_tag(:call, request)
+  defp service_request_kind({:"$gen_call", _from, request}),
+    do: service_request_tag(:call, request)
+
   defp service_request_kind({:"$gen_cast", request}), do: service_request_tag(:cast, request)
   defp service_request_kind(_message), do: :info
 
   defp service_request_tag(kind, request) do
     tag = if is_tuple(request) and tuple_size(request) > 0, do: elem(request, 0), else: request
 
-    if tag in [:fetch, :update, :done, :insert, :delete, :which_children, :start_child, :terminate_child],
-      do: {kind, tag},
-      else: kind
+    if tag in [
+         :fetch,
+         :update,
+         :done,
+         :insert,
+         :delete,
+         :which_children,
+         :start_child,
+         :terminate_child
+       ],
+       do: {kind, tag},
+       else: kind
   end
 
   defp timer_diagnostic(ref, timer, state) do
