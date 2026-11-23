@@ -121,7 +121,8 @@ defmodule AshOnetime.Test.TestFormatter do
 
       selected =
         expression_assertion(assertions, error) ||
-          Enum.find(assertions, fn {start, node} -> start <= line and line <= last_line(node) end)
+          Enum.find(assertions, fn {start, node} -> start <= line and line <= last_line(node) end) ||
+          migration_assertion(ast, line, error)
 
       assertion_location(selected, line)
     else
@@ -135,6 +136,61 @@ defmodule AshOnetime.Test.TestFormatter do
   end
 
   defp assertion_location(nil, line), do: {line, "source assertion unavailable"}
+
+  # Ecto reraises a migration task's native stack. Its caller preserves the
+  # local rescue frame while retaining the original exception and native frames.
+  # Attribute only that rescue's single migration assertion, never a nearby test
+  # assertion or a failure raised by the callback after the migration.
+  defp migration_assertion(ast, line, %Postgrex.Error{}) do
+    {_ast, matches} =
+      Macro.prewalk(ast, [], fn
+        {:try, _, [clauses]} = node, matches ->
+          rescue_clause = Keyword.get(clauses, :rescue)
+
+          if rescue_clause && first_line(rescue_clause) <= line and
+               line <= last_line(rescue_clause) do
+            {_body, assertions} =
+              Macro.prewalk(Keyword.fetch!(clauses, :do), [], fn
+                {:assert, metadata,
+                 [{:=, _, [:ok, {{:., _, [{:__aliases__, _, [:Ecto, :Migrator]}, :up]}, _, _}]}]} =
+                    assertion,
+                found ->
+                  {assertion, [{metadata[:line], assertion} | found]}
+
+                body, found ->
+                  {body, found}
+              end)
+
+            {node, assertions ++ matches}
+          else
+            {node, matches}
+          end
+
+        node, matches ->
+          {node, matches}
+      end)
+
+    case matches do
+      [assertion] -> assertion
+      _ -> nil
+    end
+  end
+
+  defp migration_assertion(_ast, _line, _error), do: nil
+
+  defp first_line(expression) do
+    {_expression, line} =
+      Macro.prewalk(expression, nil, fn
+        {_, metadata, _} = node, line when is_list(metadata) ->
+          value = metadata[:line]
+          {node, if(value, do: min(line || value, value), else: line)}
+
+        node, line ->
+          {node, line}
+      end)
+
+    line || 0
+  end
 
   # Tail calls can remove an assertion's caller from the native stack. ExUnit's
   # assertion macros retain their quoted source expression. Use it only to select

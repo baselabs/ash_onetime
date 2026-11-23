@@ -224,7 +224,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     case pair_returned(state, source) do
       %{source: %{event: {_, :call, {:ets, ^function, arguments}}} = call} ->
         case {function, arguments} do
-          {function, [holder, {:conn, _, Postgrex.Protocol, %Postgrex.Protocol{}, _, _, _, _} = row]}
+          {function,
+           [holder, {:conn, _, Postgrex.Protocol, %Postgrex.Protocol{}, _, _, _, _} = row]}
           when function in [:insert, :insert_new] ->
             retain_row(state, holder, row, source.index, call.index)
 
@@ -261,7 +262,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp committed_row(_source, state), do: state
 
   defp retain_row(state, holder, row, index, origin) do
-    rows = if is_nil(row), do: Map.delete(state.rows, holder), else: Map.put(state.rows, holder, row)
+    rows =
+      if is_nil(row), do: Map.delete(state.rows, holder), else: Map.put(state.rows, holder, row)
+
     commit = %{holder: holder, index: index, origin: origin, row: row}
     %{state | rows: rows, commits: [commit | state.commits]}
   end

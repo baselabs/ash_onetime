@@ -41,6 +41,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias AshOnetime.Test.StoreCase
   alias AshOnetime.Test.TestFormatter
   alias Ecto.Adapters.SQL
+  import Ecto.Query, only: [from: 2]
   use AshOnetime.Test.ExitBoundary.ComparatorCase, async: false
 
   @helper_buffer_inputs %{
@@ -2815,12 +2816,162 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  @tag :connection_streams
+  @tag prepare: :named
+  test "Connection streams: history cuts retain native and Ecto committed query caches", context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+
+    tables =
+      [historical.query_cache.table | Enum.map(historical.connections, fn {_holder, connection} ->
+         connection.protocol.queries
+       end)]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    parent = self()
+    token = make_ref()
+
+    {observer, monitor} =
+      spawn_monitor(fn ->
+        parent_monitor = Process.monitor(parent)
+        holder_observer(parent, token, parent_monitor)
+      end)
+
+    try do
+      run =
+        ExitBoundary.observe(
+          fn -> Repo.put_dynamic_repo(context.repo) end,
+          fn _ ->
+            SQL.query!(context.repo, "SELECT 23::int4 AS native_cache_history", [],
+              cache_statement: "native_committed_history"
+            )
+
+            table_barrier(observer, token, tables, :native)
+
+            Repo.all(
+              from(c in "pg_class", prefix: "pg_catalog", select: count(c.oid))
+            )
+
+            table_barrier(observer, token, tables, :ecto)
+
+            Repo.all(
+              from(c in "pg_class", prefix: "pg_catalog", select: count(c.relname))
+            )
+
+            table_barrier(observer, token, tables, :later)
+            :ok
+          end,
+          %{host: [], callbacks: []}
+        )
+
+      assert run.result == :ok
+      events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+      indexed = %{events: events, query_cache: historical.query_cache}
+      native = NativeTransport.build(indexed, historical.connections)
+      assert native.errors == []
+      reads = ConnectionReads.build(native, MapSet.new(), historical.prepared_catalogs)
+      assert reads.errors == []
+
+      decoders =
+        ConnectionDecoders.build(
+          indexed,
+          native,
+          reads,
+          historical.connections,
+          historical.query_origins
+        )
+
+      assert decoders.errors == []
+
+      states =
+        ConnectionStates.build(
+          indexed,
+          native,
+          decoders,
+          historical.connections,
+          {:initial, run.initial_state}
+        )
+
+      assert states.errors == []
+
+      snapshots =
+        for phase <- [:native, :ecto, :later], into: %{} do
+          receive do
+            {:native_tables_snapshot, ^token, ^phase, rows} -> {phase, rows}
+          after
+            0 -> flunk("the independent observer did not retain every live cache table")
+          end
+        end
+
+      ecto = historical.query_cache.table
+      assert snapshots.native[ecto] !== snapshots.ecto[ecto]
+      assert snapshots.ecto[ecto] !== snapshots.later[ecto]
+
+      native_changed? =
+        Enum.any?(historical.connections, fn {_holder, connection} ->
+          cache = connection.query_cache
+          cache.table && Enum.sort(cache.rows) !== snapshots.native[cache.table]
+        end)
+
+      assert native_changed?, "the native query must commit its prepared cache row"
+      history? = Map.has_key?(states, :table_commits)
+      assert history?, "the native and Ecto committed-cache ledger is absent"
+      commits = Map.fetch!(states, :table_commits)
+
+      for {phase, tables} <- snapshots do
+        [barrier] =
+          Enum.filter(events, fn
+            %{event: {_, :receive, {:native_tables_cut, ^token, ^phase, :observed}}} -> true
+            _ -> false
+          end)
+
+        for {table, rows} <- tables do
+          committed =
+            commits
+            |> Enum.filter(&(&1.table == table and &1.index < barrier.index))
+            |> Enum.max_by(& &1.index, fn -> nil end)
+
+          assert committed, "every live-read cut needs its preceding committed cache table"
+          same_rows? = Enum.sort(committed.rows) === rows
+          assert same_rows?, "a cache cut must equal the independent live read and exclude later writes"
+        end
+      end
+    after
+      send(observer, :stop)
+
+      receive do
+        {:DOWN, ^monitor, :process, ^observer, reason} -> assert reason == :normal
+      after
+        5_000 ->
+          Process.exit(observer, :kill)
+          flunk("the native cache observer did not stop")
+      end
+    end
+  end
+
+  defp table_barrier(observer, token, tables, phase) do
+    send(observer, {:native_tables_cut, token, self(), tables, phase})
+
+    receive do
+      {:native_tables_cut, ^token, ^phase, :observed} -> :ok
+    after
+      5_000 -> raise "the native cache observer did not acknowledge its live read"
+    end
+  end
+
   defp holder_observer(parent, token, parent_monitor) do
     receive do
       {:native_holder_cut, ^token, caller, holder, phase} ->
         [row] = :ets.lookup(holder, :conn)
         send(parent, {:native_holder_snapshot, token, phase, holder, row})
         send(caller, {:native_holder_cut, token, phase, :observed})
+        holder_observer(parent, token, parent_monitor)
+
+      {:native_tables_cut, ^token, caller, tables, phase} ->
+        rows = Map.new(tables, &{&1, Enum.sort(:ets.tab2list(&1))})
+        send(parent, {:native_tables_snapshot, token, phase, rows})
+        send(caller, {:native_tables_cut, token, phase, :observed})
         holder_observer(parent, token, parent_monitor)
 
       :stop ->

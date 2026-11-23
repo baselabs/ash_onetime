@@ -4002,6 +4002,10 @@ defmodule AshOnetime.Store.MaintenanceTest do
                  prefix: schema,
                  log: false
                )
+    rescue
+      error in Postgrex.Error ->
+        {:current_stacktrace, caller} = Process.info(self(), :current_stacktrace)
+        reraise error, __STACKTRACE__ ++ caller
     after
       Repo.put_dynamic_repo(previous)
       :code.purge(module)
@@ -4185,8 +4189,14 @@ defmodule AshOnetime.Store.MaintenanceTest do
     previous = Repo.put_dynamic_repo(c.owner_repo)
 
     try do
-      assert :ok =
-               Ecto.Migrator.up(Repo, 20_261_114_000_002, module, prefix: c.schema, log: false)
+      try do
+        assert :ok =
+                 Ecto.Migrator.up(Repo, 20_261_114_000_002, module, prefix: c.schema, log: false)
+      rescue
+        error in Postgrex.Error ->
+          {:current_stacktrace, caller} = Process.info(self(), :current_stacktrace)
+          reraise error, __STACKTRACE__ ++ caller
+      end
 
       callback.()
     after

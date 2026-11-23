@@ -120,7 +120,9 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
           {:gen_tcp, port} <- [origin.sock],
           do: Map.put(origin, :port, port)
 
-    Map.put(connection, :descriptors, descriptors)
+    connection
+    |> Map.put(:descriptors, descriptors)
+    |> Map.put(:query_cache, %{table: protocol.queries, rows: queries})
   end
 
   defp readable(table) do

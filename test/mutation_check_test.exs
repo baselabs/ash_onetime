@@ -106,6 +106,7 @@ defmodule AshOnetime.MutationCheckTest do
         stderr_to_stdout: true
       )
 
+    print_self_test_failure(output)
     assert status == 0, output
 
     assert output =~
@@ -118,6 +119,13 @@ defmodule AshOnetime.MutationCheckTest do
 
     assert output =~
              "mutation checker self-test: every shard count partitions the battery exactly"
+  end
+
+  # The nested command's arbitrary output stays private. This source-owned
+  # diagnostic proves the specific guard executed, without rendering its output.
+  defp print_self_test_failure(output) do
+    summary = "mutation checker self-test failed: restoration receipt guard opened"
+    if summary in String.split(output, "\n"), do: IO.puts(summary)
   end
 
   @tag :mutation_checker_error_attribution_mutation
