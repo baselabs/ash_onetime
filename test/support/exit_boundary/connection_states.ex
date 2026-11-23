@@ -1503,6 +1503,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp type_service_event(
+         %{event: {pid, :call, {Postgrex.TypeServer, :handle_info, [message, _state]}}} =
+           source,
+         state
+       ) do
+    terminal_service_copy(state, source, message, [2, 2, 0], state.service_current[pid])
+  end
+
+  defp type_service_event(
          %{event: {pid, :call, {:gen_server, function, arguments}}} = source,
          state
        )
@@ -1803,7 +1811,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     module = Keyword.fetch!(context.options, :types)
     {_, :call, {_, _, [server]}} = source.event
 
-    with %{types: {^module, _table} = types} <- state.type_roots[server],
+    with %{types: {^module, _table} = types} = root <- state.type_roots[server],
+         true <- Map.get(root, :index, -1) < source.index,
+         true <- is_nil(Map.get(root, :retired)) or root.retired > source.index,
          [location] <-
            native_type_calls(state, context.source, source, {Postgrex.TypeSupervisor, :locate, 2}),
          {_, :call, {_, _, [^module, endpoint]}} <- location.source.event,

@@ -1256,7 +1256,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
   defp initialize_types(state, source, port, cursor) do
     with %{source: %{event: {_, :call, {_, _, [server]}}}} <- returned_pair(state, source),
-         %{types: types} <- state.type_roots[server] do
+         %{types: types} = root <- state.type_roots[server],
+         true <- Map.get(root, :index, -1) < source.index,
+         true <- is_nil(Map.get(root, :retired)) or root.retired > source.index do
       {_, :return_from, _, {:lock, _ref, actual}} = source.event
       state = exact(state, source, :decoder_type_origin, actual, types)
       cursor = %{cursor | types: types}

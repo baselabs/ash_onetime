@@ -135,6 +135,7 @@ defmodule AshOnetime.Test.ExitBoundary do
 
     Map.merge(AshOnetime.Test.ExitBoundary.ConnectionTypes.services(), declared)
     |> Map.put_new(Postgrex.Parameters, {Postgrex.Parameters, :handle_call, 3})
+    |> Map.put_new(Postgrex.TypeSupervisor, {DynamicSupervisor, :handle_call, 3})
   end
 
   defp collector_failure(reason) do

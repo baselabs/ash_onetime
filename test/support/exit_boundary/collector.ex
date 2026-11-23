@@ -88,7 +88,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   end
 
   def service_callbacks({module, :handle_call, 3})
-      when module in [Postgrex.TypeServer, Postgrex.Parameters],
+      when module in [Postgrex.TypeServer, Postgrex.Parameters, DynamicSupervisor],
       do: [{module, :handle_call, 3}, {module, :handle_cast, 2}, {module, :handle_info, 2}]
 
   def service_callbacks(callback), do: [callback]
@@ -390,7 +390,50 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
         Port.info(binding.port, :connected) == {:connected, binding.owner}
 
   defp service_bound?(pid, %{table: table}), do: :ets.info(table, :owner) == pid
+  defp service_bound?(pid, %{registration: {registry, key}}),
+    do: key in Registry.keys(registry, pid)
+
   defp service_bound?(pid, %{name: name}), do: Process.whereis(name) == pid
+
+  defp service_event(state, {pid, :return_from, {Registry, :register, 3}, {:ok, _partition}}) do
+    registration =
+      Enum.find_value(state.events, fn
+        {_stamp, {^pid, :call, {Registry, :register, [Postgrex.TypeManager, key, _value]}}} ->
+          key
+
+        _ ->
+          nil
+      end)
+
+    case registration do
+      {module, _endpoint} = key when is_atom(module) ->
+        callback = {Postgrex.TypeServer, :handle_call, 3}
+
+        binding = %{
+          name: {:native_type_owner, key},
+          registration: {Postgrex.TypeManager, key},
+          callback: callback,
+          callbacks: service_callbacks(callback),
+          birth_stamp: state.stamp
+        }
+
+        put_in(state.services[pid], binding)
+
+      nil ->
+        state
+    end
+  end
+
+  defp service_event(state, {pid, :exit, _reason} = event) do
+    receipts =
+      Enum.map(state.service_receipts, fn receipt ->
+        if receipt.pid == pid and is_nil(receipt.returned),
+          do: Map.put(receipt, :retired, event),
+          else: receipt
+      end)
+
+    %{state | service_receipts: receipts, service_pending: Map.delete(state.service_pending, pid)}
+  end
 
   defp service_event(state, {pid, :receive, message} = event) do
     case Map.fetch(state.services, pid) do

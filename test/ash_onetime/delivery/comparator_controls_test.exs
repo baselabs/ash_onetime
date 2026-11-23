@@ -3970,15 +3970,39 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert proof.native.errors == []
     assert proof.reads.errors == []
 
-    for error <- proof.decoders.errors ++ proof.states.errors do
+    for error <- proof.types.errors ++ proof.decoders.errors ++ proof.states.errors do
       Diagnostics.emit(
         "CONNECTION_FRESH_TYPE_ORIGIN_FAILURE",
         Map.take(error, [:index, :at, :rule, :path, :context])
       )
     end
 
+    assert proof.types.errors == []
+    assert [birth] = proof.types.births
+    assert birth.registration < birth.index
+    assert birth.index < birth.initialized
+    assert is_integer(birth.retired)
+    assert birth.initialized < birth.retired
+    assert MapSet.member?(run.snapshot.down, birth.owner)
+    assert :ets.info(birth.table) == :undefined
+    assert Registry.lookup(Postgrex.TypeManager, birth.key) == []
+
     assert proof.decoders.errors == []
     assert proof.states.errors == []
+
+    without_origin =
+      ComparatorMutants.with_mutant(:stream_startup_type_root, fn ->
+        ConnectionHistory.build(side)
+      end)
+
+    assert without_origin.native.errors == []
+    assert without_origin.reads.errors == []
+    assert Enum.any?(without_origin.decoders.errors, &(&1.rule == :decoder_type_origin))
+    assert ConnectionHistory.build(side).errors == []
+
+    restored = ConnectionNative.observe_fresh_startup()
+    side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+    assert ConnectionHistory.build(side).errors == []
   end
 
   @tag :connection_streams

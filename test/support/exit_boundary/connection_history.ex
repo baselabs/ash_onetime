@@ -6,6 +6,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   alias AshOnetime.Test.ExitBoundary.ConnectionReads
   alias AshOnetime.Test.ExitBoundary.ConnectionStates
   alias AshOnetime.Test.ExitBoundary.ConnectionTls
+  alias AshOnetime.Test.ExitBoundary.ConnectionTypes
   alias AshOnetime.Test.ExitBoundary.NativeTransport
 
   import Postgrex.Messages,
@@ -67,13 +68,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       connection_state_program: Map.get(historical, :connection_state_program, %{})
     }
 
-    type_roots =
-      for {owner, %{table: table, initial_state: %Postgrex.TypeServer{types: types} = root}} <-
-            side.run.snapshot.services || %{},
-          into: %{},
-          do: {owner, %{table: table, types: types, state: root}}
-
-    indexed = Map.put(indexed, :connection_type_roots, type_roots)
     indexed = Map.put(indexed, :connection_services, side.run.snapshot.services || %{})
 
     # Earlier real records finish the validation of calls that cross the cut.
@@ -93,6 +87,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       |> Map.put(:connection_roots, roots)
       |> Map.put(:event_offset, Map.get(historical, :event_offset, 0))
       |> Map.put(:connection_framing, historical.connection_framing)
+
+    types = ConnectionTypes.history(program, native.pairs, indexed.connection_services)
+    type_roots = types.roots
+    indexed = Map.put(indexed, :connection_type_roots, type_roots)
 
     # This labels exact frontend writes for statement ordinals only. It grants
     # no event allowance. Backend ownership remains the protocol machine's exact
@@ -124,7 +122,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       )
 
     errors =
-      Enum.map(native.errors ++ reads.errors ++ decoders.errors ++ states.errors, fn
+      Enum.map(native.errors ++ types.errors ++ reads.errors ++ decoders.errors ++ states.errors, fn
         %{index: index} = error when is_integer(index) ->
           error
 
@@ -164,6 +162,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       program_events: program_events,
       native_roots: roots,
       native: native,
+      types: types,
       reads: reads,
       decoders: decoders,
       states: states,

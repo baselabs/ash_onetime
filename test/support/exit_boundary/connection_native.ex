@@ -77,6 +77,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   end
 
   def observe_startup(corruption \\ nil, types \\ Postgrex.DefaultTypes) do
+    startup_observation(corruption, types, false)
+  end
+
+  defp startup_observation(corruption, types, retire?) do
     ExitBoundary.observe(
       fn -> :ok end,
       fn _ ->
@@ -90,6 +94,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           :ok
         after
           :ok = module.close(socket)
+          if retire?, do: retire_type_services(types)
         end
       end,
       %{host: [], callbacks: []}
@@ -103,13 +108,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     unless native_type_servers(types) == [], do: raise("the fresh type service already exists")
 
     try do
-      observe_startup(nil, types)
+      startup_observation(nil, types, true)
     after
-      for pid <- native_type_servers(types) do
-        :ok = DynamicSupervisor.terminate_child(Postgrex.TypeSupervisor, pid)
-      end
+      retire_type_services(types)
 
       unless native_type_servers(types) == [], do: raise("the fresh type service was not removed")
+    end
+  end
+
+  defp retire_type_services(types) do
+    for pid <- native_type_servers(types) do
+      :ok = DynamicSupervisor.terminate_child(Postgrex.TypeSupervisor, pid)
     end
   end
 
@@ -117,7 +126,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     for {_id, pid, :worker, [Postgrex.TypeServer]} <-
           DynamicSupervisor.which_children(Postgrex.TypeSupervisor),
         is_pid(pid),
-        %Postgrex.TypeServer{types: {^types, _table}} <- [:sys.get_state(pid)],
+        {^types, _endpoint} <- Registry.keys(Postgrex.TypeManager, pid),
         do: pid
   end
 
