@@ -3656,21 +3656,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                      "a continued stream must retain its physical byte coordinates across leases"
             end
 
-            original_cursor =
-              proof.decoders.versions
-              |> Enum.filter(&(&1.port == port))
-              |> List.last()
-
-            continued_cursor =
-              resumed.decoders.versions
-              |> Enum.filter(&(&1.port == port))
-              |> List.last()
-
-            assert original_cursor && continued_cursor
+            original_cursor = Map.fetch!(proof.decoders.cursors, port)
+            continued_cursor = Map.fetch!(resumed.decoders.cursors, port)
 
             same_cursor? =
-              Map.take(continued_cursor.cursor, [:offset, :buffer, :rows, :types]) ===
-                Map.take(original_cursor.cursor, [:offset, :buffer, :rows, :types])
+              Map.take(continued_cursor, [:offset, :buffer, :rows, :types]) ===
+                Map.take(original_cursor, [:offset, :buffer, :rows, :types])
 
             assert same_cursor?,
                    "a continued decoder must retain its original byte coordinate and native values"
@@ -3882,6 +3873,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert proof.decoders.errors == [],
            "a successful native connect must create its own initially empty decoder"
+
+    unrooted =
+      ComparatorMutants.with_mutant(:stream_startup_decoder, fn ->
+        ConnectionHistory.build(side)
+      end)
+
+    assert unrooted.native.errors == []
+    assert unrooted.reads.errors == []
+    assert Enum.any?(unrooted.decoders.errors, &(&1.rule == :decoder_history))
+    assert ConnectionHistory.build(side).decoders.errors == []
 
     assert proof.states.errors == [],
            "every constructor and authentication Protocol copy needs its native source"

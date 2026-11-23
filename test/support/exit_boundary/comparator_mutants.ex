@@ -500,6 +500,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_startup_decoder) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_decoders.ex",
+        original: "        if {Postgrex.Protocol, :connect, 1} in stack do\n",
+        mutated: "        if {Postgrex.Protocol, :connect, 0} in stack do\n"
+      }
+    ]
+  end
+
   def edits(:stream_state_holder_update) do
     [
       %{

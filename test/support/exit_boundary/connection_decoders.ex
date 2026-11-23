@@ -58,6 +58,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     state = decoder_programs(state)
 
     %{
+      cursors: state.cursors,
       instances: Enum.reverse(state.instances),
       programs: Enum.reverse(state.programs),
       versions: Enum.reverse(state.versions),
@@ -1084,6 +1085,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
       :error ->
         failure(state, source, :decoder_history, false)
+    end
+  end
+
+  defp decoder_event(
+         %{event: {_, :return_from, {:gen_tcp, :connect, 4}, {:ok, port}}} = source,
+         state
+       ) do
+    case returned_pair(state, source) do
+      %{source: %{stack: stack}} ->
+        if {Postgrex.Protocol, :connect, 1} in stack do
+          cursor = %{buffer: <<>>, offset: 0, rows: [], types: nil, spans: []}
+          version = %{index: source.index, port: port, cursor: cursor, kind: :connection_open}
+
+          state
+          |> exact(source, :decoder_connection_origin, Map.has_key?(state.cursors, port), false)
+          |> put_in([:cursors, port], cursor)
+          |> Map.update!(:timeline, &[version | &1])
+        else
+          state
+        end
+
+      _ ->
+        state
     end
   end
 

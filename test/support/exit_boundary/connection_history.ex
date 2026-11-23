@@ -81,6 +81,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       program
       |> native_history(roots, side.run.tls_bindings || [])
       |> Map.put(:historical, historical.connections)
+      |> Map.put(:connection_roots, roots)
       |> Map.put(:event_offset, Map.get(historical, :event_offset, 0))
       |> Map.put(:connection_framing, historical.connection_framing)
 

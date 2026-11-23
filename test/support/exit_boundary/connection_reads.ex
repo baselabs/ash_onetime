@@ -25,7 +25,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       cancellations: cancellations,
       startups: startups(native, cancellations),
       pings: ping_calls(native),
-      historical: Map.get(native, :historical, %{})
+      historical: Map.get(native, :connection_roots, Map.get(native, :historical, %{}))
     }
 
     connections =
