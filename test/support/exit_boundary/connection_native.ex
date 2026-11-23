@@ -80,6 +80,50 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     startup_observation(corruption, types, :keep)
   end
 
+  def observe_pool_startup do
+    ExitBoundary.observe(
+      fn -> :ok end,
+      fn _ ->
+        options =
+          Repo.config()
+          |> Keyword.drop([:name, :pool, :pool_size])
+          |> Keyword.put(:types, Postgrex.DefaultTypes)
+
+        {:ok, pool} = Postgrex.start_link(options)
+
+        try do
+          %{rows: [[17]]} =
+            Postgrex.query!(pool, "SELECT 17::int4 AS connection_owner_birth", [])
+
+          :ok
+        after
+          GenServer.stop(pool)
+        end
+      end,
+      %{
+        host: [],
+        callbacks: [],
+        services: %{
+          DBConnection.Watcher => {DBConnection.Watcher, :handle_call, 3},
+          DBConnection.ConnectionPool.Supervisor => {DynamicSupervisor, :handle_call, 3}
+        },
+        frames: [
+          {DBConnection.ConnectionPool, :init, 1},
+          {DBConnection.ConnectionPool.Pool, :init, 1},
+          {DBConnection.ConnectionPool.Pool, :start_supervised, 3},
+          {DBConnection.Watcher, :watch, 2},
+          {DBConnection.Watcher, :unwatch, 1},
+          {DBConnection.Connection, :start_link, 4},
+          {DBConnection.Connection, :init, 1},
+          {DBConnection.Connection, :callback_mode, 0},
+          {DBConnection.Backoff, :new, 1},
+          {DBConnection.Backoff, :reset, 1},
+          {DBConnection.Backoff, :backoff, 1}
+        ]
+      }
+    )
+  end
+
   defp startup_observation(corruption, types, retirement) do
     ExitBoundary.observe(
       fn -> :ok end,

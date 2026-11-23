@@ -4659,6 +4659,51 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert ConnectionHistory.build(side).errors == []
   end
 
+  @tag :connection_streams
+  test "Connection streams: a pool born during observation owns its complete native state",
+       context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+    run = ConnectionNative.observe_pool_startup()
+    assert run.result == :ok
+    assert run.initial_state == :ok
+
+    owners =
+      for %{event: {pid, :call, {DBConnection.Connection, :init, [_]}}} <- run.events,
+          uniq: true,
+          do: pid
+
+    assert [owner] = owners
+    refute Map.has_key?(historical.connection_owners, owner)
+    assert MapSet.member?(run.snapshot.down, owner)
+
+    assert Enum.any?(run.events, fn
+             %{event: {^owner, :call, {Postgrex.Protocol, :connect, [_]}}} -> true
+             _ -> false
+           end)
+
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+
+    for error <- proof.errors do
+      Diagnostics.emit(
+        "CONNECTION_POOL_BIRTH_FAILURE",
+        Map.take(error, [:index, :at, :rule, :path, :context])
+      )
+    end
+
+    assert proof.errors == [],
+           "every born pool owner needs its native factory and initial state before any copy"
+
+    assert Enum.any?(proof.states.owner_commits, fn commit ->
+             commit.owner == owner and commit.index >= 0 and commit.machine != nil
+           end)
+
+    assert Enum.any?(proof.states.owner_commits, fn commit ->
+             commit.owner == owner and commit.machine == nil
+           end)
+  end
+
   for lifecycle <- [:idle_ping, :reconnect] do
     @tag :connection_streams
     test "Connection streams: native #{lifecycle} retains the renewed holder's cut origin",
