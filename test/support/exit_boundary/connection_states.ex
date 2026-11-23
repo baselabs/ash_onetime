@@ -915,9 +915,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
                pair.source.event ===
                  {parent, :call,
                   {:gen_statem, :start_link,
-                   [DBConnection.Connection, arguments, Keyword.take(options, [:debug, :spawn_opt])]}}
+                   [
+                     DBConnection.Connection,
+                     arguments,
+                     Keyword.take(options, [:debug, :spawn_opt])
+                   ]}}
            end),
-         true <- native.returned.event === {parent, :return_from, {:gen_statem, :start_link, 3}, {:ok, pid}},
+         true <-
+           native.returned.event ===
+             {parent, :return_from, {:gen_statem, :start_link, 3}, {:ok, pid}},
          true <-
            init.source.event ===
              {pid, :call, {DBConnection.Connection, :init, [arguments]}},
@@ -936,12 +942,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
                    [parent, [], DBConnection.Connection, pid, :infinity, :no_state, data, actions]}}
            end),
          before = {:params, :state_functions, false, parent, [:gen_statem], pid, :infinity},
-         params = put_elem(put_elem(before, 1, :handle_event_function), 4, [DBConnection.Connection]),
+         params =
+           put_elem(put_elem(before, 1, :handle_event_function), 4, [DBConnection.Connection]),
          [mode] <-
            Enum.filter(calls, fn pair ->
              pair.source.index > entry.index and
                pair.source.event ===
-                 {pid, :call, {:gen_statem, :get_callback_mode, [before, [DBConnection.Connection]]}} and
+                 {pid, :call,
+                  {:gen_statem, :get_callback_mode, [before, [DBConnection.Connection]]}} and
                pair.returned.event ===
                  {pid, :return_from, {:gen_statem, :get_callback_mode, 2}, params}
            end) do
@@ -1531,7 +1539,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     state =
       if Map.has_key?(machine, :params) and function in @owner_loop_current do
-        exact(state, source, :state_owner_params, owner_term(source.event, [2, 2, 0]), machine.params)
+        exact(
+          state,
+          source,
+          :state_owner_params,
+          owner_term(source.event, [2, 2, 0]),
+          machine.params
+        )
       else
         state
       end

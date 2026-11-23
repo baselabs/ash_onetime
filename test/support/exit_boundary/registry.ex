@@ -604,6 +604,8 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {Postgrex.Parameters, :handle_call, 3},
         {Postgrex.Parameters, :fetch, 1},
         {:tls_sender, :connection, 3},
+        {:tls_sender, :initialize, 2},
+        {:tls_sender, :init, 3},
         {:tls_sender, :send_application_data, 4},
         {:tls_sender, :send_or_buffer, 5},
         {:tls_sender, :send_reply, 2},

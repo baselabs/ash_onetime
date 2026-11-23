@@ -81,8 +81,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       },
       %{
         path: "test/support/exit_boundary/readback.ex",
-        original:
-          "    prepared = Map.fetch!(side, :readback_reference)\n",
+        original: "    prepared = Map.fetch!(side, :readback_reference)\n",
         mutated: "    prepared = capture(side, bound)\n"
       }
     ]
@@ -845,7 +844,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/collector.ex",
-        original: "          service_reply_origin?(context, pid, target, tag, monitor, receipt),\n",
+        original:
+          "          service_reply_origin?(context, pid, target, tag, monitor, receipt),\n",
         mutated: "          true,\n"
       }
     ]
@@ -872,6 +872,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     required =
       case rule do
         :helper_state -> 2
+        :initialization_input -> 2
         rule when rule in [:reply_copy, :reply_value] -> 7
         rule when rule in [:hibernate_name, :hibernate_actions] -> 5
         _ -> 3
@@ -2093,6 +2094,57 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       end)
 
     {{:function, annotation, :send_or_buffer, 5, changed}, sites + length(clauses)}
+  end
+
+  defp tls_sender_form(
+         {:function, annotation, :initialize, 2,
+          [{:clause, location, arguments, guards, [call]}]},
+         sites,
+         :initialization_input
+       ) do
+    {:call, call_location, remote, [pid, {:tuple, message_location, [caller, initialization]}]} =
+      call
+
+    changed =
+      {:tuple, message_location,
+       [{:atom, message_location, :native_foreign_tls_initialization}, initialization]}
+
+    call =
+      {:call, call_location, remote,
+       [pid, {:tuple, message_location, [caller, changed]}]}
+
+    clause = {:clause, location, arguments, guards, [call]}
+    {{:function, annotation, :initialize, 2, [clause]}, sites + 1}
+  end
+
+  defp tls_sender_form(
+         {:function, annotation, :init, 3, [first | rest]},
+         sites,
+         :initialization_input
+       ) do
+    {:clause, location, arguments, guards, body} = first
+    input = {:var, location, :NativeTlsInitializationInput}
+    peer = {:var, location, :NativeTlsInitializationPeer}
+    initialization = {:var, location, :NativeTlsInitializationValue}
+    unchanged = {:var, location, :NativeTlsInitializationUnchanged}
+
+    tagged =
+      {:tuple, location,
+       [peer,
+        {:tuple, location,
+         [{:atom, location, :native_foreign_tls_initialization}, initialization]}]}
+
+    restored = {:tuple, location, [peer, initialization]}
+
+    cases = [
+      {:clause, location, [tagged], [], [restored]},
+      {:clause, location, [unchanged], [], [unchanged]}
+    ]
+
+    restore = {:match, location, Enum.at(arguments, 1), {:case, location, input, cases}}
+    arguments = List.replace_at(arguments, 1, input)
+    clause = {:clause, location, arguments, guards, [restore | body]}
+    {{:function, annotation, :init, 3, [clause | rest]}, sites + 1}
   end
 
   defp tls_sender_form(form, sites, _rule), do: {form, sites}

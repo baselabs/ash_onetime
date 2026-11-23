@@ -4436,6 +4436,47 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert ConnectionHistory.build(restored_side).errors == []
   end
 
+  @tag :connection_streams
+  test "Connection streams: a born TLS sender retains its initialization copies", context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+
+    build = fn run ->
+      assert run.result == :ok
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      ConnectionHistory.build(side)
+    end
+
+    positive = ConnectionNative.observe_tls_startup()
+    proof = build.(positive)
+    assert proof.errors == []
+
+    assert Enum.any?(positive.events, fn
+             %{event: {_, :call, {:tls_sender, :init, [_, _, _]}}} -> true
+             _ -> false
+           end)
+
+    corrupt = fn ->
+      ComparatorMutants.with_tls_sender_mutant(
+        :initialization_input,
+        &ConnectionNative.observe_tls_startup/0
+      )
+    end
+
+    errors = build.(corrupt.()).errors
+    assert errors != []
+    assert Enum.all?(errors, &(&1.rule == :tls_worker_state_copy))
+
+    ComparatorMutants.with_mutant(:stream_tls_worker_state_copy, fn ->
+      assert build.(corrupt.()).errors == []
+    end)
+
+    restored = build.(corrupt.()).errors
+    assert restored != []
+    assert Enum.all?(restored, &(&1.rule == :tls_worker_state_copy))
+    assert build.(ConnectionNative.observe_tls_startup()).errors == []
+  end
+
   defp cold_tls_entry_state(
          _pairs,
          _receiver,
@@ -4848,7 +4889,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         )
       end
 
-      assert proof.errors == [], "failed connections must retain their complete native owner state"
+      assert proof.errors == [],
+             "failed connections must retain their complete native owner state"
 
       owners =
         for %{event: {pid, :call, {DBConnection.Connection, :init, [_]}}} <- run.events,

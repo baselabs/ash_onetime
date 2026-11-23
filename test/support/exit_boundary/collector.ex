@@ -892,7 +892,14 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
           pair.source.stamp < monitor.source.stamp,
           monitor.returned.stamp < receipt.received_stamp,
           service_reply_target?(context, pid, destination, target, pair, monitor),
-          service_reply_sent?(context, pid, target, {label, {pid, tag}, request}, monitor, receipt),
+          service_reply_sent?(
+            context,
+            pid,
+            target,
+            {label, {pid, tag}, request},
+            monitor,
+            receipt
+          ),
           service_reply_demonitored?(context, pid, ref, receipt, pair),
           do: {pair, monitor}
 

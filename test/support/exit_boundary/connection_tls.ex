@@ -281,13 +281,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          true <- created.returned.index < configured.source.index,
          [entry] <- birth_entries(events, receiver, elem(client, 0), :initial_hello),
          before_entry = Enum.filter(interval, &(&1.returned.index < entry.index)),
-         {:ok, entered} <- birth_client_state(before_entry, receiver, elem(client, 0), configured),
+         {:ok, entered, initialization_origin} <-
+           birth_client_state(before_entry, receiver, elem(client, 0), configured),
          true <- Enum.at(elem(elem(entry.event, 2), 2), 6) === entered,
          {^receiver, :call, {_, _, [supervisor | _]}} <- entry.event,
          true <- configured.returned.index < entry.index,
          [tree] <- Enum.filter(interval, &birth_supervisor?(&1, supervisor)),
          [sender_init] <- Enum.filter(interval, &(&1.source.mfa == {:tls_sender, :init, 1})),
          {^sender, :return_from, _, {:ok, :init, sender_data}} <- sender_init.returned.event,
+         true <- sender_data === initial_sender_data(),
          [sender_entry] <- birth_entries(events, sender, :tls_sender, :init, sender_data),
          {^sender, :call, {_, _, [^supervisor | _]}} <- sender_entry.event,
          true <- sender_init.returned.index < sender_entry.index,
@@ -319,6 +321,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          transport: %{port: port, active: false, owner: receiver},
          states: %{receiver => {:initial_hello, entered}, sender => {:init, sender_data}},
          machines: %{receiver => receiver_machine, sender => sender_machine},
+         initialization_origin: initialization_origin,
          receipts: [options_receipt.index],
          born?: true
        }}
@@ -331,6 +334,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     for {_index, pair} <- pairs,
         pair.source.index > first and pair.returned.index < last,
         do: pair
+  end
+
+  # OTP's sender init/1 constructs these constants before any receiver message.
+  # Its checked return cannot choose the root used to validate later copies.
+  defp initial_sender_data do
+    environment = List.to_tuple([:env | List.duplicate(:undefined, 12)] ++ [0])
+    {:data, environment, %{}, :undefined, :undefined}
   end
 
   defp birth_socket?(pair, port, socket) do
@@ -418,7 +428,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp birth_client_state(_calls, _receiver, :tls_client_connection_1_3, configured) do
     {_, :return_from, _, state} = configured.returned.event
-    {:ok, state}
+    {:ok, state, configured.returned.index}
   end
 
   defp birth_client_state(calls, receiver, :tls_client_connection, configured) do
@@ -449,7 +459,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          true <- configured.returned.index < certificates.source.index,
          true <- certificates.returned.index < selection.source.index,
          {_, :return_from, _, session} <- selection.returned.event do
-      {:ok, put_elem(state, 8, session)}
+      {:ok, put_elem(state, 8, session), selection.returned.index}
     else
       _ -> :error
     end
@@ -679,6 +689,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   @worker_inputs %{
+    {:tls_sender, :init, 3} => 2,
     {:tls_sender, :connection, 3} => 2,
     {:tls_sender, :send_application_data, 4} => 3,
     {:tls_sender, :send_or_buffer, 5} => 4,
@@ -1444,11 +1455,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {:loop_actions_list, 13} ->
           base ++ [{12, context.action}]
 
-        {:loop_actions_reply, 14} ->
+        {:loop_actions_reply, 14}
+        when is_tuple(context.reply) and tuple_size(context.reply) == 2 ->
           {from, reply} = context.reply
           base ++ [{12, from}, {13, reply}]
 
-        {:loop_actions_next_event, 14} ->
+        {:loop_actions_next_event, 14}
+        when is_tuple(context.action) and tuple_size(context.action) == 3 and
+               elem(context.action, 0) == :next_event ->
           {:next_event, type, content} = context.action
           base ++ [{12, type}, {13, content}]
 
@@ -2519,7 +2533,121 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     state = hibernate_input(state, source, arguments, frames, version)
     frame = %{source: source, input: version, current: version, arguments: arguments}
     frame = Map.put(frame, :event, Map.get(state.messages, source.pid))
+    {state, frame} = worker_initialization(state, frame)
     put_in(state.frames[source.pid], [frame | frames])
+  end
+
+  defp worker_initialization(
+         state,
+         %{source: %{mfa: {:tls_sender, :init, 3}} = source} = frame
+       ) do
+    family = state.owners[source.pid].family
+    receiver = family.owner
+    sender = family.sender
+    {_name, receiver_data} = Map.fetch!(family.states, receiver)
+    initialization = sender_initialization(receiver_data)
+
+    factories =
+      Map.get(state.pair_index, {receiver, {:tls_gen_connection, :initialize_tls_sender, 1}}, [])
+
+    interfaces = Map.get(state.pair_index, {receiver, {:tls_sender, :initialize, 2}}, [])
+    calls = Map.get(state.pair_index, {receiver, {:gen_statem, :call, 2}}, [])
+
+    with %{value: {{:call, from}, _message}} <- frame.event,
+         {:ok, initialization_origin} <- Map.fetch(family, :initialization_origin),
+         [factory] <- Enum.filter(factories, &initialization_active?(&1, source)),
+         [interface] <- Enum.filter(interfaces, &initialization_active?(&1, source)),
+         [call] <- Enum.filter(calls, &initialization_active?(&1, source)),
+         true <- initialization_origin < factory.source.index,
+         true <- factory.source.index < interface.source.index,
+         true <- interface.source.index < call.source.index,
+         true <- call.returned.index < interface.returned.index,
+         true <- interface.returned.index < factory.returned.index,
+         true <- factory.returned.event == {receiver, :return_from, factory.source.mfa, :ok},
+         true <- interface.returned.event == {receiver, :return_from, interface.source.mfa, :ok},
+         true <- call.returned.event == {receiver, :return_from, call.source.mfa, :ok} do
+      origin = {:tls_receiver_initialization, initialization_origin}
+
+      state =
+        state
+        |> worker_copy(factory.source, [2, 2, 0], receiver_data, origin)
+        |> worker_copy(interface.source, [2, 2], [sender, initialization], origin)
+        |> worker_copy(call.source, [2, 2], [sender, {receiver, initialization}], origin)
+        |> worker_copy(source, [2, 2, 1], {receiver, initialization}, origin)
+
+      data = initialized_sender_data(frame.input.data, receiver, initialization)
+      current = %{frame.input | name: :handshake, data: data, origin: factory.source.index}
+      {state, frame |> Map.put(:current, current) |> Map.put(:initialization_from, from)}
+    else
+      _ -> {tls_failure(state, source, :tls_sender_initialization_origin), frame}
+    end
+  end
+
+  defp worker_initialization(state, frame), do: {state, frame}
+
+  defp initialization_active?(pair, source),
+    do: pair.source.index < source.index and source.index < pair.returned.index
+
+  # initialize_tls_sender/1 builds this message from the independently constructed
+  # receiver entry. No field is learned from the checked sender request or return.
+  defp sender_initialization(data) do
+    environment = elem(data, 2)
+    options = elem(data, 4)
+    connection_states = elem(data, 10)
+
+    keylog =
+      case Map.get(options, :keep_secrets, false) do
+        {:keylog, function} -> function
+        _ -> :undefined
+      end
+
+    %{
+      current_write: Map.fetch!(connection_states, :current_write),
+      beast_mitigation: Map.get(connection_states, :beast_mitigation, :disabled),
+      role: elem(environment, 1),
+      socket: elem(environment, 11),
+      socket_opts_tab: elem(data, 1),
+      erl_dist: Map.get(options, :erl_dist, false),
+      trackers: elem(environment, 18),
+      transport_cb: elem(environment, 3),
+      negotiated_version: elem(elem(data, 3), 5),
+      renegotiate_at: Map.fetch!(options, :renegotiate_at),
+      key_update_at: Map.fetch!(options, :key_update_at),
+      log_level: Map.fetch!(options, :log_level),
+      hibernate_after: Map.get(options, :hibernate_after, :infinity),
+      keylog_fun: keylog
+    }
+  end
+
+  defp initialized_sender_data(data, receiver, initialization) do
+    environment =
+      Enum.reduce(
+        [
+          {1, receiver},
+          {2, initialization.role},
+          {3, initialization.socket},
+          {4, initialization.socket_opts_tab},
+          {5, initialization.transport_cb},
+          {6, initialization.negotiated_version},
+          {7, initialization.renegotiate_at},
+          {8, initialization.key_update_at},
+          {9, initialization.erl_dist},
+          {10, initialization.log_level},
+          {11, initialization.hibernate_after},
+          {12, initialization.keylog_fun}
+        ],
+        elem(data, 1),
+        fn {position, value}, environment -> put_elem(environment, position, value) end
+      )
+
+    connection_states = Map.put(elem(data, 2), :current_write, initialization.current_write)
+
+    connection_states =
+      if initialization.beast_mitigation == :disabled,
+        do: connection_states,
+        else: Map.put(connection_states, :beast_mitigation, initialization.beast_mitigation)
+
+    data |> put_elem(1, environment) |> put_elem(2, connection_states) |> put_elem(3, 0)
   end
 
   defp hibernate_input(
@@ -3012,6 +3140,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp callback_result(
          state,
+         %{mfa: {:tls_sender, :init, 3}} = source,
+         %{initialization_from: from},
+         version,
+         actual
+       ) do
+    expected = {:next_state, :handshake, version.data, [{:reply, from, :ok}]}
+    callback_result_exact(state, source, actual, expected)
+  end
+
+  defp callback_result(
+         state,
          %{mfa: {:tls_sender, :hibernate_after, 3}} = source,
          _frame,
          version,
@@ -3026,10 +3165,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {:next_state, version.name, version.data}
       end
 
-    tls_exact(state, source, :tls_callback_result, actual, expected)
+    callback_result_exact(state, source, actual, expected)
   end
 
   defp callback_result(state, _source, _frame, _version, _actual), do: state
+
+  defp callback_result_exact(state, source, actual, expected) do
+    tls_exact(state, source, :tls_callback_result, actual, expected)
+  end
 
   defp advance_worker(state, source, version, []) do
     version = %{version | origin: {:tls_callback_return, source.index}}
