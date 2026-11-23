@@ -116,12 +116,41 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTypes do
           {^owner, :call, {Registry, :register, [Postgrex.TypeManager, {^module, _} = key, nil]}} <-
             [pair.source.event],
           {^owner, :return_from, _, {:ok, _}} <- [pair.returned.event],
+          native_registration?(pairs, pair, owner, key),
           do: {key, pair.returned.index}
 
     case registrations do
       [{key, index}] -> {:ok, key, index}
       _ -> :error
     end
+  end
+
+  defp native_registration?(pairs, registration, owner, key) do
+    counters =
+      for {_index, pair} <- pairs,
+          pair.source.pid == owner and pair.source.index > registration.source.index and
+            pair.returned.index < registration.returned.index,
+          {^owner, :return_from, {:erlang, :unique_integer, _}, counter} <- [pair.returned.event],
+          do: counter
+
+    Enum.any?(children(pairs, registration, {:ets, :insert, 2}), fn insertion ->
+      case {insertion.source.event, insertion.returned.event} do
+        {{^owner, :call, {:ets, :insert, [_pid_table, {^owner, ^key, table, counter}]}},
+         {^owner, :return_from, _, true}} ->
+          counter in counters and native_key_registration?(pairs, registration, owner, key, table)
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp native_key_registration?(pairs, registration, owner, key, table) do
+    Enum.any?(children(pairs, registration, {:ets, :insert_new, 2}), fn insertion ->
+      insertion.source.event ===
+        {owner, :call, {:ets, :insert_new, [table, {key, {owner, nil}}]}} and
+        insertion.returned.event === {owner, :return_from, {:ets, :insert_new, 2}, true}
+    end)
   end
 
   defp factory(pairs, services, owner, starter, {module, _endpoint} = key, init) do
