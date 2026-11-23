@@ -87,7 +87,9 @@ defmodule AshOnetime.DocumentationCurrencyTest do
     history =
       if @parsed_version.pre == [] do
         # The current release qualifies before publication creates its Hex release and tag.
-        refute MapSet.member?(published, @release), "current release v#{@release} is already on Hex"
+        refute MapSet.member?(published, @release),
+               "current release v#{@release} is already on Hex"
+
         refute MapSet.member?(tags, @release), "current release v#{@release} is already tagged"
         MapSet.delete(dated, @release)
       else
@@ -125,7 +127,8 @@ defmodule AshOnetime.DocumentationCurrencyTest do
     end
   end
 
-  test "targeted development guides point to published HexDocs and released guides do not", context do
+  test "targeted development guides point to published HexDocs and released guides do not",
+       context do
     for {path, source} <- context.documents do
       if @parsed_version.pre == ["dev"] do
         if Regex.match?(@target_claim, source) do
@@ -193,8 +196,12 @@ defmodule AshOnetime.DocumentationCurrencyTest do
     assert is_list(releases) and releases != [], "GET #{@hex_url} returned no release list"
 
     MapSet.new(releases, fn release ->
-      assert %{"version" => version} = release, "GET #{@hex_url} returned a release without a version"
-      assert {:ok, _version} = Version.parse(version), "GET #{@hex_url} returned an invalid version"
+      assert %{"version" => version} = release,
+             "GET #{@hex_url} returned a release without a version"
+
+      assert {:ok, _version} = Version.parse(version),
+             "GET #{@hex_url} returned an invalid version"
+
       version
     end)
   end
