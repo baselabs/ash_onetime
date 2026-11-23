@@ -998,10 +998,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
           pair.source.event === {pid, :call, {:erlang, :cancel_timer, [ref]}} and
           pair.returned.event === {pid, :return_from, {:erlang, :cancel_timer, 1}, false} and
           Enum.all?(targets, fn {child, _spec} ->
-            Enum.any?(context.events, fn event ->
-              timer.source.stamp < event.stamp and event.stamp < pair.source.stamp and
-                match?(%{event: {^pid, :receive, {:DOWN, _, :process, ^child, _}}}, event)
-            end)
+            service_child_down?(context, pid, child, timer.source.stamp, pair.source.stamp)
           end)
       end)
 
@@ -1018,6 +1015,13 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       end)
 
     cancelled or killed
+  end
+
+  defp service_child_down?(context, pid, child, after_stamp, before_stamp) do
+    Enum.any?(context.events, fn event ->
+      after_stamp < event.stamp and event.stamp < before_stamp and
+        match?(%{event: {^pid, :receive, {:DOWN, _, :process, ^child, _}}}, event)
+    end)
   end
 
   defp service_exit?(context, pid, child, reason, after_stamp, before_stamp) do
