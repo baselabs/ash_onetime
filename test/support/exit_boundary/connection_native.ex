@@ -900,6 +900,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
                 nil,
                 :unbound_active_control,
                 :unbound_mode_active_control,
+                :unbound_initial_active_control,
                 :passive_source
               ] do
     if mode == :active, do: :ok = :inet.setopts(socket, active: :once)
@@ -917,6 +918,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
           :unbound_mode_active_control ->
             [1] = :erlang.port_control(socket, 0x03F1A300 + 7, <<24, 1::32, 22, 0::32>>)
+
+          :unbound_initial_active_control ->
+            [1] =
+              :erlang.port_control(
+                socket,
+                0x03F1A300 + 7,
+                <<30, 15_000::32, 23, 0::32, 24, 1::32, 22, 0::32>>
+              )
 
           _ ->
             :ok

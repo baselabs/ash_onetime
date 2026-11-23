@@ -4290,7 +4290,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag :connection_streams
   test "Connection streams: every active control has its own native option origin" do
-    for corruption <- [:unbound_active_control, :unbound_mode_active_control] do
+    for corruption <- [
+          :unbound_active_control,
+          :unbound_mode_active_control,
+          :unbound_initial_active_control
+        ] do
       run = ConnectionNative.observe(:active, corruption)
       assert run.result == :ok
 

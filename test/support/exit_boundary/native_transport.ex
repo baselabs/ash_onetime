@@ -144,7 +144,9 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   defp active_option?(options), do: Enum.any?(options, &match?({:active, _}, &1))
 
   defp active_option_bytes?(<<22, _::binary>>), do: true
-  defp active_option_bytes?(<<24, _mode::32, rest::binary>>), do: active_option_bytes?(rest)
+  defp active_option_bytes?(<<tag, _value::32, rest::binary>>) when tag in [23, 24, 30],
+    do: active_option_bytes?(rest)
+
   defp active_option_bytes?(_bytes), do: false
 
   # Select code coordinates and option names only. An initialization program can
@@ -361,7 +363,9 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
       %{state | options: [option | state.options]}
     else
-      {:error, reason} -> failure(state, source, reason)
+      {:error, reason} ->
+        failure(state, source, reason, %{options: Enum.map(options, &option_name/1)})
+
       _ -> failure(state, source, :native_option_program)
     end
   end
@@ -439,12 +443,10 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
        do: optimized_option(options, rest, accumulator, <<22, 3::32, count::signed-16>>)
 
   defp option_values([{name, value} | rest] = options, accumulator) do
-    with {:ok, tag, table} <- option_enum(name),
-         {^value, number} <- List.keyfind(table, value, 0),
-         bytes = uint32(number),
+    with {:ok, tag, type, bytes, enum} <- option_value(name, value),
          next = [tag, bytes | accumulator],
          {:ok, encoded, tail} <- option_values(rest, next) do
-      scalar = option_scalar(name, value, tag, table, number, bytes)
+      scalar = option_scalar(name, value, tag, type, bytes, enum)
 
       body =
         program(
@@ -471,11 +473,47 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
 
   defp option_enum(:active), do: {:ok, 22, [{false, 0}, {true, 1}, {:once, 2}, {:multi, 3}]}
   defp option_enum(:mode), do: {:ok, 24, [list: 0, binary: 1]}
+
+  defp option_enum(:packet),
+    do:
+      {:ok, 23,
+       [
+         {0, 0},
+         {1, 1},
+         {2, 2},
+         {4, 3},
+         {:raw, 0},
+         {:sunrm, 5},
+         {:asn1, 4},
+         {:cdr, 6},
+         {:fcgi, 7},
+         {:line, 8},
+         {:tpkt, 9},
+         {:http, 10},
+         {:httph, 11},
+         {:http_bin, 13},
+         {:httph_bin, 14},
+         {:ssl, 12},
+         {:ssl_tls, 12}
+       ]}
+
   defp option_enum(_name), do: :unsupported
 
-  defp option_scalar(name, value, tag, table, number, bytes) do
-    type = {:enum, table}
-    enum = option_enum_program(value, table, number)
+  defp option_value(:send_timeout, :infinity), do: {:ok, 30, :time, uint32(-1), []}
+
+  defp option_value(:send_timeout, value) when is_integer(value) and value >= 0,
+    do: {:ok, 30, :time, uint32(value), []}
+
+  defp option_value(name, value) do
+    with {:ok, tag, table} <- option_enum(name),
+         {^value, number} <- List.keyfind(table, value, 0) do
+      {:ok, tag, {:enum, table}, uint32(number), option_enum_program(value, table, number)}
+    else
+      _ -> :unsupported
+    end
+  end
+
+  defp option_scalar(name, value, tag, type, bytes, enum) do
     lookup = program(:prim_inet, :type_opt_1, [name], type)
     lookup = program(:prim_inet, :type_opt, [:set, name], type, lookup)
     check = program(:prim_inet, :type_value_2, [type, value], true, enum)
