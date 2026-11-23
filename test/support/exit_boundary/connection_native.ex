@@ -52,6 +52,30 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp initial_mode(protocol, _mode), do: protocol
 
+  def observe_cancel do
+    observer = self()
+    tag = make_ref()
+
+    run =
+      ExitBoundary.observe(
+        fn ->
+          protocol = connect()
+          {:gen_tcp, port} = protocol.sock
+          {:connected, owner} = Port.info(port, :connected)
+          send(observer, {tag, %{self() => %{protocol: protocol, port_owner: owner}}})
+          protocol
+        end,
+        fn protocol -> Postgrex.Protocol.disconnect(nil, protocol) end,
+        %{host: [], callbacks: []}
+      )
+
+    receive do
+      {^tag, historical} -> Map.put(run, :native_history, historical)
+    after
+      0 -> raise "native cancellation history was not captured"
+    end
+  end
+
   # Exercise the actual Holder API on a real, single-connection Postgrex pool.
   # The deliberately altered write is restored before the next callback runs.
   def observe_holder(corruption \\ nil) do

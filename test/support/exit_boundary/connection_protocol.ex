@@ -25,6 +25,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
 
   def push(state, frame), do: step(frame, state)
 
+  def cancellation(origin), do: Map.put(new(), :cancel, origin)
+
+  def close_cancel(%{pending: [%{kind: :cancel}]} = state, {:error, :closed}),
+    do: {:ok, %{state | pending: []}}
+
+  def close_cancel(_state, _result), do: {:error, :cancel_close}
+
   def finish(state) do
     errors =
       case state.pending do
@@ -38,6 +45,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
 
     %{state | messages: Enum.reverse(state.messages), errors: Enum.reverse(errors)}
   end
+
+  def request(%{cancel: origin, pending: [%{kind: :cancel}]}, <<>>),
+    do: {:ok, %{length: 0, timeout: origin.timeout}}
 
   def request(%{pending: []}, <<>>), do: {:error, :extra_read}
 
@@ -73,6 +83,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
   rescue
     error in [ArgumentError, MatchError, KeyError, FunctionClauseError] ->
       fail(state, frame, :protocol_message, error.__struct__, :valid_protocol_instance)
+  end
+
+  defp frontend(
+         %{tag: :startup, payload: <<80_877_102::32, backend::32, key::32>>} = frame,
+         %{cancel: origin, pending: [], message_counts: counts} = state
+       )
+       when not is_map_key(counts, :frontend) do
+    state =
+      state
+      |> enqueue(:cancel, nil)
+      |> emit(frame, {:cancel_request, backend, key}, nil)
+
+    if {backend, key} === {origin.backend, origin.key} do
+      state
+    else
+      fail(state, frame, :cancel_identity, :foreign_cancel_identity, :bound_native_connection)
+    end
   end
 
   defp frontend(%{tag: ?P, payload: payload} = frame, state) do

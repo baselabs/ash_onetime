@@ -3543,6 +3543,54 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  @tag :connection_streams
+  test "Connection streams: cancellation binds its separate connection to the native backend" do
+    for corruption <- [nil, :cancel_key] do
+      run =
+        if corruption do
+          ComparatorMutants.with_postgrex_mutant(corruption, &ConnectionNative.observe_cancel/0)
+        else
+          ConnectionNative.observe_cancel()
+        end
+
+      assert run.result == :ok
+      events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+      native = NativeTransport.build(%{events: events}, run.native_history)
+      assert native.errors == []
+      reads = ConnectionReads.build(native)
+
+      if corruption do
+        assert Enum.map(reads.errors, & &1.rule) == [:cancel_identity]
+
+        for mutant <- [:stream_length, :stream_timeout, :stream_required, :stream_cancel_identity] do
+          unchecked =
+            ComparatorMutants.with_mutant(mutant, fn -> ConnectionReads.build(native) end)
+
+          expected = if mutant == :stream_cancel_identity, do: [], else: [:cancel_identity]
+          assert Enum.map(unchecked.errors, & &1.rule) == expected
+        end
+
+        assert Enum.map(ConnectionReads.build(native).errors, & &1.rule) == [:cancel_identity]
+      else
+        assert reads.errors == []
+
+        cancellations =
+          for {_port, connection} <- reads.connections,
+              message <- connection.protocol.messages,
+              match?({:cancel_request, _, _}, message.decoded),
+              do: message
+
+        assert length(cancellations) == 1
+      end
+    end
+
+    restored = ConnectionNative.observe_cancel()
+    events = Enum.with_index(restored.events, &Map.put(&1, :index, &2))
+    native = NativeTransport.build(%{events: events}, restored.native_history)
+    assert native.errors == []
+    assert ConnectionReads.build(native).errors == []
+  end
+
   for lifecycle <- [:idle_ping, :reconnect] do
     @tag :connection_streams
     test "Connection streams: native #{lifecycle} retains the renewed holder's cut origin",

@@ -350,6 +350,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_cancel_identity) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_protocol.ex",
+        original: "    if {backend, key} === {origin.backend, origin.key} do\n",
+        mutated: "    if is_integer(backend) and is_integer(key) do\n"
+      }
+    ]
+  end
+
   def edits(:stream_required) do
     [
       %{
@@ -2100,6 +2110,13 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         Code.compiler_options(previous)
       end
     end
+  end
+
+  defp postgrex_edits(:cancel_key) do
+    [
+      {"    msg = msg_cancel_request(pid: pid, key: key)\n",
+       "    msg = msg_cancel_request(pid: pid, key: :erlang.bxor(key, 1))\n"}
+    ]
   end
 
   defp postgrex_edits(:send_buffer_copy) do

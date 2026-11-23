@@ -7,6 +7,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
   # perfectly formed driver read is still refused when the protocol needs none.
   # Nothing in this ledger changes or removes an observation event.
   def build(native, readback \\ MapSet.new(), protocols \\ %{}) do
+    {cancellations, cancellation_errors} = cancellations(native)
     writes = for write <- native.writes, do: {write.command.index, :write, write}
     requests = for read <- native.reads, do: {read.source.index, :request, read}
     replies = for read <- native.reads, do: {read.returned.index, :reply, read}
@@ -18,11 +19,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       |> Enum.reduce(
         %{
           connections: %{},
-          errors: [],
+          errors: cancellation_errors,
           demands: [],
           versions: [],
           readback: readback,
           protocols: protocols,
+          cancellations: cancellations,
           pings: ping_calls(native),
           historical: Map.get(native, :historical, %{})
         },
@@ -124,7 +126,32 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     })
   end
 
-  defp event({_index, :reply, %{result: {:error, _}}}, state), do: state
+  defp event({_index, :reply, %{result: {:error, _}} = read}, state) do
+    connection = connection(state, read.port)
+
+    if Map.has_key?(connection.protocol, :cancel) do
+      case ConnectionProtocol.close_cancel(connection.protocol, read.result) do
+        {:ok, protocol} ->
+          connection = %{connection | protocol: protocol}
+
+          version = %{
+            index: read.returned.index,
+            port: read.port,
+            framing: connection.framing,
+            protocol: protocol
+          }
+
+          state
+          |> put_in([:connections, read.port], connection)
+          |> Map.update!(:versions, &[version | &1])
+
+        {:error, reason} ->
+          failure(state, read, reason, :unexpected_cancel_result, :server_closed_without_reply)
+      end
+    else
+      state
+    end
+  end
 
   defp event({_index, :reply, read}, state) do
     state =
@@ -231,15 +258,89 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     |> Map.update!(:versions, &[version | &1])
   end
 
-  defp connection(state, port),
-    do:
-      Map.get(state.connections, port, %{
-        framing: Wire.frame_state(),
-        # A cut may have outstanding frontend operations. Retain their request
-        # ownership, portals and counters; only this capture's emitted messages
-        # start empty. Earlier messages remain in the retained history.
-        protocol: %{Map.get(state.protocols, port, ConnectionProtocol.new()) | messages: []}
-      })
+  defp connection(state, port) do
+    initial =
+      case Map.fetch(state.cancellations, port) do
+        {:ok, origin} ->
+          %{framing: Wire.frame_state(:startup), protocol: ConnectionProtocol.cancellation(origin)}
+
+        :error ->
+          initial_connection(state, port)
+      end
+
+    Map.get(state.connections, port, initial)
+  end
+
+  defp initial_connection(state, port) do
+    %{
+      framing: Wire.frame_state(),
+      # A cut may have outstanding frontend operations. Retain their request
+      # ownership, portals and counters; only this capture's emitted messages
+      # start empty. Earlier messages remain in the retained history.
+      protocol: %{Map.get(state.protocols, port, ConnectionProtocol.new()) | messages: []}
+    }
+  end
+
+  # CancelRequest is a startup-format exchange on its own socket. Its authority
+  # is the enclosing native request and that request's successful connect, not
+  # a byte pattern, another connection's row or the message being checked.
+  defp cancellations(native) do
+    helpers =
+      native.pairs
+      |> Map.values()
+      |> Enum.filter(&(&1.source.mfa == {Postgrex.Protocol, :cancel_send_recv, 2}))
+      |> Enum.sort_by(& &1.source.index)
+
+    Enum.reduce(helpers, {%{}, []}, fn helper, {origins, errors} ->
+      {pid, :call, {_, _, [protocol, port]}} = helper.source.event
+
+      roots =
+        for {_index, root} <- native.pairs,
+            root.source.pid == pid and root.source.index < helper.source.index and
+              helper.returned.index < root.returned.index,
+            {^pid, :call, {Postgrex.Protocol, :cancel_request, [ip, endpoint, ^protocol]}} <-
+              [root.source.event],
+            do: {root, ip, endpoint}
+
+      connects =
+        for {root, ip, endpoint} <- roots,
+            {_index, pair} <- native.pairs,
+            pair.source.pid == pid and root.source.index < pair.source.index and
+              pair.returned.index < helper.source.index,
+            pair.source.event ==
+              {pid, :call,
+               {:gen_tcp, :connect,
+                [ip, endpoint, [mode: :binary, active: false], protocol.timeout]}},
+            pair.returned.event == {pid, :return_from, {:gen_tcp, :connect, 4}, {:ok, port}},
+            do: {root, pair}
+
+      case connects do
+        [{root, connect}] ->
+          origin = %{
+            source: root.source.index,
+            connect: connect.source.index,
+            helper: helper.source.index,
+            port: port,
+            backend: protocol.connection_id,
+            key: protocol.connection_key,
+            timeout: protocol.timeout
+          }
+
+          {Map.put(origins, port, origin), errors}
+
+        _ ->
+          error = %{
+            index: helper.source.index,
+            at: Map.take(helper.source, [:mfa, :role, :stack]),
+            rule: :cancel_connection_origin,
+            actual: :missing_native_connection,
+            expected: :own_successful_cancel_connect
+          }
+
+          {origins, [error | errors]}
+      end
+    end)
+  end
 
   defp finish(connection) do
     framing = Wire.finish_frames(connection.framing)

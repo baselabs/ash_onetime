@@ -9,6 +9,7 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
   end
 
   def frame_state, do: %{directions: %{}, messages: [], errors: []}
+  def frame_state(:startup), do: Map.put(frame_state(), :format, :startup)
   def push_frame(state, chunk), do: frame_chunk(chunk, state)
 
   def finish_frames(state) do
@@ -69,6 +70,9 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
     put_in(state.directions[direction], stream)
   end
 
+  defp extract_frames(stream, direction, %{format: :startup} = state),
+    do: extract_startup(stream, direction, state)
+
   defp extract_frames(
          %{buffer: <<tag, size::signed-32, tail::binary>>} = stream,
          direction,
@@ -107,6 +111,50 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
   end
 
   defp extract_frames(stream, _direction, state), do: {stream, state}
+
+  defp extract_startup(
+         %{buffer: <<size::signed-32, tail::binary>>} = stream,
+         :frontend,
+         state
+       )
+       when size >= 8 and byte_size(tail) >= size - 4 do
+    payload_size = size - 4
+    <<payload::binary-size(^payload_size), rest::binary>> = tail
+    stop = stream.offset + size
+
+    message = %{
+      direction: :frontend,
+      tag: :startup,
+      payload: payload,
+      start: stream.offset,
+      stop: stop,
+      provenance: spans(stream.provenance, stream.offset, stop)
+    }
+
+    {message, state} = frame_ownership(message, state)
+
+    stream = %{
+      stream
+      | buffer: rest,
+        offset: stop,
+        provenance: Enum.filter(stream.provenance, &(&1.offset + &1.length > stop))
+    }
+
+    extract_startup(stream, :frontend, %{state | messages: [message | state.messages]})
+  end
+
+  defp extract_startup(%{buffer: <<size::signed-32, _::binary>>} = stream, :frontend, state)
+       when size < 8 do
+    error = %{rule: :frame_length, direction: :frontend, offset: stream.offset, actual: size}
+    {stream, %{state | errors: [error | state.errors]}}
+  end
+
+  defp extract_startup(%{buffer: bytes} = stream, :backend, state) when bytes != <<>> do
+    error = %{rule: :cancel_backend_bytes, direction: :backend, offset: stream.offset}
+    {stream, %{state | errors: [error | state.errors]}}
+  end
+
+  defp extract_startup(stream, _direction, state), do: {stream, state}
 
   defp frame_ownership(%{direction: :frontend} = message, state) do
     phases = Enum.uniq(Enum.map(message.provenance, & &1.phase))
