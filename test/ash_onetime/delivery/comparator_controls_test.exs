@@ -4150,8 +4150,101 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              "a born TLS worker cannot acquire a post-birth historical root"
     end
 
+    indexed = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+    pairs = NativeTransport.pairs(indexed)
+
+    assert [tree] =
+             for {_, pair} <- pairs,
+                 pair.source.pid == supervisor,
+                 pair.source.mfa == {:tls_dyn_connection_sup, :start_link, 2},
+                 do: pair
+
+    assert {^supervisor, :return_from, _, {:ok, dynamic_supervisor}} = tree.returned.event
+
+    assert [created] =
+             for {_, pair} <- pairs,
+                 pair.source.pid == receiver,
+                 pair.source.mfa == {:tls_gen_connection_1_3, :initial_state, 9},
+                 do: pair
+
+    assert {^receiver, :call,
+            {:tls_gen_connection_1_3, :initial_state,
+             [:client, ^sender, table, host, remote_port, port, options, caller, callbacks]}} =
+             created.source.event
+
+    assert is_reference(table) and is_port(port)
+    assert {^receiver, :return_from, _, initial} = created.returned.event
+
+    assert [configured] =
+             for {_, pair} <- pairs,
+                 pair.source.pid == receiver,
+                 pair.source.mfa == {:ssl_gen_statem, :init_ssl_config, 3},
+                 do: pair
+
+    assert {^receiver, :call, {:ssl_gen_statem, :init_ssl_config, [ssl_options, :client, input]}} =
+             configured.source.event
+
+    assert elem(options, 0) === ssl_options
+    same_initial? = input === initial
+    assert same_initial?, "SSL configuration must consume its own native constructor return"
+    assert created.returned.index < configured.source.index
+    assert {^receiver, :return_from, _, configured_state} = configured.returned.event
+
+    entries =
+      for %{event: {pid, :call, {:gen_statem, :enter, arguments}}} = source <- indexed,
+          pid in [sender, receiver],
+          do: {pid, source, arguments}
+
+    assert [
+             {^receiver, entry,
+              [^dynamic_supervisor, [], :tls_client_connection_1_3, ^receiver, :infinity,
+               :initial_hello, entered, []]}
+           ] =
+             Enum.filter(entries, &(elem(&1, 0) == receiver))
+
+    same_configured? = entered === configured_state
+    assert same_configured?, "the cold receiver must enter with its configured native state"
+    assert configured.returned.index < entry.index
+
+    assert [sender_init] =
+             for {_, pair} <- pairs,
+                 pair.source.pid == sender,
+                 pair.source.mfa == {:tls_sender, :init, 1},
+                 do: pair
+
+    assert {^sender, :return_from, _, {:ok, :init, sender_state}} = sender_init.returned.event
+
+    assert [
+             {^sender, sender_entry,
+              [^dynamic_supervisor, [], :tls_sender, ^sender, :infinity,
+               :init, sender_entered, []]}
+           ] =
+             Enum.filter(entries, &(elem(&1, 0) == sender))
+
+    same_sender? = sender_entered === sender_state
+    assert same_sender?, "the cold sender must enter with its own native init return"
+    assert sender_init.returned.index < sender_entry.index
+
+    assert [factory] =
+             for {_, pair} <- pairs,
+                 pair.source.pid == caller,
+                 {^caller, :call,
+                  {:tls_gen_connection, :start_fsm,
+                   [^host, ^remote_port, ^port, _options, ^caller, ^callbacks, _timeout]}} <-
+                   [pair.source.event],
+                 do: pair
+
+    assert factory.source.index < created.source.index
+    assert entry.index < factory.returned.index
+
     side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
     proof = ConnectionHistory.build(side)
+
+    assert [request, response | _startup] = proof.reads.connections[port].protocol.messages
+    assert request.direction == :frontend and request.start == 0
+    assert request.decoded == {:ssl_request, 80_877_103}
+    assert response.direction == :backend and response.start == 0
+    assert response.decoded == {:ssl_response, ?S}
 
     for error <- proof.errors do
       Diagnostics.emit(

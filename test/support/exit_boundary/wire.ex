@@ -75,6 +75,9 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
   defp extract_frames(stream, direction, %{format: :connection_startup} = state),
     do: extract_startup(stream, direction, state)
 
+  defp extract_frames(stream, direction, %{format: :ssl_response} = state),
+    do: extract_ssl_response(stream, direction, state)
+
   defp extract_frames(
          %{buffer: <<tag, size::signed-32, tail::binary>>} = stream,
          direction,
@@ -144,10 +147,15 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
 
     state = %{state | messages: [message | state.messages]}
 
-    if Map.get(state, :format) == :connection_startup do
-      extract_frames(stream, :frontend, Map.delete(state, :format))
-    else
-      extract_startup(stream, :frontend, state)
+    case {Map.get(state, :format), payload} do
+      {:connection_startup, <<80_877_103::32>>} ->
+        extract_frames(stream, :frontend, Map.put(state, :format, :ssl_response))
+
+      {:connection_startup, _payload} ->
+        extract_frames(stream, :frontend, Map.delete(state, :format))
+
+      _ ->
+        extract_startup(stream, :frontend, state)
     end
   end
 
@@ -163,6 +171,49 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
   end
 
   defp extract_startup(stream, _direction, state), do: {stream, state}
+
+  # SSLRequest has a one-byte response before the TLS handshake. An E instead
+  # begins an ordinary PostgreSQL ErrorResponse; keep that byte in its frame.
+  defp extract_ssl_response(%{buffer: <<?E, _::binary>>} = stream, :backend, state),
+    do: extract_frames(stream, :backend, Map.delete(state, :format))
+
+  defp extract_ssl_response(%{buffer: <<reply, rest::binary>>} = stream, :backend, state) do
+    stop = stream.offset + 1
+
+    message = %{
+      direction: :backend,
+      tag: :ssl_response,
+      payload: <<reply>>,
+      start: stream.offset,
+      stop: stop,
+      provenance: spans(stream.provenance, stream.offset, stop)
+    }
+
+    {message, state} = frame_ownership(message, state)
+
+    stream = %{
+      stream
+      | buffer: rest,
+        offset: stop,
+        provenance: Enum.filter(stream.provenance, &(&1.offset + &1.length > stop))
+    }
+
+    state = %{state | messages: [message | state.messages]}
+
+    state =
+      if reply == ?S,
+        do: Map.put(state, :format, :connection_startup),
+        else: Map.delete(state, :format)
+
+    extract_frames(stream, :backend, state)
+  end
+
+  defp extract_ssl_response(%{buffer: <<>>} = stream, _direction, state), do: {stream, state}
+
+  defp extract_ssl_response(stream, :frontend, state) do
+    error = %{rule: :ssl_response_required, direction: :frontend, offset: stream.offset}
+    {stream, %{state | errors: [error | state.errors]}}
+  end
 
   defp frame_ownership(%{direction: :frontend} = message, state) do
     phases = Enum.uniq(Enum.map(message.provenance, & &1.phase))

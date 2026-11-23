@@ -281,8 +281,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           {:ssl_gen_statem, :tls_start_link, 2},
           {:ssl_gen_statem, :init, 1},
           {:ssl_gen_statem, :init_statem, 1},
+          {:ssl_gen_statem, :init_ssl_config, 3},
           {:tls_gen_connection, :start_fsm, :_},
           {:tls_gen_connection, :initialize_tls_sender, 1},
+          {:tls_gen_connection_1_3, :initial_state, 9},
           {:tls_client_connection, :init, 1},
           {:tls_client_connection_1_3, :init, 1}
         ]

@@ -56,6 +56,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
       when phase in [:password, :sasl_initial, :sasl_response],
       do: {:error, :startup_client_reply_required}
 
+  def request(%{startup: %{phase: :ssl_response}}, <<>>),
+    do: {:ok, %{length: 1, timeout: :infinity}}
+
   def request(%{startup: %{phase: phase}} = state, buffer)
       when phase not in [:ready, :failed, :opening],
       do: required_read(state, buffer)
@@ -94,6 +97,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
   rescue
     error in [ArgumentError, MatchError, KeyError, FunctionClauseError] ->
       fail(state, frame, :protocol_message, error.__struct__, :valid_protocol_instance)
+  end
+
+  defp frontend(
+         %{tag: :startup, payload: <<80_877_103::32>>} = frame,
+         %{startup: %{phase: :opening} = startup} = state
+       )
+       when not is_map_key(startup, :ssl) do
+    state = Map.put(state, :startup, %{startup | phase: :ssl_response})
+    state = enqueue(state, :ssl_negotiation, nil)
+    emit(state, frame, {:ssl_request, 80_877_103}, nil)
   end
 
   defp frontend(
@@ -220,6 +233,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
 
   defp frontend(frame, state),
     do: fail(state, frame, :frontend_message, frame.tag, :declared_frontend_protocol)
+
+  defp backend(
+         %{tag: :ssl_response, payload: <<reply>>} = frame,
+         %{
+           startup: %{phase: :ssl_response} = startup,
+           pending: [%{kind: :ssl_negotiation}]
+         } = state
+       )
+       when reply in [?S, ?N] do
+    phase = if reply == ?S, do: :opening, else: :failed
+    startup = startup |> Map.put(:ssl, reply) |> Map.put(:phase, phase)
+    state = %{state | startup: startup, pending: []}
+    emit(state, frame, {:ssl_response, reply}, nil)
+  end
 
   defp backend(
          %{tag: ?R, payload: <<code::32, data::binary>>} = frame,
