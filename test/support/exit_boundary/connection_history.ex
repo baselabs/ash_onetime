@@ -173,20 +173,35 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
     }
   end
 
-  defp native_history(indexed, connections, []), do: NativeTransport.build(indexed, connections)
-
   defp native_history(indexed, connections, bindings) do
+    births = ConnectionTls.births(indexed)
+    native_history(indexed, connections, bindings ++ births.bindings, births.errors)
+  end
+
+  defp native_history(indexed, connections, [], errors) do
+    transport = NativeTransport.build(indexed, connections)
+    %{transport | errors: transport.errors ++ errors}
+  end
+
+  defp native_history(indexed, connections, bindings, errors) do
     transport = NativeTransport.build(indexed, connections, Enum.map(bindings, & &1.transport))
     tls = ConnectionTls.build(Map.put(indexed, :native_transport, transport), bindings)
-    ports = MapSet.new(bindings, & &1.port)
+    upgrades = Map.new(bindings, &{&1.port, Map.get(&1, :upgrade_index, -1)})
+
+    plaintext? = fn instance ->
+      case Map.fetch(upgrades, instance.port) do
+        {:ok, upgrade} -> instance.source.index < upgrade
+        :error -> true
+      end
+    end
 
     # Ciphertext keeps its complete native/worker proof. Only each independently
     # bound public SSL boundary supplies bytes to PostgreSQL's logical stream.
     Map.merge(transport, %{
-      reads: Enum.reject(transport.reads, &MapSet.member?(ports, &1.port)) ++ tls.reads,
-      writes: Enum.reject(transport.writes, &MapSet.member?(ports, &1.port)) ++ tls.writes,
-      active: Enum.reject(transport.active, &MapSet.member?(ports, &1.port)) ++ tls.active,
-      errors: tls.errors,
+      reads: Enum.filter(transport.reads, plaintext?) ++ tls.reads,
+      writes: Enum.filter(transport.writes, plaintext?) ++ tls.writes,
+      active: Enum.filter(transport.active, plaintext?) ++ tls.active,
+      errors: tls.errors ++ errors,
       tls: tls,
       tls_bindings: bindings
     })

@@ -215,6 +215,322 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     :exit, _reason -> false
   end
 
+  # Born workers acquire their roots at their native entry, never at a later
+  # system-state read. A public socket is a copy of this exact constructor.
+  def births(indexed) do
+    pairs = NativeTransport.pairs(indexed.events)
+
+    connects =
+      for {_index, pair} <- pairs,
+          {_, :call, {:ssl, :connect, [port, _options, _timeout]}} <- [pair.source.event],
+          is_port(port),
+          {_, :return_from, _, {:ok, _socket}} <- [pair.returned.event],
+          do: pair
+
+    Enum.reduce(connects, %{bindings: [], errors: []}, fn connect, result ->
+      case birth_binding(indexed.events, pairs, connect) do
+        {:ok, binding} ->
+          %{result | bindings: result.bindings ++ [binding]}
+
+        :error ->
+          error = %{
+            index: connect.source.index,
+            at: Map.take(connect.source, [:mfa, :role, :stack]),
+            rule: :tls_birth_origin,
+            actual: :unbound_constructor_chain,
+            expected: :same_native_socket_workers_and_entries
+          }
+
+          %{result | errors: result.errors ++ [error]}
+      end
+    end)
+  end
+
+  defp birth_binding(events, pairs, connect) do
+    {caller, :call, {:ssl, :connect, [port, _options, _timeout]}} = connect.source.event
+    {_, :return_from, _, {:ok, socket}} = connect.returned.event
+    interval = birth_calls(pairs, connect.source.index, connect.returned.index)
+
+    with [tcp] <- Enum.filter(Map.values(pairs), &birth_tcp?(&1, caller, port)),
+         true <- tcp.returned.index < connect.source.index,
+         [constructed] <- Enum.filter(interval, &birth_socket?(&1, port, socket)),
+         {receiver, :call,
+          {:tls_socket, :socket,
+           [[receiver, sender], :gen_tcp, ^port, :tls_gen_connection, table, _trackers]}} <-
+           constructed.source.event,
+         [created] <- Enum.filter(interval, &birth_constructor?(&1, receiver, sender, table, port)),
+         {^receiver, :call,
+          {constructor, :initial_state,
+           [:client, ^sender, ^table, host, remote_port, ^port, options, ^caller, callbacks]}} <-
+           created.source.event,
+         {^receiver, :return_from, _, initial} <- created.returned.event,
+         [table_origin] <- Enum.filter(interval, &birth_table?(&1, receiver, table)),
+         true <- table_origin.returned.index < created.source.index,
+         true <- created.source.index < constructed.source.index,
+         true <- constructed.returned.index < created.returned.index,
+         true <-
+           birth_initial?(initial, {table, host, remote_port, port, options, callbacks, socket, sender}),
+         client = birth_client(options),
+         true <- constructor == elem(client, 1),
+         true <- birth_client_init?(events, created, elem(client, 0)),
+         [configured] <- Enum.filter(interval, &birth_configuration?(&1, receiver, initial)),
+         true <- created.returned.index < configured.source.index,
+         [entry] <- birth_entries(events, receiver, elem(client, 0), :initial_hello),
+         before_entry = Enum.filter(interval, &(&1.returned.index < entry.index)),
+         {:ok, entered} <- birth_client_state(before_entry, receiver, elem(client, 0), configured),
+         true <- Enum.at(elem(elem(entry.event, 2), 2), 6) === entered,
+         {^receiver, :call, {_, _, [supervisor | _]}} <- entry.event,
+         true <- configured.returned.index < entry.index,
+         [tree] <- Enum.filter(interval, &birth_supervisor?(&1, supervisor)),
+         [sender_init] <- Enum.filter(interval, &(&1.source.mfa == {:tls_sender, :init, 1})),
+         {^sender, :return_from, _, {:ok, :init, sender_data}} <- sender_init.returned.event,
+         [sender_entry] <- birth_entries(events, sender, :tls_sender, :init, sender_data),
+         {^sender, :call, {_, _, [^supervisor | _]}} <- sender_entry.event,
+         true <- sender_init.returned.index < sender_entry.index,
+         true <- birth_spawn?(events, supervisor, receiver) and birth_spawn?(events, supervisor, sender),
+         true <- tree.source.index < entry.index,
+         [factory] <- Enum.filter(interval, &birth_factory?(&1, caller, host, remote_port, port, options, callbacks)),
+         true <- factory.source.index < created.source.index and entry.index < factory.returned.index,
+         true <- birth_options?(interval, receiver, factory, options, created),
+         {:ok, options_receipt} <- birth_options_receipt(events, tree, factory, receiver, supervisor),
+         [handoff] <- Enum.filter(interval, &birth_handoff?(&1, caller, port, receiver)),
+         true <- constructed.returned.index < handoff.source.index,
+         {:ok, receiver_machine} <- birth_machine(interval, entry, elem(client, 0), entered),
+         {:ok, sender_machine} <- birth_machine(interval, sender_entry, :tls_sender, sender_data) do
+      {:ok,
+       %{
+         socket: socket,
+         port: port,
+         owner: receiver,
+         sender: sender,
+         supervisor: supervisor,
+         upgrade_index: connect.source.index,
+         transport: %{port: port, active: false, owner: receiver},
+         states: %{receiver => {:initial_hello, entered}, sender => {:init, sender_data}},
+         machines: %{receiver => receiver_machine, sender => sender_machine},
+         receipts: [options_receipt.index],
+         born?: true
+       }}
+    else
+      _ -> :error
+    end
+  end
+
+  defp birth_calls(pairs, first, last) do
+    for {_index, pair} <- pairs,
+        pair.source.index > first and pair.returned.index < last,
+        do: pair
+  end
+
+  defp birth_socket?(pair, port, socket) do
+    match?(
+      {_, :call, {:tls_socket, :socket, [[_, _], :gen_tcp, ^port, :tls_gen_connection, _, _]}},
+      pair.source.event
+    ) and match?({_, :return_from, _, ^socket}, pair.returned.event)
+  end
+
+  defp birth_tcp?(pair, caller, port) do
+    case {pair.source.event, pair.returned.event} do
+      {{^caller, :call, {:gen_tcp, :connect, [_, _, options, _]}},
+       {^caller, :return_from, _, {:ok, ^port}}} ->
+        Keyword.fetch(options, :active) == {:ok, false}
+
+      _ ->
+        false
+    end
+  end
+
+  defp birth_constructor?(pair, receiver, sender, table, port) do
+    pair.source.mfa in [
+      {:tls_gen_connection_1_3, :initial_state, 9},
+      {:tls_dtls_gen_connection, :initial_state, 9}
+    ] and
+      match?(
+        {^receiver, :call, {_, _, [:client, ^sender, ^table, _, _, ^port, _, _, _]}},
+        pair.source.event
+      )
+  end
+
+  defp birth_table?(pair, receiver, table),
+    do:
+      pair.source.event == {receiver, :call, {:ets, :new, [:tls_socket, []]}} and
+        pair.returned.event == {receiver, :return_from, {:ets, :new, 2}, table}
+
+  defp birth_client(options) do
+    if Map.fetch!(elem(options, 0), :versions) == [{3, 4}],
+      do: {:tls_client_connection_1_3, :tls_gen_connection_1_3},
+      else: {:tls_client_connection, :tls_dtls_gen_connection}
+  end
+
+  defp birth_initial?(initial, {table, host, remote_port, port, options, callbacks, socket, sender})
+       when is_tuple(initial) and tuple_size(initial) == 13 do
+    environment = elem(initial, 2)
+
+    Enum.all?(
+      [
+        {elem(initial, 0), :state},
+        {elem(initial, 1), table},
+        {elem(initial, 4), elem(options, 0)},
+        {elem(initial, 5), elem(options, 1)},
+        {elem(environment, 1), :client},
+        {elem(environment, 2), socket},
+        {elem(environment, 3), elem(callbacks, 0)},
+        {elem(environment, 4), :tls_gen_connection},
+        {elem(environment, 9), host},
+        {elem(environment, 10), remote_port},
+        {elem(environment, 11), port},
+        {Map.fetch!(elem(initial, 7), :sender), sender}
+      ],
+      fn {actual, expected} -> actual === expected end
+    )
+  end
+
+  defp birth_initial?(_initial, _context), do: false
+
+  defp birth_client_init?(events, created, client) do
+    {pid, :call, {_, _, arguments}} = created.source.event
+
+    Enum.any?(events, fn source ->
+      source.event == {pid, :call, {client, :init, [arguments]}} and
+        source.index < created.source.index
+    end)
+  end
+
+  defp birth_configuration?(pair, receiver, initial),
+    do:
+      pair.source.event ==
+        {receiver, :call, {:ssl_gen_statem, :init_ssl_config, [elem(initial, 4), :client, initial]}}
+
+  defp birth_client_state(_calls, _receiver, :tls_client_connection_1_3, configured) do
+    {_, :return_from, _, state} = configured.returned.event
+    {:ok, state}
+  end
+
+  defp birth_client_state(calls, receiver, :tls_client_connection, configured) do
+    {_, :return_from, _, state} = configured.returned.event
+    environment = elem(state, 2)
+    alternatives = elem(elem(state, 3), 7)
+
+    with [certificates] <-
+           Enum.filter(calls, &(&1.source.event == {receiver, :call, {:ssl_certificate, :available_cert_key_pairs, [alternatives]}})),
+         {_, :return_from, _, certificate_pairs} <- certificates.returned.event,
+         [selection] <-
+           Enum.filter(calls, fn pair ->
+             pair.source.event ==
+               {receiver, :call,
+                {:ssl_session, :client_select_session,
+                 [{elem(environment, 9), elem(environment, 10), elem(state, 4)}, elem(environment, 13),
+                  elem(environment, 14), elem(state, 8), certificate_pairs]}}
+           end),
+         true <- configured.returned.index < certificates.source.index,
+         true <- certificates.returned.index < selection.source.index,
+         {_, :return_from, _, session} <- selection.returned.event do
+      {:ok, put_elem(state, 8, session)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp birth_entries(events, pid, module, name, data) do
+    for %{event: {^pid, :call, {:gen_statem, :enter, [_, [], ^module, ^pid, :infinity, ^name, ^data, []]}}} = source <- events,
+        do: source
+  end
+
+  defp birth_entries(events, pid, module, name) do
+    for %{event: {^pid, :call, {:gen_statem, :enter, [_, [], ^module, ^pid, :infinity, ^name, _, []]}}} = source <- events,
+        do: source
+  end
+
+  defp birth_supervisor?(pair, supervisor),
+    do:
+      pair.source.mfa == {:tls_dyn_connection_sup, :start_link, 2} and
+        match?({_, :return_from, _, {:ok, ^supervisor}}, pair.returned.event)
+
+  defp birth_spawn?(events, parent, child),
+    do: Enum.any?(events, &match?(%{event: {^parent, :spawn, ^child, _}}, &1))
+
+  defp birth_factory?(pair, caller, host, remote_port, port, options, callbacks) do
+    case pair.source.event do
+      {^caller, :call,
+       {:tls_gen_connection, :start_fsm,
+        [^host, ^remote_port, ^port, {ssl, _emulated, trackers}, ^caller, ^callbacks, _]}} ->
+        ssl === elem(options, 0) and trackers === elem(options, 2)
+
+      _ ->
+        false
+    end
+  end
+
+  defp birth_options?(calls, receiver, factory, options, created) do
+    {_, :call, {_, _, [_, _, _, {_ssl, emulated, _trackers} | _]}} = factory.source.event
+    initial = {:socket_options, :list, 0, 0, 0, true}
+    expected = :tls_socket.emulated_socket_options(emulated, initial)
+
+    case Enum.filter(calls, fn pair ->
+           pair.source.event ==
+             {receiver, :call, {:tls_socket, :emulated_socket_options, [emulated, initial]}} and
+             factory.source.index < pair.source.index and pair.returned.index < created.source.index
+         end) do
+      [%{returned: %{event: {_, :return_from, _, ^expected}}}] ->
+        elem(options, 1) === expected
+
+      _ ->
+        false
+    end
+  end
+
+  defp birth_options_receipt(events, tree, factory, receiver, supervisor) do
+    {caller, :call,
+     {_, _, [host, port, socket, options, caller, callbacks, _timeout]}} = factory.source.event
+    sender = tree.source.pid
+    arguments = [:client, supervisor, host, port, socket, options, caller, callbacks]
+    message = {sender, :options, arguments}
+
+    sends = Enum.filter(events, &(&1.event == {sender, :send, message, receiver}))
+    receives = Enum.filter(events, &(&1.event == {receiver, :receive, message}))
+
+    with [sent] <- sends,
+         [received] <- receives,
+         [initial] <-
+           Enum.filter(events, &(&1.event == {receiver, :call, {:ssl_gen_statem, :init, [sender]}})),
+         [initialized] <-
+           Enum.filter(events, &(&1.event == {receiver, :call, {:ssl_gen_statem, :init_statem, [arguments]}})),
+         true <- sent.index < received.index,
+         true <- initial.index < received.index and received.index < initialized.index do
+      {:ok, received}
+    else
+      _ -> :error
+    end
+  end
+
+  defp birth_handoff?(pair, caller, port, receiver),
+    do:
+      pair.source.event == {caller, :call, {:gen_tcp, :controlling_process, [port, receiver]}} and
+        pair.returned.event == {caller, :return_from, {:gen_tcp, :controlling_process, 2}, :ok}
+
+  defp birth_machine(calls, entry, module, data) do
+    pid = entry.pid
+    {^pid, :call, {_, _, [parent, [], ^module, ^pid, :infinity, name, ^data, []]}} = entry.event
+    before = {:params, :state_functions, false, parent, [:gen_statem], pid, :infinity}
+    params = {:params, :state_functions, module == :tls_client_connection_1_3, parent, [module], pid, :infinity}
+
+    with [mode] <- Enum.filter(calls, &(&1.source.event == {pid, :call, {:gen_statem, :get_callback_mode, [before, [module]]}})),
+         true <- entry.index < mode.source.index,
+         {^pid, :return_from, _, ^params} <- mode.returned.event do
+      {:ok,
+       %{
+         params: params,
+         state: {:state, {name, data}, [], %{}, [], false},
+         debug: [],
+         origin: {:tls_birth_machine, mode.returned.index},
+         debug_origin: {:tls_birth_debug, entry.index},
+         birth_index: mode.returned.index
+       }}
+    else
+      _ -> :error
+    end
+  end
+
   # Only the public SSL send/recv arguments and returns are PostgreSQL bytes.
   # Encrypted port data never enters the framing or protocol association machine.
   # This ledger grants no event allowance; native interior/copy qualification and
@@ -385,6 +701,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     owners =
       for family <- families,
+          not Map.get(family, :born?, false),
           {pid, {name, data}} <- family.states,
           into: %{} do
         version = %{name: name, data: data, origin: {:historical_tls, pid}}
@@ -393,6 +710,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     initial = %{
       owners: owners,
+      birth_candidates:
+        families
+        |> Enum.filter(&Map.get(&1, :born?, false))
+        |> Enum.flat_map(&[&1.owner, &1.sender])
+        |> MapSet.new(),
+      born_workers: MapSet.new(),
+      births:
+        for(family <- families,
+            Map.get(family, :born?, false),
+            {pid, machine} <- family.machines,
+            do: {machine.birth_index, {pid, family, machine}})
+        |> Enum.group_by(&elem(&1, 0), &elem(&1, 1)),
       pending: %{},
       frames: %{},
       received: %{},
@@ -427,6 +756,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       |> Enum.flat_map(& &1.indexes)
       |> MapSet.new()
       |> MapSet.union(call_receipts(events, pairs))
+      |> MapSet.union(MapSet.new(Enum.flat_map(families, &Map.get(&1, :receipts, []))))
 
     debug =
       Map.new(owners, fn {pid, owner} ->
@@ -440,7 +770,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     state =
       profile_component(profile, :worker_events, fn ->
-        Enum.reduce(events, initial, &worker_owner_event(&1, &2, owners))
+        Enum.reduce(events, initial, &worker_owner_event/2)
       end)
 
     profile_component(profile, :worker_debug_completion, fn ->
@@ -450,8 +780,46 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end)
   end
 
-  defp worker_owner_event(source, state, owners) do
-    if Map.has_key?(owners, source.pid), do: worker_event(source, state), else: state
+  defp worker_owner_event(source, state) do
+    state = worker_spawn(source, state)
+    state = Enum.reduce(Map.get(state.births, source.index, []), state, &worker_birth(&1, source, &2))
+
+    cond do
+      Map.has_key?(state.owners, source.pid) ->
+        worker_event(source, state)
+
+      elem(source.event, 1) == :receive and MapSet.member?(state.born_workers, source.pid) ->
+        worker_event(source, state)
+
+      true ->
+        state
+    end
+  end
+
+  defp worker_spawn(%{event: {_, :spawn, child, _}}, state) do
+    if MapSet.member?(state.birth_candidates, child),
+      do: %{state | born_workers: MapSet.put(state.born_workers, child)},
+      else: state
+  end
+
+  defp worker_spawn(_source, state), do: state
+
+  defp worker_birth({pid, family, machine}, source, state) do
+    {name, data} = elem(machine.state, 1)
+    version = %{name: name, data: data, origin: machine.origin}
+
+    state =
+      state
+      |> put_in([:owners, pid], %{version: version, family: family})
+      |> put_in([:machine_states, pid], machine)
+      |> put_in([:machine_debug, pid], %{value: [], origin: machine.debug_origin})
+
+    context =
+      program_context(state, source, [{:internal, :init_state}], false, machine.birth_index)
+      |> Map.put(:call_enter, true)
+      |> Map.put(:actions, [{:postpone, false}])
+
+    put_in(state.machine_programs[pid], context)
   end
 
   defp worker_event(%{event: {pid, :receive, message}} = source, state) do
