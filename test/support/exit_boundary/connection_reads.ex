@@ -24,6 +24,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
           versions: [],
           readback: readback,
           protocols: protocols,
+          framing: Map.get(native, :connection_framing, %{}),
           cancellations: cancellations,
           pings: ping_calls(native),
           historical: Map.get(native, :historical, %{})
@@ -275,12 +276,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
   end
 
   defp initial_connection(state, port) do
+    protocol = Map.get(state.protocols, port, ConnectionProtocol.new())
+
     %{
-      framing: Wire.frame_state(),
+      framing: Map.get(state.framing, port, Wire.frame_state()),
       # A cut may have outstanding frontend operations. Retain their request
       # ownership, portals and counters; only this capture's emitted messages
       # start empty. Earlier messages remain in the retained history.
-      protocol: %{Map.get(state.protocols, port, ConnectionProtocol.new()) | messages: []}
+      protocol: %{protocol | messages: []},
+      historical_messages: Enum.reverse(protocol.messages)
     }
   end
 
@@ -352,6 +356,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     %{
       framing: framing,
       protocol: protocol,
+      historical_messages: Map.get(connection, :historical_messages, []),
       errors: framing.errors ++ protocol.errors
     }
   end

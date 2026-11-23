@@ -10,10 +10,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   # grants no observation exemption.
   def build(indexed, native, streams, historical, origins \\ []) do
     replies = Map.new(native.reads ++ native.active, &{&1.returned.index, &1})
+    cursors = Map.get_lazy(indexed, :connection_decoders, fn -> initial_cursors(historical) end)
 
     initial = %{
       ports: %{},
-      cursors: initial_cursors(historical),
+      cursors: cursors,
+      initial_cursors: cursors,
       pending_cursors: %{},
       versions: [],
       timeline: [],
@@ -151,7 +153,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
   defp active_inputs(context, pairs) do
     versions = Map.new(context.state.timeline, &{&1.index, &1})
-    initial = initial_cursors(context.state.native.historical)
+    initial = context.state.initial_cursors
 
     active =
       for delivery <- context.state.native.active,
@@ -1306,7 +1308,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp validate_result(pair, port, cursor, {:rows, types, rows, type_state}, state) do
-    context = row_context(state.streams[port].protocol.messages, cursor.offset)
+    stream = Map.fetch!(state.streams, port)
+    messages = Map.get(stream, :historical_messages, []) ++ stream.protocol.messages
+    context = row_context(messages, cursor.offset)
     origin = Map.fetch!(state.executing, port)
     query = origin.query
     state = query_metadata(state, pair.source, query, context, cursor.types)

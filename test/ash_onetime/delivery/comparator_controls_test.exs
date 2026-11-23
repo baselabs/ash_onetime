@@ -641,6 +641,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
     proof = ConnectionHistory.build(side)
+
+    for error <- proof.errors do
+      Diagnostics.emit(
+        "CONNECTION_TLS_MAIN_FAILURE",
+        Map.take(error, [:index, :at, :rule, :path, :context])
+      )
+    end
+
     assert proof.errors == [], "MAIN must prove the real TLS plaintext and worker programs"
   end
 
@@ -3419,11 +3427,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert same_framing?, "the cut must retain the complete directional framing prefix"
 
         decoder =
-          decoders.versions
+          decoders.timeline
           |> Enum.filter(&(&1.port == port and &1.index < before))
           |> List.last()
 
-        assert decoder, "a partial native frame needs its own earlier decoder cursor"
+        assert decoder, "a partial native frame needs its own causally current decoder cursor"
 
         same_coordinates? =
           decoder.cursor.offset + byte_size(decoder.cursor.buffer) ==
@@ -3545,8 +3553,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           suffix = Enum.drop(run.events, barrier.index)
           continued = %{side | run: %{run | events: suffix}, historical: checkpoint}
           resumed = ConnectionHistory.build(continued)
+
+          for error <- resumed.errors do
+            Diagnostics.emit(
+              "CONNECTION_SUFFIX_FAILURE",
+              Map.take(error, [:index, :at, :rule, :path, :context])
+            )
+          end
+
           assert resumed.errors == []
           assert map_size(resumed.reads.connections) > 0
+
+          assert Enum.map(resumed.indexed.events, & &1.index) ==
+                   Enum.to_list(barrier.index..(length(run.events) - 1))
 
           for {port, connection} <- resumed.reads.connections do
             complete = Map.fetch!(proof.reads.connections, port)
@@ -3656,6 +3675,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         restored.native_history,
         {:initial, restored.initial_state}
       )
+
+    for error <- states.errors do
+      Diagnostics.emit(
+        "CONNECTION_CANCEL_OWNER_FAILURE",
+        Map.take(error, [:index, :at, :rule, :path, :context])
+      )
+    end
 
     assert states.errors == [], "cancellation must preserve every original Protocol owner copy"
     assert decoders.protocol_copies != []
@@ -3794,6 +3820,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert proof.native.errors == []
         assert proof.reads.errors == []
         assert proof.decoders.errors == []
+
+        for error <- proof.states.errors do
+          Diagnostics.emit(
+            "CONNECTION_RENEWAL_OWNER_FAILURE",
+            Map.take(error, [:index, :at, :rule, :path, :context])
+          )
+        end
 
         assert proof.states.errors == [],
                "a native holder renewal must retain its owner origin before cutting"

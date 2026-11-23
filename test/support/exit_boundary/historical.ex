@@ -197,18 +197,19 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
         {holder, connection}
       end
 
-    {:ok,
-     %{
-       historical
-       | connections: connections,
-         query_cache: cache_cut(historical.query_cache.table, tables),
-         prepared_catalogs: catalogs,
-         connection_framing: framing,
-         connection_decoders: decoders,
-         connection_protocols: protocols,
-         query_origins: origins,
-         pool_clocks: pool_clock_cut(historical, connections, proof.native.pairs, before)
-     }}
+    checkpoint = %{
+      historical
+      | connections: connections,
+        query_cache: cache_cut(historical.query_cache.table, tables),
+        prepared_catalogs: catalogs,
+        connection_framing: framing,
+        connection_decoders: decoders,
+        connection_protocols: protocols,
+        query_origins: origins,
+        pool_clocks: pool_clock_cut(historical, connections, proof.native.pairs, before)
+    }
+
+    {:ok, Map.put(checkpoint, :event_offset, before)}
   end
 
   defp active_descriptors(origins, protocol, rows, port) do

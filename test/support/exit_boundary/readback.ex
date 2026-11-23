@@ -92,12 +92,12 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
 
     reference = %{
       reference
-      | events: Enum.map(reference_events, &Map.drop(&1, [:index, :role, :phase]))
+      | events: Enum.map(reference_events, &Map.drop(&1, [:role, :phase]))
     }
 
     run = %{
       side.run
-      | events: Enum.map(observed, &Map.drop(&1, [:index, :role, :phase])),
+      | events: Enum.map(observed, &Map.drop(&1, [:role, :phase])),
         result: result(observed),
         residue: 0
     }
@@ -122,14 +122,12 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
         readback_reference?: true
       )
 
-    errors = Enum.map(result.errors, &reference_error(&1, observed))
-
     sources =
       for {key, origin} <- Origins.build(run_side).origins, into: %{} do
-        {Enum.fetch!(observed, origin.index).index, %{key: key, value: origin.value}}
+        {origin.index, %{key: key, value: origin.value}}
       end
 
-    %{claimed: MapSet.new(observed, & &1.index), errors: errors, sources: sources}
+    %{claimed: MapSet.new(observed, & &1.index), errors: result.errors, sources: sources}
   end
 
   defp cut_failure(observed, start, failure) do
@@ -141,16 +139,6 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
         %{at: at, rule: failure.rule, path: [], run: failure, twin: :committed_history_cut}
       ]
     }
-  end
-
-  defp reference_error(error, observed) do
-    at =
-      case error.at do
-        %{run_index: n} = at -> %{at | run_index: Enum.at(observed, n, hd(observed)).index}
-        other -> other
-      end
-
-    %{error | at: at}
   end
 
   # The third execution is a read-only SQL/program witness. Its private origin

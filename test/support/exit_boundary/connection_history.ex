@@ -50,14 +50,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   # Build one authoritative history for the complete raw capture, before origin
   # pairing, scheduling moves or interval selection.
   def build(side) do
+    historical = side.historical
+
     indexed = %{
-      events: Enum.with_index(side.run.events, &Map.put(&1, :index, &2)),
-      query_cache: side.historical.query_cache
+      events:
+        side.run.events
+        |> Enum.with_index(Map.get(historical, :event_offset, 0))
+        |> Enum.map(fn {event, index} -> Map.put_new(event, :index, index) end),
+      query_cache: historical.query_cache,
+      connection_decoders: historical.connection_decoders
     }
 
-    historical = side.historical
     initial_state = side.run.initial_state
-    native = NativeTransport.build(indexed, historical.connections)
+
+    native =
+      indexed
+      |> NativeTransport.build(historical.connections)
+      |> Map.put(:connection_framing, historical.connection_framing)
 
     # This labels exact frontend writes for statement ordinals only. It grants
     # no event allowance. Backend ownership remains the protocol machine's exact

@@ -26,7 +26,7 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
       reads: %{},
       phase: %{},
       events: [],
-      index: 0,
+      index: Map.get(side.historical, :event_offset, 0),
       pending: %{},
       identities: %{},
       relations: side.historical.relations,
@@ -52,13 +52,13 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
       )
       |> Enum.map(&rename_frame(&1, side))
 
-    e = Map.merge(e, %{role: role, phase: phase, index: state.index})
+    e = Map.merge(e, %{role: role, phase: phase, index: Map.get(e, :index, state.index)})
 
     state = %{
       state
       | phase: Map.put(state.phase, role, phase),
         events: [e | state.events],
-        index: state.index + 1
+        index: e.index + 1
     }
 
     case e.event do

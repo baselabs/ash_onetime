@@ -1051,7 +1051,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp exact_return(_projected, state) do
     # Per-side return equality uses the untouched native term. The sequence
     # comparison separately checks its statement-grounded database projections.
-    source = Enum.fetch!(state.run.run.events, state.at.run_index).event
+    source =
+      Enum.find(state.run.connection_history.indexed.events, &(&1.index == state.at.run_index)).event
 
     value =
       case source do
