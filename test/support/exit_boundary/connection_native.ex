@@ -255,6 +255,41 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
+  # The shared native supervisor must be armed before it creates the TLS tree.
+  # Every constructor, handshake, worker and retirement is then in the same raw
+  # observation. No post-birth system state supplies an expected machine root.
+  def observe_tls_startup do
+    ExitBoundary.observe(
+      fn -> :ok end,
+      fn _ ->
+        protocol = connect_tls()
+        execute_tls(protocol, nil)
+      end,
+      %{
+        host: [],
+        callbacks: [],
+        services: %{
+          tls_connection_sup: {:supervisor, :handle_call, 3},
+          ssl_manager: {:ssl_manager, :handle_info, 2}
+        },
+        frames: [
+          {:tls_connection_sup, :start_child, 1},
+          {:tls_dyn_connection_sup, :start_link, 2},
+          {:tls_dyn_connection_sup, :init, 1},
+          {:tls_sender, :start_link, :_},
+          {:tls_sender, :init, :_},
+          {:ssl_gen_statem, :tls_start_link, 2},
+          {:ssl_gen_statem, :init, 1},
+          {:ssl_gen_statem, :init_statem, 1},
+          {:tls_gen_connection, :start_fsm, :_},
+          {:tls_gen_connection, :initialize_tls_sender, 1},
+          {:tls_client_connection, :init, 1},
+          {:tls_client_connection_1_3, :init, 1}
+        ]
+      }
+    )
+  end
+
   def observe_tls(corruption \\ nil) do
     observer = self()
     tag = make_ref()

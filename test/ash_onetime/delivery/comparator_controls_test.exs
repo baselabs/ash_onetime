@@ -4063,6 +4063,59 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: cold TLS derives its workers from the native startup chain", context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+    run = ConnectionNative.observe_tls_startup()
+    assert run.result == :ok
+    assert run.initial_state == :ok
+
+    factories =
+      for %{event: {supervisor, :call, {:tls_dyn_connection_sup, :start_link, _}}} <- run.events,
+          do: supervisor
+
+    assert [supervisor] = factories
+    assert run.snapshot.services[supervisor].name == :tls_connection_sup
+
+    senders =
+      for %{event: {pid, :call, {:tls_sender, :init, [_]}}} <- run.events, do: pid
+
+    receivers =
+      for %{event: {pid, :call, {:ssl_gen_statem, :init, [_]}}} <- run.events, do: pid
+
+    assert [sender] = senders
+    assert [receiver] = receivers
+    refute sender == receiver
+
+    workers =
+      for %{event: {parent, :spawn, child, _}} <- run.events,
+          parent in run.snapshot.pids,
+          do: child
+
+    assert length(Enum.uniq(workers)) >= 2
+    assert sender in workers and receiver in workers
+    assert Enum.all?(workers, &MapSet.member?(run.snapshot.down, &1))
+
+    for worker <- workers, binding <- run.tls_bindings do
+      refute worker in [binding.owner, binding.sender],
+             "a born TLS worker cannot acquire a post-birth historical root"
+    end
+
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+
+    for error <- proof.errors do
+      Diagnostics.emit(
+        "CONNECTION_COLD_TLS_ORIGIN_FAILURE",
+        Map.take(error, [:index, :at, :rule, :path, :context])
+      )
+    end
+
+    assert proof.errors == [],
+           "every TLS worker and plaintext socket needs its actual native birth origin"
+  end
+
+  @tag :connection_streams
   test "Connection streams: a native supervisor shutdown timer keeps its private receive proof",
        context do
     Repo.put_dynamic_repo(context.repo)

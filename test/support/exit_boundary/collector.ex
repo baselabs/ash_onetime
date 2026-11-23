@@ -89,7 +89,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   end
 
   def service_callbacks({module, :handle_call, 3})
-      when module in [Postgrex.TypeServer, Postgrex.Parameters, DynamicSupervisor],
+      when module in [Postgrex.TypeServer, Postgrex.Parameters, DynamicSupervisor, :supervisor],
       do: [{module, :handle_call, 3}, {module, :handle_cast, 2}, {module, :handle_info, 2}]
 
   def service_callbacks(callback), do: [callback]
