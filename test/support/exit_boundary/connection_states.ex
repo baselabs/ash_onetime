@@ -3633,13 +3633,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     {_, :return_from, _, 0} = size.returned.event
     server_version = Postgrex.Utils.parse_version(version.protocol.parameters["server_version"])
+    type_module = Keyword.fetch!(context.options, :types)
+    disable_composite_types = version.protocol.disable_composite_types
 
     # The short-lived owner retires the independently created table without
     # inspecting Postgrex's opaque state or borrowing the observed table.
     query =
       Task.async(fn ->
-        types = Postgrex.Types.new(Keyword.fetch!(context.options, :types))
-        input = %{types: types, disable_composite_types: version.protocol.disable_composite_types}
+        types = Postgrex.Types.new(type_module)
+        input = %{types: types, disable_composite_types: disable_composite_types}
         Postgrex.Types.bootstrap_query(server_version, input)
       end)
       |> Task.await()
