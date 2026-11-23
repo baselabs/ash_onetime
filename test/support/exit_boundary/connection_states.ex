@@ -391,8 +391,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp startup_phase(options) do
     if options[:ssl] not in [nil, false] and
          Keyword.get(options, :ssl_negotiation, :postgres) == :postgres,
-      do: :ssl_negotiation,
-      else: :startup
+       do: :ssl_negotiation,
+       else: :startup
   end
 
   defp startup_return(state, source, context, {:gen_tcp, :connect, 4}, {:ok, socket}) do
@@ -444,15 +444,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          {:gen_tcp, ^port} <- context.version.protocol.sock,
          true <- context.options[:ssl] not in [nil, false],
          true <-
-           {context.phase, Keyword.get(context.options, :ssl_negotiation, :postgres)} in
-             [{:ssl_upgrade, :postgres}, {:startup, :direct}],
+           {context.phase, Keyword.get(context.options, :ssl_negotiation, :postgres)} in [
+             {:ssl_upgrade, :postgres},
+             {:startup, :direct}
+           ],
          [binding] <-
            Enum.filter(Map.get(state.native, :tls_bindings, []), fn binding ->
              binding.port === port and binding.socket === socket and
                Map.get(binding, :upgrade_index) == call.index
            end) do
       context = %{context | phase: :startup}
-      startup_protocol(state, source, context, %{context.version.protocol | sock: {:ssl, binding.socket}})
+
+      startup_protocol(state, source, context, %{
+        context.version.protocol
+        | sock: {:ssl, binding.socket}
+      })
     else
       _ -> failure(state, source, :state_constructor_tls_origin)
     end

@@ -258,7 +258,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           {:tls_socket, :socket,
            [[receiver, sender], :gen_tcp, ^port, :tls_gen_connection, table, _trackers]}} <-
            constructed.source.event,
-         [created] <- Enum.filter(interval, &birth_constructor?(&1, receiver, sender, table, port)),
+         [created] <-
+           Enum.filter(interval, &birth_constructor?(&1, receiver, sender, table, port)),
          {^receiver, :call,
           {constructor, :initial_state,
            [:client, ^sender, ^table, host, remote_port, ^port, options, ^caller, callbacks]}} <-
@@ -269,7 +270,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          true <- created.source.index < constructed.source.index,
          true <- constructed.returned.index < created.returned.index,
          true <-
-           birth_initial?(initial, {table, host, remote_port, port, options, callbacks, socket, sender}),
+           birth_initial?(
+             initial,
+             {table, host, remote_port, port, options, callbacks, socket, sender}
+           ),
          client = birth_client(options),
          true <- constructor == elem(client, 1),
          true <- birth_client_init?(events, created, elem(client, 0)),
@@ -287,12 +291,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          [sender_entry] <- birth_entries(events, sender, :tls_sender, :init, sender_data),
          {^sender, :call, {_, _, [^supervisor | _]}} <- sender_entry.event,
          true <- sender_init.returned.index < sender_entry.index,
-         true <- birth_spawn?(events, supervisor, receiver) and birth_spawn?(events, supervisor, sender),
+         true <-
+           birth_spawn?(events, supervisor, receiver) and birth_spawn?(events, supervisor, sender),
          true <- tree.source.index < entry.index,
-         [factory] <- Enum.filter(interval, &birth_factory?(&1, caller, host, remote_port, port, options, callbacks)),
-         true <- factory.source.index < created.source.index and entry.index < factory.returned.index,
+         [factory] <-
+           Enum.filter(
+             interval,
+             &birth_factory?(&1, caller, host, remote_port, port, options, callbacks)
+           ),
+         true <-
+           factory.source.index < created.source.index and entry.index < factory.returned.index,
          true <- birth_options?(interval, receiver, factory, options, created),
-         {:ok, options_receipt} <- birth_options_receipt(events, tree, factory, receiver, supervisor),
+         {:ok, options_receipt} <-
+           birth_options_receipt(events, tree, factory, receiver, supervisor),
          [handoff] <- Enum.filter(interval, &birth_handoff?(&1, caller, port, receiver)),
          true <- constructed.returned.index < handoff.source.index,
          {:ok, receiver_machine} <- birth_machine(interval, entry, elem(client, 0), entered),
@@ -362,7 +373,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       else: {:tls_client_connection, :tls_dtls_gen_connection}
   end
 
-  defp birth_initial?(initial, {table, host, remote_port, port, options, callbacks, socket, sender})
+  defp birth_initial?(
+         initial,
+         {table, host, remote_port, port, options, callbacks, socket, sender}
+       )
        when is_tuple(initial) and tuple_size(initial) == 13 do
     environment = elem(initial, 2)
 
@@ -399,7 +413,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp birth_configuration?(pair, receiver, initial),
     do:
       pair.source.event ==
-        {receiver, :call, {:ssl_gen_statem, :init_ssl_config, [elem(initial, 4), :client, initial]}}
+        {receiver, :call,
+         {:ssl_gen_statem, :init_ssl_config, [elem(initial, 4), :client, initial]}}
 
   defp birth_client_state(_calls, _receiver, :tls_client_connection_1_3, configured) do
     {_, :return_from, _, state} = configured.returned.event
@@ -412,15 +427,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     alternatives = elem(elem(state, 3), 7)
 
     with [certificates] <-
-           Enum.filter(calls, &(&1.source.event == {receiver, :call, {:ssl_certificate, :available_cert_key_pairs, [alternatives]}})),
+           Enum.filter(
+             calls,
+             &(&1.source.event ==
+                 {receiver, :call, {:ssl_certificate, :available_cert_key_pairs, [alternatives]}})
+           ),
          {_, :return_from, _, certificate_pairs} <- certificates.returned.event,
          [selection] <-
            Enum.filter(calls, fn pair ->
              pair.source.event ==
                {receiver, :call,
                 {:ssl_session, :client_select_session,
-                 [{elem(environment, 9), elem(environment, 10), elem(state, 4)}, elem(environment, 13),
-                  elem(environment, 14), elem(state, 8), certificate_pairs]}}
+                 [
+                   {elem(environment, 9), elem(environment, 10), elem(state, 4)},
+                   elem(environment, 13),
+                   elem(environment, 14),
+                   elem(state, 8),
+                   certificate_pairs
+                 ]}}
            end),
          true <- configured.returned.index < certificates.source.index,
          true <- certificates.returned.index < selection.source.index,
@@ -432,12 +456,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp birth_entries(events, pid, module, name, data) do
-    for %{event: {^pid, :call, {:gen_statem, :enter, [_, [], ^module, ^pid, :infinity, ^name, ^data, []]}}} = source <- events,
+    for %{
+          event:
+            {^pid, :call,
+             {:gen_statem, :enter, [_, [], ^module, ^pid, :infinity, ^name, ^data, []]}}
+        } = source <- events,
         do: source
   end
 
   defp birth_entries(events, pid, module, name) do
-    for %{event: {^pid, :call, {:gen_statem, :enter, [_, [], ^module, ^pid, :infinity, ^name, _, []]}}} = source <- events,
+    for %{
+          event:
+            {^pid, :call, {:gen_statem, :enter, [_, [], ^module, ^pid, :infinity, ^name, _, []]}}
+        } = source <- events,
         do: source
   end
 
@@ -469,7 +500,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case Enum.filter(calls, fn pair ->
            pair.source.event ==
              {receiver, :call, {:tls_socket, :emulated_socket_options, [emulated, initial]}} and
-             factory.source.index < pair.source.index and pair.returned.index < created.source.index
+             factory.source.index < pair.source.index and
+             pair.returned.index < created.source.index
          end) do
       [%{returned: %{event: {_, :return_from, _, ^expected}}}] ->
         elem(options, 1) === expected
@@ -480,8 +512,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp birth_options_receipt(events, tree, factory, receiver, supervisor) do
-    {caller, :call,
-     {_, _, [host, port, socket, options, caller, callbacks, _timeout]}} = factory.source.event
+    {caller, :call, {_, _, [host, port, socket, options, caller, callbacks, _timeout]}} =
+      factory.source.event
+
     sender = tree.source.pid
     arguments = [:client, supervisor, host, port, socket, options, caller, callbacks]
     message = {sender, :options, arguments}
@@ -492,9 +525,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     with [sent] <- sends,
          [received] <- receives,
          [initial] <-
-           Enum.filter(events, &(&1.event == {receiver, :call, {:ssl_gen_statem, :init, [sender]}})),
+           Enum.filter(
+             events,
+             &(&1.event == {receiver, :call, {:ssl_gen_statem, :init, [sender]}})
+           ),
          [initialized] <-
-           Enum.filter(events, &(&1.event == {receiver, :call, {:ssl_gen_statem, :init_statem, [arguments]}})),
+           Enum.filter(
+             events,
+             &(&1.event == {receiver, :call, {:ssl_gen_statem, :init_statem, [arguments]}})
+           ),
          true <- sent.index < received.index,
          true <- initial.index < received.index and received.index < initialized.index do
       {:ok, received}
@@ -512,9 +551,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     pid = entry.pid
     {^pid, :call, {_, _, [parent, [], ^module, ^pid, :infinity, name, ^data, []]}} = entry.event
     before = {:params, :state_functions, false, parent, [:gen_statem], pid, :infinity}
-    params = {:params, :state_functions, module == :tls_client_connection_1_3, parent, [module], pid, :infinity}
 
-    with [mode] <- Enum.filter(calls, &(&1.source.event == {pid, :call, {:gen_statem, :get_callback_mode, [before, [module]]}})),
+    params =
+      {:params, :state_functions, module == :tls_client_connection_1_3, parent, [module], pid,
+       :infinity}
+
+    with [mode] <-
+           Enum.filter(
+             calls,
+             &(&1.source.event ==
+                 {pid, :call, {:gen_statem, :get_callback_mode, [before, [module]]}})
+           ),
          true <- entry.index < mode.source.index,
          {^pid, :return_from, _, ^params} <- mode.returned.event do
       {:ok,
@@ -717,10 +764,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         |> MapSet.new(),
       born_workers: MapSet.new(),
       births:
-        for(family <- families,
-            Map.get(family, :born?, false),
-            {pid, machine} <- family.machines,
-            do: {machine.birth_index, {pid, family, machine}})
+        for(
+          family <- families,
+          Map.get(family, :born?, false),
+          {pid, machine} <- family.machines,
+          do: {machine.birth_index, {pid, family, machine}}
+        )
         |> Enum.group_by(&elem(&1, 0), &elem(&1, 1)),
       pending: %{},
       frames: %{},
@@ -782,7 +831,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp worker_owner_event(source, state) do
     state = worker_spawn(source, state)
-    state = Enum.reduce(Map.get(state.births, source.index, []), state, &worker_birth(&1, source, &2))
+
+    state =
+      Enum.reduce(Map.get(state.births, source.index, []), state, &worker_birth(&1, source, &2))
 
     cond do
       Map.has_key?(state.owners, source.pid) ->
