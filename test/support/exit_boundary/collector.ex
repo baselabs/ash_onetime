@@ -334,7 +334,9 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     events
     |> Enum.filter(fn {_stamp, event} -> elem(event, 0) == receipt.pid end)
     |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.with_index(fn {stamp, event}, index -> %{stamp: stamp, event: event, index: index} end)
+    |> Enum.with_index(fn {stamp, event}, index ->
+      %{stamp: stamp, event: event, index: index}
+    end)
     |> NativeTransport.pairs()
     |> Map.values()
     |> Enum.filter(fn pair ->
