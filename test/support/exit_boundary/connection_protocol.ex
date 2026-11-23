@@ -293,7 +293,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
   end
 
   defp enqueue(state, kind, context) do
-    op = %{kind: kind, context: context, ordinal: state.ordinal}
+    op = %{
+      kind: kind,
+      context: context,
+      ordinal: state.ordinal,
+      request: Map.get(state.message_counts, :frontend, 0)
+    }
+
     pending = state.pending ++ [op]
     pending = if state.failed?, do: error_tail(pending), else: pending
     %{state | pending: pending, ordinal: state.ordinal + 1}
@@ -306,10 +312,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
     association = if operation, do: {operation.kind, operation.ordinal}, else: :frontend
     ordinal = Map.get(state.message_counts, frame.direction, 0)
 
+    # A reply belongs to the frontend message that queued its protocol
+    # operation, including Describe/Execute's inherited statement context.
+    # Native receive positions never identify a request.
+    request =
+      cond do
+        operation -> operation.request
+        frame.direction == :frontend and context != nil -> ordinal
+        true -> nil
+      end
+
     message =
       frame
       |> Map.put(:decoded, decoded)
       |> Map.put(:association, association)
+      |> Map.put(:request, request)
       |> Map.put(:sql, if(context, do: context.sql))
       |> Map.put(:statement, if(context, do: context.statement))
       |> Map.put(:context, context)
