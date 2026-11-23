@@ -32,7 +32,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTypes do
           into: %{},
           do:
             {owner,
-             %{table: table, types: types, state: root, index: -1, registration_keys: keys}}
+             %{
+               table: table,
+               types: types,
+               state: root,
+               index: -1,
+               initialized: -1,
+               retired: nil,
+               registration_keys: keys
+             }}
 
     pairs
     |> Map.values()
@@ -59,6 +67,43 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTypes do
           %{history | errors: history.errors ++ [error]}
       end
     end)
+  end
+
+  # The complete proof supplies the transition plan, not future operational
+  # roots. Both reducers advance this same lifetime at the actual native event.
+  def program(roots) do
+    initial = for {owner, %{index: -1} = root} <- roots, into: %{}, do: {owner, root}
+
+    events =
+      for {owner, root} <- roots,
+          root.index >= 0,
+          {kind, index} <- [
+            created: root.index,
+            initialized: root.initialized,
+            retired: root.retired
+          ],
+          is_integer(index),
+          into: %{},
+          do: {index, {kind, owner, root}}
+
+    {initial, events}
+  end
+
+  def advance(roots, events, %{index: index}) do
+    case Map.get(events, index) do
+      {:created, owner, root} ->
+        root = root |> Map.delete(:state) |> Map.put(:initialized, nil) |> Map.put(:retired, nil)
+        Map.put(roots, owner, root)
+
+      {:initialized, owner, root} ->
+        Map.update!(roots, owner, &Map.merge(&1, Map.take(root, [:state, :initialized])))
+
+      {:retired, owner, _root} ->
+        Map.update!(roots, owner, &Map.put(&1, :retired, index))
+
+      nil ->
+        roots
+    end
   end
 
   defp birth(events, pairs, services, init) do

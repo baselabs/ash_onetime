@@ -46,14 +46,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       streams: streams.connections
     }
 
-    initial = Map.put(initial, :type_roots, Map.get(indexed, :connection_type_roots, %{}))
+    {type_roots, type_events} =
+      ConnectionTypes.program(Map.get(indexed, :connection_type_roots, %{}))
+    initial = Map.put(initial, :type_roots, type_roots)
 
     saved = Map.get(indexed, :connection_decoder_program, %{})
 
     observations =
       Map.merge(Map.get(saved, :factory_observations, %{}), initial.factory_observations)
 
-    initial = initial |> Map.merge(saved) |> Map.put(:factory_observations, observations)
+    initial =
+      initial
+      |> Map.merge(saved)
+      |> Map.put(:factory_observations, observations)
+      |> Map.put(:type_events, type_events)
     continuation = %{initial: initial, events: indexed.events, replies: replies}
 
     state = Enum.reduce(indexed.events, initial, &event(&1, &2, replies))
@@ -86,7 +92,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     input.events
     |> Enum.take_while(&(&1.index < before))
     |> Enum.reduce(input.initial, &event(&1, &2, input.replies))
-    |> Map.drop([:native, :events, :pairs, :returns, :streams, :programs])
+    |> Map.drop([:native, :events, :pairs, :returns, :streams, :programs, :type_events])
   end
 
   # Every direct event stays in this index, including arrivals and events that
@@ -658,6 +664,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   defp event(e, state, replies) do
+    state = %{state | type_roots: ConnectionTypes.advance(state.type_roots, state.type_events, e)}
     state = commit_cursor(e, state)
 
     state =
@@ -1258,6 +1265,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     with %{source: %{event: {_, :call, {_, _, [server]}}}} <- returned_pair(state, source),
          %{types: types} = root <- state.type_roots[server],
          true <- Map.get(root, :index, -1) < source.index,
+         true <- is_integer(root.initialized) and root.initialized < source.index,
          true <- is_nil(Map.get(root, :retired)) or root.retired > source.index do
       {_, :return_from, _, {:lock, _ref, actual}} = source.event
       state = exact(state, source, :decoder_type_origin, actual, types)

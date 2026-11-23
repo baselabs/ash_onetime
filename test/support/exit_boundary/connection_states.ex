@@ -190,6 +190,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     tables = initial_tables(indexed, historical)
     machines = Map.get(indexed, :connection_owners, owner_machines(historical))
+    {type_roots, type_events} =
+      ConnectionTypes.program(Map.get(indexed, :connection_type_roots, %{}))
 
     initial = %{
       holders: holders,
@@ -205,7 +207,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       owner_factories: %{},
       owner_results: %{},
       starting: %{},
-      type_roots: Map.get(indexed, :connection_type_roots, %{}),
+      type_roots: type_roots,
       service_roots: Map.get(indexed, :connection_services, %{}),
       ports: ports,
       rows: rows,
@@ -254,7 +256,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       fixture: fixture
     }
 
-    initial = Map.merge(initial, Map.get(indexed, :connection_state_program, %{}))
+    initial =
+      initial
+      |> Map.merge(Map.get(indexed, :connection_state_program, %{}))
+      |> Map.put(:type_events, type_events)
     continuation = %{initial: initial, events: indexed.events}
 
     state = Enum.reduce(indexed.events, initial, &event/2)
@@ -279,7 +284,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     input.events
     |> Enum.take_while(&(&1.index < before))
     |> Enum.reduce(input.initial, &event/2)
-    |> Map.drop([:native, :events, :pairs, :returns, :decoders, :fixture, :type_services])
+    |> Map.drop([:native, :events, :pairs, :returns, :decoders, :fixture, :type_services, :type_events])
   end
 
   defp initial_tables(indexed, historical) do
@@ -312,6 +317,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp event(source, state) do
+    state =
+      %{state | type_roots: ConnectionTypes.advance(state.type_roots, state.type_events, source)}
+
     state = committed_row(source, state)
     state = committed_table(source, state)
     state = commit(source, state)
@@ -1881,6 +1889,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          [{owner, root}] <-
            Enum.filter(state.type_roots, fn {_owner, root} ->
              {module, context.endpoint} in root.registration_keys and root.index < source.index and
+               is_integer(root.initialized) and root.initialized < source.index and
                (is_nil(Map.get(root, :retired)) or root.retired > source.index)
            end) do
       origin = {:type_location, context.source.index, root.index}

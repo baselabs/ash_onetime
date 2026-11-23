@@ -4022,6 +4022,17 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              "a prefix cannot acquire the future native Types.new return"
     end
 
+    assert {:ok, before_init} = Historical.cut(historical, proof, birth.initialized)
+
+    for program <- [before_init.connection_decoder_program, before_init.connection_state_program] do
+      root = Map.fetch!(program.type_roots, birth.owner)
+      assert root.index == birth.index
+      assert root.types === birth.types
+      assert is_nil(root.initialized)
+      refute Map.has_key?(root, :state), "a prefix cannot acquire the future TypeServer.init return"
+      assert is_nil(root.retired)
+    end
+
     fetch =
       Enum.find(proof.indexed.events, fn
         %{event: {_, :call, {Postgrex.TypeServer, :fetch, [server]}}} -> server == birth.owner
@@ -4038,19 +4049,34 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       root = Map.fetch!(program.type_roots, birth.owner)
       assert root.index == birth.index
       assert root.types === birth.types
+      assert root.initialized == birth.initialized
       assert is_nil(root.retired), "a prefix cannot acquire the future service retirement"
     end
 
-    continued_side = %{
-      side
-      | historical: after_birth,
-        run: %{run | events: Enum.drop(run.events, fetch.index)}
-    }
+    assert {:ok, after_retirement} = Historical.cut(historical, proof, birth.retired + 1)
 
-    continued = ConnectionHistory.build(continued_side)
-    assert continued.errors == []
-    same_cursors? = continued.decoders.cursors === proof.decoders.cursors
-    assert same_cursors?, "the unchanged startup suffix must finish every original decoder"
+    for program <- [
+          after_retirement.connection_decoder_program,
+          after_retirement.connection_state_program
+        ] do
+      assert Map.fetch!(program.type_roots, birth.owner).retired == birth.retired
+    end
+
+    for checkpoint <- [before_birth, before_init, after_birth, after_retirement] do
+      continued_side = %{
+        side
+        | historical: checkpoint,
+          run: %{run | events: Enum.drop(run.events, checkpoint.event_offset)}
+      }
+
+      continued = ConnectionHistory.build(continued_side)
+      assert continued.errors == []
+      same_cursors? = continued.decoders.cursors === proof.decoders.cursors
+      assert same_cursors?, "the unchanged startup suffix must finish every original decoder"
+      same_commits? = continued.states.commits === proof.states.commits
+      assert same_commits?, "every lifetime cut must recover the original native holder history"
+      assert continued.types.births === proof.types.births
+    end
 
     without_origin =
       ComparatorMutants.with_mutant(:stream_startup_type_root, fn ->

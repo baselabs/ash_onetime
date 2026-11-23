@@ -494,8 +494,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/connection_states.ex",
         original:
-          "    initial = Map.merge(initial, Map.get(indexed, :connection_state_program, %{}))\n",
-        mutated: "    initial = Map.merge(initial, %{})\n"
+          "      |> Map.merge(Map.get(indexed, :connection_state_program, %{}))\n",
+        mutated: "      |> Map.merge(%{})\n"
       }
     ]
   end
