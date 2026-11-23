@@ -144,6 +144,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   defp active_option?(options), do: Enum.any?(options, &match?({:active, _}, &1))
 
   defp active_option_bytes?(<<22, _::binary>>), do: true
+
   defp active_option_bytes?(<<tag, _value::32, rest::binary>>) when tag in [23, 24, 30],
     do: active_option_bytes?(rest)
 
@@ -366,7 +367,8 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
       {:error, reason} ->
         failure(state, source, reason, %{options: Enum.map(options, &option_name/1)})
 
-      _ -> failure(state, source, :native_option_program)
+      _ ->
+        failure(state, source, :native_option_program)
     end
   end
 
