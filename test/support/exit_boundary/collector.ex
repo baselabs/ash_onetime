@@ -879,7 +879,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
     matches =
       for pair <- service_calls(context, pid, :gen, :call),
-          {^pid, :call, {:gen, :call, [destination, :"$gen_call", request, _timeout]}} <-
+          {^pid, :call, {:gen, :call, [destination, label, request, _timeout]}} <-
             [pair.source.event],
           pair.returned.event ===
             {pid, :return_from, {:gen, :call, 4}, {:ok, result}},
@@ -892,7 +892,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
           pair.source.stamp < monitor.source.stamp,
           monitor.returned.stamp < receipt.received_stamp,
           service_reply_target?(context, pid, destination, target, pair, monitor),
-          service_reply_sent?(context, pid, target, request, tag, monitor, receipt),
+          service_reply_sent?(context, pid, target, {label, {pid, tag}, request}, monitor, receipt),
           service_reply_demonitored?(context, pid, ref, receipt, pair),
           do: {pair, monitor}
 
@@ -940,10 +940,10 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   defp service_reply_target?(_context, _pid, _destination, _target, _parent, _monitor),
     do: false
 
-  defp service_reply_sent?(context, pid, target, request, tag, monitor, receipt) do
+  defp service_reply_sent?(context, pid, target, request, monitor, receipt) do
     Enum.any?(context.events, fn event ->
       monitor.returned.stamp < event.stamp and event.stamp < receipt.received_stamp and
-        event.event === {pid, :send, {:"$gen_call", {pid, tag}, request}, target}
+        event.event === {pid, :send, request, target}
     end)
   end
 

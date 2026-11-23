@@ -4676,9 +4676,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert length(replies) == 2
 
+    labels =
+      for receipt <- replies do
+        {_, :call, {:gen, :call, [_, label, _, _]}} = receipt.native_program.source
+        label
+      end
+
+    assert Enum.sort(labels) == [:"$gen_call", :system]
+
     for receipt <- replies do
       assert is_nil(receipt.called) and is_nil(receipt.returned)
-      assert {_, :call, {:gen, :call, [_, :"$gen_call", _, _]}} = receipt.native_program.source
       assert receipt.native_program.source_stamp < receipt.received_stamp
       assert receipt.received_stamp < receipt.native_program.returned_stamp
     end
