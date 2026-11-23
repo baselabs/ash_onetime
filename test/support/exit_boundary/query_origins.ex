@@ -1,5 +1,6 @@
 defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
   @moduledoc false
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.References
 
   def build(indexed, side) do
@@ -30,6 +31,8 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
         promote_commit(commit, state, historical.table, history.native.pairs, generated)
       end)
 
+    diagnose_missing_origins(result.errors, side, history)
+
     names =
       Map.new(result.ids, fn {sql, id} ->
         {sql, References.query_name(id, side.historical.repo_metadata)}
@@ -57,6 +60,30 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
     if id in generated,
       do: %{state | ids: Map.put(state.ids, statement(query), id)},
       else: %{state | errors: [{source, id, :missing_unique_integer_origin} | state.errors]}
+  end
+
+  # Temporary continuation diagnostic: coordinates and ownership flags only.
+  # Never expose the prepared query, generated integer or captured arguments.
+  defp diagnose_missing_origins(errors, side, history) do
+    before = Map.get(side.historical, :event_offset, 0)
+
+    for {source, id, :missing_unique_integer_origin} <- errors do
+      prefix_origin? =
+        Enum.any?(history.program_events, fn
+          %{event: {pid, :return_from, {:erlang, :unique_integer, _arity}, value}, index: index} ->
+            pid == source.pid and value == id and index < source.index and index < before
+
+          _ ->
+            false
+        end)
+
+      Diagnostics.emit("CONNECTION_QUERY_ORIGIN_FAILURE", %{
+        index: source.index,
+        offset: before,
+        insertion_in_prefix?: source.index < before,
+        generator_in_prefix?: prefix_origin?
+      })
+    end
   end
 
   def expected_name(origins, query), do: Map.fetch(origins.names, statement(query))

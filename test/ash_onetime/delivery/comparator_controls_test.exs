@@ -4463,6 +4463,76 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: a native query cache keeps its origins across an unchanged prefix cut",
+       context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+
+    run =
+      ExitBoundary.observe(
+        fn -> Repo.put_dynamic_repo(context.repo) end,
+        fn _ ->
+          query =
+            from(c in "pg_class",
+              prefix: "pg_catalog",
+              where: c.relkind == "r",
+              select: count(c.oid)
+            )
+
+          Repo.all(query)
+          send(self(), :native_query_origin_cut)
+          receive do: (:native_query_origin_cut -> :ok)
+          Repo.all(query)
+          :ok
+        end,
+        %{host: [], callbacks: []}
+      )
+
+    assert run.result == :ok
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+    assert proof.errors == []
+    whole = Map.put(side, :connection_history, proof)
+    original = QueryOrigins.build(Origins.build(whole), whole)
+    assert original.errors == []
+
+    [barrier] =
+      for %{event: {_, :receive, :native_query_origin_cut}} = source <- proof.indexed.events,
+          do: source
+
+    promotions =
+      for {_index, pair} <- proof.native.pairs,
+          pair.returned.index < barrier.index,
+          {_, :call, {:ets, :insert_new, [table, {_, :cache, _, {_id, _query}}]}} <-
+            [pair.source.event],
+          table == historical.query_cache.table,
+          {_, :return_from, _, true} <- [pair.returned.event],
+          do: pair.source.index
+
+    assert promotions != [], "the real prefix must commit a new Ecto cache origin"
+    assert {:ok, checkpoint} = Historical.cut(historical, proof, barrier.index)
+
+    continued_side = %{
+      side
+      | historical: checkpoint,
+        run: %{run | events: Enum.drop(run.events, barrier.index)}
+    }
+
+    continued = ConnectionHistory.build(continued_side)
+    assert continued.errors == []
+    continued_side = Map.put(continued_side, :connection_history, continued)
+    indexed = Origins.build(continued_side)
+    queries = QueryOrigins.build(indexed, continued_side)
+
+    assert queries.errors == [],
+           "a qualified prefix cache origin cannot require a second suffix generator"
+
+    same_origins? = queries.ids === original.ids and queries.names === original.names
+    assert same_origins?, "the unchanged suffix must retain every original query cache identity"
+    assert Enum.all?(queries.cache_events, &(&1 >= barrier.index))
+  end
+
+  @tag :connection_streams
   @tag prepare: :named
   test "Connection streams: a failed Ecto cache candidate cannot become a query origin",
        context do
