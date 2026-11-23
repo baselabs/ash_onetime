@@ -4141,6 +4141,21 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              is_nil(receipt.called) and is_nil(receipt.returned)
            end)
 
+    [{receipt, program}] = receipts
+    supervisor = receipt.pid
+
+    assert {^supervisor, :call, {:erlang, :start_timer, [5000, ^supervisor, :kill]}} =
+             program.timer_source
+
+    assert {^supervisor, :return_from, {:erlang, :start_timer, 3}, timer_ref} =
+             program.timer_returned
+
+    assert receipt.message == {:timeout, timer_ref, :kill}
+    assert receipt.used_by == timer_ref
+    assert program.timer_source_stamp < receipt.received_stamp
+    assert receipt.received_stamp < program.returned_stamp
+    assert run.snapshot.timers[timer_ref].terminal.native_program === program
+
     timers =
       for {_ref, %{state: :fired, terminal: %{native_program: %{kind: :shutdown_timer}}}} <-
             run.snapshot.timers,
@@ -4157,6 +4172,16 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert MapSet.member?(run.snapshot.down, birth.owner)
     assert :ets.info(birth.table) == :undefined
     assert Elixir.Registry.lookup(Postgrex.TypeManager, birth.key) == []
+
+    ComparatorMutants.with_mutant(:stream_shutdown_timer_completion, fn ->
+      assert_raise ExUnit.AssertionError, fn ->
+        ConnectionNative.observe_fresh_startup(:timed_shutdown)
+      end
+    end)
+
+    restored = ConnectionNative.observe_fresh_startup(:timed_shutdown)
+    restored_side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+    assert ConnectionHistory.build(restored_side).errors == []
   end
 
   for position <- [0, 1, :return] do

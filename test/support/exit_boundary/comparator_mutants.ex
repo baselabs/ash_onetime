@@ -819,6 +819,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_shutdown_timer_completion) do
+    [
+      %{
+        path: "test/support/exit_boundary/collector.ex",
+        original:
+          "  defp service_timer_program?(%{native_program: %{kind: :shutdown_timer}}), do: true\n",
+        mutated:
+          "  defp service_timer_program?(%{native_program: %{kind: :shutdown_timer}}), do: false\n"
+      }
+    ]
+  end
+
   def edits(:diagnostic_record_complete) do
     [
       %{

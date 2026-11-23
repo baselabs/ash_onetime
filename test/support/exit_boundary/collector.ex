@@ -828,7 +828,117 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     end
   end
 
+  defp service_program(%{message: {:timeout, ref, :kill}} = receipt, context) do
+    pid = receipt.pid
+
+    matches =
+      for parent <- service_calls(context, pid, DynamicSupervisor, :terminate_children),
+          {^pid, :call, {_, _, [children, _state]}} <- [parent.source.event],
+          parent.returned.event ===
+            {pid, :return_from, {DynamicSupervisor, :terminate_children, 2}, :ok},
+          timer <- service_calls(context, pid, :erlang, :start_timer),
+          {^pid, :call, {:erlang, :start_timer, [time, ^pid, :kill]}} <- [timer.source.event],
+          is_integer(time) and time >= 0,
+          timer.returned.event === {pid, :return_from, {:erlang, :start_timer, 3}, ref},
+          parent.source.stamp < timer.source.stamp,
+          timer.returned.stamp < receipt.received_stamp,
+          receipt.received_stamp < parent.returned.stamp,
+          targets = for({child, {_, _, ^time, _, _} = spec} <- children, do: {child, spec}),
+          targets != [],
+          Enum.all?(targets, fn {child, spec} ->
+            service_shutdown_timer_target?(context, receipt, parent, timer, child, spec)
+          end),
+          service_shutdown_timer_terminal?(context, receipt, parent, timer, targets),
+          do: {parent, timer}
+
+    case matches do
+      [{parent, timer}] ->
+        {:ok, key, program} =
+          service_program_result(
+            :shutdown_timer,
+            parent,
+            receipt,
+            {:shutdown_timer, timer.source.stamp}
+          )
+
+        {:ok, key,
+         Map.merge(program, %{
+           timer_source: timer.source.event,
+           timer_returned: timer.returned.event,
+           timer_source_stamp: timer.source.stamp
+         })}
+
+      _ ->
+        :error
+    end
+  end
+
   defp service_program(_receipt, _context), do: :error
+
+  defp service_shutdown_timer_target?(context, receipt, parent, timer, child, spec) do
+    pid = receipt.pid
+
+    with {:ok, ref, monitor} <- service_monitor(context, pid, child, parent),
+         true <- service_unlinked?(context, pid, child, parent, monitor, receipt),
+         true <-
+           service_exit?(context, pid, child, :shutdown, monitor.returned.stamp, timer.source.stamp),
+         [down] <-
+           for(
+             %{event: {^pid, :receive, {:DOWN, ^ref, :process, ^child, _}}} = event <-
+               context.events,
+             monitor.returned.stamp < event.stamp and event.stamp < parent.returned.stamp,
+             do: event
+           ),
+         {_, :receive, {_, _, _, _, reason}} <- down.event do
+      Enum.any?(service_calls(context, pid, DynamicSupervisor, :wait_child), fn waited ->
+        down.stamp < waited.source.stamp and waited.returned.stamp < parent.returned.stamp and
+          service_wait_child?(waited, pid, child, spec, reason)
+      end)
+    else
+      _ -> false
+    end
+  end
+
+  defp service_shutdown_timer_terminal?(context, receipt, parent, timer, targets) do
+    pid = receipt.pid
+    {:timeout, ref, :kill} = receipt.message
+
+    cancelled =
+      Enum.any?(service_calls(context, pid, :erlang, :cancel_timer), fn pair ->
+        timer.returned.stamp < pair.source.stamp and
+          pair.returned.stamp < receipt.received_stamp and
+          pair.source.event === {pid, :call, {:erlang, :cancel_timer, [ref]}} and
+          pair.returned.event === {pid, :return_from, {:erlang, :cancel_timer, 1}, false} and
+          Enum.all?(targets, fn {child, _spec} ->
+            Enum.any?(context.events, fn event ->
+              timer.source.stamp < event.stamp and event.stamp < pair.source.stamp and
+                match?(%{event: {^pid, :receive, {:DOWN, _, :process, ^child, _}}}, event)
+            end)
+          end)
+      end)
+
+    killed =
+      Enum.all?(targets, fn {child, _spec} ->
+        service_exit?(
+          context,
+          pid,
+          child,
+          :kill,
+          receipt.received_stamp,
+          parent.returned.stamp
+        )
+      end)
+
+    cancelled or killed
+  end
+
+  defp service_exit?(context, pid, child, reason, after_stamp, before_stamp) do
+    Enum.any?(service_calls(context, pid, :erlang, :exit), fn pair ->
+      after_stamp < pair.source.stamp and pair.returned.stamp < before_stamp and
+        pair.source.event === {pid, :call, {:erlang, :exit, [child, reason]}} and
+        pair.returned.event === {pid, :return_from, {:erlang, :exit, 2}, true}
+    end)
+  end
 
   defp service_unlinked?(context, pid, child, parent, monitor, receipt) do
     Enum.any?(service_calls(context, pid, :erlang, :unlink), fn pair ->
@@ -1023,17 +1133,21 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
         timer.dest in [receipt.pid, binding.name] and timer.expected === receipt.message and
           timer.started_stamp < receipt.received_stamp and receipt.registered? and
-          is_nil(receipt.used_by) and service_completed?(receipt)
+          is_nil(receipt.used_by) and
+          (service_completed?(receipt) or service_timer_program?(receipt))
       end)
 
     if receipt do
-      terminal = Map.take(receipt, [:pid, :received, :called, :returned])
+      terminal = Map.take(receipt, [:pid, :received, :called, :returned, :native_program])
       state = put_in(state.timers[ref], Map.merge(timer, %{state: :fired, terminal: terminal}))
       replace_service_receipt(state, %{receipt | used_by: ref})
     else
       state
     end
   end
+
+  defp service_timer_program?(%{native_program: %{kind: :shutdown_timer}}), do: true
+  defp service_timer_program?(_receipt), do: false
 
   defp service_completed?(receipt) do
     not is_nil(receipt.called) and not is_nil(receipt.returned) and
