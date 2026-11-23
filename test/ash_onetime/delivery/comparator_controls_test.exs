@@ -6461,7 +6461,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     rows =
       Enum.filter(Scenarios.rows(), fn row ->
-        Registry.allocation_checkpoint?(row) or row.branch == :replay or row.fault == :codec_decode
+        Registry.allocation_checkpoint?(row) or row.branch == :replay or
+          row.fault == :codec_decode
       end)
 
     Compiled.with_source(mutated, path, fn ->
