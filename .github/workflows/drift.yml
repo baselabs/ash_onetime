@@ -59,6 +59,8 @@ jobs:
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
       matrix_routes: ${{ steps.test-shards.outputs.matrix_routes }}
       scheduling_shards: ${{ steps.test-shards.outputs.scheduling_shards }}
+      native_shards: ${{ steps.test-shards.outputs.native_shards }}
+      postgres_all_lanes: ${{ steps.versions.outputs.postgres_all_lanes }}
       mutation_shards: ${{ steps.versions.outputs.mutation_shards }}
       default_branch: ${{ steps.ref.outputs.default_branch }}
     steps:
@@ -202,14 +204,18 @@ jobs:
           selector: ${{ matrix.name }}
 
   comparator-native:
-    name: "Native connection prerequisites"
+    name: "Native connection prerequisites ${{ matrix.shard }} (PostgreSQL ${{ matrix.postgres.major }})"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Cached 81s on Work 44909461651, job 136862122497, 83ea75c1c227cbdc29fdbc386bddf95c7d112ece.
-    # Add 57s cold setup from Work 44852145428, job 136685902792; remeasure on first cold green.
-    timeout-minutes: 5
+    # Split from Work 45265968417 (cold PG18 44m12s); no green partition run yet.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ${{ fromJSON(needs.toolchain.outputs.postgres_all_lanes) }}
+        shard: ${{ fromJSON(needs.toolchain.outputs.native_shards) }}
     env:
-      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-native"
+      ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-native-${{ strategy.job-index }}"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -220,9 +226,13 @@ jobs:
           cache: none
           elixir: ${{ needs.toolchain.outputs.elixir }}
           otp: ${{ needs.toolchain.outputs.otp }}
-          postgres-client: ${{ needs.toolchain.outputs.postgres_client }}
+          postgres-client: ${{ matrix.postgres.client }}
+          postgres-image: ${{ matrix.postgres.image }}
+          postgres-major: ${{ matrix.postgres.major }}
+          libpq-version: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
           lane: native
+          selector: ${{ matrix.shard }}
 
   comparator-controls:
     name: "Comparator controls"

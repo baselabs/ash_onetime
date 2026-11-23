@@ -1,4 +1,10 @@
 {
+  "native_shards": [
+    "transport",
+    "driver",
+    "pool",
+    "tls"
+  ],
   "matrix_routes": [
     {
       "name": "issue_abc",

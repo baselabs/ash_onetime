@@ -10,6 +10,9 @@ import sys
 def configuration():
     data = json.loads(Path(".github/test-shards.json").read_text())
     data["mutation_shards"] = json.loads(Path(".github/mutation-shards.json").read_text())
+    natives = data["native_shards"]
+    if not natives or len(natives) != len(set(natives)) or any(not name for name in natives):
+        raise ValueError("native shards must have unique, nonempty names")
     routes = data["matrix_routes"]
     names = [shard["name"] for shard in routes]
     if len(names) != len(set(names)) or any(not shard["values"] for shard in routes):
@@ -40,7 +43,8 @@ def configuration():
 def main(arguments):
     data = configuration()
     if arguments == ["--check"]:
-        print("Shared test shards cover all routes, scheduling groups and mutation shards once")
+        print("Shared test shards declare native programs and cover all routes, "
+              "scheduling groups and mutation shards once")
         return 0
     if arguments == ["--outputs"]:
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
@@ -60,8 +64,9 @@ def main(arguments):
         command += [directory + "comparator_scheduling_test.exs"]
         for group in shard["groups"]:
             command += ["--only", f"u9_group:{group}"]
-    elif lane == "native" and selector == "":
-        command += [directory + "comparator_controls_test.exs", "--only", "connection_streams"]
+    elif lane == "native" and selector in data["native_shards"]:
+        command += [directory + "comparator_controls_test.exs", "--only",
+                    f"connection_streams:{selector}"]
     elif lane == "controls" and selector == "":
         command += [directory + name for name in [
             "comparator_controls_test.exs", "comparator_matrix_test.exs",

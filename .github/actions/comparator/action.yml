@@ -29,7 +29,7 @@ inputs:
     description: matrix, scheduling, native or controls
     required: true
   selector:
-    description: Route or scheduling shard name; empty for native or controls
+    description: Native, route or scheduling shard name; empty for controls
     default: ''
 runs:
   using: composite

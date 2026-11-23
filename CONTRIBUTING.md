@@ -41,6 +41,11 @@ PostgreSQL major. Suite jobs exclude `exit_boundary`; dedicated native, controls
 and scheduling jobs cover that tag. The shared `.github/test-shards.json` declares every
 matrix route and scheduling group, and each partition runs on each major. Both workflows
 require every job and expanded matrix cell in their `qualified` verdict.
+
+Native prerequisites use that same declaration to run the transport, driver, pool and TLS
+programs separately on every major. Each native test has one `connection_streams` partition
+value; its job selects that value, and the controls lane excludes the entire tag.
+
 [`.github/postgres-compat.json`](.github/postgres-compat.json) declares each supported
 non-platform major once, with its upstream patch tag, image digest and exact PGDG client
 package. The shared toolchain reader validates the compatibility matrix and emits the

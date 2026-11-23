@@ -40,6 +40,7 @@ jobs:
       pgdg_key: ${{ steps.versions.outputs.pgdg_key }}
       matrix_routes: ${{ steps.test-shards.outputs.matrix_routes }}
       scheduling_shards: ${{ steps.test-shards.outputs.scheduling_shards }}
+      native_shards: ${{ steps.test-shards.outputs.native_shards }}
       mutation_shards: ${{ steps.versions.outputs.mutation_shards }}
     steps:
       # The default branch is read from the repository, as in every workflow here.
@@ -247,15 +248,16 @@ jobs:
           selector: ${{ matrix.shard.name }}
 
   comparator-native:
-    name: "Native connection prerequisites (PostgreSQL ${{ matrix.postgres.major }})"
+    name: "Native connection prerequisites ${{ matrix.shard }} (PostgreSQL ${{ matrix.postgres.major }})"
     needs: toolchain
     runs-on: ubuntu-24.04
-    # Expanded native obligations have no green run yet; remeasure after cold qualification.
+    # Split from Work 45265968417 (cold PG18 44m12s); no green partition run yet.
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         postgres: ${{ fromJSON(needs.toolchain.outputs.postgres_all_lanes) }}
+        shard: ${{ fromJSON(needs.toolchain.outputs.native_shards) }}
     env:
       ASH_ONETIME_TEST_SERVER: "ao-${{ github.run_id }}-${{ github.run_attempt }}-comparator-native-${{ strategy.job-index }}"
     steps:
@@ -272,6 +274,7 @@ jobs:
           libpq-version: ${{ needs.toolchain.outputs.postgres_client }}
           pgdg-key: ${{ needs.toolchain.outputs.pgdg_key }}
           lane: native
+          selector: ${{ matrix.shard }}
           cache: none
 
   comparator-controls:

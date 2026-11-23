@@ -121,7 +121,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     {Postgrex.TypeServer, :update, 3} => [0, 1, 2]
   }
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: native messages survive every header split", context do
     pair = observe(context, row!(:issue, :execute), Values.set()[:va])
     Code.ensure_loaded!(Wire)
@@ -172,7 +172,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: a native incomplete final frame is refused" do
     run = ConnectionNative.observe(:incomplete)
     assert run.result == :ok
@@ -229,7 +229,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp stream_contents(result),
     do: Enum.map(result.messages, &Map.take(&1, [:direction, :tag, :payload, :start, :stop]))
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: native Parse Describe Flush and Bind Execute Sync associate",
        context do
     Repo.put_dynamic_repo(context.repo)
@@ -381,7 +381,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp native_reason_tag({tag, _}) when tag in [:badmatch, :case_clause], do: tag
   defp native_reason_tag(_reason), do: :term
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: prepared metadata comes from the connection's native history" do
     %{run: run, history: history} = ConnectionNative.observe_prepared()
     assert run.result == :ok
@@ -422,7 +422,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            end)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: history failures keep native terms out of logger diagnostics" do
     marker = "native-history-diagnostic-marker"
     unguarded = ComparatorMutants.with_mutant(:history_status, &history_failure_log/0)
@@ -451,7 +451,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   @tag prepare: :named, pool_size: 1
   test "Connection streams: native owner replacement preserves historical observation", context do
     before = native_history_query(context, "history_before_reload")
@@ -497,7 +497,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     %{coverage: ConnectionHistory.function_coverage(), descriptors: descriptors}
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   @tag prepare: :named, pool_size: 1
   test "Connection streams: main snapshots retain native prepared catalogs and descriptors",
        context do
@@ -567,7 +567,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_NATIVE_TLS_AVAILABLE=#{tls?}")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   @tag native_tls: true, prepare: :named, pool_size: 1
   test "Connection streams: main TLS history retains its physical catalog and raw programs",
        context do
@@ -665,7 +665,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         :bind_error,
         :execute_error
       ] do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: cached decoder descriptors retain native origins for #{shape}" do
       shape = unquote(shape)
       captured = cached_decoders(nil, shape)
@@ -984,7 +984,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp native_helper_return_positions(_function, _result), do: []
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: intermediate owner returns retain their native state versions" do
     %{events: events, decoders: decoders} = cached_decoders(nil, :cross_connection)
 
@@ -1039,7 +1039,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert ready.index < completed.index
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: PID timer cancellation has a monitored native receipt" do
     run =
       ExitBoundary.observe(
@@ -1081,7 +1081,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            end)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: a registered timer destination requires its own cancellation" do
     run =
       ExitBoundary.observe(
@@ -1129,7 +1129,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     refute Map.has_key?(timer, :terminal)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: a forged DOWN cannot close a live traced process" do
     observer = self()
     tag = make_ref()
@@ -1178,7 +1178,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_MONITOR_SOURCE: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :pool
   test "Connection streams: shared service timers require their completed native callback" do
     {:ok, _applications} = Application.ensure_all_started(:ssl)
     service = Process.whereis(:ssl_manager)
@@ -1232,7 +1232,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_SERVICE_COMPLETION: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :pool
   test "Connection streams: native type-service casts retain their completed dispatch" do
     check = fn ->
       run = ConnectionNative.observe_startup()
@@ -1273,7 +1273,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     check.()
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: native row type copies have their own descriptor origin" do
     captured =
       ComparatorMutants.with_postgrex_mutant(:row_type_copy, fn -> cached_decoders(nil) end)
@@ -1314,7 +1314,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_ROW_TYPE_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: native receive helpers retain their caller timeout" do
     captured =
       ComparatorMutants.with_postgrex_mutant(:receive_timeout_copy, fn -> cached_decoders(nil) end)
@@ -1386,7 +1386,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     }
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: native transaction completions bind every tag and result" do
     captured = native_transactions()
     events = captured.events
@@ -1414,7 +1414,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   for mutation <- [:inputs, :result] do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: native transaction #{mutation} retain their command origins" do
       mutation = unquote(mutation)
       targets = %{{:done, 2} => [1], {:recv_transaction, 4} => [2]}
@@ -1477,7 +1477,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp transaction_corrupted_coordinates(_source, _mutation, _targets), do: []
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: private status copies retain their callback origin" do
     captured =
       ComparatorMutants.with_postgrex_mutant(:status_copy, fn -> cached_decoders(nil) end)
@@ -1521,7 +1521,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_STATUS_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: native error helpers retain the server error origin" do
     for shape <- [:bind_error, :execute_error] do
       captured =
@@ -1561,7 +1561,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_ERROR_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: native completion inputs retain query and command origins" do
     targets = %{{:done, 4} => [1, 3], {:done, 5} => [1, 3, 4]}
 
@@ -1576,7 +1576,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         {:cross_connection, %{{:close_parse_describe_flush, 4} => [2, 3], {:msg_send, 3} => [1]}},
         {:strict, %{{:recv_strict_ready, 4} => [2]}}
       ] do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: native #{shape} helper inputs retain their factories" do
       shape = unquote(shape)
       targets = unquote(Macro.escape(targets))
@@ -1585,7 +1585,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: indexed native intervals retain the entire fragmented transport proof" do
     run = ConnectionNative.observe_tls(:fragmented)
 
@@ -1618,7 +1618,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     )
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: bounded diagnostics preserve every native error coordinate" do
     captured =
       ComparatorMutants.with_postgrex_inputs(
@@ -1739,7 +1739,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         {:describe_result, 5, 2, :ref},
         {:handle_prepare, 3, 3, :columns}
       ] do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: native #{function} Query returns retain earlier factories" do
       function = unquote(function)
       arity = unquote(arity)
@@ -1829,7 +1829,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         :array_nested_composite_array_domain_reload,
         :unsupported_type
       ] do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: fresh native #{shape} preparation binds every helper return coordinate" do
       captured = native_query_factory(unquote(shape))
       assert_query_factory_path(captured, unquote(shape))
@@ -1870,7 +1870,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       postgrex_prepare <- [false, true],
       mode <- [:transaction, :savepoint],
       {prepare, postgrex_prepare, mode} != {:named, false, :transaction} do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: #{shape} reload closes #{prepare}/#{postgrex_prepare}/#{mode} origins" do
       options = [postgrex_prepare: unquote(postgrex_prepare), mode: unquote(mode)]
       captured = native_query_factory(unquote(shape), unquote(prepare), options)
@@ -1922,7 +1922,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       postgrex_prepare <- [false, true],
       mode <- [:transaction, :savepoint],
       {prepare, postgrex_prepare, mode} != {:named, false, :transaction} do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: #{shape} preparation closes #{prepare}/#{postgrex_prepare}/#{mode} errors" do
       captured =
         native_query_factory(unquote(shape), unquote(prepare),
@@ -1978,7 +1978,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            {:reload_closed, 5} => [2, 3]
          }}
       ] do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: prepared reload #{prepare}/#{mode} inputs retain their origins" do
       targets = unquote(Macro.escape(targets))
 
@@ -1991,21 +1991,21 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: parameter reload inputs retain both type origins" do
     assert_native_helper_inputs(%{{:reload_describe_result, 4} => [1, 2]}, fn ->
       native_query_factory(:domain_reload)
     end)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: type lookup inputs retain each recursive accumulator origin" do
     targets = %{{:fetch_type_info, 2} => [0, 1], {:fetch_type_info, 4} => [0, 1, 2, 3]}
 
     assert_native_helper_inputs(targets, fn -> native_query_factory(:domain_reload) end)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: native type lookup arguments retain OID and table origins" do
     assert_native_helper_inputs(
       %{{:fetch, 2} => [0, 1]},
@@ -2014,7 +2014,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     )
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: native type owner and catalog inputs retain their sources" do
     assert_native_helper_inputs(
       %{{:owner, 1} => [0], {:build_type_info, 1} => [0]},
@@ -2023,7 +2023,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     )
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: native type lock and update retain owner, lock and catalog origins" do
     assert_native_helper_inputs(
       %{{:fetch, 1} => [0], {:update, 3} => [0, 1, 2]},
@@ -2046,7 +2046,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         {Postgrex.TypeServer, :fetch, 1, 3, 2, :domain_reload},
         {Postgrex.TypeServer, :update, 3, nil, nil, :domain_reload}
       ] do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: #{module}.#{function}/#{arity} #{shape} return #{position} binds its native source" do
       module = unquote(module)
       function = unquote(function)
@@ -2104,7 +2104,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp native_type_return_field(_result, _size, _position), do: :other_return
 
-  @tag :connection_streams
+  @tag connection_streams: :pool
   test "Connection streams: native type requests retain their completed server callbacks" do
     captured = native_query_factory(:domain_reload)
     assert captured.native.errors == []
@@ -2150,7 +2150,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: savepoint tags retain the active transaction receive origin" do
     targets = %{{:recv_transaction, 4} => [2], {:done, 2} => [1]}
 
@@ -2163,7 +2163,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         message: {Postgrex.Protocol, :msg_recv, 3},
         rows: {Postgrex.Protocol, :rows_recv, 4}
       ] do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: an extra no-progress #{kind} decoder remains observable" do
       kind = unquote(kind)
 
@@ -2252,7 +2252,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     %{events: events, native: native, streams: streams, decoders: decoders}
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: reload inputs retain parent, catalog and reference origins" do
     targets = %{{:reload_spawn, 5} => [1, 2, 3], {:reload_init, 5} => [1, 2, 3]}
 
@@ -2375,7 +2375,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       do: assert(Enum.any?(infos, &(&1.category == :composite and &1.comp_elems != [])))
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: explicit native ping options retain callback, buffer and timeout origins" do
     run = ConnectionNative.observe_ping_options()
     assert run.result == :ok
@@ -2383,7 +2383,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert_native_caller_census(run)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: native prepare cache hits, reprepare and invalidation retain origins" do
     run = ConnectionNative.observe_prepare_cycle()
     assert {first, cached, reparsed, renewed} = run.result
@@ -2441,7 +2441,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: native cursor callbacks bind each operation and suspended result" do
     run = ConnectionNative.observe_cursor()
     assert run.result == [[1], [2], [3]]
@@ -2471,7 +2471,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         {:recv_describe, 4, 7, 6},
         {:reload_describe_result, 4, 4, 3}
       ] do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: native #{function} return buffers retain decoder origins" do
       function = unquote(function)
       arity = unquote(arity)
@@ -2532,7 +2532,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         {:columns, 1, 3, 1},
         {:columns, 1, 3, 2}
       ] do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: native #{function} return field #{position} retains its own origin" do
       function = unquote(function)
       arity = unquote(arity)
@@ -2586,7 +2586,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp native_return_factory(:reload_describe_result), do: native_query_factory(:domain_reload)
   defp native_return_factory(_function), do: native_query_factory()
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: notify factories retain their native code and empty environment" do
     captured =
       ComparatorMutants.with_owner_outputs(
@@ -2625,7 +2625,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_NOTIFY_FACTORY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: unsolicited helper messages cannot supply their expected state" do
     for shape <- [:notice, :parameter, :notification] do
       captured =
@@ -2666,7 +2666,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         {:redescribe, {:redescribe, 6}, %{size: 4, position: 1, field: :columns}},
         {:bind_error, {:error_ready, 4}, %{size: 3, position: 1, field: :message}}
       ] do
-    @tag :connection_streams
+    @tag connection_streams: :driver
     test "Connection streams: #{elem(target, 0)}/#{elem(target, 1)} returns retain earlier inputs" do
       shape = unquote(shape)
       {function, arity} = target = unquote(Macro.escape(target))
@@ -2708,7 +2708,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: completed rows retain their earlier decoder origin" do
     captured =
       ComparatorMutants.with_postgrex_mutant(:done_rows_copy, fn -> cached_decoders(nil) end)
@@ -2743,7 +2743,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_DONE_ROWS_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: encoded send messages retain their earlier caller origin" do
     captured =
       ComparatorMutants.with_postgrex_mutant(:send_message_copy, fn -> cached_decoders(nil) end)
@@ -2778,7 +2778,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_SEND_MESSAGES_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: private send buffers retain their native owner copy" do
     captured =
       ComparatorMutants.with_postgrex_mutant(:send_buffer_copy, fn -> cached_decoders(nil) end)
@@ -2856,7 +2856,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     )
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: callback inputs bind to their actual owner state" do
     captured = cached_decoders(:state_copy)
 
@@ -2917,7 +2917,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_STATE_INPUT_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :pool
   test "Connection streams: holder writes bind to the callback return that owns their state" do
     {captured, rejected} = holder_states(:state_copy)
     assert Enum.map(rejected.errors, & &1.rule) == [:state_holder_update]
@@ -2949,7 +2949,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_STATE_HOLDER_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :pool
   test "Connection streams: history cuts retain committed holder rows, not temporary outputs" do
     parent = self()
     token = make_ref()
@@ -3031,7 +3031,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   @tag prepare: :named
   test "Connection streams: history cuts retain native and Ecto committed query caches",
        context do
@@ -3583,7 +3583,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :pool
   test "Connection streams: cuts retain checkin clocks for every physical pool", context do
     options =
       Repo.config()
@@ -3722,7 +3722,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: cancellation binds its separate connection to the native backend" do
     for corruption <- [nil, :cancel_key] do
       run =
@@ -3844,7 +3844,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            end)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: startup reads belong to their native authentication exchange" do
     for corruption <- [nil, :extra_read] do
       run = ConnectionNative.observe_startup(corruption)
@@ -3893,7 +3893,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert ConnectionReads.build(native).errors == []
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :pool
   test "Connection streams: startup constructs its decoder and Protocol from native origins",
        context do
     Repo.put_dynamic_repo(context.repo)
@@ -3960,7 +3960,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            "every constructor and authentication Protocol copy needs its native source"
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :pool
   test "Connection streams: a new native type service constructs its own startup roots",
        context do
     Repo.put_dynamic_repo(context.repo)
@@ -4096,7 +4096,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert ConnectionHistory.build(side).errors == []
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: native SSL negotiation retains its exact cleartext prefix" do
     {native, reads} = ssl_upgrade_prefix(ConnectionNative.observe_tls_startup())
     assert native.errors == []
@@ -4153,7 +4153,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     {native, ConnectionReads.build(native)}
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: cold TLS derives its workers from the native startup chain",
        context do
     Repo.put_dynamic_repo(context.repo)
@@ -4436,7 +4436,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert ConnectionHistory.build(restored_side).errors == []
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: a born TLS sender retains its initialization copies", context do
     Repo.put_dynamic_repo(context.repo)
     historical = Historical.capture(context.prefix)
@@ -4533,7 +4533,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     put_elem(state, 8, session)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :pool
   test "Connection streams: a native supervisor shutdown timer keeps its private receive proof",
        context do
     Repo.put_dynamic_repo(context.repo)
@@ -4597,7 +4597,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   for position <- [0, 1, :return] do
-    @tag :connection_streams
+    @tag connection_streams: :pool
     test "Connection streams: native type-service location #{position} retains its constructor origin",
          context do
       Repo.put_dynamic_repo(context.repo)
@@ -4662,7 +4662,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :pool
   test "Connection streams: a startup Protocol copy retains its constructor peer", context do
     Repo.put_dynamic_repo(context.repo)
     historical = Historical.capture(context.prefix)
@@ -4700,7 +4700,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert ConnectionHistory.build(side).errors == []
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :pool
   test "Connection streams: a pool born during observation owns its complete native state",
        context do
     Repo.put_dynamic_repo(context.repo)
@@ -4774,7 +4774,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            end)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :pool
   test "Connection streams: a private service reply retains its native sender" do
     positive = ConnectionNative.observe_pool_startup()
     assert positive.result == :ok
@@ -4802,7 +4802,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         :after_connect_function,
         :after_connect_mfa
       ] do
-    @tag :connection_streams
+    @tag connection_streams: :pool
     test "Connection streams: a born pool retains native #{mode} configuration", context do
       Repo.put_dynamic_repo(context.repo)
       historical = Historical.capture(context.prefix)
@@ -4849,7 +4849,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   for type <- [:default, :stop, :rand, :exp, :rand_exp] do
-    @tag :connection_streams
+    @tag connection_streams: :pool
     test "Connection streams: native connection failure retains #{type} backoff state", context do
       Repo.put_dynamic_repo(context.repo)
       historical = Historical.capture(context.prefix)
@@ -4908,7 +4908,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   for lifecycle <- [:idle_ping, :reconnect] do
-    @tag :connection_streams
+    @tag connection_streams: :pool
     test "Connection streams: native #{lifecycle} retains the renewed holder's cut origin",
          context do
       lifecycle = unquote(lifecycle)
@@ -5059,7 +5059,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   for lifecycle <- [:idle_ping, :reconnect] do
-    @tag :connection_streams
+    @tag connection_streams: :pool
     test "Connection streams: a native #{lifecycle} owner handoff has its own sole copy guard",
          context do
       lifecycle = unquote(lifecycle)
@@ -5096,7 +5096,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: origin indexing retains the complete authoritative cache baseline",
        context do
     Repo.put_dynamic_repo(context.repo)
@@ -5118,7 +5118,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert complete?, "origin indexing must retain every authoritative initial cache row"
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: a native query cache keeps its origins across an unchanged prefix cut",
        context do
     Repo.put_dynamic_repo(context.repo)
@@ -5188,7 +5188,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Enum.all?(queries.cache_events, &(&1 >= barrier.index))
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   @tag prepare: :named
   test "Connection streams: a failed Ecto cache candidate cannot become a query origin",
        context do
@@ -5228,7 +5228,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     refute run.result in Map.values(queries.ids)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: raw ledgers finish before projected consumers", context do
     pair = observe(context, row!(:issue, :execute), Values.set()[:va])
 
@@ -5288,7 +5288,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: MAIN consumes the validated logical observation", context do
     pair = observe(context, row!(:issue, :execute), Values.set()[:va])
 
@@ -5659,7 +5659,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
      }, states}
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: cached query copies are independently bound" do
     captured = cached_decoders(:query_copy)
     assert Enum.map(captured.decoders.errors, & &1.rule) == [:decoder_query_copy]
@@ -5786,7 +5786,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp cached_rows(:redescribe), do: [[17, "native"]]
   defp cached_rows(_shape), do: [[17]]
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: native active delivery changes back to passive mode" do
     run = ConnectionNative.observe(:active)
     assert run.result == :ok
@@ -5882,7 +5882,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: every active control has its own native option origin" do
     for corruption <- [
           :unbound_active_control,
@@ -5919,7 +5919,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: deferred controls use their actual native driver replies" do
     {native, streams} = native_connection(:contended, nil)
     assert native.errors == []
@@ -5938,7 +5938,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_STREAM_DEFERRED_CONTROLS: " <> Diagnostics.render(length(deferred)))
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: Postgrex replays its own unread native buffer" do
     replays =
       for _ <- 1..20 do
@@ -5991,7 +5991,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: an extra native replay copy has no decoder origin" do
     corruptions =
       for _ <- 1..20,
@@ -6122,7 +6122,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     _error in [ArgumentError, Enum.OutOfBoundsError, FunctionClauseError] -> nil
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: native pipelining preserves each query and response" do
     cases = [
       {:single, nil, ["17"]},
@@ -6148,7 +6148,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: real receive corruptions reach their own validation" do
     obligations = [
       {:length, :receive_length, :stream_length},
@@ -6192,7 +6192,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     {native, ConnectionReads.build(native)}
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: backend ownership follows each pipelined frontend request" do
     {native, streams} = native_connection(:pipeline, nil)
     assert native.errors == []
@@ -6232,7 +6232,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Enum.frequencies_by(fresh_backend, & &1.request) == %{0 => 4, 1 => 4}
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "Connection streams: logical rendering consumes only proved native programs" do
     run = ConnectionNative.observe(:pipeline)
     assert run.result == :ok
@@ -6647,7 +6647,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert_green(restored)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :driver
   test "OPEN reference eligibility is fixed before a real action can omit OPEN", context do
     path = "lib/ash_onetime/delivery.ex"
     original = File.read!(path)
@@ -7876,7 +7876,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     do: value |> Map.to_list() |> Enum.flat_map(&wire_terms(&1, tag))
 
   defp wire_terms(_, _), do: []
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection diagnostics: every output boundary keeps captured native state private",
        context do
     Repo.put_dynamic_repo(context.repo)
@@ -8003,7 +8003,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp diagnostic_sentinel(value, _marker), do: value
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: a historical active mode owns the first native delivery" do
     run = ConnectionNative.observe(:historical_active)
     assert run.result == :ok
@@ -8040,7 +8040,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     )
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: coalesced messages have distinct addresses and real native indices" do
     run = ConnectionNative.observe(:pipeline)
     assert run.result == :ok
@@ -8090,7 +8090,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     )
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: native TLS sender state copies need an owning guard" do
     run = ComparatorMutants.with_tls_sender_mutant(&ConnectionNative.observe_tls/0)
     assert run.result == []
@@ -8149,7 +8149,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_TLS_STATE_COPY: owning RED; sole catcher; exact restore; fresh GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: native TLS callback actions retain their constructor" do
     run =
       ComparatorMutants.with_tls_sender_mutant(
@@ -8206,7 +8206,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_TLS_CALLBACK_RESULT: owning RED; sole catcher; restore; fresh GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: native TLS constructed state needs its own guard" do
     run =
       ComparatorMutants.with_tls_sender_mutant(
@@ -8269,7 +8269,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   for {corruption, position} <- [hibernate_name: 0, hibernate_actions: 2] do
-    @tag :connection_streams
+    @tag connection_streams: :tls
     test "Connection streams: native TLS constructor #{corruption} keeps its earlier input" do
       corruption = unquote(corruption)
       position = unquote(position)
@@ -8322,7 +8322,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: native TLS forwarding retains record and reply copies" do
     for {control, rule, owner} <- [
           {:record_copy, :tls_record_copy, :stream_tls_record_copy},
@@ -8367,7 +8367,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: TLS ciphertext retains its actual native port program" do
     run = ConnectionNative.observe_tls()
     assert run.result == []
@@ -8399,7 +8399,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   for mode <- [nil, :debug] do
-    @tag :connection_streams
+    @tag connection_streams: :tls
     test "Connection streams: TLS #{mode} machine roots retain queue and timer metadata" do
       run = ConnectionNative.observe_tls(unquote(mode))
       assert run.result == []
@@ -8494,13 +8494,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp native_argument_children?(_covered, _index, _path, _value), do: false
 
   for {corruption, position} <- [params: 0, queue: 3, hibernate: 4] do
-    @tag :connection_streams
+    @tag connection_streams: :tls
     test "Connection streams: native TLS machine #{corruption} copies retain their origins" do
       assert :ok == ComparatorMutants.machine_copy_control(unquote(corruption), unquote(position))
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: native machine temporary arguments retain their complete program" do
     targets = %{
       {:loop_state_callback, 11} => [1, 3, 5, 6, 7, 8, 9, 10],
@@ -8511,18 +8511,18 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert :ok == ComparatorMutants.machine_program_control(targets)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: native debug logs retain their program inputs and successive roots" do
     targets = %{{:loop_event, 5} => [1], {:sys_debug, 3} => [0, 1, 2]}
     assert :ok == ComparatorMutants.machine_program_control(targets, :debug)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: native debug ring outputs retain every entry and formatter" do
     assert :ok == ComparatorMutants.machine_debug_log_control()
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: native machine termination retains class, reason, stack and replies" do
     targets = %{
       {:reply_then_terminate, 8} => [0, 1, 2, 4, 6, 7],
@@ -8533,7 +8533,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert :ok == ComparatorMutants.machine_program_control(targets)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: native machine timeout arguments retain their action program" do
     targets = %{
       {:loop_timeouts, 12} => [1, 3, 5, 6, 7, 8, 9, 10, 11],
@@ -8545,14 +8545,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   for mode <- [nil, :fragmented] do
-    @tag :connection_streams
+    @tag connection_streams: :tls
     test "Connection streams: native #{mode} machine and direct TLS reply values retain their origins" do
       assert :ok == ComparatorMutants.machine_reply_control(unquote(mode))
     end
   end
 
   for corruption <- [:reply_copy, :reply_value] do
-    @tag :connection_streams
+    @tag connection_streams: :tls
     test "Connection streams: TLS reply forwarding binds #{corruption}" do
       corruption = unquote(corruption)
 
@@ -8602,7 +8602,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :transport
   test "Connection streams: counted passive notifications need their own native origin" do
     for corruption <- [nil, :passive_source] do
       run = ConnectionNative.observe(:active_counted, corruption)
@@ -8654,7 +8654,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_PASSIVE_ORIGIN: native positive; owning RED; sole catcher; restore GREEN")
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: fragmented TLS binds active counts and worker transitions" do
     run = ConnectionNative.observe_tls(:fragmented)
     assert run.result == []
@@ -8688,7 +8688,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         {:active_option, :tls_active_option_copy, :stream_tls_active_option},
         {:passive_option, :tls_passive_option, :stream_tls_passive_option}
       ] do
-    @tag :connection_streams
+    @tag connection_streams: :tls
     test "Connection streams: native TLS #{corruption} is independently enforced" do
       corruption = unquote(corruption)
       rule = unquote(rule)
@@ -8767,7 +8767,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end)
   end
 
-  @tag :connection_streams
+  @tag connection_streams: :tls
   test "Connection streams: TLS plaintext has a native physical port binding" do
     observations =
       Map.new([nil, :binding, :workers, :byte], fn corruption ->
