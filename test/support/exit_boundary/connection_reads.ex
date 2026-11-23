@@ -20,6 +20,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
           connections: %{},
           errors: [],
           demands: [],
+          versions: [],
           readback: readback,
           protocols: protocols,
           pings: ping_calls(native),
@@ -39,7 +40,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     %{
       connections: connections,
       errors: Enum.reverse(state.errors) ++ errors,
-      demands: Enum.reverse(state.demands)
+      demands: Enum.reverse(state.demands),
+      versions: Enum.reverse(state.versions)
     }
   end
 
@@ -222,7 +224,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
       end)
 
     connection = %{connection | framing: framing, protocol: protocol}
-    put_in(state.connections[port], connection)
+    version = %{index: chunk.index, port: port, framing: framing, protocol: protocol}
+
+    state
+    |> put_in([:connections, port], connection)
+    |> Map.update!(:versions, &[version | &1])
   end
 
   defp connection(state, port),

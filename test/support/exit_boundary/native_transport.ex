@@ -125,7 +125,12 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     case IO.iodata_to_binary(data) do
       <<22, _::binary>> ->
         bound? = Enum.any?(state.options, &(source.index in &1.indexes))
-        if bound?, do: state, else: failure(state, source, :native_option_source)
+
+        if bound? do
+          state
+        else
+          failure(state, source, {:native_option_source, option_source_context(state, source)})
+        end
 
       _ ->
         state
@@ -133,6 +138,24 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   end
 
   defp option_source(_source, state), do: state
+
+  # Select code coordinates and option names only. An initialization program can
+  # carry other socket options; its raw arguments never belong in diagnostics.
+  defp option_source_context(state, source) do
+    for {_index, pair} <- state.pairs,
+        pair.source.pid == source.pid,
+        pair.source.index < source.index and source.index < pair.returned.index,
+        {_, :call, {:prim_inet, :setopts, [_port, options]}} <- [pair.source.event],
+        do: %{
+          index: pair.source.index,
+          mfa: pair.source.mfa,
+          options: Enum.map(options, &option_name/1)
+        }
+  end
+
+  defp option_name({name, _value}) when is_atom(name), do: name
+  defp option_name(name) when is_atom(name), do: name
+  defp option_name(_option), do: :other_socket_option
 
   defp active_deliveries(state) do
     modes = for option <- state.options, do: {option.requested.index, :mode, option}

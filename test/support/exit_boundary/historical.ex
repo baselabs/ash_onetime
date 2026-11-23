@@ -84,6 +84,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
 
     %{
       prepared_catalogs: catalogs,
+      connection_framing: %{},
       connection_protocols:
         Map.new(catalogs, fn {port, statements} ->
           {port, ConnectionProtocol.new(statements)}
@@ -156,7 +157,10 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
   defp committed_cut(historical, proof, before) do
     rows = committed_before(proof.states.commits, :holder, before)
     tables = committed_before(proof.states.table_commits, :table, before)
-    protocols = protocol_cut(historical.connection_protocols, proof.reads.connections, before)
+    protocols =
+      stream_cut(historical.connection_protocols, proof.reads.versions, before, :protocol)
+
+    framing = stream_cut(historical.connection_framing, proof.reads.versions, before, :framing)
     catalogs = Map.new(protocols, fn {port, protocol} -> {port, protocol.statements} end)
     origins = descriptor_cut(historical.query_origins, proof, before)
 
@@ -192,6 +196,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
        | connections: connections,
          query_cache: cache_cut(historical.query_cache.table, tables),
          prepared_catalogs: catalogs,
+         connection_framing: framing,
          connection_protocols: protocols,
          query_origins: origins,
          pool_clocks: pool_clock_cut(historical, proof.native.pairs, before)
@@ -223,19 +228,14 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
     %{table: table, rows: commit.rows, present?: commit.present?}
   end
 
-  # Keep the entire causal prefix, including pending frontend requests, portals,
-  # error recovery and occurrence counters. A ready catalog cannot represent a
-  # connection awaiting a reply. Only fully received frames precede the cut.
-  defp protocol_cut(initial, connections, before) do
-    Enum.reduce(connections, initial, fn {port, connection}, protocols ->
-      protocol =
-        connection.protocol.messages
-        |> Enum.filter(fn frame -> Enum.all?(frame.provenance, &(&1.index < before)) end)
-        |> Enum.reduce(Map.get(initial, port, ConnectionProtocol.new()), fn frame, state ->
-          ConnectionProtocol.push(state, frame)
-        end)
-
-      Map.put(protocols, port, protocol)
+  # These versions come from the one directional reassembly, before its final
+  # completeness checks. Keep partial bytes and their spans together with the
+  # exact protocol machine that consumed the completed frames at that point.
+  defp stream_cut(initial, versions, before, field) do
+    versions
+    |> Enum.filter(&(&1.index < before))
+    |> Enum.reduce(initial, fn version, connections ->
+      Map.put(connections, version.port, Map.fetch!(version, field))
     end)
   end
 

@@ -3422,7 +3422,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       |> Keyword.put(:idle_limit, 0)
       |> Keyword.put(:types, Postgrex.DefaultTypes)
 
-    pool = start_supervised!({Postgrex, options})
+    pool = start_supervised!({Postgrex, options}, id: :native_pool_clock)
     assert %{rows: [[17]]} = Postgrex.query!(pool, "SELECT 17::int4 AS other_pool_clock", [])
     Repo.put_dynamic_repo(context.repo)
     historical = Historical.capture(context.prefix)
