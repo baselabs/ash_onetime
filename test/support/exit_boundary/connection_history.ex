@@ -67,6 +67,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       connection_state_program: Map.get(historical, :connection_state_program, %{})
     }
 
+    # Earlier real records finish the validation of calls that cross the cut.
+    # They remain program evidence; this observation retains its own events
+    # and source indexes for origins and the whole comparison.
     program_events = Map.get(historical, :connection_program_events, []) ++ indexed.events
     indexed = Map.put(indexed, :connection_program_events, program_events)
     program = %{indexed | events: program_events}

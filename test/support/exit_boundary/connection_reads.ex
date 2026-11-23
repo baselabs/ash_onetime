@@ -37,6 +37,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
 
     state =
       (writes ++ requests ++ replies ++ active)
+      # The retained physical prefix already owns earlier receipts and demands.
+      # Their raw programs are still validated; feed each wire byte only once.
       |> Enum.filter(fn {index, _kind, _instance} -> index >= before end)
       |> Enum.sort_by(&elem(&1, 0))
       |> Enum.reduce(initial, &event/2)
