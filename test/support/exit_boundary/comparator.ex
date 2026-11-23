@@ -285,15 +285,23 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         )
       end)
 
+    query_errors =
+      for {side, indexed, origins} <- [{:run_index, ri, rq}, {:twin_index, ti, tq}],
+          {source, value, expected} <- origins.errors do
+        # Query origins come from the independently validated raw history. Its
+        # source has no paired role; use this side's existing causal-role map.
+        at =
+          source
+          |> Map.take([:mfa, :stack])
+          |> Map.put(:role, Map.get(indexed.roles, source.pid))
+          |> Map.put(side, source.index)
+
+        {at, value, expected}
+      end
+
     state =
-      Enum.reduce(rq.errors ++ tq.errors, state, fn {e, value, expected}, s ->
-        error(
-          %{s | at: %{mfa: e.mfa, role: e.role, run_index: e.index, stack: e.stack}},
-          :query_origin,
-          [],
-          value,
-          expected
-        )
+      Enum.reduce(query_errors, state, fn {at, value, expected}, s ->
+        error(%{s | at: at}, :query_origin, [], value, expected)
       end)
 
     state =
