@@ -4297,7 +4297,24 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert initial_lease.holder == original
       assert initial_lease.owner == historical.connections[original].owner
       assert initial_lease.port == historical.connections[original].port
-      assert is_integer(initial_lease.checkin) and is_integer(initial_lease.giveaway)
+      terminal = if lifecycle == :idle_ping, do: :checkin, else: :disconnect
+      caller = initial_lease.source.pid
+      pool = initial_lease.pool
+      queue = initial_lease.queue
+
+      assert [termination] =
+               for %{event: {^caller, :call, {:ets, :give_away, arguments}}} = source <-
+                     proof.indexed.events,
+                   [^original, ^pool, {^terminal, ^queue, _value}] <- [arguments],
+                   source.index > initial_lease.acquired,
+                   do: source
+
+      assert termination.index < lease.acquired
+
+      if lifecycle == :idle_ping do
+        assert is_integer(initial_lease.checkin) and is_integer(initial_lease.giveaway)
+      end
+
       assert lease.holder == renewed
       assert lease.owner == historical.connections[original].owner
       assert lease.port == proof.states.holder_origins[renewed].port
