@@ -3142,6 +3142,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
             assert described?,
                    "the full cut must retain the committed cache row's native descriptor"
+
+            origin = Enum.find(connection.descriptors, &(&1.query === query))
+            {:gen_tcp, port} = connection.protocol.sock
+            bound_port? = Map.get(origin, :port) === port
+
+            assert bound_port?, "the cut descriptor must retain its native physical port binding"
           end
         end
       end

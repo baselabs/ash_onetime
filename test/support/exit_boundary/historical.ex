@@ -195,10 +195,12 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
   defp active_descriptors(origins, protocol, rows) do
     for origin <- origins,
         origin.sock === protocol.sock and origin.query.types === protocol.types,
+        origin.parameters === origin.query.param_oids,
+        {:gen_tcp, port} <- [origin.sock],
         Enum.any?(rows, fn row ->
           elem(row, 0) === origin.query.name and elem(row, 1) === origin.query.ref
         end),
-        do: origin
+        do: Map.put(origin, :port, port)
   end
 
   defp committed_before(commits, key, before) do
@@ -306,15 +308,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
   defp descriptors(%{protocol: protocol} = connection, origins) do
     queries = if protocol.queries, do: readable(protocol.queries), else: []
 
-    descriptors =
-      for origin <- origins,
-          origin.sock === protocol.sock and origin.query.types === protocol.types,
-          origin.parameters === origin.query.param_oids,
-          Enum.any?(queries, fn row ->
-            elem(row, 0) === origin.query.name and elem(row, 1) === origin.query.ref
-          end),
-          {:gen_tcp, port} <- [origin.sock],
-          do: Map.put(origin, :port, port)
+    descriptors = active_descriptors(origins, protocol, queries)
 
     connection
     |> Map.put(:descriptors, descriptors)
