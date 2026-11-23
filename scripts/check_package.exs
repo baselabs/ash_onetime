@@ -151,6 +151,7 @@ defmodule AshOnetime.PackageCheck do
         use ExUnit.Case, async: true
 
         test "core package works with no optional dependencies or application config" do
+          assert to_string(Application.spec(:ash_onetime, :vsn)) == #{inspect(Mix.Project.config()[:version])}
           assert {:ok, <<2, _::binary>>} = AshOnetime.Canonical.encode(1)
           assert :miss = AshOnetime.Cache.None.get(:crypto.strong_rand_bytes(32))
           refute Code.ensure_loaded?(AshOnetime.Plug)
@@ -232,6 +233,14 @@ defmodule AshOnetime.PackageCheck do
         error ->
           raise "could not parse archive metadata #{metadata_path}: #{inspect(error)}"
       end
+
+    {"version", shipped_version} = List.keyfind(metadata, "version", 0)
+
+    assert_equal!(
+      shipped_version,
+      Mix.Project.config()[:version],
+      "archive version differs from mix.exs"
+    )
 
     {"requirements", entries} = List.keyfind(metadata, "requirements", 0)
 

@@ -4,6 +4,8 @@
 replay-safe idempotency from collision-rejecting one-time nonces and uses PostgreSQL as the
 authoritative admissions store.
 
+This version is in development and is not yet on Hex; use the [published release documentation on HexDocs](https://hexdocs.pm/ash_onetime/).
+
 ## What it does
 
 Every protected action declares one strategy and a nonempty scope. PostgreSQL admits exactly

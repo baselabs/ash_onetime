@@ -7,6 +7,8 @@ whole suite on both majors; maintenance uses `MAINTAIN`. This guide targets
 v2.0.0 (`{:ash_onetime, "~> 2.0.0"}`); see the
 [release notes](../CHANGELOG.md).
 
+This version is in development and is not yet on Hex; use the [published release documentation on HexDocs](https://hexdocs.pm/ash_onetime/).
+
 Ash 3.33 additionally requires every application to declare how it counts string
 length; without this your resources fail to compile:
 

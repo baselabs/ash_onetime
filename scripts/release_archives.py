@@ -10,7 +10,7 @@
         to $GITHUB_OUTPUT when it is set.
     python3 scripts/release_archives.py notes ASSETS_DIR
         Write NOTES.md from the dated CHANGELOG.md section for the version; refuse when the
-        section is missing, undated or still Unreleased.
+        version is a pre-release or the section is missing, undated or still Unreleased.
     python3 scripts/release_archives.py verify-docs DOCS VERSION --repository PATH --dispatched SHA
         Inspect served docs and print their published commit, which must be SHA or its ancestor.
     python3 scripts/release_archives.py checksums ASSETS_DIR
@@ -53,6 +53,14 @@ def mix(*arguments):
     # The Ash matrix selector must never freeze the published dependency requirement.
     environment = {k: v for k, v in os.environ.items() if k != "ASH_ONETIME_ASH_VERSION"}
     subprocess.run(["mix", *arguments], check=True, env=environment)
+
+
+def require_release(release):
+    if "-" in release:
+        raise SystemExit(f"pre-release version {release} cannot be published; declare a plain release in mix.exs")
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", release):
+        raise SystemExit(f"expected a plain release version, got {release}")
+    return release
 
 
 def docs_archive(root, docs):
@@ -117,6 +125,7 @@ def inspect_docs(docs, release):
 
 
 def verify_docs(docs, release, repository, dispatched):
+    require_release(release)
     commit_sha(dispatched)
     with tarfile.open(docs, "r:gz") as archive:
         published = docs_provenance(archive, release)
@@ -161,7 +170,7 @@ def build(assets):
 
 
 def notes(assets):
-    release = version()
+    release = require_release(version())
     changelog = Path("CHANGELOG.md").read_text()
     sections = list(re.finditer(r"^## (.+)$", changelog, re.MULTILINE))
     prefix = f"v{release} — "

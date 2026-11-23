@@ -7,7 +7,11 @@ Security-driven dependency floors follow the documented minor-release policy in
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md);
 their required dependency edits appear here too.
 
-This guide targets v2.0.0:
+This guide targets v2.0.0.
+
+This version is in development and is not yet on Hex; use the [published release documentation on HexDocs](https://hexdocs.pm/ash_onetime/).
+
+The release will use this dependency requirement:
 
 ```elixir
 {:ash_onetime, "~> 2.0.0"}

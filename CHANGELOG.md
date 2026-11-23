@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- Declare the development version only in `mix.exs`; check documentation claims against it,
+  distinguish unpublished guides from HexDocs, and refuse pre-release publication.
+
 - Verify PostgreSQL 17 and 18 in Work and qualification: the whole suite runs on the
   PostgreSQL 18 platform engine and a digest-pinned upstream PostgreSQL 17 lane with
   matching dump/restore clients. The compatibility declaration owns the major, image and
@@ -161,11 +164,13 @@ All notable changes to this project are documented in this file.
   equality, preserving data and exact trust through PostgreSQL 18 dump/restore. Historical
   templates and generators replace approximate upgrade fixtures.
 
-## v1.10.0 — November 13, 2026
+### Prepared as 1.10.0; never published
+
+The following work was prepared as 1.10.0 and never published; it is part of 2.0.0.
 
 **Upgrade action required for existing installations.** Generate and apply the operation-hold
 migration (`mix ash_onetime.gen.migrations --repo MyApp.Repo --operation-hold`, then
-`mix ecto.migrate`) before deploying 1.10.0. Until it runs, admission refuses with
+`mix ecto.migrate`) before deploying 2.0.0. Until it runs, admission refuses with
 `:store_invariant` rather than proceeding unprotected; `mix ash_onetime.doctor --live` reports
 the missing shape. See [Upgrading](documentation/upgrading.md).
 

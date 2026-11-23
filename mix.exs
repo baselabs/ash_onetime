@@ -1,7 +1,7 @@
 defmodule AshOnetime.MixProject do
   use Mix.Project
 
-  @version "1.10.0"
+  @version "2.0.0-dev"
   @source_url "https://github.com/baselabs/ash_onetime"
 
   def project do
@@ -160,7 +160,7 @@ defmodule AshOnetime.MixProject do
   defp docs do
     [
       main: "readme",
-      source_ref: "v#{@version}",
+      source_ref: if(Version.parse!(@version).pre == [], do: "v#{@version}", else: "main"),
       source_url: @source_url,
       extras: [
         "README.md",
