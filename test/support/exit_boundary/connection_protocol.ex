@@ -86,7 +86,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionProtocol do
   end
 
   defp frontend(
-         %{tag: :startup, payload: <<80_877_102::32, backend::32, key::32>>} = frame,
+         %{tag: :startup, payload: <<80_877_102::32, backend::signed-32, key::signed-32>>} = frame,
          %{cancel: origin, pending: [], message_counts: counts} = state
        )
        when not is_map_key(counts, :frontend) do
