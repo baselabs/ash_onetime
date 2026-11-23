@@ -3065,6 +3065,28 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: origin indexing retains the complete authoritative cache baseline",
+       context do
+    Repo.put_dynamic_repo(context.repo)
+    Repo.all(from(c in "pg_class", prefix: "pg_catalog", select: count(c.oid)))
+    historical = Historical.capture(context.prefix)
+    assert historical.query_cache.rows != []
+
+    run =
+      ExitBoundary.observe(
+        fn -> Repo.put_dynamic_repo(context.repo) end,
+        fn _ -> SQL.query!(context.repo, "SELECT 31::int4 AS complete_cache_baseline", []) end,
+        %{host: [], callbacks: []}
+      )
+
+    assert %Postgrex.Result{rows: [[31]]} = run.result
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    indexed = Origins.build(side)
+    complete? = Enum.sort(indexed.query_cache.rows) === Enum.sort(historical.query_cache.rows)
+    assert complete?, "origin indexing must retain every authoritative initial cache row"
+  end
+
+  @tag :connection_streams
   @tag prepare: :named
   test "Connection streams: a failed Ecto cache candidate cannot become a query origin",
        context do
