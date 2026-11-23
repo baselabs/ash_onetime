@@ -270,7 +270,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         callbacks: [],
         services: %{
           tls_connection_sup: {:supervisor, :handle_call, 3},
-          ssl_manager: {:ssl_manager, :handle_info, 2}
+          ssl_manager: {:ssl_manager, :handle_call, 3}
         },
         frames: [
           {:tls_connection_sup, :start_child, 1},
