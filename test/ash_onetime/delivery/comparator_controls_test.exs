@@ -18,6 +18,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias AshOnetime.Test.ExitBoundary.DatabaseOrigins
   alias AshOnetime.Test.ExitBoundary.Declarations
   alias AshOnetime.Test.ExitBoundary.Diagnostics
+  alias AshOnetime.Test.ExitBoundary.FailureTrace
   alias AshOnetime.Test.ExitBoundary.Historical
   alias AshOnetime.Test.ExitBoundary.NativeTransport
   alias AshOnetime.Test.ExitBoundary.Origins
@@ -27,6 +28,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias AshOnetime.Test.ExitBoundary.QueryOrigins
   alias AshOnetime.Test.ExitBoundary.Readback
   alias AshOnetime.Test.ExitBoundary.References
+  alias AshOnetime.Test.ExitBoundary.Refusals
   alias AshOnetime.Test.ExitBoundary.Registry
   alias AshOnetime.Test.ExitBoundary.Returned
   alias AshOnetime.Test.ExitBoundary.Scenarios
@@ -3092,7 +3094,28 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       {ConnectionStates, :build, 5}
     ]
 
-    consumers = [{Scheduling, :build, 1}, {Readback, :check, 3}, {Allocation, :check, 2}]
+    # Every raw projection boundary in the current comparator, including the
+    # registered rules. A new consumer must join this same ordering obligation.
+    consumers = [
+      {Scheduling, :build, 1},
+      {PermittedTrace, :match, 2},
+      {References, :operation_slots, 2},
+      {References, :locator_copies, 1},
+      {FailureTrace, :check, 2},
+      {Readback, :check, 3},
+      {Refusals, :check, 2},
+      {Origins, :pair, 3},
+      {Registry, :compute, 2},
+      {Allocation, :check, 2},
+      {Allocation, :pair, 5},
+      {QueryOrigins, :build, 2},
+      {ClockExpressions, :build, 2},
+      {TransportReferences, :build, 2},
+      {Wire, :build, 2},
+      {DatabaseOrigins, :build, 2},
+      {DatabaseOrigins, :sql_contexts, 1}
+    ]
+
     events = comparator_call_order(pair, proofs ++ consumers)
     first = Enum.find_index(events, fn {kind, mfa, _} -> kind == :call and mfa in consumers end)
     assert is_integer(first)
@@ -3167,6 +3190,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       {:trace_ts, _pid, :return_from, mfa, %{errors: errors}, stamp} ->
         event = {:return, mfa, errors == []}
         comparator_order_observer(parent, parent_monitor, [{stamp, event} | events])
+
+      {:trace_ts, _pid, :return_from, mfa, _result, stamp} ->
+        comparator_order_observer(parent, parent_monitor, [{stamp, {:return, mfa, nil}} | events])
 
       {:trace_ts, _pid, :exception_from, mfa, _reason, stamp} ->
         comparator_order_observer(parent, parent_monitor, [{stamp, {:exception, mfa, false}} | events])
