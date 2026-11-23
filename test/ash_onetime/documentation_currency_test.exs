@@ -16,7 +16,9 @@ defmodule AshOnetime.DocumentationCurrencyTest do
                       capture: :all_but_first
                     )
   @dated_releases Enum.reject(@version_headings, fn [_, date] -> date == @unpublished_marker end)
-  @unpublished_tags for [release, @unpublished_marker] <- @version_headings, do: release
+  @unpublished_tags for [release, date] <- @version_headings,
+                        date == @unpublished_marker,
+                        do: release
   @months ~w(January February March April May June July August September October November December)
   @hex_url "https://hex.pm/api/packages/ash_onetime"
 
