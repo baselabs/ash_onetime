@@ -39,7 +39,20 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorCase do
   setup context do
     size = Map.get(context, :pool_size, 2)
     prepare = Map.get(context, :prepare, :unnamed)
-    repo = start_unboxed_repo!(prepare: prepare, idle_interval: 3_600_000, pool_size: size)
+    options = [prepare: prepare, idle_interval: 3_600_000, pool_size: size]
+
+    options =
+      if Map.get(context, :native_tls, false) do
+        Keyword.put(options, :ssl,
+          verify: :verify_peer,
+          cacertfile: System.fetch_env!("ASH_ONETIME_NATIVE_TLS_CA_FILE") |> String.to_charlist(),
+          server_name_indication: ~c"localhost"
+        )
+      else
+        options
+      end
+
+    repo = start_unboxed_repo!(options)
     Repo.put_dynamic_repo(repo)
     ExternalPeer.install!(context.prefix)
 

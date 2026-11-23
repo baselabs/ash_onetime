@@ -567,6 +567,52 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts("CONNECTION_NATIVE_TLS_AVAILABLE=#{tls?}")
   end
 
+  @tag :connection_streams
+  @tag native_tls: true, prepare: :named, pool_size: 1
+  test "Connection streams: main TLS history retains its physical catalog and raw programs",
+       context do
+    sql = "SELECT $1::int4 AS tls_historical_catalog"
+
+    assert %{rows: [[17]]} =
+             SQL.query!(context.repo, sql, [17], cache_statement: "tls_native_catalog")
+
+    historical = Historical.capture(context.prefix)
+
+    [connection] =
+      for {_holder, connection} <- historical.connections,
+          connection.pool == historical.repo_metadata.pid,
+          match?({:ssl, _}, connection.protocol.sock),
+          do: connection
+
+    descriptors =
+      Enum.filter(connection.descriptors, fn origin ->
+        IO.iodata_to_binary(origin.query.statement) == sql
+      end)
+
+    assert descriptors != [], "TLS descriptors must retain their native owner and physical port"
+    binding = Map.fetch!(connection, :tls)
+    assert ConnectionTls.validate(binding) == []
+
+    for origin <- descriptors do
+      assert origin.port == binding.port
+      catalog = historical.prepared_catalogs[origin.port][origin.query.name]
+      assert catalog.sql == sql
+      assert catalog.parameter_types == [23]
+    end
+
+    run =
+      ExitBoundary.observe(
+        fn -> Repo.put_dynamic_repo(context.repo) end,
+        fn _ -> SQL.query!(context.repo, sql, [29], cache_statement: "tls_native_catalog") end,
+        %{host: [], callbacks: []}
+      )
+
+    assert %{rows: [[29]]} = run.result
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+    assert proof.errors == [], "MAIN must prove the real TLS plaintext and worker programs"
+  end
+
   for shape <- [
         :rows,
         :none,
