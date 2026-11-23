@@ -813,8 +813,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/collector.ex",
         original:
-          "      do: [{module, :handle_call, 3}, {module, :handle_cast, 2}, {module, :handle_info, 2}]\n",
-        mutated: "      do: [{module, :handle_call, 3}, {module, :handle_info, 2}]\n"
+          "    do: [{module, :handle_call, 3}, {module, :handle_cast, 2}, {module, :handle_info, 2}]\n",
+        mutated: "    do: [{module, :handle_call, 3}, {module, :handle_info, 2}]\n"
       }
     ]
   end
