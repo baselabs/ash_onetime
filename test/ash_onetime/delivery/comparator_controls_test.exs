@@ -4007,7 +4007,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert birth.initialized < birth.retired
     assert MapSet.member?(run.snapshot.down, birth.owner)
     assert :ets.info(birth.table) == :undefined
-    assert Registry.lookup(Postgrex.TypeManager, birth.key) == []
+    assert Elixir.Registry.lookup(Postgrex.TypeManager, birth.key) == []
 
     assert proof.decoders.errors == []
     assert proof.states.errors == []
@@ -4156,7 +4156,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert is_integer(birth.retired)
     assert MapSet.member?(run.snapshot.down, birth.owner)
     assert :ets.info(birth.table) == :undefined
-    assert Registry.lookup(Postgrex.TypeManager, birth.key) == []
+    assert Elixir.Registry.lookup(Postgrex.TypeManager, birth.key) == []
   end
 
   for position <- [0, 1, :return] do
