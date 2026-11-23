@@ -82,7 +82,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/readback.ex",
         original:
-          "    prepared = Map.get_lazy(side, :readback_reference, fn -> capture(side, bound) end)\n",
+          "    prepared = Map.fetch!(side, :readback_reference)\n",
         mutated: "    prepared = capture(side, bound)\n"
       }
     ]
@@ -837,6 +837,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         original:
           "        service_program_result(\n          :gen_call_reply,\n          pair,\n          receipt,\n          {:gen_call_reply, monitor.source.stamp}\n        )\n",
         mutated: "        _ = {pair, monitor}\n        :error\n"
+      }
+    ]
+  end
+
+  def edits(:stream_service_reply_origin) do
+    [
+      %{
+        path: "test/support/exit_boundary/collector.ex",
+        original: "          service_reply_origin?(context, pid, target, tag, monitor, receipt),\n",
+        mutated: "          true,\n"
       }
     ]
   end
@@ -2203,6 +2213,21 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         callback
       )
     end)
+  end
+
+  # Keep the real Watcher, supervisor, PostgreSQL and reply value. Only the
+  # native reply's sending process changes to a real, traced descendant.
+  def with_service_reply_sender(callback) do
+    path = Path.join(Mix.Project.deps_path(), "db_connection/lib/db_connection/watcher.ex")
+
+    edits = [
+      {"  def handle_call({:watch, supervisor, args}, {caller_pid, _ref}, {caller_refs, started_refs}) do\n",
+       "  def handle_call({:watch, supervisor, args}, {caller_pid, reply_ref}, {caller_refs, started_refs}) do\n"},
+      {"        {:reply, {:ok, caller_ref}, {caller_refs, started_refs}}\n",
+       "        {:ok, _} = Task.start(fn -> GenServer.reply({caller_pid, reply_ref}, {:ok, caller_ref}) end)\n        {:noreply, {caller_refs, started_refs}}\n"}
+    ]
+
+    with_source_owner(DBConnection.Watcher, path, edits, callback)
   end
 
   defp with_source_owner(module, path, edits, callback) do

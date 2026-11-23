@@ -4726,6 +4726,28 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            end)
   end
 
+  @tag :connection_streams
+  test "Connection streams: a private service reply retains its native sender" do
+    positive = ConnectionNative.observe_pool_startup()
+    assert positive.result == :ok
+
+    corrupt = fn ->
+      ComparatorMutants.with_service_reply_sender(&ConnectionNative.observe_pool_startup/0)
+    end
+
+    assert_raise ExUnit.AssertionError, corrupt
+
+    bypassed =
+      ComparatorMutants.with_mutant(:stream_service_reply_origin, fn ->
+        corrupt.()
+      end)
+
+    assert bypassed.result == :ok
+    assert_raise ExUnit.AssertionError, corrupt
+    restored = ConnectionNative.observe_pool_startup()
+    assert restored.result == :ok
+  end
+
   for mode <- [
         :configure_function,
         :configure_mfa,
