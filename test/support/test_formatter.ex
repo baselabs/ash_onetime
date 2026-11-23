@@ -132,7 +132,16 @@ defmodule AshOnetime.Test.TestFormatter do
 
   defp assertion_location({start, node}, line) do
     location = if start <= line and line <= last_line(node), do: line, else: start
-    {location, Macro.to_string(node)}
+
+    # Attribution names source syntax. A display-width break must not split
+    # that syntax; retain literal contents through the formatter's own algebra.
+    assertion =
+      node
+      |> Code.quoted_to_algebra(migrate_charlists_as_sigils: true)
+      |> Inspect.Algebra.format(:infinity)
+      |> IO.iodata_to_binary()
+
+    {location, assertion}
   end
 
   defp assertion_location(nil, line), do: {line, "source assertion unavailable"}
