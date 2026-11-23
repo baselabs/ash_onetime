@@ -345,7 +345,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     holder = get_in(state.owner_machines, [pid, :version, :holder])
     version = %{holder: holder, protocol: protocol, origin: {:protocol_constructor, source.index}}
-    context = %{source: source, options: options, version: version, password_message: nil, authenticated?: false, endpoint: nil, phase: :startup}
+
+    context = %{
+      source: source,
+      options: options,
+      version: version,
+      password_message: nil,
+      authenticated?: false,
+      endpoint: nil,
+      phase: :startup
+    }
+
     put_in(state.starting[pid], context)
   end
 
@@ -360,38 +370,71 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp startup_return(state, source, context, {:gen_tcp, :connect, 4}, {:ok, socket}) do
     case pair_returned(state, source) do
-      %{source: %{stack: stack, event: {_, :call, {_, _, [host, port, _socket_options, _timeout]}}}} ->
+      %{
+        source: %{
+          stack: stack,
+          event: {_, :call, {_, _, [host, port, _socket_options, _timeout]}}
+        }
+      } ->
         if {Postgrex.Protocol, :connect, 1} in stack do
-          context = %{context | endpoint: {host, port, Keyword.fetch!(context.options, :database)}}
-          startup_protocol(state, source, context, %{context.version.protocol | sock: {:gen_tcp, socket}})
+          context = %{
+            context
+            | endpoint: {host, port, Keyword.fetch!(context.options, :database)}
+          }
+
+          startup_protocol(state, source, context, %{
+            context.version.protocol
+            | sock: {:gen_tcp, socket}
+          })
         else
           state
         end
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
   defp startup_return(state, source, context, {:prim_inet, :peername, 1}, {:ok, peer}) do
     %{source: call} = pair_returned(state, source)
     {_, socket} = context.version.protocol.sock
-    state = exact(state, call, :state_constructor_socket, call.event, {source.pid, :call, {:prim_inet, :peername, [socket]}})
+
+    state =
+      exact(
+        state,
+        call,
+        :state_constructor_socket,
+        call.event,
+        {source.pid, :call, {:prim_inet, :peername, [socket]}}
+      )
+
     startup_protocol(state, source, context, %{context.version.protocol | peer: peer})
   end
 
   defp startup_return(state, source, context, {Postgrex.Protocol, :msg_decode, 1}, _result) do
     case Enum.find(state.decoders.instances, &(&1.returned.index == source.index)) do
       %{expected: {:ok, {:msg_backend_key, backend, key}, _}} ->
-        startup_protocol(state, source, context, %{context.version.protocol | connection_id: backend, connection_key: key})
+        startup_protocol(state, source, context, %{
+          context.version.protocol
+          | connection_id: backend,
+            connection_key: key
+        })
 
       %{expected: {:ok, {:msg_auth, :ok, _}, _}} ->
         put_in(state.starting[source.pid], %{context | authenticated?: true})
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
-  defp startup_return(state, source, context, {Postgrex.SCRAM, :negotiate_channel_binding, 3}, actual) do
+  defp startup_return(
+         state,
+         source,
+         context,
+         {Postgrex.SCRAM, :negotiate_channel_binding, 3},
+         actual
+       ) do
     %{source: call} = pair_returned(state, source)
     protocol = context.version.protocol
 
@@ -400,16 +443,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         mode = context.options[:channel_binding] || :prefer
         arguments = [mechanisms, protocol.sock, mode]
         {_, :call, {_, _, actual_arguments}} = call.event
-        state = type_input_copies(state, call, actual_arguments, arguments, {:constructor_scram, context.source.index})
+
+        state =
+          type_input_copies(
+            state,
+            call,
+            actual_arguments,
+            arguments,
+            {:constructor_scram, context.source.index}
+          )
+
         expected = startup_binding(state, call, mechanisms, protocol.sock, mode)
-        state = helper_copy(state, source, [3], actual, expected, {:constructor_scram, call.index})
+
+        state =
+          helper_copy(state, source, [3], actual, expected, {:constructor_scram, call.index})
 
         case expected do
-          {:ok, binding} -> startup_protocol(state, source, context, %{protocol | scram_cb: binding})
-          _ -> state
+          {:ok, binding} ->
+            startup_protocol(state, source, context, %{protocol | scram_cb: binding})
+
+          _ ->
+            state
         end
 
-      _ -> failure(state, source, :state_constructor_auth_origin)
+      _ ->
+        failure(state, source, :state_constructor_auth_origin)
     end
   end
 
@@ -417,7 +475,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     %{source: call} = pair_returned(state, source)
     pair = Map.fetch!(state.pairs, call.index)
 
-    with [random] <- native_type_calls(state, call, pair.returned, {:crypto, :strong_rand_bytes, 1}),
+    with [random] <-
+           native_type_calls(state, call, pair.returned, {:crypto, :strong_rand_bytes, 1}),
          {_, :call, {_, _, [18]}} <- random.source.event,
          {_, :return_from, _, bytes} <- random.returned.event,
          true <- is_binary(bytes) and byte_size(bytes) == 18 do
@@ -425,8 +484,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       sasl = [header, "n=,r=", Base.encode64(bytes)]
       message = [mechanism, 0, <<IO.iodata_length(sasl)::signed-32>>, sasl]
       {_, :call, {_, _, arguments}} = call.event
-      state = type_input_copies(state, call, arguments, [context.version.protocol.scram_cb], {:constructor_scram, context.source.index})
-      state = helper_copy(state, source, [3], actual, message, {:constructor_nonce, random.returned.index})
+
+      state =
+        type_input_copies(
+          state,
+          call,
+          arguments,
+          [context.version.protocol.scram_cb],
+          {:constructor_scram, context.source.index}
+        )
+
+      state =
+        helper_copy(
+          state,
+          source,
+          [3],
+          actual,
+          message,
+          {:constructor_nonce, random.returned.index}
+        )
+
       put_in(state.starting[source.pid], %{context | password_message: message})
     else
       _ -> failure(state, source, :state_constructor_nonce_origin)
@@ -439,13 +516,37 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         {message, scram} = startup_scram(data, context.version.protocol.scram_cb, context.options)
         %{source: call} = pair_returned(state, source)
         {_, :call, {_, _, arguments}} = call.event
-        expected_arguments = [data, context.version.protocol.scram_cb, startup_options(context.options)]
-        state = type_input_copies(state, call, arguments, expected_arguments, {:constructor_scram, context.source.index})
-        state = helper_copy(state, source, [3], actual, {message, scram}, {:constructor_scram, call.index})
+
+        expected_arguments = [
+          data,
+          context.version.protocol.scram_cb,
+          startup_options(context.options)
+        ]
+
+        state =
+          type_input_copies(
+            state,
+            call,
+            arguments,
+            expected_arguments,
+            {:constructor_scram, context.source.index}
+          )
+
+        state =
+          helper_copy(
+            state,
+            source,
+            [3],
+            actual,
+            {message, scram},
+            {:constructor_scram, call.index}
+          )
+
         context = %{context | password_message: message}
         startup_protocol(state, source, context, %{context.version.protocol | scram: scram})
 
-      _ -> failure(state, source, :state_constructor_auth_origin)
+      _ ->
+        failure(state, source, :state_constructor_auth_origin)
     end
   end
 
@@ -454,19 +555,37 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       {:msg_auth, :sasl_fin, data} ->
         %{source: call} = pair_returned(state, source)
         {_, :call, {_, _, arguments}} = call.event
-        expected_arguments = [data, context.version.protocol.scram, startup_options(context.options)]
-        state = type_input_copies(state, call, arguments, expected_arguments, {:constructor_scram, context.source.index})
+
+        expected_arguments = [
+          data,
+          context.version.protocol.scram,
+          startup_options(context.options)
+        ]
+
+        state =
+          type_input_copies(
+            state,
+            call,
+            arguments,
+            expected_arguments,
+            {:constructor_scram, context.source.index}
+          )
+
         expected = startup_verify(data, context.version.protocol.scram, context.options)
         helper_copy(state, source, [3], actual, expected, {:constructor_scram, call.index})
 
-      _ -> failure(state, source, :state_constructor_auth_origin)
+      _ ->
+        failure(state, source, :state_constructor_auth_origin)
     end
   end
 
   defp startup_return(state, source, context, {Postgrex.TypeServer, :fetch, 1}, _result) do
     with %{source: call} <- pair_returned(state, source),
          %{result: {:lock, _ref, types}} <- state.type_models[call.index] do
-      startup_protocol(state, source, %{context | phase: :bootstrap}, %{context.version.protocol | types: types})
+      startup_protocol(state, source, %{context | phase: :bootstrap}, %{
+        context.version.protocol
+        | types: types
+      })
     else
       _ -> failure(state, source, :state_constructor_type_origin)
     end
@@ -477,7 +596,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       %{source: %{event: {_, :call, {:ets, :new, [Postgrex.Protocol, [:set, :public]]}}}} ->
         startup_protocol(state, source, context, %{context.version.protocol | queries: table})
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
@@ -485,14 +605,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     %{source: call} = pair_returned(state, source)
     parameters = context.version.protocol.parameters
     {_, :call, {_, _, arguments}} = call.event
-    state = type_input_copies(state, call, arguments, [parameters], {:constructor_parameters, context.source.index})
+
+    state =
+      type_input_copies(
+        state,
+        call,
+        arguments,
+        [parameters],
+        {:constructor_parameters, context.source.index}
+      )
 
     case startup_parameter_reference(state, call, parameters) do
       {:ok, reference, origin} ->
         state = helper_copy(state, source, [3], actual, reference, origin)
-        startup_protocol(state, source, context, %{context.version.protocol | parameters: reference})
 
-      :error -> failure(state, source, :state_constructor_parameters_origin)
+        startup_protocol(state, source, context, %{
+          context.version.protocol
+          | parameters: reference
+        })
+
+      :error ->
+        failure(state, source, :state_constructor_parameters_origin)
     end
   end
 
@@ -515,31 +648,69 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp startup_scram(data, {_mechanism, header, binding}, options) do
-    server = for <<key, "=", value::binary>> <- :binary.split(data, ",", [:global]), into: %{}, do: {key, value}
+    server =
+      for <<key, "=", value::binary>> <- :binary.split(data, ",", [:global]),
+          into: %{},
+          do: {key, value}
+
     salt = Base.decode64!(server[?s])
     iterations = String.to_integer(server[?i])
     nonce = binary_part(server[?r], 0, 24)
-    without_proof = ["c=", Base.encode64(IO.iodata_to_binary([header, binding])), ",r=", server[?r]]
+
+    without_proof = [
+      "c=",
+      Base.encode64(IO.iodata_to_binary([header, binding])),
+      ",r=",
+      server[?r]
+    ]
+
     prefix = ["n=,r=", nonce, ",r=", server[?r], ",s=", server[?s], ",i=", server[?i], ?,]
     auth_message = IO.iodata_to_binary([prefix | without_proof])
-    salted = :crypto.pbkdf2_hmac(:sha256, Keyword.fetch!(options, :password), salt, iterations, 32)
+
+    salted =
+      :crypto.pbkdf2_hmac(:sha256, Keyword.fetch!(options, :password), salt, iterations, 32)
+
     client_key = :crypto.mac(:hmac, :sha256, salted, "Client Key")
     signature = :crypto.mac(:hmac, :sha256, :crypto.hash(:sha256, client_key), auth_message)
     proof = Base.encode64(:crypto.exor(client_key, signature))
-    {[without_proof, ",p=", proof], %{salt: salt, iterations: iterations, auth_message: auth_message}}
+
+    {[without_proof, ",p=", proof],
+     %{salt: salt, iterations: iterations, auth_message: auth_message}}
   end
 
   defp startup_verify(data, scram, options) do
-    server = for <<key, "=", value::binary>> <- :binary.split(data, ",", [:global]), into: %{}, do: {key, value}
+    server =
+      for <<key, "=", value::binary>> <- :binary.split(data, ",", [:global]),
+          into: %{},
+          do: {key, value}
 
     case server do
-      %{?e => error} -> {:error, %Postgrex.Error{message: "error received in SCRAM server final message: #{inspect(error)}"}}
+      %{?e => error} ->
+        {:error,
+         %Postgrex.Error{
+           message: "error received in SCRAM server final message: #{inspect(error)}"
+         }}
+
       %{?v => signature} ->
-        salted = :crypto.pbkdf2_hmac(:sha256, Keyword.fetch!(options, :password), scram.salt, scram.iterations, 32)
+        salted =
+          :crypto.pbkdf2_hmac(
+            :sha256,
+            Keyword.fetch!(options, :password),
+            scram.salt,
+            scram.iterations,
+            32
+          )
+
         key = :crypto.mac(:hmac, :sha256, salted, "Server Key")
         expected = :crypto.mac(:hmac, :sha256, key, scram.auth_message)
-        if expected == Base.decode64!(signature), do: :ok, else: {:error, %Postgrex.Error{message: "cannot verify SCRAM server signature"}}
-      _ -> {:error, %Postgrex.Error{message: "unsupported SCRAM server final message: #{inspect(server)}"}}
+
+        if expected == Base.decode64!(signature),
+          do: :ok,
+          else: {:error, %Postgrex.Error{message: "cannot verify SCRAM server signature"}}
+
+      _ ->
+        {:error,
+         %Postgrex.Error{message: "unsupported SCRAM server final message: #{inspect(server)}"}}
     end
   end
 
@@ -550,8 +721,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     parameters =
       case options[:search_path] do
-        path when is_list(path) -> Keyword.put(parameters, :search_path, Enum.intersperse(path, ", "))
-        nil -> parameters
+        path when is_list(path) ->
+          Keyword.put(parameters, :search_path, Enum.intersperse(path, ", "))
+
+        nil ->
+          parameters
       end
 
     Keyword.put(options, :parameters, parameters)
@@ -561,7 +735,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     servers = for {pid, %{name: Postgrex.Parameters}} <- state.service_roots, do: pid
 
     with [server] <- servers,
-         {:ok, callback, from, reference, _completion} <- type_server_request(state, source, server, {:insert, parameters}, Postgrex.Parameters),
+         {:ok, callback, from, reference, _completion} <-
+           type_server_request(state, source, server, {:insert, parameters}, Postgrex.Parameters),
          [{^reference, monitor}] <- type_lock_monitors(state, callback, server, source.pid),
          {:ok, insert} <- startup_parameter_insert(state, callback, from, parameters, reference) do
       {:ok, reference, {:constructor_parameter_monitor, monitor, insert}}
@@ -571,11 +746,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp startup_parameter_insert(state, callback, from, parameters, reference) do
-    with [insert] <- native_type_calls(state, callback.source, callback.returned, {:ets, :insert_new, 2}),
-         {_, :call, {:ets, :insert_new, [Postgrex.Parameters, {^reference, ^parameters}]}} <- insert.source.event,
+    with [insert] <-
+           native_type_calls(state, callback.source, callback.returned, {:ets, :insert_new, 2}),
+         {_, :call, {:ets, :insert_new, [Postgrex.Parameters, {^reference, ^parameters}]}} <-
+           insert.source.event,
          {_, :return_from, _, true} <- insert.returned.event,
-         {_, :call, {_, _, [{:insert, ^parameters}, ^from, Postgrex.Parameters]}} <- callback.source.event,
-         {_, :return_from, _, {:reply, ^reference, Postgrex.Parameters}} <- callback.returned.event do
+         {_, :call, {_, _, [{:insert, ^parameters}, ^from, Postgrex.Parameters]}} <-
+           callback.source.event,
+         {_, :return_from, _, {:reply, ^reference, Postgrex.Parameters}} <-
+           callback.returned.event do
       {:ok, insert.source.index}
     else
       _ -> :error
@@ -589,13 +768,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       with [certificate] <- native_type_calls(state, call, pair.returned, {:ssl, :peercert, 1}),
            {_, :call, {:ssl, :peercert, [^socket]}} <- certificate.source.event,
            {_, :return_from, _, {:ok, der}} <- certificate.returned.event,
-           {:Certificate, _tbs, {_tag, oid, _parameters}, _signature} <- :public_key.pkix_decode_cert(der, :plain),
+           {:Certificate, _tbs, {_tag, oid, _parameters}, _signature} <-
+             :public_key.pkix_decode_cert(der, :plain),
            {digest, _sign} when digest != :none <- :public_key.pkix_sign_types(oid) do
         digest = if digest in [:md5, :sha], do: :sha256, else: digest
         {:ok, {"SCRAM-SHA-256-PLUS", "p=tls-server-end-point,,", :crypto.hash(digest, der)}}
       else
-        _ when mode != :require -> {:ok, {"SCRAM-SHA-256", "n,,", ""}}
-        _ -> {:error, %Postgrex.Error{message: "channel binding is required but the server certificate has no usable hash"}}
+        _ when mode != :require ->
+          {:ok, {"SCRAM-SHA-256", "n,,", ""}}
+
+        _ ->
+          {:error,
+           %Postgrex.Error{
+             message: "channel binding is required but the server certificate has no usable hash"
+           }}
       end
     else
       # No certificate access occurs in this branch of the owning function.
@@ -1618,7 +1804,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     {_, :call, {_, _, [server]}} = source.event
 
     with %{types: {^module, _table} = types} <- state.type_roots[server],
-         [location] <- native_type_calls(state, context.source, source, {Postgrex.TypeSupervisor, :locate, 2}),
+         [location] <-
+           native_type_calls(state, context.source, source, {Postgrex.TypeSupervisor, :locate, 2}),
          {_, :call, {_, _, [^module, endpoint]}} <- location.source.event,
          true <- endpoint == context.endpoint,
          {_, :return_from, _, ^server} <- location.returned.event do
@@ -1912,7 +2099,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       target_server_type: context.options[:target_server_type] || :any
     }
 
-    helper_copy(state, source, [2, 2, 1], actual, expected, {:constructor_status, context.source.index})
+    helper_copy(
+      state,
+      source,
+      [2, 2, 1],
+      actual,
+      expected,
+      {:constructor_status, context.source.index}
+    )
   end
 
   defp status_input(state, source, function, arguments) when function in @status_consumers do
@@ -2521,20 +2715,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp buffer_input(state, source, :msg_send, [_protocol, _messages, buffer], version) do
     cursor? =
-      Map.has_key?(state.starting, source.pid) or Enum.any?(source.stack, fn
-        {Postgrex.Protocol, function, _} ->
-          function in [
-            :error_flushed,
-            :rollback_flushed,
-            :reload_flushed,
-            :reload_ready,
-            :reload_transaction,
-            :reload_init
-          ]
+      Map.has_key?(state.starting, source.pid) or
+        Enum.any?(source.stack, fn
+          {Postgrex.Protocol, function, _} ->
+            function in [
+              :error_flushed,
+              :rollback_flushed,
+              :reload_flushed,
+              :reload_ready,
+              :reload_transaction,
+              :reload_init
+            ]
 
-        _ ->
-          false
-      end)
+          _ ->
+            false
+        end)
 
     {state, expected, origin} = send_buffer_origin(state, source, version, cursor?)
     buffer_copy(state, source, [2, 2, 2], buffer, expected, origin, version.protocol.sock)
@@ -3145,7 +3340,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     {expected, phase} =
       case context.phase do
         :startup ->
-          parameters = [user: Keyword.fetch!(options, :username), database: Keyword.fetch!(options, :database)] ++ options[:parameters]
+          parameters =
+            [
+              user: Keyword.fetch!(options, :username),
+              database: Keyword.fetch!(options, :database)
+            ] ++ options[:parameters]
+
           {{:msg_startup, parameters}, :authentication}
 
         :authentication ->
@@ -3156,7 +3356,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       end
 
     state
-    |> helper_copy(source, [2, 2, 1], actual, expected, {:constructor_message, context.source.index})
+    |> helper_copy(
+      source,
+      [2, 2, 1],
+      actual,
+      expected,
+      {:constructor_message, context.source.index}
+    )
     |> put_in([:starting, source.pid, :phase], phase)
   end
 
@@ -3164,13 +3370,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     options = startup_options(context.options)
 
     case native_message(state, source, context.version.protocol) do
-      {:msg_auth, :cleartext, _} -> {:msg_password, [Keyword.fetch!(options, :password), 0]}
+      {:msg_auth, :cleartext, _} ->
+        {:msg_password, [Keyword.fetch!(options, :password), 0]}
+
       {:msg_auth, :md5, salt} ->
-        digest = :erlang.md5([Keyword.fetch!(options, :password), Keyword.fetch!(options, :username)]) |> Base.encode16(case: :lower)
+        digest =
+          :erlang.md5([Keyword.fetch!(options, :password), Keyword.fetch!(options, :username)])
+          |> Base.encode16(case: :lower)
+
         digest = :erlang.md5([digest, salt]) |> Base.encode16(case: :lower)
         {:msg_password, ["md5", digest, 0]}
-      {:msg_auth, type, _} when type in [:sasl, :sasl_cont] -> {:msg_password, context.password_message}
-      _ -> :no_constructor_authentication_origin
+
+      {:msg_auth, type, _} when type in [:sasl, :sasl_cont] ->
+        {:msg_password, context.password_message}
+
+      _ ->
+        :no_constructor_authentication_origin
     end
   end
 
@@ -3178,11 +3393,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     types = Postgrex.Types.new(Keyword.fetch!(context.options, :types))
 
     try do
-      [size] = for pair <- native_type_calls(state, context.source, source, {:ets, :info, 2}),
-                   {_, :call, {_, _, [table, :size]}} <- [pair.source.event],
-                   {_, actual_table} = version.protocol.types,
-                   table == actual_table,
-                   do: pair
+      [size] =
+        for pair <- native_type_calls(state, context.source, source, {:ets, :info, 2}),
+            {_, :call, {_, _, [table, :size]}} <- [pair.source.event],
+            {_, actual_table} = version.protocol.types,
+            table == actual_table,
+            do: pair
+
       {_, :return_from, _, 0} = size.returned.event
       server_version = Postgrex.Utils.parse_version(version.protocol.parameters["server_version"])
       input = %{types: types, disable_composite_types: version.protocol.disable_composite_types}
@@ -3553,7 +3770,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp helper_timeout(state, source, actual) when is_map_key(state.starting, source.pid),
-    do: helper_copy(state, source, [2, 2, 1], actual, :infinity, {:constructor_timeout, state.starting[source.pid].source.index})
+    do:
+      helper_copy(
+        state,
+        source,
+        [2, 2, 1],
+        actual,
+        :infinity,
+        {:constructor_timeout, state.starting[source.pid].source.index}
+      )
 
   defp helper_timeout(state, source, actual) do
     callback =

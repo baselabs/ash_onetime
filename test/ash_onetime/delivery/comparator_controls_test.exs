@@ -3920,7 +3920,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
-  test "Connection streams: a new native type service constructs its own startup roots", context do
+  test "Connection streams: a new native type service constructs its own startup roots",
+       context do
     Repo.put_dynamic_repo(context.repo)
     historical = Historical.capture(context.prefix)
     run = ConnectionNative.observe_fresh_startup()
@@ -3931,7 +3932,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert proof.reads.errors == []
 
     for error <- proof.decoders.errors ++ proof.states.errors do
-      Diagnostics.emit("CONNECTION_FRESH_TYPE_ORIGIN_FAILURE", Map.take(error, [:index, :at, :rule, :path, :context]))
+      Diagnostics.emit(
+        "CONNECTION_FRESH_TYPE_ORIGIN_FAILURE",
+        Map.take(error, [:index, :at, :rule, :path, :context])
+      )
     end
 
     assert proof.decoders.errors == []
@@ -3943,7 +3947,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     Repo.put_dynamic_repo(context.repo)
     historical = Historical.capture(context.prefix)
 
-    run = ComparatorMutants.with_postgrex_mutant(:startup_peer_copy, &ConnectionNative.observe_startup/0)
+    run =
+      ComparatorMutants.with_postgrex_mutant(
+        :startup_peer_copy,
+        &ConnectionNative.observe_startup/0
+      )
+
     assert run.result == :ok
     side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
     proof = ConnectionHistory.build(side)
@@ -3951,7 +3960,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert proof.reads.errors == []
     assert proof.decoders.errors == []
 
-    assert [%{rule: :state_input_copy, different_fields: [:peer], at: %{mfa: {Postgrex.Protocol, :msg_send, 3}}}] = proof.states.errors
+    assert [
+             %{
+               rule: :state_input_copy,
+               different_fields: [:peer],
+               at: %{mfa: {Postgrex.Protocol, :msg_send, 3}}
+             }
+           ] = proof.states.errors
 
     for mutant <- [:stream_state_copy, :stream_helper_copy, :stream_owner_copy] do
       checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)

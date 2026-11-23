@@ -2199,8 +2199,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   defp postgrex_edits(:startup_peer_copy) do
-    original = "    msg = msg_startup(params: [user: user, database: database] ++ params)\n\n    case msg_send(s, msg, \"\") do\n"
-    mutated = "    msg = msg_startup(params: [user: user, database: database] ++ params)\n\n    case msg_send(%{s | peer: nil}, msg, \"\") do\n"
+    original =
+      "    msg = msg_startup(params: [user: user, database: database] ++ params)\n\n    case msg_send(s, msg, \"\") do\n"
+
+    mutated =
+      "    msg = msg_startup(params: [user: user, database: database] ++ params)\n\n    case msg_send(%{s | peer: nil}, msg, \"\") do\n"
+
     [{original, mutated}]
   end
 

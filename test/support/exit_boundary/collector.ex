@@ -368,7 +368,14 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
         # tracing. New ordinary messages then have their own native receipts.
         initial_state = :sys.get_state(pid)
 
-        {pid, %{name: name, callback: callback, callbacks: service_callbacks(callback), table: table, initial_state: initial_state}}
+        {pid,
+         %{
+           name: name,
+           callback: callback,
+           callbacks: service_callbacks(callback),
+           table: table,
+           initial_state: initial_state
+         }}
 
       {name, callback} ->
         pid = Process.whereis(name)
