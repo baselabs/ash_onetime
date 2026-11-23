@@ -2,6 +2,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Compiled
   alias AshOnetime.Test.ExitBoundary.ConnectionTypes
+  alias AshOnetime.Test.ExitBoundary.NativeTransport
   alias AshOnetime.Test.ExitBoundary.Wire
 
   # Decoder buffers are copies of one physical connection's unconsumed bytes.
@@ -19,7 +20,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       pending_cursors: %{},
       versions: [],
       timeline: [],
-      descriptors: Map.merge(historical_descriptors(historical), owner_descriptors(origins)),
+      descriptors:
+        Map.merge(historical_descriptors(historical), owner_descriptors(origins, historical)),
       executing: %{},
       executions: [],
       query_inputs: %{},
@@ -193,11 +195,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     {module, socket} = protocol.sock
     tag = if module == :gen_tcp, do: :tcp, else: :ssl
     child = direct_call(events, {Postgrex.Protocol, :msg_recv, 3})
-    cursor = active_cursor(context, socket, pair.source.index, initial)
+    port = NativeTransport.physical_port(context.state.native, protocol.sock)
+    cursor = active_cursor(context, port, pair.source.index, initial)
 
     if child && cursor do
       Enum.find(deliveries, fn delivery ->
-        eligible_active_delivery?(delivery, pair, child, cursor, {tag, socket}, used)
+        eligible_active_delivery?(delivery, pair, child, cursor, {tag, socket, port}, used)
       end)
     end
   end
@@ -212,10 +215,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     end
   end
 
-  defp eligible_active_delivery?(delivery, pair, child, cursor, {tag, socket}, used) do
+  defp eligible_active_delivery?(delivery, pair, child, cursor, {tag, socket, port}, used) do
     received = delivery.received
 
-    delivery.port == socket and delivery.start >= cursor.offset and
+    delivery.port == port and delivery.start >= cursor.offset and
       received.index < child.index and received.pid == pair.source.pid and
       not MapSet.member?(used, received.index) and
       match?({_, :receive, {^tag, ^socket, _}}, received.event)
@@ -594,14 +597,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   defp buffer_kind(buffer) when buffer in [nil, :active_once], do: buffer
   defp buffer_kind(_buffer), do: :invalid
 
-  defp owner_descriptors(origins) do
-    for %{sock: {:gen_tcp, port}, query: query} = origin <- origins,
+  defp owner_descriptors(origins, historical) do
+    for %{sock: socket, query: query} = origin <- origins,
+        port = NativeTransport.physical_port(%{historical: historical}, socket),
         into: %{},
         do: {query.ref, Map.put(origin, :port, port)}
   end
 
   defp historical_descriptors(historical) do
-    for {_holder, %{protocol: %{sock: {:gen_tcp, port}} = protocol} = history} <- historical,
+    for {_holder, %{protocol: %{sock: socket} = protocol} = history} <- historical,
+        port = NativeTransport.physical_port(%{historical: historical}, socket),
         origin <- Map.get(history, :descriptors, []),
         origin.port == port and origin.query.types === protocol.types,
         into: %{},
@@ -609,8 +614,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   end
 
   def initial_cursors(historical) do
-    for {holder, %{protocol: %{sock: {:gen_tcp, port}} = protocol}} <- historical,
+    for {holder, %{protocol: %{sock: socket} = protocol}} <- historical,
         into: %{} do
+      port = NativeTransport.physical_port(%{historical: historical}, socket)
       buffer = if is_binary(protocol.buffer), do: protocol.buffer, else: <<>>
       source = %{index: {:historical, holder}, path: [:protocol, :buffer], offset: 0}
       copies = [Map.put(source, :length, byte_size(buffer))]
@@ -659,7 +665,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
             ] do
     case query_root(state, source) do
       %{query: query, protocol: protocol} = root ->
-        port = elem(protocol.sock, 1)
+        port = NativeTransport.physical_port(state.native, protocol.sock)
         description = query_description(state, source, root, port)
 
         query =
@@ -692,7 +698,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
        ) do
     case query_root(state, source) do
       %{query: query, protocol: protocol} = root ->
-        input = query_description(state, source, root, elem(protocol.sock, 1))
+        port = NativeTransport.physical_port(state.native, protocol.sock)
+        input = query_description(state, source, root, port)
 
         input =
           Map.merge(input, %{
@@ -995,7 +1002,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
        }) do
     matches =
       for {_ref, descriptor} <- state.descriptors,
-          descriptor.port == elem(protocol.sock, 1),
+          descriptor.port == NativeTransport.physical_port(state.native, protocol.sock),
           descriptor.query.name == query.name,
           descriptor.query.statement === query.statement,
           descriptor.query.types === protocol.types,
@@ -1055,10 +1062,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
          %{
            event:
              {_, :return_from, {Postgrex.Protocol, :redescribe, 6},
-              {:ok, %Postgrex.Query{}, %{sock: {:gen_tcp, port}}, _buffer}}
+              {:ok, %Postgrex.Query{}, %{sock: socket}, _buffer}}
          } = e,
          state
        ) do
+    port = NativeTransport.physical_port(state.native, socket)
+
     case state.query_outputs[e.index] do
       %{query: query} ->
         origin = %{query: query, port: port, index: e.index, path: [3, 1]}
@@ -1077,10 +1086,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
          %{
            event:
              {_, :return_from, {Postgrex.Protocol, :handle_prepare, 3},
-              {:ok, %Postgrex.Query{}, %{sock: {:gen_tcp, port}}}}
+              {:ok, %Postgrex.Query{}, %{sock: socket}}}
          } = e,
          state
        ) do
+    port = NativeTransport.physical_port(state.native, socket)
+
     case state.query_outputs[e.index] do
       %{query: expected} ->
         origin = %{query: expected, port: port, index: e.index, path: [3, 1]}
@@ -1107,7 +1118,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     protocol = if function in [:msg_recv, :rows_recv], do: hd(args), else: protocol
 
     case protocol do
-      %{sock: {:gen_tcp, port}} ->
+      %{sock: socket} ->
+        port = NativeTransport.physical_port(state.native, socket)
         state = put_in(state.ports[pid], port)
 
         starts_rows? = function in [:handle_execute, :handle_fetch]
@@ -1137,11 +1149,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
          %{
            event:
              {_, :call,
-              {Postgrex.Protocol, :activate, [%{sock: {:gen_tcp, port}} = protocol, buffer]}}
+              {Postgrex.Protocol, :activate, [%{sock: socket} = protocol, buffer]}}
          } = e,
          state
        )
        when is_binary(buffer) do
+    port = NativeTransport.physical_port(state.native, socket)
+
     case Map.fetch(state.cursors, port) do
       {:ok, cursor} ->
         state = exact(state, e, :decoder_replay_buffer, buffer, cursor.buffer)
@@ -1155,7 +1169,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     end
   end
 
-  defp decoder_event(%{event: {pid, :send, {:tcp, _port, _bytes}, pid}} = e, state) do
+  defp decoder_event(%{event: {pid, :send, {tag, _socket, _bytes}, pid}} = e, state)
+       when tag in [:tcp, :ssl] do
     bound? = MapSet.member?(state.replay_sends, e.index)
     if bound?, do: state, else: failure(state, e, :decoder_replay_source, false)
   end
@@ -1173,7 +1188,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   defp replay(e, protocol, buffer, port, cursor, state) do
     pair = Map.fetch!(state.pairs, e.index)
     pid = e.pid
-    message = {:tcp, port, buffer}
+    {module, socket} = protocol.sock
+    tag = if module == :gen_tcp, do: :tcp, else: :ssl
+    message = {tag, socket, buffer}
 
     program =
       Enum.filter(state.events, fn event ->

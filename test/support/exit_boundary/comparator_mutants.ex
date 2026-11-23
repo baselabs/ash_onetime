@@ -407,9 +407,9 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       %{
         path: "test/support/exit_boundary/connection_decoders.ex",
         original:
-          "  defp decoder_event(%{event: {pid, :send, {:tcp, _port, _bytes}, pid}} = e, state) do\n    bound? = MapSet.member?(state.replay_sends, e.index)\n    if bound?, do: state, else: failure(state, e, :decoder_replay_source, false)\n  end\n",
+          "  defp decoder_event(%{event: {pid, :send, {tag, _socket, _bytes}, pid}} = e, state)\n       when tag in [:tcp, :ssl] do\n    bound? = MapSet.member?(state.replay_sends, e.index)\n    if bound?, do: state, else: failure(state, e, :decoder_replay_source, false)\n  end\n",
         mutated:
-          "  defp decoder_event(%{event: {pid, :send, {:tcp, _port, _bytes}, pid}}, state), do: state\n"
+          "  defp decoder_event(%{event: {pid, :send, {tag, _socket, _bytes}, pid}}, state)\n       when tag in [:tcp, :ssl],\n       do: state\n"
       }
     ]
   end

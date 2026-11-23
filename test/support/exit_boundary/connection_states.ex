@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.ConnectionTypes
+  alias AshOnetime.Test.ExitBoundary.NativeTransport
   alias AshOnetime.Test.ExitBoundary.Root
 
   import Postgrex.Messages,
@@ -1681,7 +1682,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     reads =
       Enum.filter(state.native.reads, fn read ->
         read.returned.pid == source.pid and read.returned.index > parent.index and
-          read.returned.index < source.index and {:gen_tcp, read.port} == version.protocol.sock
+          read.returned.index < source.index and
+          read.port == NativeTransport.physical_port(state.native, version.protocol.sock)
       end)
 
     case reads do
@@ -2548,8 +2550,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
-  defp helper_types(state, source, %{protocol: %{sock: {:gen_tcp, port}}}, actual) do
-    execution = execution_origin(state, source, %{sock: {:gen_tcp, port}})
+  defp helper_types(state, source, %{protocol: %{sock: _socket} = protocol}, actual) do
+    execution = execution_origin(state, source, protocol)
 
     case execution do
       %{descriptor: descriptor} ->
@@ -2564,7 +2566,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp helper_types(state, source, _version, _actual),
     do: failure(state, source, :state_helper_type_origin)
 
-  defp execution_origin(state, source, %{sock: {:gen_tcp, port}}) do
+  defp execution_origin(state, source, %{sock: socket}) do
+    port = NativeTransport.physical_port(state.native, socket)
+
     state.decoders.executions
     |> Enum.filter(&(&1.port == port and &1.pid == source.pid and &1.index < source.index))
     |> List.last()
@@ -2609,7 +2613,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp helper_required(%{expected: {:more, more}}, :message), do: {:ok, more}
   defp helper_required(_instance, _kind), do: :error
 
-  defp helper_decoder(state, source, %{sock: {:gen_tcp, port}}, kind) do
+  defp helper_decoder(state, source, %{sock: socket}, kind) do
+    port = NativeTransport.physical_port(state.native, socket)
+
     mfa =
       if kind == :rows,
         do: {Postgrex.Types, :decode_rows, 4},
@@ -2878,7 +2884,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp transaction_commands(state, source, protocol, first) do
     state.decoders.instances
     |> Enum.filter(fn instance ->
-      {:gen_tcp, instance.port} == protocol.sock and instance.returned.pid == source.pid and
+      instance.port == NativeTransport.physical_port(state.native, protocol.sock) and
+        instance.returned.pid == source.pid and
         instance.source.index > first and instance.returned.index < source.index and
         match?({:ok, {:msg_command_complete, _}, _}, instance.expected)
     end)
@@ -2893,7 +2900,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     state.decoders.instances
     |> Enum.filter(fn instance ->
-      {:gen_tcp, instance.port} == protocol.sock and instance.returned.pid == source.pid and
+      instance.port == NativeTransport.physical_port(state.native, protocol.sock) and
+        instance.returned.pid == source.pid and
         instance.source.index > first and
         instance.returned.index < source.index and
         command_message?(instance.expected)
@@ -3290,13 +3298,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp native_message_instance(state, source, protocol) do
     state.decoders.instances
     |> Enum.filter(
-      &({:gen_tcp, &1.port} == protocol.sock and &1.returned.pid == source.pid and
+      &(&1.port == NativeTransport.physical_port(state.native, protocol.sock) and
+          &1.returned.pid == source.pid and
           &1.returned.index < source.index)
     )
     |> List.last()
   end
 
-  defp cursor_version(state, source, %{sock: {:gen_tcp, port}}) do
+  defp cursor_version(state, source, %{sock: socket}) do
+    port = NativeTransport.physical_port(state.native, socket)
+
     state.decoders.timeline
     |> Enum.filter(&(&1.port == port and &1.index < source.index))
     |> List.last()

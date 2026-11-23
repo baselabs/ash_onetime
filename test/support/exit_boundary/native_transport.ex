@@ -3,6 +3,22 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   alias AshOnetime.Test.ExitBoundary.Diagnostics
   @control_magic 0x03F1A300
 
+  def physical_port(_native, {:gen_tcp, port}) when is_port(port), do: port
+
+  def physical_port(native, {:ssl, socket}) do
+    case Enum.find(Map.get(native, :tls_bindings, []), &(&1.socket === socket)) do
+      %{port: port} -> port
+      nil -> historical_tls_port(Map.get(native, :historical, %{}), socket)
+    end
+  end
+
+  defp historical_tls_port(historical, socket) do
+    Enum.find_value(historical, :unbound_tls_socket, fn
+      {_holder, %{protocol: %{sock: {:ssl, ^socket}}, port: port}} -> port
+      _connection -> nil
+    end)
+  end
+
   # Validate the concrete inet driver program of each read independently. This
   # ledger does not grant any event exemption: the stream consumer must also prove
   # that framing and the protocol state machine required that particular read.

@@ -4,6 +4,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     Compiled,
     ConnectionHistory,
     Historical,
+    NativeTransport,
     Origins,
     References,
     Registry,
@@ -173,6 +174,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
           end)
 
         historical = Map.fetch!(side.historical.connections, holder)
+        port = NativeTransport.physical_port(%{historical: side.historical.connections}, protocol.sock)
 
         [
           %{
@@ -189,7 +191,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
             conn_ref: conn_ref,
             owner: historical.owner,
             backend: protocol.connection_id,
-            port: port(protocol.sock)
+            port: port
           }
         ]
 
@@ -202,10 +204,6 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     end)
     |> elem(0)
   end
-
-  defp port({:gen_tcp, port}), do: port
-  defp port({:gen_tcp, port, _}), do: port
-  defp port(port) when is_port(port), do: port
 
   defp errors_for_leases(leases) do
     for lease <- leases,

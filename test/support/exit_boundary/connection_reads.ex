@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.ConnectionProtocol
+  alias AshOnetime.Test.ExitBoundary.NativeTransport
   alias AshOnetime.Test.ExitBoundary.Wire
 
   # Native program validation and framing demand are separate proofs. An extra
@@ -220,9 +221,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
 
     origin =
       Enum.find_value(state.historical, fn
-        {_holder, %{protocol: %{sock: {:gen_tcp, port}} = historical}}
-        when port == read.port ->
-          historical
+        {_holder, %{protocol: %{sock: socket} = historical}} ->
+          if NativeTransport.physical_port(state, socket) == read.port, do: historical
 
         _ ->
           nil

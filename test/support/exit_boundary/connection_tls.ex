@@ -220,32 +220,40 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   # This ledger grants no event allowance; native interior/copy qualification and
   # the main comparator's consumption remain separate obligations.
   def build(indexed, binding, profile \\ nil) do
-    families = Map.get(binding, :families, [binding])
+    bindings = if is_list(binding), do: binding, else: [binding]
+    families = Enum.flat_map(bindings, &Map.get(&1, :families, [&1]))
+    sockets = Map.new(bindings, &{&1.socket, &1})
 
     transport =
       profile_component(profile, :native_transport, fn ->
-        NativeTransport.build(
-          Map.put(indexed, :profile, profile),
-          %{},
-          Enum.map(families, & &1.transport)
-        )
+        Map.get_lazy(indexed, :native_transport, fn ->
+          NativeTransport.build(
+            Map.put(indexed, :profile, profile),
+            %{},
+            Enum.map(families, & &1.transport)
+          )
+        end)
       end)
 
     pairs = transport.pairs
 
     state =
       Enum.reduce(indexed.events, %{pairs: pairs, writes: [], reads: [], errors: []}, fn
-        %{event: {_, :call, {:ssl, :send, [socket, data]}}} = source, state
-        when socket == binding.socket ->
-          write(state, source, binding.port, IO.iodata_to_binary(data))
+        %{event: {_, :call, {:ssl, :send, [socket, data]}}} = source, state ->
+          case Map.fetch(sockets, socket) do
+            {:ok, binding} -> write(state, source, binding.port, IO.iodata_to_binary(data))
+            :error -> tls_failure(state, source, :tls_socket_source)
+          end
 
-        %{event: {_, :call, {:ssl, :recv, [socket, length, timeout]}}} = source, state
-        when socket == binding.socket ->
-          read(state, source, binding.port, length, timeout)
+        %{event: {_, :call, {:ssl, :recv, [socket, length, timeout]}}} = source, state ->
+          case Map.fetch(sockets, socket) do
+            {:ok, binding} -> read(state, source, binding.port, length, timeout)
+            :error -> tls_failure(state, source, :tls_socket_source)
+          end
 
         %{event: {_, :call, {:ssl, function, _arguments}}} = source, state
         when function in [:send, :recv] ->
-          %{state | errors: [{source.index, :tls_socket_source} | state.errors]}
+          tls_failure(state, source, :tls_socket_source)
 
         _, state ->
           state
@@ -253,8 +261,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     helper =
       profile_component(profile, :sender_copies, fn ->
-        sender_copies(indexed.events, pairs, binding)
+        Enum.reduce(families, %{terms: [], errors: []}, fn family, combined ->
+          helper = sender_copies(indexed.events, pairs, family)
+          %{terms: helper.terms ++ combined.terms, errors: helper.errors ++ combined.errors}
+        end)
       end)
+
+    binding =
+      bindings
+      |> hd()
+      |> Map.put(:families, families)
+      |> Map.put(
+        :debug_observations,
+        Enum.reduce(bindings, %{}, &Map.merge(&2, Map.get(&1, :debug_observations, %{})))
+      )
 
     workers =
       profile_component(profile, :worker_states, fn ->
@@ -267,6 +287,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       reads: Enum.reverse(state.reads),
       active: [],
       historical: %{},
+      tls_bindings: bindings,
       transport: transport,
       terms: Enum.reverse(helper.terms) ++ Enum.reverse(workers.terms),
       errors:
@@ -2815,7 +2836,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         %{state | writes: [write | state.writes]}
 
       _ ->
-        %{state | errors: [{source.index, :tls_write_return} | state.errors]}
+        tls_failure(state, source, :tls_write_return)
     end
   end
 
@@ -2839,7 +2860,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         %{state | reads: [read | state.reads]}
 
       _ ->
-        %{state | errors: [{source.index, :tls_read_return} | state.errors]}
+        tls_failure(state, source, :tls_read_return)
     end
   end
 

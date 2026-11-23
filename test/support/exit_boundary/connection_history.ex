@@ -5,6 +5,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   alias AshOnetime.Test.ExitBoundary.ConnectionDecoders
   alias AshOnetime.Test.ExitBoundary.ConnectionReads
   alias AshOnetime.Test.ExitBoundary.ConnectionStates
+  alias AshOnetime.Test.ExitBoundary.ConnectionTls
   alias AshOnetime.Test.ExitBoundary.NativeTransport
 
   import Postgrex.Messages,
@@ -65,7 +66,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
 
     native =
       indexed
-      |> NativeTransport.build(historical.connections)
+      |> native_history(historical.connections, side.run.tls_bindings || [])
       |> Map.put(:connection_framing, historical.connection_framing)
 
     # This labels exact frontend writes for statement ordinals only. It grants
@@ -141,6 +142,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       states: states,
       errors: errors
     }
+  end
+
+  defp native_history(indexed, connections, []), do: NativeTransport.build(indexed, connections)
+
+  defp native_history(indexed, connections, bindings) do
+    transport = NativeTransport.build(indexed, connections, Enum.map(bindings, & &1.transport))
+    tls = ConnectionTls.build(Map.put(indexed, :native_transport, transport), bindings)
+    ports = MapSet.new(bindings, & &1.port)
+
+    # Ciphertext keeps its complete native/worker proof. Only each independently
+    # bound public SSL boundary supplies bytes to PostgreSQL's logical stream.
+    Map.merge(transport, %{
+      reads: Enum.reject(transport.reads, &MapSet.member?(ports, &1.port)) ++ tls.reads,
+      writes: Enum.reject(transport.writes, &MapSet.member?(ports, &1.port)) ++ tls.writes,
+      active: Enum.reject(transport.active, &MapSet.member?(ports, &1.port)) ++ tls.active,
+      errors: tls.errors,
+      tls: tls,
+      tls_bindings: bindings
+    })
   end
 
   @impl true

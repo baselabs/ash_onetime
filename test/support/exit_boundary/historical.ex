@@ -3,6 +3,7 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
   alias AshOnetime.Test.ExitBoundary.ConnectionHistory
   alias AshOnetime.Test.ExitBoundary.ConnectionProtocol
   alias AshOnetime.Test.ExitBoundary.ConnectionTls
+  alias AshOnetime.Test.ExitBoundary.NativeTransport
   alias AshOnetime.Test.Repo
   alias Ecto.Adapters.SQL
   import Postgrex.Messages, only: [row_field: 1]
@@ -258,7 +259,8 @@ defmodule AshOnetime.Test.ExitBoundary.Historical do
           {:ok, input} <- [Map.fetch(proof.decoders.query_inputs, factory)],
           root = Map.fetch!(proof.native.pairs, input.root).source,
           {_, :call, {_, _, arguments}} = root.event,
-          %{sock: {:gen_tcp, port} = sock} <- [List.last(arguments)],
+          %{sock: sock} <- [List.last(arguments)],
+          port = NativeTransport.physical_port(proof.native, sock),
           source = Map.fetch!(proof.native.pairs, factory).returned,
           do: %{
             index: index,
