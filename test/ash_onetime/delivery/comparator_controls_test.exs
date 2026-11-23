@@ -4612,7 +4612,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                 end)
 
               send(parent, {:native_renewal_initial, token, historical, holder})
-              %{dynamic_repo: dynamic_repo, pool: pool, owner: connection.owner, pool_ref: pool_ref}
+
+              %{
+                dynamic_repo: dynamic_repo,
+                pool: pool,
+                owner: connection.owner,
+                pool_ref: pool_ref
+              }
             catch
               kind, reason ->
                 Supervisor.stop(dynamic_repo)

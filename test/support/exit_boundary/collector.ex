@@ -729,7 +729,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
     case matches do
       [pair] ->
-        service_program_result(:startup_ack, pair, receipt, {:startup_ack, pair.source.index})
+        service_program_result(:startup_ack, pair, receipt, {:startup_ack, pair.source.stamp})
 
       _ ->
         :error
@@ -754,7 +754,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
           :shutdown_exit,
           pair,
           receipt,
-          {:shutdown_exit, monitor.source.index}
+          {:shutdown_exit, monitor.source.stamp}
         )
 
       _ ->
@@ -776,7 +776,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
     case matches do
       [pair] ->
-        service_program_result(:monitor_flush, pair, receipt, {:monitor_flush, pair.source.index})
+        service_program_result(:monitor_flush, pair, receipt, {:monitor_flush, pair.source.stamp})
 
       _ ->
         nil
@@ -803,7 +803,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
           :shutdown_down,
           pair,
           receipt,
-          {:shutdown_down, monitor.source.index}
+          {:shutdown_down, monitor.source.stamp}
         )
 
       _ ->
@@ -833,6 +833,7 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
       {^pid, :call, {DynamicSupervisor, :wait_child, [^child, ^spec, ^reason, stacks]}}
       when is_map(stacks) and is_tuple(spec) and tuple_size(spec) == 5 ->
         expected = service_shutdown_stack(child, spec, reason, stacks)
+
         pair.returned.event ===
           {pid, :return_from, {DynamicSupervisor, :wait_child, 4}, expected}
 
@@ -919,6 +920,8 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   end
 
   defp service_program_result(kind, pair, receipt, key) do
+    # Strict stamps keep the same native occurrence key when a later fence
+    # delivers an older event that changes the sorted prefix's integer indexes.
     {:ok, key,
      %{
        kind: kind,
