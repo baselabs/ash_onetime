@@ -3312,6 +3312,44 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  @tag :connection_streams
+  test "Connection streams: MAIN consumes the validated logical observation", context do
+    pair = observe(context, row!(:issue, :execute), Values.set()[:va])
+
+    proofs = [
+      {NativeTransport, :build, 3},
+      {ConnectionReads, :build, 3},
+      {ConnectionDecoders, :build, 5},
+      {ConnectionStates, :build, 5}
+    ]
+
+    legacy = [{TransportReferences, :build, 2}, {Wire, :build, 2}]
+    renderer = {ConnectionHistory, :render, 2}
+    functions = proofs ++ legacy
+
+    functions =
+      if function_exported?(ConnectionHistory, :render, 2),
+        do: [renderer | functions],
+        else: functions
+
+    events = comparator_call_order(pair, functions)
+
+    for mfa <- proofs do
+      calls = Enum.count(events, &match?({:call, ^mfa, _}, &1))
+      completed = Enum.filter(events, &match?({:return, ^mfa, _}, &1))
+      successful? = Enum.all?(completed, &match?({:return, ^mfa, true}, &1))
+
+      assert calls >= 2 and length(completed) == calls and successful?,
+             "the MAIN witness requires successful raw proofs on both sides"
+    end
+
+    consumed = Enum.count(events, &match?({:return, ^renderer, true}, &1))
+    assert consumed >= 2, "MAIN must consume both validated logical connection observations"
+
+    legacy? = Enum.any?(events, fn {kind, mfa, _} -> kind == :call and mfa in legacy end)
+    refute legacy?, "MAIN cannot compare native packet boundaries as logical messages"
+  end
+
   defp comparator_call_order(pair, functions) do
     parent = self()
     token = make_ref()
@@ -3991,6 +4029,61 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     native = NativeTransport.build(%{events: events})
     {native, ConnectionReads.build(native)}
+  end
+
+  @tag :connection_streams
+  test "Connection streams: logical rendering consumes only proved native programs" do
+    run = ConnectionNative.observe(:pipeline)
+    assert run.result == :ok
+    indexed = %{events: Enum.with_index(run.events, &Map.put(&1, :index, &2))}
+    historical = run.native_history
+    native = NativeTransport.build(indexed, historical)
+    assert native.errors == []
+    reads = ConnectionReads.build(native)
+    assert reads.errors == []
+    decoders = ConnectionDecoders.build(indexed, native, reads, historical)
+    assert decoders.errors == []
+    states = ConnectionStates.build(indexed, native, decoders, historical)
+    assert states.errors == []
+
+    proof = %{
+      indexed: indexed,
+      native: native,
+      reads: reads,
+      decoders: decoders,
+      states: states,
+      errors: []
+    }
+
+    messages = ConnectionReads.messages(reads, indexed)
+    assert Enum.count(messages, &(&1.wire_frame.direction == :frontend)) == 2
+    assert Enum.count(messages, &(&1.wire_frame.direction == :backend)) == 8
+
+    rows =
+      for %{wire_frame: %{decoded: {:data_row, columns}}} <- messages,
+          {:data_column, _, _, _, _, _, _, 23, _, value} <- columns,
+          do: value
+
+    assert rows == [17, 29]
+
+    native_indexes =
+      (native.writes ++ native.reads ++ native.options ++ native.active ++ native.passive)
+      |> Enum.flat_map(& &1.indexes)
+      |> MapSet.new()
+
+    assert MapSet.size(native_indexes) > 0
+    untouched = Enum.reject(indexed.events, &MapSet.member?(native_indexes, &1.index))
+    assert untouched != []
+    render? = function_exported?(ConnectionHistory, :render, 2)
+    assert render?, "the main logical connection renderer is absent"
+    render = Function.capture(ConnectionHistory, :render, 2)
+    rendered = render.(proof, indexed)
+    assert rendered.errors == []
+    assert rendered.consumed == native_indexes
+    logical = Enum.filter(rendered.events, &Map.has_key?(&1, :message_address))
+    assert logical === messages
+    remaining = Enum.reject(rendered.events, &Map.has_key?(&1, :message_address))
+    assert remaining === untouched
   end
 
   @tag :comparator_control
