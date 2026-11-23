@@ -227,6 +227,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       described: %{},
       factories: %{},
       type_models: %{},
+      type_locations: %{},
       type_locks: %{},
       type_owners: %{},
       type_services:
@@ -1808,6 +1809,46 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
+  defp factory_event(
+         %{event: {pid, :call, {Postgrex.TypeSupervisor, :locate, arguments}}} = source,
+         state
+       ) do
+    case state.starting[pid] do
+      nil ->
+        failure(state, source, :state_type_location_origin)
+
+      context ->
+        expected = [Keyword.fetch!(context.options, :types), context.endpoint]
+        type_input_copies(state, source, arguments, expected, {:type_location, context.source.index})
+    end
+  end
+
+  defp factory_event(
+         %{event: {pid, :return_from, {Postgrex.TypeSupervisor, :locate, 2}, actual}} = source,
+         state
+       ) do
+    with context when not is_nil(context) <- state.starting[pid],
+         module <- Keyword.fetch!(context.options, :types),
+         [{owner, root}] <-
+           Enum.filter(state.type_roots, fn {_owner, root} ->
+             {module, context.endpoint} in root.registration_keys and root.index < source.index and
+               (is_nil(Map.get(root, :retired)) or root.retired > source.index)
+           end) do
+      origin = {:type_location, context.source.index, root.index}
+
+      state
+      |> helper_copy(source, [3], actual, owner, origin)
+      |> put_in([:type_locations, pid], %{
+        owner: owner,
+        types: root.types,
+        constructor: context.source.index,
+        index: source.index
+      })
+    else
+      _ -> failure(state, source, :state_type_location_origin)
+    end
+  end
+
   defp factory_event(%{event: {pid, :return_from, {module, function, _}, actual}} = source, state)
        when (module == Postgrex.Types and function in [:owner, :build_type_info]) or
               (module == Postgrex.TypeServer and function in [:fetch, :update]) do
@@ -1928,18 +1969,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp constructor_type_server_origin(state, source, context) do
-    module = Keyword.fetch!(context.options, :types)
-    {_, :call, {_, _, [server]}} = source.event
-
-    with %{types: {^module, _table} = types} = root <- state.type_roots[server],
-         true <- Map.get(root, :index, -1) < source.index,
-         true <- is_nil(Map.get(root, :retired)) or root.retired > source.index,
-         true <- {module, context.endpoint} in root.registration_keys,
-         [location] <-
-           native_type_calls(state, context.source, source, {Postgrex.TypeSupervisor, :locate, 2}),
-         {_, :call, {_, _, [^module, endpoint]}} <- location.source.event,
-         true <- endpoint == context.endpoint,
-         {_, :return_from, _, ^server} <- location.returned.event do
+    with %{owner: server, types: types, constructor: constructor, index: index} <-
+           state.type_locations[source.pid],
+         true <- constructor == context.source.index and index < source.index do
       {:ok, server, types}
     else
       _ -> :error

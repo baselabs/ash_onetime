@@ -4047,6 +4047,72 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert ConnectionHistory.build(side).errors == []
   end
 
+  for position <- [0, 1, :return] do
+    @tag :connection_streams
+    test "Connection streams: native type-service location #{position} retains its constructor origin",
+         context do
+      Repo.put_dynamic_repo(context.repo)
+      historical = Historical.capture(context.prefix)
+      position = unquote(position)
+
+      run =
+        if position == :return do
+          ComparatorMutants.with_native_type_outputs(
+            Postgrex.TypeSupervisor,
+            %{{:locate, 2} => %{kind: :value}},
+            &ConnectionNative.observe_startup/0
+          )
+        else
+          ComparatorMutants.with_postgrex_inputs(
+            %{{:locate, 2} => [position]},
+            &ConnectionNative.observe_startup/0,
+            Postgrex.TypeSupervisor
+          )
+        end
+
+      assert run.result == :ok
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
+      assert proof.native.errors == []
+      assert proof.reads.errors == []
+      assert proof.decoders.errors == []
+
+      coordinates =
+        for source <- proof.indexed.events,
+            {_, kind, _, _} <- [source.event],
+            kind == :return_from and position == :return,
+            source.mfa == {Postgrex.TypeSupervisor, :locate, 2},
+            do: {source.index, [3]}
+
+      coordinates =
+        if position == :return do
+          coordinates
+        else
+          for %{event: {_, :call, {Postgrex.TypeSupervisor, :locate, _}}} = source <-
+                proof.indexed.events,
+              do: {source.index, [2, 2, position]}
+        end
+
+      assert coordinates != []
+
+      assert Enum.map(proof.states.errors, & &1.rule) ==
+               List.duplicate(:state_helper_copy, length(coordinates))
+
+      assert Enum.map(proof.states.errors, &{&1.index, &1.path}) == coordinates
+
+      for mutant <- [:stream_helper_copy, :stream_state_copy, :stream_owner_copy] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
+        expected = if mutant == :stream_helper_copy, do: [], else: proof.errors
+        assert checked.errors == expected
+      end
+
+      assert ConnectionHistory.build(side).errors == proof.errors
+      restored = ConnectionNative.observe_startup()
+      side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+      assert ConnectionHistory.build(side).errors == []
+    end
+  end
+
   @tag :connection_streams
   test "Connection streams: a startup Protocol copy retains its constructor peer", context do
     Repo.put_dynamic_repo(context.repo)
