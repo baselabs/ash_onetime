@@ -3176,6 +3176,26 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           Map.fetch!(checkpoint.connection_protocols, port).pending === prefix.pending
 
         assert same_pending?, "the cut cannot replace a pending description with a ready catalog"
+
+        retained = Map.fetch!(checkpoint.connection_protocols, port)
+        same_prefix? = retained === prefix
+
+        assert same_prefix?, "the cut must retain every field of its causal protocol prefix"
+
+        connection = Map.fetch!(reads.connections, port)
+
+        resumed =
+          connection.protocol.messages
+          |> Enum.reject(fn frame -> Enum.all?(frame.provenance, &(&1.index < before)) end)
+          |> Enum.reduce(retained, fn frame, protocol ->
+            ConnectionProtocol.push(protocol, frame)
+          end)
+          |> ConnectionProtocol.finish()
+
+        same_completion? = resumed === connection.protocol
+
+        assert same_completion?,
+               "the retained prefix and remaining real messages must recover the full protocol"
       end
     after
       send(observer, :stop)
