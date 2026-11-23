@@ -2,6 +2,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Comparator
   alias AshOnetime.Test.ExitBoundary.Compiled
+  alias AshOnetime.Test.ExitBoundary.ConnectionHistory
   alias AshOnetime.Test.ExitBoundary.ConnectionNative
   alias AshOnetime.Test.ExitBoundary.ConnectionTls
   alias AshOnetime.Test.ExitBoundary.Diagnostics
@@ -1286,14 +1287,14 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     try do
       if sticky?, do: true = :code.unstick_mod(module)
       {:module, ^module} = :code.load_binary(module, path, mutant)
-      :ok = AshOnetime.Test.ExitBoundary.ConnectionHistory.owner_loaded(module)
+      :ok = ConnectionHistory.owner_loaded(module)
       Compiled.with_object(module, mutant, callback)
     after
       try do
         true = :code.soft_purge(module)
         {:module, ^module} = :code.load_binary(module, path, original)
         true = :code.soft_purge(module)
-        :ok = AshOnetime.Test.ExitBoundary.ConnectionHistory.owner_loaded(module)
+        :ok = ConnectionHistory.owner_loaded(module)
         {^module, ^original, ^path} = :code.get_object_code(module)
       after
         if sticky?, do: true = :code.stick_mod(module)
@@ -2083,14 +2084,14 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     try do
       modules = Code.compile_string(mutant, path)
       {Postgrex.Protocol, binary} = List.keyfind(modules, Postgrex.Protocol, 0)
-      :ok = AshOnetime.Test.ExitBoundary.ConnectionHistory.owner_loaded(Postgrex.Protocol)
+      :ok = ConnectionHistory.owner_loaded(Postgrex.Protocol)
       Compiled.with_object(Postgrex.Protocol, binary, callback)
     after
       try do
         true = :code.soft_purge(Postgrex.Protocol)
         {:module, Postgrex.Protocol} = :code.load_binary(Postgrex.Protocol, beam_path, original)
         true = :code.soft_purge(Postgrex.Protocol)
-        :ok = AshOnetime.Test.ExitBoundary.ConnectionHistory.owner_loaded(Postgrex.Protocol)
+        :ok = ConnectionHistory.owner_loaded(Postgrex.Protocol)
         {Postgrex.Protocol, ^original, ^beam_path} = :code.get_object_code(Postgrex.Protocol)
 
         unless File.read!(path) === source,
