@@ -528,6 +528,12 @@ database schema, persisted response, token wire-format, or migration change.
 - Contributor setup uses macOS or Linux; Windows developers use WSL2. See
   [CONTRIBUTING.md](CONTRIBUTING.md) for the supported setup and executable gates.
 
+## v1.3.3 — tagged, never published
+
+The `v1.3.3` tag was created on October 6, 2026, but 1.3.3 was never published to Hex.
+Version tags are never moved or deleted, so the tag stays and 1.3.4 is the next published
+release.
+
 ## v1.3.2 — 2026-09-20
 
 ### Security

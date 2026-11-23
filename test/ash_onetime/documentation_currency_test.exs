@@ -9,9 +9,14 @@ defmodule AshOnetime.DocumentationCurrencyTest do
   @target_claim ~r/\btargets\s+\[?(v[0-9][0-9A-Za-z+-]*(?:\.[0-9A-Za-z+-]+)*)/i
   @install_claim ~r/\{\s*:ash_onetime\s*,\s*"([^"]*)"/
   @changelog File.read!("CHANGELOG.md")
-  @dated_releases Regex.scan(~r/^## v(\d+\.\d+\.\d+) — (.+)$/m, @changelog,
-                    capture: :all_but_first
-                  )
+  # A version tag is never moved or deleted; a tag whose version was never published stays, and
+  # the changelog records it under this heading instead of a release date.
+  @unpublished_marker "tagged, never published"
+  @version_headings Regex.scan(~r/^## v(\d+\.\d+\.\d+) — (.+)$/m, @changelog,
+                      capture: :all_but_first
+                    )
+  @dated_releases Enum.reject(@version_headings, fn [_, date] -> date == @unpublished_marker end)
+  @unpublished_tags for [release, @unpublished_marker] <- @version_headings, do: release
   @months ~w(January February March April May June July August September October November December)
   @hex_url "https://hex.pm/api/packages/ash_onetime"
 
@@ -66,10 +71,16 @@ defmodule AshOnetime.DocumentationCurrencyTest do
 
   test "dated release history and repository tags equal the published Hex releases" do
     published = published_versions()
-    versions = Enum.map(@dated_releases, &hd/1)
-    dated = MapSet.new(versions)
+    versions = Enum.map(@version_headings, &hd/1)
+    dated = MapSet.new(@dated_releases, &hd/1)
+    unpublished = MapSet.new(@unpublished_tags)
 
-    assert length(versions) == MapSet.size(dated), "CHANGELOG has duplicate dated releases"
+    assert length(versions) == MapSet.size(MapSet.new(versions)),
+           "CHANGELOG has duplicate version headings"
+
+    assert MapSet.disjoint?(unpublished, published),
+           "CHANGELOG records published versions as never published: " <>
+             inspect(unpublished |> MapSet.intersection(published) |> Enum.sort())
 
     for [release, date] <- @dated_releases do
       assert valid_date?(date), "v#{release} requires a valid release date; got #{date}"
@@ -103,10 +114,13 @@ defmodule AshOnetime.DocumentationCurrencyTest do
              "missing headings #{difference(published, history)}; " <>
              "unpublished headings #{difference(history, published)}"
 
-    assert tags == published,
-           "release tags at #{url} differ from #{@hex_url}: " <>
-             "missing tags #{difference(published, tags)}; " <>
-             "unpublished tags #{difference(tags, published)}"
+    recorded = MapSet.union(published, unpublished)
+
+    assert tags == recorded,
+           "release tags at #{url} differ from #{@hex_url} plus the CHANGELOG's " <>
+             "\"#{@unpublished_marker}\" headings: " <>
+             "missing tags #{difference(recorded, tags)}; " <>
+             "unrecorded tags #{difference(tags, recorded)}"
   end
 
   test "every tracked target claim names the release declared in mix.exs", context do
