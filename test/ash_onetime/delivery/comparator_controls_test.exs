@@ -3363,6 +3363,98 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag :connection_streams
+  test "Connection streams: cuts retain checkin clocks for every physical pool", context do
+    options =
+      Repo.config()
+      |> Keyword.delete(:name)
+      |> Keyword.put(:pool, DBConnection.ConnectionPool)
+      |> Keyword.put(:pool_size, 1)
+      |> Keyword.put(:idle_limit, 0)
+      |> Keyword.put(:types, Postgrex.DefaultTypes)
+
+    pool = start_supervised!({Postgrex, options})
+    assert %{rows: [[17]]} = Postgrex.query!(pool, "SELECT 17::int4 AS other_pool_clock", [])
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+
+    [holder] =
+      for {holder, connection} <- historical.connections, connection.pool == pool, do: holder
+
+    parent = self()
+    token = make_ref()
+
+    {observer, monitor} =
+      spawn_monitor(fn ->
+        parent_monitor = Process.monitor(parent)
+        holder_observer(parent, token, parent_monitor)
+      end)
+
+    try do
+      run =
+        ExitBoundary.observe(
+          fn -> :pool_clock_observation end,
+          fn _ ->
+            for value <- [29, 41] do
+              assert %{rows: [[^value]]} =
+                       Postgrex.query!(pool, "SELECT $1::int4 AS other_pool_clock", [value])
+
+              DBConnection.get_connection_metrics(pool)
+              send(observer, {:native_pool_clock_cut, token, self(), pool, value})
+
+              receive do
+                {:native_pool_clock_cut, ^token, ^value, :observed} -> :ok
+              after
+                5_000 -> raise "the independent pool observer did not acknowledge its live read"
+              end
+            end
+
+            :ok
+          end,
+          %{host: [], callbacks: []}
+        )
+
+      assert run.result == :ok
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
+      assert proof.errors == []
+
+      snapshots =
+        for value <- [29, 41], into: %{} do
+          receive do
+            {:native_pool_clock_snapshot, ^token, ^value, clocks} -> {value, clocks}
+          after
+            0 -> flunk("the independent observer did not retain every pool-clock cut")
+          end
+        end
+
+      assert Map.fetch!(snapshots[29], holder) != Map.fetch!(snapshots[41], holder)
+
+      for {value, expected} <- snapshots do
+        [barrier] =
+          Enum.filter(proof.indexed.events, fn
+            %{event: {_, :receive, {:native_pool_clock_cut, ^token, ^value, :observed}}} -> true
+            _ -> false
+          end)
+
+        assert {:ok, checkpoint} = Historical.cut(historical, proof, barrier.index)
+        actual = Map.take(checkpoint.pool_clocks, Map.keys(expected))
+        same_clocks? = actual === expected
+        assert same_clocks?, "the cut must retain every pool's own committed checkin clocks"
+      end
+    after
+      send(observer, :stop)
+
+      receive do
+        {:DOWN, ^monitor, :process, ^observer, reason} -> assert reason == :normal
+      after
+        5_000 ->
+          Process.exit(observer, :kill)
+          flunk("the independent pool observer did not stop")
+      end
+    end
+  end
+
+  @tag :connection_streams
   test "Connection streams: origin indexing retains the complete authoritative cache baseline",
        context do
     Repo.put_dynamic_repo(context.repo)
@@ -3636,6 +3728,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         send(parent, {:native_holder_tables_snapshot, token, phase, holder_rows})
         send(parent, {:native_catalog_snapshot, token, phase, backend, catalog})
         send(caller, {:native_tables_cut, token, phase, :observed})
+        holder_observer(parent, token, parent_monitor)
+
+      {:native_pool_clock_cut, ^token, caller, pool, phase} ->
+        clocks =
+          for table <- :ets.all(),
+              :ets.info(table, :name) == DBConnection.ConnectionPool.Queue,
+              :ets.info(table, :owner) == pool,
+              {{clock, holder}} <- :ets.tab2list(table),
+              into: %{},
+              do: {holder, clock}
+
+        send(parent, {:native_pool_clock_snapshot, token, phase, clocks})
+        send(caller, {:native_pool_clock_cut, token, phase, :observed})
         holder_observer(parent, token, parent_monitor)
 
       :stop ->
