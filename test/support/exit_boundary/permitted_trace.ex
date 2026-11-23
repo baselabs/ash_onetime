@@ -1,4 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
+  alias AshOnetime.Test.ExitBoundary.Capture
   alias AshOnetime.Delivery
   alias AshOnetime.Delivery.Envelope
   alias AshOnetime.Test.ExitBoundary.FrameBindings
@@ -87,7 +88,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
   # by their source, and all nonmatching events remain in the compared observation.
   def match(side, indexed) do
     state = %{
-      host_owned: HostCall.indexes(indexed.events),
+      host_owned: HostCall.addresses(indexed.events),
       bound: Map.get(side, :fixture_bindings, %{}),
       claimed: MapSet.new(),
       errors: [],
@@ -147,7 +148,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
   end
 
   defp step(e, state, _side),
-    do: if(MapSet.member?(state.host_owned, e.index), do: claim(state, e), else: state)
+    do: if(MapSet.member?(state.host_owned, Capture.address(e)), do: claim(state, e), else: state)
 
   defp path_call(e, state, side, pid, mfa, args) do
     {m, f, _} = mfa
@@ -156,7 +157,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
       path_reference?(e, state) ->
         path_reference(e, state, side)
 
-      MapSet.member?(state.host_owned, e.index) ->
+      MapSet.member?(state.host_owned, Capture.address(e)) ->
         claim(state, e)
 
       m in [AshOnetime.Change, AshOnetime.GenericAction] and f in [:produce, :complete_delivery] ->
@@ -234,7 +235,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
       path_reference?(e, state) ->
         path_reference(e, state, side)
 
-      MapSet.member?(state.host_owned, e.index) ->
+      MapSet.member?(state.host_owned, Capture.address(e)) ->
         claim(state, e)
 
       elem(mfa, 0) in [AshOnetime.Change, AshOnetime.GenericAction] and
@@ -516,7 +517,7 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
         &Map.update(&1, {pid, mfa}, [args], fn stack -> [args | stack] end)
       )
 
-  defp claim(state, e), do: %{state | claimed: MapSet.put(state.claimed, e.index)}
+  defp claim(state, e), do: %{state | claimed: MapSet.put(state.claimed, Capture.address(e))}
   defp bind(state, name, value), do: put_in(state.bound[name], value)
 
   defp returned(

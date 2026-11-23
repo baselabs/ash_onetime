@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.Allocation do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.{
+    Capture,
     Compiled,
     ConnectionHistory,
     Historical,
@@ -594,7 +595,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
   defp take(%{events: [e | rest]} = s, event) do
     ensure(s, e, :checkpoint_event, e.event, event)
     ensure(s, e, :checkpoint_stack, e.stack, s.stack)
-    %{s | events: rest, claimed: [e.index | s.claimed]}
+    %{s | events: rest, claimed: [Capture.address(e) | s.claimed]}
   end
 
   defp take(s, _), do: fail(s, nil, :checkpoint_event, :missing, :next_instruction)

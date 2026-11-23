@@ -1,4 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.FailureTrace do
+  alias AshOnetime.Test.ExitBoundary.Capture
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.{FailureTwins, Hooks, References}
 
@@ -160,7 +161,7 @@ defmodule AshOnetime.Test.ExitBoundary.FailureTrace do
     end
   end
 
-  defp claim(s, e), do: %{s | claimed: MapSet.put(s.claimed, e.index)}
+  defp claim(s, e), do: %{s | claimed: MapSet.put(s.claimed, Capture.address(e))}
   defp check(s, _e, _rule, a, b) when a === b, do: s
 
   defp check(s, e, rule, actual, expected),

@@ -1,5 +1,6 @@
 defmodule AshOnetime.Test.ExitBoundary.Comparator do
   alias AshOnetime.Test.ExitBoundary.AttributeCopies
+  alias AshOnetime.Test.ExitBoundary.Capture
   alias AshOnetime.Test.ExitBoundary.ClockExpressions
   alias AshOnetime.Test.ExitBoundary.ConnectionHistory
   alias AshOnetime.Test.ExitBoundary.ContextCopies
@@ -383,22 +384,22 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
           | event:
               e.event
               |> ClockExpressions.project(e.index, rc)
-              |> DatabaseOrigins.project(DatabaseOrigins.address(e), rdb)
+              |> DatabaseOrigins.project(Capture.address(e), rdb)
         }
       end)
-      |> Enum.reject(&MapSet.member?(claimed, &1.index))
+      |> Enum.reject(&MapSet.member?(claimed, Capture.address(&1)))
       |> Enum.group_by(& &1.role)
 
-    twin_indexes =
+    twin_addresses =
       if reference?,
         do: [],
         else:
-          HostCall.indexes(ti.events)
+          HostCall.addresses(ti.events)
           |> MapSet.union(tf.claimed)
           |> MapSet.union(checkpoint.claimed)
           |> MapSet.to_list()
 
-    twin_claimed = MapSet.new(twin_indexes)
+    twin_claimed = MapSet.new(twin_addresses)
 
     right =
       tw
@@ -408,10 +409,10 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
           | event:
               e.event
               |> ClockExpressions.project(e.index, tc)
-              |> DatabaseOrigins.project(DatabaseOrigins.address(e), tdb)
+              |> DatabaseOrigins.project(Capture.address(e), tdb)
         }
       end)
-      |> Enum.reject(&MapSet.member?(twin_claimed, &1.index))
+      |> Enum.reject(&MapSet.member?(twin_claimed, Capture.address(&1)))
       |> Enum.group_by(& &1.role)
 
     state = compare_boundaries(state, ri.events, ti.events, reference?)
@@ -458,8 +459,12 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   end
 
   defp readback_backend_event(e, state, readback, backend) do
-    if MapSet.member?(readback.claimed, e.index) do
-      at = Map.take(e, [:role, :mfa, :stack]) |> Map.put(:run_index, e.index)
+    if MapSet.member?(readback.claimed, Capture.address(e)) do
+      at =
+        e
+        |> Map.take([:role, :mfa, :stack])
+        |> Map.put(:run_index, e.index)
+        |> Map.put(:run_address, Capture.address(e))
       readback_backends(e.event, backend, %{state | at: at}, [:event])
     else
       state
@@ -479,6 +484,14 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   # and its closure environment therefore stays in the exact comparison.
   defp at_index(at, key) when is_map(at), do: Map.get(at, key)
   defp at_index(_at, _key), do: nil
+
+  defp at_address(at, :run) when is_map(at),
+    do: Map.get(at, :run_address, Map.get(at, :run_index))
+
+  defp at_address(at, :twin) when is_map(at),
+    do: Map.get(at, :twin_address, Map.get(at, :twin_index))
+
+  defp at_address(_at, _side), do: nil
 
   defp error_order(%{at: %{run_index: n}}) when is_integer(n), do: {0, n}
   defp error_order(%{at: %{twin_index: n}}) when is_integer(n), do: {0, n}
@@ -616,7 +629,9 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
        ) do
     state = %{
       state
-      | at: %{role: a.role, run_index: a.index, twin_index: b.index, mfa: a.mfa, stack: a.stack}
+      | at: %{role: a.role, run_index: a.index, twin_index: b.index,
+          run_address: Capture.address(a), twin_address: Capture.address(b),
+          mfa: a.mfa, stack: a.stack}
     }
 
     expected = PathFrames.expected(twin_stack, state.path_frames, state.backtrace_depth)
@@ -636,7 +651,9 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     if descriptor(a, state.run) == descriptor(b, state.twin) do
       state = %{
         state
-        | at: %{role: a.role, run_index: a.index, twin_index: b.index, mfa: a.mfa, stack: a.stack}
+        | at: %{role: a.role, run_index: a.index, twin_index: b.index,
+          run_address: Capture.address(a), twin_address: Capture.address(b),
+          mfa: a.mfa, stack: a.stack}
       }
 
       state = event(a, b, query_context(a, b, state))
@@ -651,7 +668,9 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
       state = %{
         state
-        | at: %{role: a.role, run_index: a.index, twin_index: b.index, mfa: a.mfa, stack: a.stack}
+        | at: %{role: a.role, run_index: a.index, twin_index: b.index,
+          run_address: Capture.address(a), twin_address: Capture.address(b),
+          mfa: a.mfa, stack: a.stack}
       }
 
       cond do
@@ -673,7 +692,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         as,
         [],
         error(
-          %{state | at: %{mfa: a.mfa, role: a.role, run_index: a.index, stack: a.stack}},
+          %{state | at: %{mfa: a.mfa, role: a.role, run_index: a.index,
+            run_address: Capture.address(a), stack: a.stack}},
           :extra_event,
           [],
           a.event,
@@ -687,7 +707,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         [],
         bs,
         error(
-          %{state | at: %{mfa: b.mfa, role: b.role, twin_index: b.index, stack: b.stack}},
+          %{state | at: %{mfa: b.mfa, role: b.role, twin_index: b.index,
+            twin_address: Capture.address(b), stack: b.stack}},
           :missing_event,
           [],
           :absent,
@@ -1509,14 +1530,14 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       Map.update!(ai, :env, fn env ->
         env
         |> ClockExpressions.project_at(at_index(state.at, :run_index), base, rc)
-        |> DatabaseOrigins.project_at(at_index(state.at, :run_index), base, rdb)
+        |> DatabaseOrigins.project_at(at_address(state.at, :run), base, rdb)
       end)
 
     bi =
       Map.update!(bi, :env, fn env ->
         env
         |> ClockExpressions.project_at(at_index(state.at, :twin_index), base, tc)
-        |> DatabaseOrigins.project_at(at_index(state.at, :twin_index), base, tdb)
+        |> DatabaseOrigins.project_at(at_address(state.at, :twin), base, tdb)
       end)
 
     keys = [:module, :name, :arity, :new_uniq, :index, :type, :pid]
@@ -2123,10 +2144,10 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
   defp query_context(a, b, state) do
     run_sql =
-      event_sql(a.event) || Map.fetch!(state.query_contexts.run, DatabaseOrigins.address(a))
+      event_sql(a.event) || Map.fetch!(state.query_contexts.run, Capture.address(a))
 
     twin_sql =
-      event_sql(b.event) || Map.fetch!(state.query_contexts.twin, DatabaseOrigins.address(b))
+      event_sql(b.event) || Map.fetch!(state.query_contexts.twin, Capture.address(b))
 
     %{state | current: %{run: a, twin: b, run_sql: run_sql, twin_sql: twin_sql}}
   end

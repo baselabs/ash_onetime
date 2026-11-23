@@ -1,4 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.Origins do
+  alias AshOnetime.Test.ExitBoundary.Capture
   alias AshOnetime.Test.ExitBoundary.FailureTwins
   alias AshOnetime.Test.ExitBoundary.HostCall
   alias AshOnetime.Test.ExitBoundary.PermittedTrace
@@ -252,12 +253,12 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
   defp bind_query_reference(state, _a, _b, _key), do: state
 
   def permitted_sources(indexed, other_claimed) do
-    owned = HostCall.indexes(indexed.events)
+    owned = HostCall.addresses(indexed.events)
 
     Enum.reduce(indexed.events, other_claimed, fn e, allowed ->
       if elem(e.event, 1) == :return_from and
-           (MapSet.member?(owned, e.index) or delivery_source?(e)),
-         do: MapSet.put(allowed, e.index),
+           (MapSet.member?(owned, Capture.address(e)) or delivery_source?(e)),
+         do: MapSet.put(allowed, Capture.address(e)),
          else: allowed
     end)
   end

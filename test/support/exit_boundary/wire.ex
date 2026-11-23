@@ -1,4 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.Wire do
+  alias AshOnetime.Test.ExitBoundary.Capture
   @moduledoc false
 
   # Input is one physical connection's actual writes and native deliveries, never
@@ -263,7 +264,7 @@ defmodule AshOnetime.Test.ExitBoundary.Wire do
       # This is annotation provenance, never server or prepared-connection state.
       # OPEN's independently checked extra statements cannot advance the ordinal
       # of a subsequent shared statement on the same physical connection.
-      phase = if MapSet.member?(readback, e.index), do: :committed_read, else: :shared
+      phase = if MapSet.member?(readback, Capture.address(e)), do: :committed_read, else: :shared
       connections = Map.put(connections, :annotation_phase, phase)
       {event, connections} = transport(e.event, connections)
       e = e |> Map.put(:event, event) |> Map.put(:wire_sql, statement(event, connections))

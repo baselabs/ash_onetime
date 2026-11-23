@@ -1,4 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.Search do
+  alias AshOnetime.Test.ExitBoundary.Capture
   @moduledoc false
   alias AshOnetime.Delivery.Envelope
   alias AshOnetime.Test.ExitBoundary.{Analysis, HostCall, Origins}
@@ -10,11 +11,11 @@ defmodule AshOnetime.Test.ExitBoundary.Search do
   def hits(side) do
     indexed = Origins.build(side)
     needles = Analysis.needles(Map.values(side.values))
-    owned = HostCall.indexes(indexed.events)
+    owned = HostCall.addresses(indexed.events)
 
     for e <- indexed.events,
         e.class in @exits,
-        not MapSet.member?(owned, e.index),
+        not MapSet.member?(owned, Capture.address(e)),
         not transfer?(e),
         not result_protocol?(e.event, side),
         Analysis.contains?(e.event, needles),

@@ -1,13 +1,13 @@
 defmodule AshOnetime.Test.ExitBoundary.HostCall do
   @moduledoc false
-  alias AshOnetime.Test.ExitBoundary.{External, Producer, ReturnedExternal}
+  alias AshOnetime.Test.ExitBoundary.{Capture, External, Producer, ReturnedExternal}
 
   @calls [{Producer, :produce, 2}, {External, :execute, 3}, {ReturnedExternal, :execute, 3}]
 
   # Only the first declared host call owns its interior. The endpoints remain in
   # the transfer program, and a second host call owns no events or origins.
-  def indexes(events) do
-    indexes =
+  def addresses(events) do
+    addresses =
       case Enum.find(events, &(&1.mfa in @calls and elem(&1.event, 1) == :call)) do
         nil ->
           []
@@ -17,7 +17,7 @@ defmodule AshOnetime.Test.ExitBoundary.HostCall do
           interior(events, start, stop)
       end
 
-    MapSet.new(indexes)
+    MapSet.new(addresses)
   end
 
   defp host_return?(event, start),
@@ -34,7 +34,7 @@ defmodule AshOnetime.Test.ExitBoundary.HostCall do
       e.pid == start.pid and e.index > start.index and e.index < stop.index and
         start.mfa in e.stack and not peer?(e)
     end)
-    |> Enum.map(& &1.index)
+    |> Enum.map(&Capture.address/1)
   end
 
   defp peer?(e),

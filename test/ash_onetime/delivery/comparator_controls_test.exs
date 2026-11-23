@@ -1,6 +1,7 @@
 defmodule AshOnetime.Delivery.ComparatorControlsTest do
   alias AshOnetime.Test.ExitBoundary
   alias AshOnetime.Test.ExitBoundary.Allocation
+  alias AshOnetime.Test.ExitBoundary.Capture
   alias AshOnetime.Test.ExitBoundary.ClockExpressions
   alias AshOnetime.Test.ExitBoundary.Comparator
   alias AshOnetime.Test.ExitBoundary.ComparatorMutants
@@ -8135,7 +8136,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     for message <- messages do
       source = Enum.fetch!(events, message.index)
       assert source.pid == message.pid
-      assert DatabaseOrigins.address(message) == message.message_address
+      assert Capture.address(message) == message.message_address
       assert Map.fetch!(contexts, message.message_address) == message.wire_sql
 
       assert message.wire_frame.stop - message.wire_frame.start ==

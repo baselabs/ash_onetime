@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.Readback do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary
+  alias AshOnetime.Test.ExitBoundary.Capture
   alias AshOnetime.Test.ExitBoundary.{Comparator, Historical, Origins, Withheld}
   @root {AshOnetime.Store, :committed_completion, 2}
 
@@ -126,7 +127,7 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
         {origin.index, %{key: key, value: origin.value}}
       end
 
-    %{claimed: MapSet.new(observed, & &1.index), errors: result.errors, sources: sources}
+    %{claimed: MapSet.new(observed, &Capture.address/1), errors: result.errors, sources: sources}
   end
 
   defp cut_failure(observed, start, failure) do

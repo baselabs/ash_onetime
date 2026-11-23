@@ -1,4 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.Scheduling do
+  alias AshOnetime.Test.ExitBoundary.Capture
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.Registry
 
@@ -13,16 +14,16 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
 
     # Move only validated scheduling signals. Their complete payloads continue to
     # compare at the fixed anchor; all other event order is untouched.
-    moved = MapSet.new(for {_anchor, signals} <- state.moves, signal <- signals, do: signal.index)
+    moved = MapSet.new(for {_anchor, signals} <- state.moves, signal <- signals, do: Capture.address(signal))
 
     result =
       Enum.flat_map(events, fn e ->
-        if MapSet.member?(state.claimed, e.index) or MapSet.member?(moved, e.index) do
+        if MapSet.member?(state.claimed, Capture.address(e)) or MapSet.member?(moved, Capture.address(e)) do
           []
         else
-          e = Map.get(state.rewrites, e.index, e)
-          before = Map.get(state.moves, {:before, e.index}, [])
-          after_events = Map.get(state.moves, {:after, e.index}, [])
+          e = Map.get(state.rewrites, Capture.address(e), e)
+          before = Map.get(state.moves, {:before, Capture.address(e)}, [])
+          after_events = Map.get(state.moves, {:after, Capture.address(e)}, [])
           before ++ [e] ++ after_events
         end
       end)
@@ -111,7 +112,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
 
       s
       |> claim(received)
-      |> put_in([:rewrites, source.index], %{
+      |> put_in([:rewrites, Capture.address(source)], %{
         source
         | event: {caller, :return_from, {:erts_internal, f, 3}, result}
       })
@@ -145,7 +146,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
              _ ->
                false
            end) do
-      s |> move(received, {:before, returned.index}) |> move(sent, {:after, command.index})
+      s |> move(received, {:before, Capture.address(returned)}) |> move(sent, {:after, Capture.address(command)})
     else
       _ -> failure(s, source, :inet_reply, :incomplete, :same_port_monitor_and_status)
     end
@@ -171,13 +172,13 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
                &1
              )
            ),
-         %{index: anchor, event: {_, _, _, ^result}} <-
+         %{event: {_, _, _, ^result}} = anchor <-
            following(
              events,
              call,
              &match?(%{event: {^caller, :return_from, {:prim_inet, :recv0, 3}, _}}, &1)
            ) do
-      s = move(s, source, {:before, anchor})
+      s = move(s, source, {:before, Capture.address(anchor)})
 
       controls =
         select(events, fn
@@ -189,7 +190,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
         end)
 
       case controls do
-        [control] -> move(s, control, {:before, sent.index})
+        [control] -> move(s, control, {:before, Capture.address(sent)})
         [] -> s
         _ -> failure(s, source, :inet_async, :duplicate_control, :one_origin)
       end
@@ -207,7 +208,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
          [received] <- select(events, &(&1.event == {child, :receive, message})),
          %{event: {^child, :spawned, ^parent, _}} = spawned <-
            Enum.find(events, &match?(%{event: {^child, :spawned, ^parent, _}}, &1)) do
-      move(s, received, {:after, spawned.index})
+      move(s, received, {:after, Capture.address(spawned)})
     else
       _ -> failure(s, source, :task_startup, :incomplete, :spawn_send_receive)
     end
@@ -230,13 +231,13 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
              monitor,
              &match?(%{event: {^parent, :call, {:erlang, :demonitor, [^ref, [:flush]]}}}, &1)
            ),
-         %{index: anchor} <-
+         %{} = anchor <-
            following(
              events,
              demonitor,
              &match?(%{event: {^parent, :return_from, {:erlang, :demonitor, 2}, true}}, &1)
            ) do
-      move(s, source, {:after, anchor})
+      move(s, source, {:after, Capture.address(anchor)})
     else
       _ -> s
     end
@@ -353,7 +354,7 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
   defp following(events, source, predicate),
     do: events |> Enum.drop_while(&(&1.index <= source.index)) |> Enum.find(predicate)
 
-  defp claim(s, e), do: %{s | claimed: MapSet.put(s.claimed, e.index)}
+  defp claim(s, e), do: %{s | claimed: MapSet.put(s.claimed, Capture.address(e))}
   defp move(s, e, anchor), do: %{s | moves: Map.update(s.moves, anchor, [e], &(&1 ++ [e]))}
 
   defp failure(s, e, rule, actual, expected),

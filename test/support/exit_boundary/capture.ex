@@ -52,6 +52,11 @@ defmodule AshOnetime.Test.ExitBoundary.Capture do
     :trace.function(session, :on_load, [{:_, [], [{:exception_trace}]}], [:local])
   end
 
+  # A raw index locates evidence. Several logical messages can share that
+  # location, so ownership and projection use the occurrence's address.
+  def address(%{message_address: address}), do: address
+  def address(%{index: index}), do: index
+
   def annotate(snapshot, spec \\ %{host: [], callbacks: []}) do
     frames = frames(spec.host, spec.callbacks) ++ Map.get(spec, :frames, [])
 

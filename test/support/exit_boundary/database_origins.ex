@@ -1,5 +1,6 @@
 defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
   alias AshOnetime.Store.Claim
+  alias AshOnetime.Test.ExitBoundary.Capture
   alias AshOnetime.Test.ExitBoundary.Compiled
   alias AshOnetime.Test.ExitBoundary.HostCall
   alias AshOnetime.Test.ExitBoundary.Registry
@@ -18,7 +19,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     rows = Map.new(prior, fn row -> {{uuid(row["id"]), row["state"]}, row} end)
 
     initial = %{
-      host_owned: HostCall.indexes(events),
+      host_owned: HostCall.addresses(events),
       query_contexts: sql_contexts(events),
       relations: side.historical.relations,
       statements: Registry.database_statements(),
@@ -54,15 +55,12 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
   defp claim_field({:state, value}), do: {"state", Atom.to_string(value)}
   defp claim_field({key, value}), do: {Atom.to_string(key), value}
 
-  def project(event, index, state), do: project_at(event, index, [], state)
+  def project(event, address, state), do: project_at(event, address, [], state)
 
-  def address(%{message_address: address}), do: address
-  def address(%{index: index}), do: index
-
-  def project_at(event, index, base, state),
+  def project_at(event, address, base, state),
     do:
       walk(event, base, fn value, path ->
-        case Map.fetch(state.slots, {index, path}) do
+        case Map.fetch(state.slots, {address, path}) do
           {:ok, token} -> {:replace, token}
           :error -> {:descend, value}
         end
@@ -94,7 +92,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     s = release(e, s)
     s = outcome_result(e, s)
     s = date_flow(e, s)
-    s = put_in(s.date_checkpoints[address(e)], Map.get(s.dates, e.role))
+    s = put_in(s.date_checkpoints[Capture.address(e)], Map.get(s.dates, e.role))
     s = if wire_event?(e.event), do: data_rows(e.event, [], e, s), else: s
 
     s =
@@ -107,7 +105,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
           s
       end
 
-    if MapSet.member?(s.host_owned, e.index), do: s, else: typed_copies(e.event, [], e, s)
+    if MapSet.member?(s.host_owned, Capture.address(e)), do: s, else: typed_copies(e.event, [], e, s)
   end
 
   # First bind the date flowing through the completion to its native SELECT.
@@ -340,7 +338,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
               scope
           end
 
-        {Map.put(contexts, address(e), statement), Map.put(open, e.pid, scope)}
+        {Map.put(contexts, Capture.address(e), statement), Map.put(open, e.pid, scope)}
       end)
 
     contexts
@@ -367,7 +365,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     contexts = sql_contexts(events)
 
     Enum.reduce(events, s, fn e, s ->
-      statement = Map.fetch!(contexts, address(e))
+      statement = Map.fetch!(contexts, Capture.address(e))
 
       s =
         Enum.reduce(parameter_paths(e.mfa), s, fn path, acc ->
@@ -483,7 +481,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
             e,
             base ++ [index],
             Enum.fetch!(info.env, index),
-            s.date_checkpoints[address(e)],
+            s.date_checkpoints[Capture.address(e)],
             :completion_date_environment
           )
 
@@ -1093,7 +1091,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
       "operation_key" in columns and "inserted_at" in columns ->
         Enum.with_index(rows) |> Enum.reduce(s, &peer_result_row(&1, &2, columns, path, e))
 
-      columns == s.statements.date.columns[s.query_contexts[address(e)]] ->
+      columns == s.statements.date.columns[s.query_contexts[Capture.address(e)]] ->
         date_result(rows, path, e, s)
 
       true ->
@@ -1204,7 +1202,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
   defp checked(s, e, path, actual, expected, token) do
     if actual === expected,
-      do: put_in(s.slots[{address(e), path}], {:database_expression, token}),
+      do: put_in(s.slots[{Capture.address(e), path}], {:database_expression, token}),
       else: failure(s, e, {token, path}, actual, expected)
   end
 

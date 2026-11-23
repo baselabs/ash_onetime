@@ -1,4 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.TransportReferences do
+  alias AshOnetime.Test.ExitBoundary.Capture
   @moduledoc false
 
   # inet_drv's asynchronous receive id is created by TCP_REQ_RECV. Its two
@@ -59,7 +60,7 @@ defmodule AshOnetime.Test.ExitBoundary.TransportReferences do
   end
 
   defp event(%{event: {pid, :call, {:prim_inet, :async_recv, [port, _, _]}}} = e, state) do
-    phase = if MapSet.member?(state.readback, e.index), do: :committed_read, else: :shared
+    phase = if MapSet.member?(state.readback, Capture.address(e)), do: :committed_read, else: :shared
     n = Map.get(state.counts, {e.role, port, phase}, 0)
     frame = %{port: port, phase: phase, ordinal: n, source: nil}
 

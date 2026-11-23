@@ -1,4 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.Refusals do
+  alias AshOnetime.Test.ExitBoundary.Capture
   @moduledoc false
   alias AshOnetime.Delivery
   alias AshOnetime.Test.ExitBoundary.{PathFrames, References, Scenarios}
@@ -129,7 +130,7 @@ defmodule AshOnetime.Test.ExitBoundary.Refusals do
         end)
 
       errors = differences(actual, expected)
-      %{claimed: MapSet.new(actual, & &1.index), errors: errors, result: result}
+      %{claimed: MapSet.new(actual, &Capture.address/1), errors: errors, result: result}
     end
   end
 
