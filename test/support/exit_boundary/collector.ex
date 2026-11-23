@@ -87,6 +87,12 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     end
   end
 
+  def service_callbacks({module, :handle_call, 3})
+      when module in [Postgrex.TypeServer, Postgrex.Parameters],
+      do: [{module, :handle_call, 3}, {module, :handle_cast, 2}, {module, :handle_info, 2}]
+
+  def service_callbacks(callback), do: [callback]
+
   defp init(test, frames, deadline, options) do
     loaded_before = MapSet.new(:code.all_loaded(), &elem(&1, 0))
     session = :trace.session_create(:ash_onetime_exit_boundary, self(), [])
@@ -362,12 +368,12 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
         # tracing. New ordinary messages then have their own native receipts.
         initial_state = :sys.get_state(pid)
 
-        {pid, %{name: name, callback: callback, table: table, initial_state: initial_state}}
+        {pid, %{name: name, callback: callback, callbacks: service_callbacks(callback), table: table, initial_state: initial_state}}
 
       {name, callback} ->
         pid = Process.whereis(name)
         unless is_pid(pid), do: raise("a declared observation service is unavailable")
-        {pid, %{name: name, callback: callback}}
+        {pid, %{name: name, callback: callback, callbacks: service_callbacks(callback)}}
     end)
   end
 
@@ -397,18 +403,11 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
 
         state = %{state | service_receipts: [receipt | state.service_receipts]}
 
-        case {binding.callback, message} do
-          {{_, :handle_call, 3}, {:"$gen_call", {_caller, _tag}, _request}} ->
-            pending = Map.update(state.service_pending, pid, [receipt], &(&1 ++ [receipt]))
-            %{state | service_pending: pending}
-
-          {{_, _, 3}, {:"$gen_call", {_caller, _tag}, _request}}
-          when binding.kind == :state_machine ->
-            pending = Map.update(state.service_pending, pid, [receipt], &(&1 ++ [receipt]))
-            %{state | service_pending: pending}
-
-          _ ->
-            state
+        if service_dispatch?(binding, message) do
+          pending = Map.update(state.service_pending, pid, [receipt], &(&1 ++ [receipt]))
+          %{state | service_pending: pending}
+        else
+          state
         end
 
       :error ->
@@ -416,45 +415,22 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
     end
   end
 
-  defp service_event(state, {pid, :call, {module, function, [message | _] = args}} = event) do
+  defp service_event(state, {pid, :call, {_module, _function, [_message | _]}} = event) do
     case Map.fetch(state.services, pid) do
-      {:ok, %{callback: {^module, ^function, arity}} = binding} when arity == length(args) ->
-        envelope =
-          case {Map.get(binding, :kind), function, args} do
-            {:state_machine, _, [{:call, from}, request, _data]} ->
-              {:"$gen_call", from, request}
-
-            {:state_machine, _, [:cast, request, _data]} ->
-              {:"$gen_cast", request}
-
-            {:state_machine, _, [:info, request, _data]} ->
-              request
-
-            {_, :handle_call, [request, from, _state]} ->
-              {:"$gen_call", from, request}
-
-            _ ->
-              message
-          end
-
-        service_call(state, pid, envelope, event)
-
-      _ ->
-        state
+      {:ok, binding} -> service_callback(state, pid, binding, event)
+      :error -> state
     end
   end
 
   defp service_event(state, {pid, :return_from, mfa, _result} = event) do
     case {Map.fetch(state.services, pid), Map.get(state.service_pending, pid, [])} do
-      {{:ok, %{callback: ^mfa}}, [receipt | rest]} ->
-        receipt = %{receipt | returned: event, returned_stamp: state.stamp}
-
-        pending =
-          if rest == [],
-            do: Map.delete(state.service_pending, pid),
-            else: Map.put(state.service_pending, pid, rest)
-
-        replace_service_receipt(%{state | service_pending: pending}, receipt)
+      {{:ok, binding}, [%{called: {_, :call, {module, function, arguments}}} = receipt | rest]} ->
+        if mfa == {module, function, length(arguments)} and
+             mfa in Map.get(binding, :callbacks, [binding.callback]) do
+          service_return(state, pid, event, receipt, rest)
+        else
+          state
+        end
 
       _ ->
         state
@@ -462,6 +438,60 @@ defmodule AshOnetime.Test.ExitBoundary.Collector do
   end
 
   defp service_event(state, _event), do: state
+
+  defp service_callback(state, pid, binding, {_, :call, {module, function, arguments}} = event) do
+    if {module, function, length(arguments)} in Map.get(binding, :callbacks, [binding.callback]) do
+      envelope = service_envelope(Map.get(binding, :kind), function, arguments)
+      service_call(state, pid, envelope, event)
+    else
+      state
+    end
+  end
+
+  defp service_envelope(:state_machine, _function, [{:call, from}, request, _data]),
+    do: {:"$gen_call", from, request}
+
+  defp service_envelope(:state_machine, _function, [:cast, request, _data]),
+    do: {:"$gen_cast", request}
+
+  defp service_envelope(:state_machine, _function, [:info, request, _data]), do: request
+
+  defp service_envelope(_kind, :handle_call, [request, from, _state]),
+    do: {:"$gen_call", from, request}
+
+  defp service_envelope(_kind, :handle_cast, [request, _state]), do: {:"$gen_cast", request}
+  defp service_envelope(_kind, _function, [message | _]), do: message
+
+  defp service_return(state, pid, event, receipt, rest) do
+    receipt = %{receipt | returned: event, returned_stamp: state.stamp}
+
+    pending =
+      if rest == [],
+        do: Map.delete(state.service_pending, pid),
+        else: Map.put(state.service_pending, pid, rest)
+
+    replace_service_receipt(%{state | service_pending: pending}, receipt)
+  end
+
+  defp service_dispatch?(_binding, {:system, _from, _request}), do: false
+
+  defp service_dispatch?(%{kind: :state_machine}, {:"$gen_call", {_caller, _tag}, _request}),
+    do: true
+
+  defp service_dispatch?(%{kind: :state_machine}, _message), do: false
+
+  defp service_dispatch?(binding, message) do
+    {module, _function, _arity} = binding.callback
+
+    callback =
+      case message do
+        {:"$gen_call", {_caller, _tag}, _request} -> {module, :handle_call, 3}
+        {:"$gen_cast", _request} -> {module, :handle_cast, 2}
+        _ -> {module, :handle_info, 2}
+      end
+
+    callback in Map.get(binding, :callbacks, [binding.callback])
+  end
 
   defp service_call(state, pid, message, event) do
     receipt =

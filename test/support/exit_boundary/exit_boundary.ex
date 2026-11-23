@@ -53,9 +53,9 @@ defmodule AshOnetime.Test.ExitBoundary do
       services = Map.merge(tls.services, observation_services(spec, initial_state))
 
       service_frames =
-        Enum.map(services, fn
-          {_name, %{callback: callback}} -> callback
-          {_name, callback} -> callback
+        Enum.flat_map(services, fn
+          {_name, %{callback: callback}} -> Collector.service_callbacks(callback)
+          {_name, callback} -> Collector.service_callbacks(callback)
         end)
 
       spec = Map.update(spec, :frames, service_frames, &(&1 ++ service_frames))

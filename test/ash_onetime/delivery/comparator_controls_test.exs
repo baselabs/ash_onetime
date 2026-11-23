@@ -3859,6 +3859,25 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     historical = Historical.capture(context.prefix)
     run = ConnectionNative.observe_startup()
     assert run.result == :ok
+
+    services = run.snapshot.services
+    [parameters] = for {pid, %{name: Postgrex.Parameters}} <- services, do: pid
+
+    insertions =
+      Enum.filter(run.snapshot.service_receipts, fn receipt ->
+        receipt.pid == parameters and
+          match?({:"$gen_call", _, {:insert, _}}, receipt.message)
+      end)
+
+    assert length(insertions) == 1
+
+    for receipt <- insertions do
+      assert receipt.registered?
+      assert receipt.called && receipt.returned
+      assert receipt.received_stamp < receipt.called_stamp
+      assert receipt.called_stamp < receipt.returned_stamp
+    end
+
     side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
     proof = ConnectionHistory.build(side)
     assert proof.native.errors == []
