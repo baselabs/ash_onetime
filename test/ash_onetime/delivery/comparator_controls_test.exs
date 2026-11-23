@@ -4437,6 +4437,74 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag connection_streams: :tls
+  test "Connection streams: every cold TLS callback has its actual dispatch and return" do
+    run = ConnectionNative.observe_tls_startup()
+    assert run.result == :ok
+    indexed = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+    pairs = NativeTransport.pairs(indexed)
+
+    workers =
+      for %{event: {pid, :call, {module, function, [_]}}} <- indexed,
+          {module, function} in [{:tls_sender, :init}, {:ssl_gen_statem, :init_statem}],
+          do: pid
+
+    assert length(Enum.uniq(workers)) == 2
+
+    dispatches =
+      for %{event: {pid, :call, {:gen_statem, :loop_state_callback, arguments}}} = source <-
+            indexed,
+          pid in workers and length(arguments) == 11,
+          do: source
+
+    assert dispatches != []
+
+    for dispatch <- dispatches do
+      {pid, :call, {_, _, arguments}} = dispatch.event
+      params = Enum.at(arguments, 0)
+      {name, data} = Enum.at(arguments, 4)
+      {type, content} = Enum.at(arguments, 10)
+      assert elem(params, 1) == :state_functions
+      [module | _] = elem(params, 4)
+
+      completed =
+        Enum.find(indexed, fn
+          %{index: index, event: {^pid, :call, {:gen_statem, :loop_state_callback_result, values}}}
+          when index > dispatch.index ->
+            length(values) == 11
+
+          _ ->
+            false
+        end)
+
+      assert completed, "every native TLS dispatch must reach its own callback-result program"
+
+      callbacks =
+        for {_index, pair} <- pairs,
+            pair.source.event == {pid, :call, {module, name, [type, content, data]}},
+            dispatch.index < pair.source.index,
+            pair.returned.index < completed.index,
+            do: pair
+
+      if length(callbacks) != 1 do
+        Diagnostics.emit("CONNECTION_TLS_CALLBACK_CAPTURE_FAILURE", %{
+          index: dispatch.index,
+          mfa: {module, name, 3},
+          length: length(callbacks)
+        })
+      end
+
+      assert length(callbacks) == 1,
+             "each native TLS state dispatch needs its own captured callback and return"
+
+      [callback] = callbacks
+      {^pid, :return_from, _, result} = callback.returned.event
+      {^pid, :call, {_, _, values}} = completed.event
+      same_result? = result === Enum.at(values, 10)
+      assert same_result?, "the engine must consume its own native callback's exact return"
+    end
+  end
+
+  @tag connection_streams: :tls
   test "Connection streams: a born TLS sender retains its initialization copies", context do
     Repo.put_dynamic_repo(context.repo)
     historical = Historical.capture(context.prefix)
