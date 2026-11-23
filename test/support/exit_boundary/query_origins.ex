@@ -3,7 +3,7 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
   alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.References
 
-  def build(indexed, side) do
+  def build(_indexed, side) do
     history = side.connection_history
     historical = history.indexed.query_cache
 
@@ -13,7 +13,19 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
           into: %{},
           do: {statement(query), id}
 
-    generated = for {_, %{value: value}} <- indexed.origins, is_integer(value), do: value
+    # The committed baseline can retain a successful insertion from the raw
+    # prefix. Its own primitive generator remains authoritative after a cut;
+    # the suffix's cross-side O1 inventory cannot recreate that occurrence.
+    generated =
+      for {_index, pair} <- history.native.pairs,
+          %{pid: pid, mfa: {:erlang, :unique_integer, arity}} <- [pair.source],
+          arity in [0, 1],
+          {^pid, :return_from, {:erlang, :unique_integer, ^arity}, value} <-
+            [pair.returned.event],
+          is_integer(value),
+          do: {pid, pair.returned.index, value}
+
+    before = Map.get(side.historical, :event_offset, 0)
 
     cache_events =
       for {_index,
@@ -23,6 +35,7 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
            }} <- history.native.pairs,
           table == historical.table,
           index <- [source.index, returned.index],
+          index >= before,
           into: MapSet.new(),
           do: index
 
@@ -57,7 +70,12 @@ defmodule AshOnetime.Test.ExitBoundary.QueryOrigins do
   defp promote_commit(_commit, state, _table, _pairs, _generated), do: state
 
   defp promote(state, source, id, query, generated) do
-    if id in generated,
+    own_origin? =
+      Enum.any?(generated, fn {pid, index, value} ->
+        pid == source.pid and index < source.index and value == id
+      end)
+
+    if own_origin?,
       do: %{state | ids: Map.put(state.ids, statement(query), id)},
       else: %{state | errors: [{source, id, :missing_unique_integer_origin} | state.errors]}
   end
