@@ -1114,6 +1114,34 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_event(
+         %{event: {_, :call, {DBConnection.Backoff, :backoff, [input]}}} = source,
+         state
+       ) do
+    case state.owner_machines[source.pid] do
+      %{data: %{backoff: %DBConnection.Backoff{} = expected}, version: version} ->
+        state = exact(state, source, :state_owner_backoff_input, input, expected)
+        state = copy_error_path(state, source, [2, 2, 0], :state_owner_backoff_input)
+        owner_backoff_term(state, source, [2, 2, 0], expected, version.origin)
+
+      _ ->
+        state
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :return_from, {DBConnection.Backoff, :backoff, 1}, actual}} = source,
+         state
+       ) do
+    case {state.owner_machines[source.pid], pair_returned(state, source)} do
+      {%{data: %{backoff: %DBConnection.Backoff{} = backoff}}, retry} when not is_nil(retry) ->
+        owner_backoff_result(state, source, retry, backoff, actual)
+
+      _ ->
+        state
+    end
+  end
+
+  defp owner_event(
          %{event: {_, :call, {DBConnection.Connection, :handle_event, arguments}}} = source,
          state
        ) do
@@ -1597,14 +1625,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
              returned,
              {DBConnection.Backoff, :backoff, 1}
            ),
-         true <-
-           retry.source.event ===
-             {returned.pid, :call, {DBConnection.Backoff, :backoff, [backoff]}},
-         {:ok, timeout, next_backoff} <- owner_backoff(state, retry, backoff),
-         true <-
-           retry.returned.event ===
-             {returned.pid, :return_from, {DBConnection.Backoff, :backoff, 1},
-              {timeout, next_backoff}} do
+         {:ok, timeout, next_backoff} <- owner_backoff(state, retry, backoff) do
       data = %{machine.data | backoff: next_backoff}
       next = Map.put(%{machine | data: data}, :backoff_program, {returned.index, timeout})
       {:ok, next, {:keep_state, data, {{:timeout, :backoff}, timeout, nil}}}
@@ -1646,6 +1667,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_connect_result(_state, _connect, _returned, _machine), do: :error
+
+  defp owner_backoff_result(state, source, retry, backoff, actual) do
+    case owner_backoff(state, retry, backoff) do
+      {:ok, timeout, next_backoff} ->
+        expected = {timeout, next_backoff}
+        state = exact(state, source, :state_owner_backoff_result, actual, expected)
+        state = copy_error_path(state, source, [3], :state_owner_backoff_result)
+        owner_backoff_term(state, source, [3], expected, {:native_backoff, retry.source.index})
+
+      :error ->
+        failure(state, source, :state_owner_backoff_result_origin)
+    end
+  end
+
+  defp owner_backoff_term(state, source, path, expected, origin) do
+    copy = %{index: source.index, path: path, origin: origin}
+
+    state
+    |> Map.update!(:terms, &[copy | &1])
+    |> put_in([:term_values, {source.index, path}], %{value: expected, origin: origin})
+  end
 
   # Derive the retry from its original struct and its own native random return.
   # Calling Backoff.backoff/1 here would draw fresh entropy and prove nothing.
