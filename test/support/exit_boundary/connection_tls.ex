@@ -3741,15 +3741,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
         diagnose_encode_origin(state, source, arguments, expected_args, frame, version)
 
-        expected = :tls_record.encode_data(plaintext, version, states)
+        state = tls_exact(state, source, :tls_record_input, arguments, expected_args)
 
-        state
-        |> tls_exact(source, :tls_record_input, arguments, expected_args)
-        |> put_in([:records, source.index], %{
-          result: expected,
-          kind: :encode,
-          plaintext: plaintext
-        })
+        case encode_records(state, source, plaintext, version, states) do
+          {:ok, expected} ->
+            put_in(state.records[source.index], %{
+              result: expected,
+              kind: :encode,
+              plaintext: plaintext
+            })
+
+          :error ->
+            tls_failure(state, source, :tls_encode_primitive_origin)
+        end
 
       :error ->
         tls_failure(state, source, :tls_plaintext_origin)
@@ -3888,6 +3892,351 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp record_call(state, _source, _module, _function, _arguments), do: state
+
+  # Build the record program from the modeled sender, the qualified plaintext
+  # boundary and argument-qualified crypto primitives. Replaying tls_record
+  # would run the implementation whose copies this proof has to check.
+  defp encode_records(state, source, plaintext, version, states) do
+    maximum = Map.get(states, :max_fragment_length, 16_384)
+    fragments = record_fragments(plaintext, maximum)
+    write = Map.fetch!(states, :current_write)
+    bulk = elem(write.security_parameters, 3)
+
+    fragments =
+      case {version, bulk, Map.get(states, :beast_mitigation, :disabled)} do
+        {{3, 1}, bulk, mode} when bulk != 1 and mode in [:one_n_minus_one, :zero_n] ->
+          size = if mode == :one_n_minus_one, do: 1, else: 0
+          {first, rest} = record_fragment(plaintext, size, [])
+          [first | record_fragments(rest, maximum)]
+
+        _ ->
+          fragments
+      end
+
+    Enum.reduce_while(fragments, {:ok, {[], states}}, fn fragment, {:ok, {encoded, states}} ->
+      case encode_record(state, source, fragment, version, states) do
+        {:ok, record, states} -> {:cont, {:ok, {[record | encoded], states}}}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, {encoded, states}} -> {:ok, {Enum.reverse(encoded), states}}
+      :error -> :error
+    end
+  end
+
+  defp record_fragments([], _maximum), do: []
+
+  defp record_fragments(data, maximum) do
+    {first, rest} = record_fragment(data, maximum, [])
+    [first | record_fragments(rest, maximum)]
+  end
+
+  defp record_fragment([], _remaining, accumulated), do: {Enum.reverse(accumulated), []}
+
+  defp record_fragment([binary | rest] = data, remaining, accumulated) do
+    cond do
+      byte_size(binary) <= remaining ->
+        record_fragment(rest, remaining - byte_size(binary), [binary | accumulated])
+
+      remaining == 0 ->
+        {Enum.reverse(accumulated), data}
+
+      true ->
+        <<first::binary-size(^remaining), tail::binary>> = binary
+        {Enum.reverse(accumulated, [first]), [tail | rest]}
+    end
+  end
+
+  defp encode_record(state, source, fragment, {3, 4}, states) do
+    write = states.current_write
+    sequence = write.sequence_number
+
+    if elem(write.security_parameters, 1) == <<0, 0>> do
+      record = record_packet(23, {3, 3}, fragment)
+      {:ok, record, Map.put(states, :current_write, %{write | sequence_number: sequence + 1})}
+    else
+      cipher = write.cipher_state
+      iv = elem(cipher, 1)
+      tag_length = elem(cipher, 6)
+      nonce = record_nonce(sequence, iv)
+      plaintext = [fragment, 23]
+      aad = <<23, 3, 3, IO.iodata_length(plaintext) + tag_length::16>>
+
+      with {:ok, handle} <- record_aead_handle(state, source, write, true),
+           {:ok, encrypted} <-
+             record_primitive(state, source, {:crypto, :crypto_one_time_aead, 4}, [
+               handle,
+               nonce,
+               plaintext,
+               aad
+             ]),
+           true <- is_binary(encrypted) do
+        write = write |> Map.put(:aead_handle, handle) |> Map.put(:sequence_number, sequence + 1)
+        {:ok, record_packet(23, {3, 3}, encrypted), Map.put(states, :current_write, write)}
+      else
+        _ -> :error
+      end
+    end
+  end
+
+  defp encode_record(state, source, fragment, version, states) do
+    write = states.current_write
+    parameters = write.security_parameters
+
+    result =
+      if elem(parameters, 4) == 2,
+        do: record_aead(state, source, fragment, version, write),
+        else: record_cipher(state, source, fragment, version, write)
+
+    case result do
+      {:ok, encrypted, cipher} ->
+        write = %{write | cipher_state: cipher, sequence_number: write.sequence_number + 1}
+        {:ok, record_packet(23, version, encrypted), Map.put(states, :current_write, write)}
+
+      :error ->
+        :error
+    end
+  end
+
+  defp record_packet(type, {major, minor}, fragment),
+    do: [<<type, major, minor, IO.iodata_length(fragment)::16>>, fragment]
+
+  defp record_nonce(sequence, iv) do
+    size = bit_size(iv) - 64
+    <<head::bitstring-size(^size), high::32, low::32>> = iv
+
+    <<head::bitstring, Bitwise.bxor(high, Bitwise.band(Bitwise.bsr(sequence, 32), 0xFFFFFFFF))::32,
+      Bitwise.bxor(low, Bitwise.band(sequence, 0xFFFFFFFF))::32>>
+  end
+
+  defp record_aead_handle(state, source, write, encrypt?) do
+    case Map.fetch(write, :aead_handle) do
+      {:ok, handle} ->
+        {:ok, handle}
+
+      :error ->
+        cipher = write.cipher_state
+
+        with {:ok, algorithm} <-
+               record_aead_algorithm(elem(write.security_parameters, 3), elem(cipher, 2)) do
+          record_primitive(state, source, {:crypto, :crypto_one_time_aead_init, 4}, [
+            algorithm,
+            elem(cipher, 2),
+            elem(cipher, 6),
+            encrypt?
+          ])
+        end
+    end
+  end
+
+  defp record_aead(state, source, fragment, {major, minor}, write) do
+    cipher = write.cipher_state
+    bulk = elem(write.security_parameters, 3)
+    sequence = write.sequence_number
+    length = IO.iodata_length(fragment)
+    aad = <<sequence::64, 23, major, minor, length::16>>
+
+    with {:ok, algorithm} <- record_aead_algorithm(bulk, elem(cipher, 2)),
+         {:ok, nonce, prefix, next_cipher} <-
+           record_legacy_nonce(state, source, bulk, cipher, sequence),
+         {:ok, {content, tag}} <-
+           record_primitive(state, source, {:crypto, :crypto_one_time_aead, 7}, [
+             algorithm,
+             elem(cipher, 2),
+             nonce,
+             fragment,
+             aad,
+             elem(cipher, 6),
+             true
+           ]),
+         true <- is_binary(content) and is_binary(tag) do
+      {:ok, prefix <> content <> tag, next_cipher}
+    else
+      _ -> :error
+    end
+  end
+
+  defp record_legacy_nonce(state, source, 9, cipher, sequence) do
+    seed = <<sequence::64>>
+
+    with {:ok, nonce} <-
+           record_primitive(state, source, {:crypto, :exor, 2}, [
+             <<0::32, seed::binary>>,
+             elem(cipher, 1)
+           ]) do
+      {:ok, nonce, <<>>, put_elem(cipher, 5, seed)}
+    end
+  end
+
+  defp record_legacy_nonce(_state, _source, bulk, cipher, _sequence) when bulk in [8, 10, 11] do
+    <<salt::binary-size(4), _::binary>> = elem(cipher, 1)
+    explicit = elem(cipher, 5)
+    {:ok, <<salt::binary, explicit::64>>, <<explicit::64>>, put_elem(cipher, 5, explicit + 1)}
+  end
+
+  defp record_aead_algorithm(9, _key), do: {:ok, :chacha20_poly1305}
+
+  defp record_aead_algorithm(bulk, key) when bulk in [8, 10, 11] do
+    case {bulk, byte_size(key)} do
+      {8, 16} -> {:ok, :aes_128_gcm}
+      {8, 24} -> {:ok, :aes_192_gcm}
+      {8, 32} -> {:ok, :aes_256_gcm}
+      {_, 16} -> {:ok, :aes_128_ccm}
+      {_, 24} -> {:ok, :aes_192_ccm}
+      {_, 32} -> {:ok, :aes_256_ccm}
+      _ -> :error
+    end
+  end
+
+  defp record_aead_algorithm(_bulk, _key), do: :error
+
+  defp record_cipher(state, source, fragment, version, write) do
+    with {:ok, mac} <- record_mac(state, source, fragment, version, write) do
+      record_cipher(state, source, fragment, version, write, mac)
+    end
+  end
+
+  defp record_mac(_state, _source, _fragment, _version, %{security_parameters: parameters})
+       when elem(parameters, 7) == 0,
+       do: {:ok, <<>>}
+
+  defp record_mac(state, source, fragment, {major, minor}, write) do
+    with {:ok, algorithm} <- record_mac_algorithm(elem(write.security_parameters, 7)) do
+      header = <<write.sequence_number::64, 23, major, minor, IO.iodata_length(fragment)::16>>
+      record_primitive(state, source, {:crypto, :mac, 4}, [
+        :hmac,
+        algorithm,
+        write.mac_secret,
+        [header, fragment]
+      ])
+    end
+  end
+
+  defp record_mac_algorithm(1), do: {:ok, :md5}
+  defp record_mac_algorithm(2), do: {:ok, :sha}
+  defp record_mac_algorithm(4), do: {:ok, :sha256}
+  defp record_mac_algorithm(5), do: {:ok, :sha384}
+  defp record_mac_algorithm(6), do: {:ok, :sha512}
+
+  defp record_mac_algorithm(algorithm)
+       when algorithm in [:md5, :sha, :sha224, :sha256, :sha384, :sha512],
+       do: {:ok, algorithm}
+
+  defp record_mac_algorithm(_algorithm), do: :error
+
+  defp record_cipher(
+         _state,
+         _source,
+         fragment,
+         _version,
+         %{security_parameters: parameters} = write,
+         <<>>
+       )
+       when elem(parameters, 3) == 0,
+       do: {:ok, IO.iodata_to_binary(fragment), write.cipher_state}
+
+  defp record_cipher(state, source, fragment, version, write, mac) do
+    cipher = write.cipher_state
+    bulk = elem(write.security_parameters, 3)
+
+    case bulk do
+      1 ->
+        record_stream_cipher(state, source, fragment, cipher, mac)
+
+      3 ->
+        record_block_cipher(state, source, fragment, version, cipher, mac, {:des_cbc, 8})
+
+      4 ->
+        record_block_cipher(state, source, fragment, version, cipher, mac, {:des_ede3_cbc, 8})
+
+      7 when byte_size(elem(cipher, 2)) == 16 ->
+        record_block_cipher(state, source, fragment, version, cipher, mac, {:aes_128_cbc, 16})
+
+      7 when byte_size(elem(cipher, 2)) == 32 ->
+        record_block_cipher(state, source, fragment, version, cipher, mac, {:aes_256_cbc, 16})
+
+      _ ->
+        :error
+    end
+  end
+
+  defp record_stream_cipher(state, source, fragment, cipher, mac) do
+    initialized =
+      case elem(cipher, 4) do
+        {:stream_init, :rc4, key, _iv} ->
+          record_primitive(state, source, {:crypto, :crypto_init, 3}, [:rc4, key, true])
+
+        handle ->
+          {:ok, handle}
+      end
+
+    with {:ok, handle} <- initialized,
+         {:ok, encrypted} <-
+           record_primitive(state, source, {:crypto, :crypto_update, 2}, [handle, [fragment, mac]]) do
+      {:ok, IO.iodata_to_binary(encrypted), put_elem(cipher, 4, handle)}
+    end
+  end
+
+  defp record_block_cipher(state, source, fragment, version, cipher, mac, {algorithm, block_size}) do
+    padding = block_size - rem(byte_size(mac) + IO.iodata_length(fragment) + 1, block_size)
+    block = [fragment, mac, :binary.copy(<<padding>>, padding + 1)]
+
+    with {:ok, input, next} <- record_block_iv(state, source, version, cipher, block),
+         {:ok, encrypted} <-
+           record_primitive(state, source, {:crypto, :crypto_one_time, 5}, [
+             algorithm,
+             elem(cipher, 2),
+             elem(cipher, 1),
+             input,
+             true
+           ]),
+         true <- is_binary(encrypted) do
+      next =
+        if version == {3, 1} do
+          size = byte_size(elem(cipher, 1))
+          put_elem(next, 1, binary_part(encrypted, byte_size(encrypted) - size, size))
+        else
+          next
+        end
+
+      {:ok, encrypted, next}
+    else
+      _ -> :error
+    end
+  end
+
+  defp record_block_iv(_state, _source, {3, 1}, cipher, block), do: {:ok, block, cipher}
+
+  defp record_block_iv(state, source, _version, cipher, block) do
+    size = byte_size(elem(cipher, 1))
+
+    cache =
+      case elem(cipher, 4) do
+        <<>> -> record_primitive(state, source, {:crypto, :strong_rand_bytes, 1}, [size * 32])
+        cache -> {:ok, cache}
+      end
+
+    with {:ok, <<iv::binary-size(^size), rest::binary>>} <- cache do
+      {:ok, [iv | block], cipher |> put_elem(1, iv) |> put_elem(4, rest)}
+    end
+  end
+
+  defp record_primitive(state, source, {module, function, _} = mfa, arguments) do
+    scope = Map.fetch!(state.pairs, source.index)
+
+    values =
+      for pair <- Map.get(state.pair_index, {source.pid, mfa}, []),
+          source.index < pair.source.index and pair.returned.index < scope.returned.index,
+          pair.source.event === {source.pid, :call, {module, function, arguments}},
+          {_, :return_from, ^mfa, value} <- [pair.returned.event],
+          do: value
+
+    case Enum.uniq(values) do
+      [value] -> {:ok, value}
+      _ -> :error
+    end
+  end
 
   defp handshake_program_call(source, :tls_handshake_events, program) do
     recursive? = List.first(source.stack) == {:tls_gen_connection, :tls_handshake_events, 2}
@@ -4329,6 +4678,37 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          actual
        ) do
     expected = {:next_state, :start, version.data, [{:next_event, :internal, hello}]}
+    callback_result_exact(state, source, actual, expected)
+  end
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_client_connection_1_3, name, 3}} = source,
+         %{event: %{value: {:internal, {:change_cipher_spec, _type}}}},
+         version,
+         actual
+       )
+       when name in [
+              :hello_middlebox_assert,
+              :hello_retry_middlebox_assert,
+              :start,
+              :wait_sh,
+              :wait_ee,
+              :wait_cert_cr,
+              :wait_cert,
+              :wait_cv,
+              :wait_finished
+            ] do
+    expected =
+      case selected_record(Map.fetch!(state.parsed, source.pid)) do
+        :no_record ->
+          receiver_hibernate_result(version, [])
+
+        {:ssl_tls, _, _, _, _} = record ->
+          {:next_state, version.name, version.data,
+           [{:next_event, :internal, {:protocol_record, record}}]}
+      end
+
     callback_result_exact(state, source, actual, expected)
   end
 

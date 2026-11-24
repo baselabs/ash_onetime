@@ -5809,7 +5809,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         do: [{ConnectionHistory, :render, 2} | consumers],
         else: consumers
 
-    events = comparator_call_order(pair, proofs ++ consumers)
+    events = comparator_call_order(fn -> Comparator.compare(pair) end, proofs ++ consumers)
 
     for mfa <- proofs do
       calls = Enum.count(events, &match?({:call, ^mfa, _}, &1))
@@ -5846,7 +5846,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     ]
 
     origin = {Origins, :build, 1}
-    events = comparator_call_order(pair, proofs ++ [origin])
+    events = comparator_call_order(fn -> Comparator.compare(pair) end, proofs ++ [origin])
     first_origin = Enum.find_index(events, &match?({:call, ^origin, _}, &1))
     assert is_integer(first_origin)
     before_origin = Enum.take(events, first_origin)
@@ -5869,7 +5869,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     ]
 
     origin = {Origins, :build, 1}
-    events = comparator_call_order(pair, proofs ++ [origin])
+    events = comparator_call_order(fn -> Comparator.compare(pair) end, proofs ++ [origin])
     first_origin = Enum.find_index(events, &match?({:call, ^origin, _}, &1))
     assert is_integer(first_origin)
     before_origin = Enum.take(events, first_origin)
@@ -5899,7 +5899,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     ]
 
     origin = {Origins, :build, 1}
-    events = comparator_call_order(pair, proofs ++ [origin])
+    events = comparator_call_order(fn -> Comparator.compare(pair) end, proofs ++ [origin])
     first_origin = Enum.find_index(events, &match?({:call, ^origin, _}, &1))
     assert is_integer(first_origin)
     before_origin = Enum.take(events, first_origin)
@@ -5955,7 +5955,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         do: [renderer | functions],
         else: functions
 
-    events = comparator_call_order(pair, functions)
+    events = comparator_call_order(fn -> Comparator.compare(pair) end, functions)
 
     for mfa <- proofs do
       calls = Enum.count(events, &match?({:call, ^mfa, _}, &1))
@@ -5980,7 +5980,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     refute legacy?, "MAIN cannot compare native packet boundaries as logical messages"
   end
 
-  defp comparator_call_order(pair, functions) do
+  defp comparator_call_order(callback, functions) do
     parent = self()
     token = make_ref()
 
@@ -5999,7 +5999,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       end
 
       1 = :trace.process(session, self(), true, [:call, :arity, :strict_monotonic_timestamp])
-      _result = Comparator.compare(pair)
+      _result = callback.()
       1 = :trace.process(session, self(), false, [:call])
       fence = :trace.delivered(session, :all)
 
@@ -8921,6 +8921,34 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert build.(run).errors == proof.errors
     assert build.(ConnectionNative.observe_tls_startup()).errors == []
+  end
+
+  @tag connection_streams: :tls
+  test "Connection streams: record proof never reexecutes the native encoder" do
+    run = ConnectionNative.observe_tls()
+    assert native_encoder_calls(run) == []
+
+    ComparatorMutants.with_mutant(:stream_tls_encode_replay, fn ->
+      assert native_encoder_calls(run) != []
+    end)
+
+    assert native_encoder_calls(run) == []
+    assert native_encoder_calls(ConnectionNative.observe_tls()) == []
+  end
+
+  defp native_encoder_calls(run) do
+    events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+    encoders = [{:tls_record, :encode_data, 3}, {:tls_record_1_3, :encode_data, 2}]
+
+    calls =
+      comparator_call_order(
+        fn ->
+          assert ConnectionTls.build(%{events: events}, run.tls_binding).errors == []
+        end,
+        encoders
+      )
+
+    Enum.filter(calls, &match?({:call, _, _}, &1))
   end
 
   for boundary <- [:input, :return, :record] do

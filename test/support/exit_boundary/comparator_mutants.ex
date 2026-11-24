@@ -624,6 +624,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_tls_encode_replay) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original: "        case encode_records(state, source, plaintext, version, states) do\n",
+        mutated:
+          "        _ = :tls_record.encode_data(plaintext, version, states)\n\n        case encode_records(state, source, plaintext, version, states) do\n"
+      }
+    ]
+  end
+
   def edits(:stream_status_copy) do
     [
       %{
