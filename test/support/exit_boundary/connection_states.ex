@@ -1635,14 +1635,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     with {^ref, :connect} <- machine.data.client,
          version when not is_nil(version) <- state.completed[pid],
          [task] <- native_type_calls(state, call, returned, {DBConnection.Task, :run_child, 4}),
-         {^pid, :call, {DBConnection.Task, :run_child, task_arguments}} <- task.source.event,
-         true <-
-           List.delete_at(task_arguments, 1) ===
-             [
-               Postgrex.Protocol,
-               machine.data.after_connect,
-               [timeout: machine.data.after_connect_timeout] ++ machine.data.opts
-             ],
          {:ok, child, reference} <- owner_task_origin(state, task, machine),
          {:ok, timer} <-
            owner_task_timer(
@@ -2085,11 +2077,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           pair.source.index < source.index and source.index < pair.returned.index,
           do: pair
 
+    # The factory input has its own copy check. Holder construction depends on
+    # the native child program and modeled owner state, even when that copy is bad.
     with [task] <- tasks,
-         arguments = [timeout: machine.data.after_connect_timeout] ++ machine.data.opts,
-         function = machine.data.after_connect,
-         {_, :call, {DBConnection.Task, :run_child, task_arguments}} <- task.source.event,
-         true <- List.delete_at(task_arguments, 1) === [Postgrex.Protocol, function, arguments],
          {:ok, child, reference} <- owner_task_origin(state, task, machine),
          [started] <-
            native_type_calls(state, task.source, source, {Task.Supervisor, :start_child, 4}),
