@@ -672,9 +672,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_tls.ex",
-        original: "    tls_exact(state, source, :tls_callback_result, actual, expected)\n",
+        original:
+          "    state\n    |> tls_exact(source, :tls_callback_result, actual, expected)\n",
         mutated:
-          "    _ = actual\n    tls_exact(state, source, :tls_callback_result, expected, expected)\n"
+          "    _ = actual\n\n    state\n    |> tls_exact(source, :tls_callback_result, expected, expected)\n"
       }
     ]
   end
