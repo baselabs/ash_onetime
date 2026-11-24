@@ -1754,6 +1754,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert native_copy_states(observe.()).errors == []
   end
 
+  @tag connection_streams: :driver
+  test "Connection streams: frontend IOdata retains its message construction origin" do
+    assert_native_helper_inputs(%{{:do_send, 3} => [1]}, &native_query_factory/0)
+  end
+
   for {function, arity, size, field} <- [
         {:describe_params, 3, 2, :param_oids},
         {:describe_result, 5, 2, :ref},
