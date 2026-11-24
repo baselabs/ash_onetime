@@ -33,7 +33,9 @@ defmodule AshOnetime.MixDependencySecurityTest do
       # CVE-2026-124283 affects Ash >= 3.31.3 and < 3.38.0.
       refute Version.match?("3.37.2", requirement)
       refute Version.match?("3.37.7", requirement)
-      assert Version.match?("3.38.0", requirement)
+      # EEF-CVE-2026-120299 affects Ash >= 3.24.0 and < 3.38.1.
+      refute Version.match?("3.38.0", requirement)
+      assert Version.match?("3.38.1", requirement)
     end
   end
 
@@ -57,6 +59,30 @@ defmodule AshOnetime.MixDependencySecurityTest do
     refute Version.match?("0.8.4", requirement)
     refute Version.match?("0.8.5", requirement)
     assert Version.match?("0.8.6", requirement)
+  end
+
+  @tag :deps_db_connection_floor_mutation
+  test "db_connection consumer requirement rejects advised versions" do
+    requirement = requirement!(:db_connection)
+    refute Version.match?("2.10.2", requirement)
+    assert Version.match?("2.10.3", requirement)
+  end
+
+  @tag :deps_postgrex_floor_mutation
+  test "postgrex consumer requirement rejects advised versions" do
+    requirement = requirement!(:postgrex)
+    refute Version.match?("0.22.0", requirement)
+    refute Version.match?("0.22.1", requirement)
+    refute Version.match?("0.22.2", requirement)
+    refute Version.match?("0.22.3", requirement)
+    assert Version.match?("0.22.4", requirement)
+  end
+
+  @tag :deps_plug_floor_mutation
+  test "plug consumer requirement rejects advised versions" do
+    requirement = requirement!(:plug)
+    refute Version.match?("1.20.3", requirement)
+    assert Version.match?("1.20.4", requirement)
   end
 
   @tag :deps_mint_floor_mutation

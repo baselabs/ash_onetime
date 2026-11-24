@@ -10,6 +10,8 @@ request path.
 
 ## Wire the Plug
 
+Use Plug `~> 1.20 and >= 1.20.4` for the optional HTTP integration.
+
 `AshOnetime.Plug` copies configured request headers into `conn.private.ash_onetime.untrusted`
 as a map of `{context_name => binary}`. Values are raw and untrusted — verification happens only
 inside the protected action. Add it to an API pipeline in your router:

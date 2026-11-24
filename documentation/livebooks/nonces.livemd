@@ -23,8 +23,8 @@ redemptions, anti-replay of a captured request).
 
 This notebook walks through the spend and the reuse rejection — against a real PostgreSQL.
 
-> Requires Elixir 1.20+, Ash 3.38.0+, and PostgreSQL 18 reachable at
-> `DATABASE_URL`. Use a development database where you can create and remove
+> Requires Elixir 1.20+, Ash 3.38.1+, DBConnection 2.10.3+, Postgrex 0.22.4+, and
+> PostgreSQL 18 reachable at `DATABASE_URL`. Use a development database where you can create and remove
 > schemas. This notebook signs and verifies real Ed25519 proofs; its simple
 > proof format illustrates nonce admission and is not a DPoP implementation.
 

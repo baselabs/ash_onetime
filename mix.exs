@@ -60,7 +60,13 @@ defmodule AshOnetime.MixProject do
       {:ash_sql, "~> 0.8 and >= 0.8.6", runtime: false},
       {:spark, "~> 2.7"},
       {:ecto_sql, "~> 3.14"},
-      {:postgrex, "~> 0.22"},
+      # Postgrex 0.22.4 fixes stream comment escaping (EEF-CVE-2026-66838).
+      # rule:deps-postgrex-floor
+      {:postgrex, "~> 0.22 and >= 0.22.4"},
+      # DBConnection 2.10.3 hardens stream logging (EEF-CVE-2026-133555).
+      # Postgrex and Ecto SQL already start DBConnection.
+      # rule:deps-db-connection-floor
+      {:db_connection, "~> 2.10 and >= 2.10.3", runtime: false},
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.4"},
       # Optional integrations are host-owned: the host declares and starts them.
@@ -68,7 +74,9 @@ defmodule AshOnetime.MixProject do
       # Their presence must not add a runtime dependency for other consumers.
       # Ash requires stream_data in every environment, so it stays resolvable there.
       # It is used for property tests and excluded from runtime applications.
-      {:plug, "~> 1.20", optional: true, runtime: false},
+      # Plug 1.20.4 fixes multipart length accounting (EEF-CVE-2026-120287).
+      # rule:deps-plug-floor
+      {:plug, "~> 1.20 and >= 1.20.4", optional: true, runtime: false},
       {:oban, "~> 2.23", optional: true, runtime: false},
       # rule:deps-igniter-floor
       # rule:deps-optional-runtime
@@ -87,15 +95,17 @@ defmodule AshOnetime.MixProject do
     ]
   end
 
-  # Consumer Ash support is >= 3.38.0 and < 4.0.0 (security floors: ADR 0004).
+  # Consumer Ash support is >= 3.38.1 and < 4.0.0 (security floors: ADR 0004).
   # ASH_ONETIME_ASH_VERSION may pin only a plain release inside that range;
   # latest or unset preserves the floating consumer requirement.
   # rule:mixpin-ash-floor
-  @ash_floor "3.38.0"
+  @ash_floor "3.38.1"
+
+  def consumer_ash_requirement, do: ">= #{@ash_floor} and < 4.0.0"
 
   defp ash_requirement do
     case System.get_env("ASH_ONETIME_ASH_VERSION") do
-      version when version in [nil, "", "latest"] -> ">= #{@ash_floor} and < 4.0.0"
+      version when version in [nil, "", "latest"] -> consumer_ash_requirement()
       version -> pinned_ash_requirement(version)
     end
   end

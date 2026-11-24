@@ -71,7 +71,7 @@ if Code.ensure_loaded?(Igniter) do
 
         igniter
         |> Formatter.import_dep(:ash_onetime)
-        |> add_optional_dependency(options[:with_plug], {:plug, "~> 1.20"})
+        |> add_optional_dependency(options[:with_plug], {:plug, "~> 1.20 and >= 1.20.4"})
         |> add_optional_dependency(options[:with_oban], {:oban, "~> 2.23"})
         |> Igniter.create_new_file(path, source)
         |> wire_resources(List.wrap(options[:resource]))

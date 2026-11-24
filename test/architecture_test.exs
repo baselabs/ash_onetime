@@ -431,6 +431,7 @@ defmodule AshOnetime.ArchitectureTest do
                :ash_postgres,
                :ash_sql,
                :credo,
+               :db_connection,
                :dialyxir,
                :ecto_sql,
                :ex_doc,

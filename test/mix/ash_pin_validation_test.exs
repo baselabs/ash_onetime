@@ -1,5 +1,5 @@
 defmodule AshOnetime.MixAshPinValidationTest do
-  # ASH_ONETIME_ASH_VERSION must be a plain release in [3.38.0, 4.0.0).
+  # ASH_ONETIME_ASH_VERSION must be a plain release in [3.38.1, 4.0.0).
   # Reject invalid pins during project configuration before they reach package metadata.
   # Invoke Mix with the variable set to exercise the actual public entry point.
   # --no-deps-check prevents lock mismatch from supplying an unrelated failure.
@@ -18,11 +18,11 @@ defmodule AshOnetime.MixAshPinValidationTest do
 
   @tag :mixpin_ash_floor_mutation
   test "rejects a below-floor pin at config evaluation" do
-    {output, exit} = mix_compile("3.37.7")
+    {output, exit} = mix_compile("3.38.0")
 
     assert exit != 0
-    assert output =~ "3.37.7"
     assert output =~ "3.38.0"
+    assert output =~ "3.38.1"
   end
 
   test "rejects a non-version pin" do
@@ -40,7 +40,7 @@ defmodule AshOnetime.MixAshPinValidationTest do
   end
 
   test "accepts the floor pin" do
-    {_output, exit} = mix_compile("3.38.0")
+    {_output, exit} = mix_compile("3.38.1")
 
     assert exit == 0
   end
@@ -53,10 +53,10 @@ defmodule AshOnetime.MixAshPinValidationTest do
   end
 
   test "rejects a build-metadata pin" do
-    {output, exit} = mix_compile("3.38.0+build5")
+    {output, exit} = mix_compile("3.38.1+build5")
 
     assert exit != 0
-    assert output =~ "3.38.0+build5"
+    assert output =~ "3.38.1+build5"
   end
 
   test "keeps the floating default when the variable is unset" do
