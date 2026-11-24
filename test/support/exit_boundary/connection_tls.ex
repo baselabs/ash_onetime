@@ -1773,7 +1773,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         IO.puts(
           "CONNECTION_COLD_TLS_PREFIX_FAILURE: " <>
             inspect(
-              Map.take(error, [:index, :rule, :path, :differences])
+              Map.take(error, [:index, :rule, :path, :differences, :branch])
               |> Map.put(:mfa, error.at.mfa)
             )
         )
@@ -3832,7 +3832,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       for error <- Enum.reverse(state.errors) do
         Diagnostics.emit(
           "CONNECTION_COLD_TLS_PREFIX_FAILURE",
-          Map.take(error, [:index, :rule, :path, :differences]) |> Map.put(:mfa, error.at.mfa)
+          Map.take(error, [:index, :rule, :path, :differences, :branch])
+          |> Map.put(:mfa, error.at.mfa)
         )
       end
 
@@ -4514,8 +4515,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     state = tls_failure(state, source, rule)
     [error | errors] = state.errors
     differences = tls_difference_paths(actual, expected)
-    %{state | errors: [Map.put(error, :differences, differences) | errors]}
+    error = Map.merge(error, %{differences: differences, branch: tls_branch(state, source.pid)})
+    %{state | errors: [error | errors]}
   end
+
+  defp tls_branch(state, pid) do
+    case Map.get(state.frames, pid, []) do
+      [%{source: source, event: %{value: event}} | _] ->
+        %{mfa: source.mfa, event: tls_event_class(event)}
+
+      _ ->
+        :no_callback_frame
+    end
+  end
+
+  defp tls_event_class({:enter, _}), do: :enter
+  defp tls_event_class({:internal, {:change_cipher_spec}}), do: :change_cipher_spec
+  defp tls_event_class({:internal, {:server_hello, _, _, _, _, _}}), do: :server_hello
+  defp tls_event_class({:internal, _}), do: :internal
+  defp tls_event_class({{:call, _}, _}), do: :call
+  defp tls_event_class({type, _}) when type in [:info, :cast], do: type
+  defp tls_event_class(_event), do: :other
 
   defp tls_difference_paths(actual, expected)
        when is_tuple(actual) and is_tuple(expected) and tuple_size(actual) == tuple_size(expected) and
