@@ -742,6 +742,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_tls_record_selection) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original:
+          "        state\n        |> tls_exact(source, :tls_record_selection, record, selected_record(parsed))\n",
+        mutated:
+          "        _ = record\n        state\n        |> tls_exact(source, :tls_record_selection, selected_record(parsed), selected_record(parsed))\n"
+      }
+    ]
+  end
+
   def edits(:stream_frame_ownership) do
     [
       %{
@@ -911,6 +923,21 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   def with_tls_connection_mutant(rule, callback),
     do: with_owner_mutant(:tls_gen_connection, 1, &receiver_form(&1, &2, rule), callback)
+
+  def with_tls_record_input(callback) do
+    targets = %{{:next_record, 3} => [2]}
+    with_owner_mutant(:tls_gen_connection, 6, &owner_inputs_form(&1, &2, targets), callback)
+  end
+
+  def with_tls_record_output(callback) do
+    targets = %{{:next_record_done, 4} => %{kind: :element, size: 2, position: 1, total?: true}}
+    with_owner_outputs(:tls_gen_connection, targets, callback)
+  end
+
+  def with_tls_record_value(callback) do
+    targets = %{{:next_record_done, 4} => %{kind: :element, size: 2, position: 0, total?: true}}
+    with_owner_outputs(:tls_gen_connection, targets, callback)
+  end
 
   def with_backoff_input(callback) do
     targets = %{{:backoff, 1} => [0]}

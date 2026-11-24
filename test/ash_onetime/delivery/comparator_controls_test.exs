@@ -5091,14 +5091,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             do: {source.index, [2, 2, 0]}
 
       assert coordinates != []
-      assert proof.native.errors == [] and proof.reads.errors == [] and proof.decoders.errors == []
+
+      assert proof.native.errors == [] and proof.reads.errors == [] and
+               proof.decoders.errors == []
 
       assert Enum.map(proof.states.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) ==
                Enum.map(coordinates, fn {index, path} ->
                  {:state_owner_backoff_input, index, path}
                end)
 
-      for mutant <- [:stream_owner_backoff_input, :stream_owner_backoff_result, :stream_owner_copy] do
+      for mutant <- [
+            :stream_owner_backoff_input,
+            :stream_owner_backoff_result,
+            :stream_owner_copy
+          ] do
         checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
         expected = if mutant == :stream_owner_backoff_input, do: [], else: proof.errors
         assert checked.errors == expected
@@ -5135,14 +5141,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             do: {source.index, [3]}
 
       assert coordinates != []
-      assert proof.native.errors == [] and proof.reads.errors == [] and proof.decoders.errors == []
+
+      assert proof.native.errors == [] and proof.reads.errors == [] and
+               proof.decoders.errors == []
 
       assert Enum.map(proof.states.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) ==
                Enum.map(coordinates, fn {index, path} ->
                  {:state_owner_backoff_result, index, path}
                end)
 
-      for mutant <- [:stream_owner_backoff_input, :stream_owner_backoff_result, :stream_owner_copy] do
+      for mutant <- [
+            :stream_owner_backoff_input,
+            :stream_owner_backoff_result,
+            :stream_owner_copy
+          ] do
         checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
         expected = if mutant == :stream_owner_backoff_result, do: [], else: proof.errors
         assert checked.errors == expected
@@ -8407,6 +8419,92 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     IO.puts(
       "CONNECTION_LOGICAL_ADDRESSES: coalesced native indices retained; all message contexts distinct"
     )
+  end
+
+  for boundary <- [:input, :return, :record] do
+    @tag connection_streams: :tls
+    test "Connection streams: TLS record #{boundary} copy retains its native source" do
+      boundary = unquote(boundary)
+      positive = ConnectionNative.observe_tls()
+      events = Enum.with_index(positive.events, &Map.put(&1, :index, &2))
+      assert ConnectionTls.build(%{events: events}, positive.tls_binding).errors == []
+
+      control =
+        case boundary do
+          :input -> :with_tls_record_input
+          :return -> :with_tls_record_output
+          :record -> :with_tls_record_value
+        end
+
+      rule = if boundary == :record, do: :tls_record_selection, else: :tls_worker_state_copy
+
+      owner =
+        if boundary == :record,
+          do: :stream_tls_record_selection,
+          else: :stream_tls_worker_state_copy
+
+      run = apply(ComparatorMutants, control, [&ConnectionNative.observe_tls/0])
+      assert run.result == []
+      events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+
+      coordinates =
+        Enum.flat_map(events, fn
+          %{
+            index: index,
+            event:
+              {_, :call,
+               {:tls_gen_connection, :next_record, [_, _, {:native_foreign_helper, _}]}}
+          } ->
+            [{index, [2, 2, 2]}]
+
+          %{
+            index: index,
+            event:
+              {_, :return_from, {:tls_gen_connection, :next_record_done, 4},
+               {_, {:native_foreign_return, _}}}
+          } ->
+            [{index, [3, 1]}]
+
+          %{
+            index: index,
+            event:
+              {_, :return_from, {:tls_gen_connection, :next_record_done, 4},
+               {{:native_foreign_return, _}, _}}
+          } ->
+            [{index, [3, 0]}]
+
+          _ ->
+            []
+        end)
+
+      assert coordinates != []
+      proof = ConnectionTls.build(%{events: events}, run.tls_binding)
+
+      assert Enum.map(proof.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) ==
+               Enum.map(coordinates, fn {index, path} ->
+                 {rule, index, path}
+               end)
+
+      for mutant <- [
+            :stream_tls_worker_state_copy,
+            :stream_tls_record_selection,
+            :stream_tls_machine_copy,
+            :stream_tls_state_copy
+          ] do
+        checked =
+          ComparatorMutants.with_mutant(mutant, fn ->
+            ConnectionTls.build(%{events: events}, run.tls_binding)
+          end)
+
+        expected = if mutant == owner, do: [], else: proof.errors
+        assert checked.errors == expected
+      end
+
+      assert ConnectionTls.build(%{events: events}, run.tls_binding).errors == proof.errors
+      restored = ConnectionNative.observe_tls()
+      restored_events = Enum.with_index(restored.events, &Map.put(&1, :index, &2))
+      assert ConnectionTls.build(%{events: restored_events}, restored.tls_binding).errors == []
+    end
   end
 
   @tag connection_streams: :tls

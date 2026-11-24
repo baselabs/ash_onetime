@@ -64,7 +64,10 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
     cond do
       prior ->
-        %{prior | errors: Enum.map(prior.errors, &Map.update!(&1, :at, fn at -> {:prior, at} end))}
+        %{
+          prior
+          | errors: Enum.map(prior.errors, &Map.update!(&1, :at, fn at -> {:prior, at} end))
+        }
 
       rc.errors != [] or tc.errors != [] ->
         raw_failure(rc.indexed, tc.indexed, rc, tc)
