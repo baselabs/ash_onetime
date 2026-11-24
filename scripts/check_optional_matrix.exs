@@ -14,8 +14,12 @@ defmodule AshOnetime.OptionalMatrix do
     {"mint-pin", [{:mint, "~> 1.9"}], %{plug: false, oban: false, igniter: false}},
     {"mint-floor", [{:mint, "== 1.10.2"}], %{plug: false, oban: false, igniter: false}},
     {"core-floors",
-     [ash: "== 3.38.1", ash_postgres: "== 2.15.2", ash_sql: "== 0.8.6", db_connection: "== 2.10.3"],
-     %{plug: false, oban: false, igniter: false}}
+     [
+       ash: "== 3.38.1",
+       ash_postgres: "== 2.15.2",
+       ash_sql: "== 0.8.6",
+       db_connection: "== 2.10.3"
+     ], %{plug: false, oban: false, igniter: false}}
   ]
 
   # Exact advised pins that must CONFLICT with ash_onetime's published floors: a
