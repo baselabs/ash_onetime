@@ -4998,6 +4998,32 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  @tag connection_streams: :pool
+  test "Connection streams: a retry retains its original native Backoff input", context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+    observe = fn -> ConnectionNative.observe_pool_startup({:connect_failure, :rand}) end
+    positive = observe.()
+    side = observation_side(context, positive, %{}, row!(:issue, :execute), historical)
+    assert ConnectionHistory.build(side).errors == []
+
+    run = ComparatorMutants.with_backoff_input(observe)
+    assert run.result == :ok
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+
+    coordinates =
+      for %{event: {_, :call, {DBConnection.Backoff, :backoff, [{:native_foreign_helper, _}]}}} = source <-
+            proof.indexed.events,
+          do: {source.index, [2, 2, 0]}
+
+    assert coordinates != []
+    assert proof.native.errors == [] and proof.reads.errors == [] and proof.decoders.errors == []
+
+    assert Enum.map(proof.states.errors, &{&1.rule, &1.index, &1.path}) ==
+             Enum.map(coordinates, fn {index, path} -> {:state_owner_backoff_input, index, path} end)
+  end
+
   for lifecycle <- [:idle_ping, :reconnect] do
     @tag connection_streams: :pool
     test "Connection streams: native #{lifecycle} retains the renewed holder's cut origin",

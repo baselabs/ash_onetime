@@ -888,6 +888,24 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   def with_tls_connection_mutant(rule, callback),
     do: with_owner_mutant(:tls_gen_connection, 1, &receiver_form(&1, &2, rule), callback)
 
+  def with_backoff_input(callback) do
+    targets = %{{:backoff, 1} => [0]}
+
+    with_owner_mutant(
+      DBConnection.Connection,
+      &(&1 > 0),
+      &remote_inputs_form(&1, &2, DBConnection.Backoff, targets),
+      fn ->
+        with_owner_mutant(
+          DBConnection.Backoff,
+          &(&1 > 0),
+          &owner_inputs_form(&1, &2, targets),
+          callback
+        )
+      end
+    )
+  end
+
   def with_postgrex_inputs(targets, callback, module \\ Postgrex.Protocol)
 
   def with_postgrex_inputs(targets, callback, Postgrex.Protocol) do
