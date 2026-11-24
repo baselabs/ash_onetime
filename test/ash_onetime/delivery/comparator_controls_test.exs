@@ -5044,87 +5044,96 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag connection_streams: :pool
-  test "Connection streams: a retry retains its original native Backoff input", context do
-    Repo.put_dynamic_repo(context.repo)
-    historical = Historical.capture(context.prefix)
-    observe = fn -> ConnectionNative.observe_pool_startup({:connect_failure, :rand}) end
-    positive = observe.()
-    side = observation_side(context, positive, %{}, row!(:issue, :execute), historical)
-    assert ConnectionHistory.build(side).errors == []
+  for mode <- [
+        {:connect_failure, :rand},
+        {:after_connect_failure, :rand, :function},
+        {:after_connect_failure, :rand, :mfa}
+      ] do
+    @tag connection_streams: :pool
+    test "Connection streams: #{inspect(mode)} retains its original native Backoff input",
+         context do
+      Repo.put_dynamic_repo(context.repo)
+      historical = Historical.capture(context.prefix)
+      mode = unquote(Macro.escape(mode))
+      observe = fn -> ConnectionNative.observe_pool_startup(mode) end
+      positive = observe.()
+      side = observation_side(context, positive, %{}, row!(:issue, :execute), historical)
+      assert ConnectionHistory.build(side).errors == []
 
-    run = ComparatorMutants.with_backoff_input(observe)
-    assert run.result == :ok
-    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
-    proof = ConnectionHistory.build(side)
+      run = ComparatorMutants.with_backoff_input(observe)
+      assert run.result == :ok
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
 
-    coordinates =
-      for %{event: {_, :call, {DBConnection.Backoff, :backoff, [{:native_foreign_helper, _}]}}} =
-            source <-
-            proof.indexed.events,
-          do: {source.index, [2, 2, 0]}
+      coordinates =
+        for %{event: {_, :call, {DBConnection.Backoff, :backoff, [{:native_foreign_helper, _}]}}} =
+              source <-
+              proof.indexed.events,
+            do: {source.index, [2, 2, 0]}
 
-    assert coordinates != []
-    assert proof.native.errors == [] and proof.reads.errors == [] and proof.decoders.errors == []
+      assert coordinates != []
+      assert proof.native.errors == [] and proof.reads.errors == [] and proof.decoders.errors == []
 
-    assert Enum.map(proof.states.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) ==
-             Enum.map(coordinates, fn {index, path} ->
-               {:state_owner_backoff_input, index, path}
-             end)
+      assert Enum.map(proof.states.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) ==
+               Enum.map(coordinates, fn {index, path} ->
+                 {:state_owner_backoff_input, index, path}
+               end)
 
-    for mutant <- [:stream_owner_backoff_input, :stream_owner_backoff_result, :stream_owner_copy] do
-      checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
-      expected = if mutant == :stream_owner_backoff_input, do: [], else: proof.errors
-      assert checked.errors == expected
+      for mutant <- [:stream_owner_backoff_input, :stream_owner_backoff_result, :stream_owner_copy] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
+        expected = if mutant == :stream_owner_backoff_input, do: [], else: proof.errors
+        assert checked.errors == expected
+      end
+
+      assert ConnectionHistory.build(side).errors == proof.errors
+      restored = observe.()
+      side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+      assert ConnectionHistory.build(side).errors == []
     end
 
-    assert ConnectionHistory.build(side).errors == proof.errors
-    restored = observe.()
-    side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
-    assert ConnectionHistory.build(side).errors == []
-  end
+    @tag connection_streams: :pool
+    test "Connection streams: #{inspect(mode)} retains its own native Backoff return", context do
+      Repo.put_dynamic_repo(context.repo)
+      historical = Historical.capture(context.prefix)
+      mode = unquote(Macro.escape(mode))
+      observe = fn -> ConnectionNative.observe_pool_startup(mode) end
+      positive = observe.()
+      side = observation_side(context, positive, %{}, row!(:issue, :execute), historical)
+      assert ConnectionHistory.build(side).errors == []
 
-  @tag connection_streams: :pool
-  test "Connection streams: a retry retains its own native Backoff return", context do
-    Repo.put_dynamic_repo(context.repo)
-    historical = Historical.capture(context.prefix)
-    observe = fn -> ConnectionNative.observe_pool_startup({:connect_failure, :rand}) end
-    positive = observe.()
-    side = observation_side(context, positive, %{}, row!(:issue, :execute), historical)
-    assert ConnectionHistory.build(side).errors == []
+      run = ComparatorMutants.with_backoff_output(observe)
+      assert run.result == :ok
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
 
-    run = ComparatorMutants.with_backoff_output(observe)
-    assert run.result == :ok
-    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
-    proof = ConnectionHistory.build(side)
+      coordinates =
+        for %{
+              event:
+                {_, :return_from, {DBConnection.Backoff, :backoff, 1},
+                 {{:native_foreign_return, _}, _}}
+            } = source <-
+              proof.indexed.events,
+            do: {source.index, [3]}
 
-    coordinates =
-      for %{
-            event:
-              {_, :return_from, {DBConnection.Backoff, :backoff, 1},
-               {{:native_foreign_return, _}, _}}
-          } = source <-
-            proof.indexed.events,
-          do: {source.index, [3]}
+      assert coordinates != []
+      assert proof.native.errors == [] and proof.reads.errors == [] and proof.decoders.errors == []
 
-    assert coordinates != []
-    assert proof.native.errors == [] and proof.reads.errors == [] and proof.decoders.errors == []
+      assert Enum.map(proof.states.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) ==
+               Enum.map(coordinates, fn {index, path} ->
+                 {:state_owner_backoff_result, index, path}
+               end)
 
-    assert Enum.map(proof.states.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) ==
-             Enum.map(coordinates, fn {index, path} ->
-               {:state_owner_backoff_result, index, path}
-             end)
+      for mutant <- [:stream_owner_backoff_input, :stream_owner_backoff_result, :stream_owner_copy] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
+        expected = if mutant == :stream_owner_backoff_result, do: [], else: proof.errors
+        assert checked.errors == expected
+      end
 
-    for mutant <- [:stream_owner_backoff_input, :stream_owner_backoff_result, :stream_owner_copy] do
-      checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
-      expected = if mutant == :stream_owner_backoff_result, do: [], else: proof.errors
-      assert checked.errors == expected
+      assert ConnectionHistory.build(side).errors == proof.errors
+      restored = observe.()
+      side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+      assert ConnectionHistory.build(side).errors == []
     end
-
-    assert ConnectionHistory.build(side).errors == proof.errors
-    restored = observe.()
-    side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
-    assert ConnectionHistory.build(side).errors == []
   end
 
   for lifecycle <- [:idle_ping, :reconnect] do
