@@ -5401,6 +5401,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     # Every raw projection boundary in the current comparator, including the
     # registered rules. A new consumer must join this same ordering obligation.
     consumers = [
+      {ConnectionHistory, :render, 2},
       {Origins, :build, 1},
       {Declarations, :pair, 2},
       {Scheduling, :build, 1},
@@ -5460,7 +5461,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     legacy = [{TransportReferences, :build, 2}, {Wire, :build, 2}]
     renderer = {ConnectionHistory, :render, 2}
-    functions = proofs ++ legacy
+    functions = proofs ++ legacy ++ [{Origins, :build, 1}]
 
     functions =
       if function_exported?(ConnectionHistory, :render, 2),
@@ -5480,6 +5481,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     consumed = Enum.count(events, &match?({:return, ^renderer, true}, &1))
     assert consumed >= 2, "MAIN must consume both validated logical connection observations"
+
+    first_origins = Enum.find_index(events, &match?({:call, {Origins, :build, 1}, _}, &1))
+    assert is_integer(first_origins)
+    before_origins = Enum.take(events, first_origins)
+
+    assert Enum.count(before_origins, &match?({:return, ^renderer, true}, &1)) == 2,
+           "both whole logical renderings must finish before origin collection"
 
     legacy? = Enum.any?(events, fn {kind, mfa, _} -> kind == :call and mfa in legacy end)
     refute legacy?, "MAIN cannot compare native packet boundaries as logical messages"
