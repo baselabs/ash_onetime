@@ -21,6 +21,99 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       0xFFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617AD3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797ABC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F619172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035BBC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91CAEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B669E1EF16E6F52C3164DF4FB7930E9E4E58857B6AC7D5F42D69F6D187763CF1D5503400487F55BA57E31CC7A7135C886EFB4318AED6A1E012D9E6832A907600A918130C46DC778F971AD0038092999A333CB8B7A1A1DB93D7140003C2A4ECEA9F98D0ACC0A8291CDCEC97DCF8EC9B55A7F88A46B4DB5A851F44182E1C68A007E5E0DD9020BFD64B645036C7A4E677D2C38532A3A23BA4442CAF53EA63BB454329B7624C8917BDD64B1C0FD4CB38E8C334C701C3ACDAD0657FCCFEC719B1F5C3E4E46041F388147FB4CFDB477A52471F7A9A96910B855322EDB6340D8A00EF092350511E30ABEC1FFF9E3A26E7FB29F8C183023C3587E38DA0077D9B4763E4E4B94B2BBC194C6651E77CAF992EEAAC0232A281BF6B3A739C1226116820AE8DB5847A67CBEF9C9091B462D538CD72B03746AE77F5E62292C311562A846505DC82DB854338AE49F5235C95B91178CCF2DD5CACEF403EC9D1810C6272B045B3B71F9DC6B80D63FDD4A8E9ADB1E6962A69526D43161C1A41D570D7938DAD4A40E329CCFF46AAA36AD004CF600C8381E425A31D951AE64FDB23FCEC9509D43687FEB69EDD1CC5E0B8CC3BDF64B10EF86B63142A3AB8829555B2F747C932665CB2C0F1CC01BD70229388839D2AF05E454504AC78B7582822846C0BA35C35F5C59160CC046FD8251541FC68C9C86B022BB7099876A460E7451A8A93109703FEE1C217E6C3826E52C51AA691E0E423CFC99E9E31650C1217B624816CDAD9A95F9D5B8019488D9C0A0A1FE3075A577E23183F81D4A3F2FA4571EFC8CE0BA8A4FE8B6855DFE72B0A66EDED2FBABFBE58A30FAFABE1C5D71A87E2F741EF8C1FE86FEA6BBFDE530677F0D97D11D49F7A8443D0822E506A9F4614E011E2A94838FF88CD68C8BB7C5C6424CFFFFFFFFFFFFFFFF
   }
 
+  # Wire enumerations from RFC 8446 and the pinned OTP 29.1.2 headers.
+  @handshake_groups %{
+    23 => :secp256r1,
+    24 => :secp384r1,
+    25 => :secp521r1,
+    29 => :x25519,
+    30 => :x448,
+    31 => :brainpoolP256r1tls13,
+    32 => :brainpoolP384r1tls13,
+    33 => :brainpoolP512r1tls13,
+    256 => :ffdhe2048,
+    257 => :ffdhe3072,
+    258 => :ffdhe4096,
+    259 => :ffdhe6144,
+    260 => :ffdhe8192,
+    512 => :mlkem512,
+    513 => :mlkem768,
+    514 => :mlkem1024,
+    4587 => :secp256r1mlkem768,
+    4588 => :x25519mlkem768,
+    4589 => :secp384r1mlkem1024
+  }
+
+  @handshake_signatures %{
+    513 => :rsa_pkcs1_sha1,
+    515 => :ecdsa_sha1,
+    1025 => :rsa_pkcs1_sha256,
+    1027 => :ecdsa_secp256r1_sha256,
+    1281 => :rsa_pkcs1_sha384,
+    1283 => :ecdsa_secp384r1_sha384,
+    1537 => :rsa_pkcs1_sha512,
+    1539 => :ecdsa_secp521r1_sha512,
+    2052 => :rsa_pss_rsae_sha256,
+    2053 => :rsa_pss_rsae_sha384,
+    2054 => :rsa_pss_rsae_sha512,
+    2055 => :eddsa_ed25519,
+    2056 => :eddsa_ed448,
+    2057 => :rsa_pss_pss_sha256,
+    2058 => :rsa_pss_pss_sha384,
+    2059 => :rsa_pss_pss_sha512,
+    2074 => :ecdsa_brainpoolP256r1tls13_sha256,
+    2075 => :ecdsa_brainpoolP384r1tls13_sha384,
+    2076 => :ecdsa_brainpoolP512r1tls13_sha512,
+    2308 => :mldsa44,
+    2309 => :mldsa65,
+    2310 => :mldsa87,
+    2321 => :slh_dsa_sha2_128s,
+    2322 => :slh_dsa_sha2_128f,
+    2323 => :slh_dsa_sha2_192s,
+    2324 => :slh_dsa_sha2_192f,
+    2325 => :slh_dsa_sha2_256s,
+    2326 => :slh_dsa_sha2_256f,
+    2327 => :slh_dsa_shake_128s,
+    2328 => :slh_dsa_shake_128f,
+    2329 => :slh_dsa_shake_192s,
+    2330 => :slh_dsa_shake_192f,
+    2331 => :slh_dsa_shake_256s,
+    2332 => :slh_dsa_shake_256f
+  }
+
+  @handshake_curve_oids %{
+    1 => {1, 3, 132, 0, 1},
+    2 => {1, 3, 132, 0, 2},
+    3 => {1, 3, 132, 0, 15},
+    4 => {1, 3, 132, 0, 24},
+    5 => {1, 3, 132, 0, 25},
+    6 => {1, 3, 132, 0, 26},
+    7 => {1, 3, 132, 0, 27},
+    8 => {1, 3, 132, 0, 3},
+    9 => {1, 3, 132, 0, 16},
+    10 => {1, 3, 132, 0, 17},
+    11 => {1, 3, 132, 0, 36},
+    12 => {1, 3, 132, 0, 37},
+    13 => {1, 3, 132, 0, 38},
+    14 => {1, 3, 132, 0, 39},
+    15 => {1, 3, 132, 0, 9},
+    16 => {1, 3, 132, 0, 8},
+    17 => {1, 3, 132, 0, 30},
+    18 => {1, 3, 132, 0, 31},
+    19 => {1, 2, 840, 10045, 3, 1, 1},
+    20 => {1, 3, 132, 0, 32},
+    21 => {1, 3, 132, 0, 33},
+    22 => {1, 3, 132, 0, 10},
+    23 => {1, 2, 840, 10045, 3, 1, 7},
+    24 => {1, 3, 132, 0, 34},
+    25 => {1, 3, 132, 0, 35},
+    26 => {1, 3, 36, 3, 3, 2, 8, 1, 1, 7},
+    27 => {1, 3, 36, 3, 3, 2, 8, 1, 1, 11},
+    28 => {1, 3, 36, 3, 3, 2, 8, 1, 1, 13},
+    29 => {1, 3, 101, 110},
+    30 => {1, 3, 101, 111}
+  }
+
   # Local formatter metadata must be frozen while a native owner mutant is
   # loaded. Its expected identity comes from that owner's independent BEAM.
   def freeze_debug(events, binding) do
@@ -968,6 +1061,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       |> debug_return(source)
       |> active_option_return(source)
       |> worker_return(source, result)
+
+  defp worker_event(%{event: {_, :exception_from, _, _exception}} = source, state) do
+    call = Map.get(state.returns, source.index)
+
+    case Map.pop(state.records, call) do
+      {%{kind: :handshake_exception, result: expected, input: input}, records} ->
+        state
+        |> Map.put(:records, records)
+        |> handshake_copy(source, [3], expected, input.origin)
+
+      {%{kind: :handshakes}, records} ->
+        state
+        |> Map.put(:records, records)
+        |> tls_failure(source, :tls_handshake_copy)
+
+      _ ->
+        state
+    end
+  end
 
   defp worker_event(%{event: {pid, :exit, _reason}}, state) do
     state
@@ -4259,18 +4371,30 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     case handshake_record(state, source.pid) do
       {:ssl_tls, 22, _, fragment, _} ->
-        result = handshake_packets(fragment, version.name, version.data)
         state = worker_copy(state, source, [2, 2, 2], version.data, version.origin)
+        state = handshake_copy(state, source, [2, 2, 0], fragment, version.origin)
+        state = handshake_copy(state, source, [2, 2, 1], version.name, version.origin)
 
-        state
-        |> handshake_copy(source, [2, 2, 0], fragment, version.origin)
-        |> handshake_copy(source, [2, 2, 1], version.name, version.origin)
-        |> Map.update!(:handshake_rest, &Map.delete(&1, source.pid))
-        |> put_in([:records, source.index], %{
-          kind: :handshakes,
-          result: result,
-          input: version
-        })
+        case handshake_packets(fragment, version.name, version.data) do
+          {:ok, result} ->
+            state
+            |> Map.update!(:handshake_rest, &Map.delete(&1, source.pid))
+            |> put_in([:records, source.index], %{
+              kind: :handshakes,
+              result: result,
+              input: version
+            })
+
+          {:exception, exception} ->
+            put_in(state.records[source.index], %{
+              kind: :handshake_exception,
+              result: exception,
+              input: version
+            })
+
+          :error ->
+            tls_failure(state, source, :tls_handshake_parser_origin)
+        end
 
       _ ->
         tls_failure(state, source, :tls_handshake_origin)
@@ -5279,8 +5403,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   # version; any coalesced remainder is queued for the negotiated state.
   defp handshake_packets(fragment, name, data) do
     version = elem(elem(data, 3), 5)
-    options = elem(data, 4)
-    [highest | _] = Map.fetch!(options, :versions)
+    [highest | _] = Map.fetch!(elem(data, 4), :versions)
     role = elem(elem(data, 2), 1)
     buffer = elem(elem(data, 11), 2)
 
@@ -5289,10 +5412,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         <<_type, length::24, _::binary>> = fragment
         <<first::binary-size(^length + 4), rest::binary>> = fragment
 
-        {packets, <<>> = buffer} =
-          :tls_handshake.get_tls_handshakes(highest, first, buffer, options)
-
-        {packets, buffer, rest}
+        {packets, remaining} = parse_handshake_stream(highest, <<buffer::binary, first::binary>>, [])
+        {:ok, {packets, remaining, rest}}
 
       _ ->
         selected =
@@ -5301,9 +5422,635 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
              do: highest,
              else: version
 
-        {packets, buffer} = :tls_handshake.get_tls_handshakes(selected, fragment, buffer, options)
-        {packets, buffer, <<>>}
+        {packets, remaining} =
+          parse_handshake_stream(selected, <<buffer::binary, fragment::binary>>, [])
+
+        {:ok, {packets, remaining, <<>>}}
     end
+  rescue
+    _error -> :error
+  catch
+    {:handshake_alert, alert} -> {:exception, {:throw, alert}}
+    :invalid_handshake -> :error
+  end
+
+  # Framing, vectors, records and extensions are built from the independently
+  # selected plaintext. No native TLS decoder supplies an expected packet.
+  # Malformed or unmodeled constructors fail closed and retain the raw event.
+  defp parse_handshake_stream(version, <<type, length::24, tail::binary>> = bytes, packets)
+       when byte_size(tail) >= length do
+    <<body::binary-size(^length), rest::binary>> = tail
+    raw = binary_part(bytes, 0, length + 4)
+    packet = decode_handshake_packet(version, type, body)
+    parse_handshake_stream(version, rest, [{packet, raw} | packets])
+  end
+
+  defp parse_handshake_stream(_version, rest, packets), do: {Enum.reverse(packets), rest}
+
+  defp decode_handshake_packet(_version, 0, <<>>), do: {:hello_request}
+
+  defp decode_handshake_packet(
+         version,
+         1,
+         <<major, minor, random::binary-size(32), size, session::binary-size(size),
+           suite_size::16, suites::binary-size(suite_size), methods_size,
+           _methods::binary-size(methods_size), extensions::binary>>
+       ) do
+    unless rem(suite_size, 2) == 0, do: handshake_decode_error()
+    extensions = handshake_vector(extensions)
+    selected = handshake_extension_version(extensions, version, {major, minor})
+
+    {:client_hello, {major, minor}, random, session, :undefined,
+     for(<<suite::binary-size(2) <- suites>>, do: suite),
+     decode_handshake_extensions(extensions, selected, :client_hello, true)}
+  end
+
+  defp decode_handshake_packet(
+         version,
+         2,
+         <<major, minor, random::binary-size(32), size, session::binary-size(size),
+           cipher::binary-size(2), compression, extensions::binary>>
+       ) do
+    retry? = version == {3, 4} and random == @hello_retry_random
+    unless compression == 0 or retry? do
+      handshake_alert(
+        {:ssl_handshake, :decode_handshake, 3},
+        0,
+        47,
+        {:invalid_compression_method, compression}
+      )
+    end
+    absent? = extensions == <<>>
+    extensions = handshake_vector(extensions)
+    selected = if absent?, do: version, else: handshake_extension_version(extensions, version, {major, minor})
+    kind = if retry?, do: :hello_retry_request, else: :server_hello
+
+    {:server_hello, {major, minor}, random, session, cipher,
+     decode_handshake_extensions(extensions, selected, kind, true)}
+  end
+
+  defp decode_handshake_packet(
+         {3, 4},
+         4,
+         <<lifetime::32, age::32, nonce_size, nonce::binary-size(nonce_size), ticket_size::16,
+           ticket::binary-size(ticket_size), size::16, extensions::binary-size(size)>>
+       ),
+       do:
+         {:new_session_ticket, lifetime, age, nonce, ticket,
+          decode_handshake_extensions(extensions, {3, 4}, :new_session_ticket, false)}
+
+  defp decode_handshake_packet({3, 4}, 5, _body), do: {:end_of_early_data}
+
+  defp decode_handshake_packet({3, 4}, 8, <<size::16, extensions::binary-size(size)>>),
+    do:
+      {:encrypted_extensions,
+       decode_handshake_extensions(extensions, {3, 4}, :encrypted_extensions, false)}
+
+  defp decode_handshake_packet(
+         {3, 4},
+         11,
+         <<context_size, context::binary-size(context_size), size::24, entries::binary-size(size)>>
+       ),
+       do: {:certificate_1_3, context, handshake_certificates(entries, :tls13, [])}
+
+  defp decode_handshake_packet(_version, 11, <<size::24, certificates::binary-size(size)>>),
+    do: {:certificate, handshake_certificates(certificates, :legacy, [])}
+
+  defp decode_handshake_packet(_version, 12, keys), do: {:server_key_exchange, keys}
+
+  defp decode_handshake_packet(
+         {3, 4},
+         13,
+         <<context_size, context::binary-size(context_size), size::16,
+           extensions::binary-size(size)>>
+       ),
+       do:
+         {:certificate_request_1_3, context,
+          decode_handshake_extensions(extensions, {3, 4}, :certificate_request, false)}
+
+  defp decode_handshake_packet(
+         {3, 3},
+         13,
+         <<size, types::binary-size(size), signs_size::16, signs::binary-size(signs_size),
+           names_size::16, names::binary-size(names_size)>>
+       ),
+       do:
+         {:certificate_request, types, {:hash_sign_algos, handshake_signature_list(signs, {3, 3})},
+          handshake_authorities(names)}
+
+  defp decode_handshake_packet(
+         _version,
+         13,
+         <<size, types::binary-size(size), names_size::16, names::binary-size(names_size)>>
+       ),
+       do: {:certificate_request, types, :undefined, handshake_authorities(names)}
+
+  defp decode_handshake_packet(_version, 14, <<>>), do: {:server_hello_done}
+
+  defp decode_handshake_packet({3, 4}, 15, <<algorithm::16, size::16, signature::binary-size(size)>>),
+    do: {:certificate_verify_1_3, handshake_signature(algorithm), signature}
+
+  defp decode_handshake_packet({3, 3}, 15, <<algorithm::16, size::16, signature::binary-size(size)>>) do
+    [scheme] = handshake_signature_list(<<algorithm::16>>, {3, 3})
+    {:certificate_verify, scheme, signature}
+  end
+
+  defp decode_handshake_packet(_version, 15, <<size::16, signature::binary-size(size)>>),
+    do: {:certificate_verify, :undefined, signature}
+
+  defp decode_handshake_packet(_version, 16, keys), do: {:client_key_exchange, keys}
+  defp decode_handshake_packet(_version, 20, verify), do: {:finished, verify}
+
+  defp decode_handshake_packet(_version, 22, <<1, size::24, response::binary-size(size)>>),
+    do: {:certificate_status, 1, response}
+
+  defp decode_handshake_packet({3, 4}, 24, <<0>>), do: {:key_update, :update_not_requested}
+  defp decode_handshake_packet({3, 4}, 24, <<1>>), do: {:key_update, :update_requested}
+
+  defp decode_handshake_packet({3, 4}, 24, <<request>>),
+    do: handshake_alert({:tls_handshake_1_3, :decode_key_update, 1}, 0, 47, {:request_update, request})
+
+  defp decode_handshake_packet(
+         _version,
+         67,
+         <<size, protocol::binary-size(size), padding_size, _padding::binary-size(padding_size)>>
+       ),
+       do: {:next_protocol, protocol}
+
+  defp decode_handshake_packet(_version, type, _body),
+    do:
+      handshake_alert(
+        {:ssl_handshake, :decode_handshake, 3},
+        1,
+        50,
+        {:unknown_or_malformed_handshake, type}
+      )
+
+  defp handshake_alert(mfa, ordinal, description, reason),
+    do: throw({:handshake_alert, record_alert(mfa, ordinal, description, reason)})
+
+  defp handshake_decode_error,
+    do:
+      handshake_alert(
+        {:tls_handshake, :get_tls_handshakes_aux, 4},
+        0,
+        50,
+        :handshake_decode_error
+      )
+
+  defp handshake_vector(<<>>), do: <<>>
+  defp handshake_vector(<<size::16, bytes::binary-size(size)>>), do: bytes
+
+  defp handshake_extension_version(<<43::16, size::16, data::binary-size(size), _::binary>>, local, _)
+       when size > 2 do
+    <<_size, versions::binary>> = data
+    [highest | _] = handshake_versions(versions, [])
+    min(local, highest)
+  end
+
+  defp handshake_extension_version(<<43::16, 2::16, major, minor, _::binary>>, local, _),
+    do: min(local, {major, minor})
+
+  defp handshake_extension_version(<<_type::16, size::16, _::binary-size(size), rest::binary>>, local, legacy),
+    do: handshake_extension_version(rest, local, legacy)
+
+  defp handshake_extension_version(_rest, local, legacy), do: min(local, legacy)
+
+  defp handshake_certificates(<<>>, _kind, certificates), do: Enum.reverse(certificates)
+
+  defp handshake_certificates(<<size::24, der::binary-size(size), rest::binary>>, :legacy, certificates),
+    do: handshake_certificates(rest, :legacy, [der | certificates])
+
+  defp handshake_certificates(
+         <<size::24, der::binary-size(size), extension_size::16,
+           extensions::binary-size(extension_size), rest::binary>>,
+         :tls13,
+         certificates
+       ),
+       do:
+         handshake_certificates(rest, :tls13, [
+           {:certificate_entry, der,
+            decode_handshake_extensions(extensions, {3, 4}, :certificate, false)}
+           | certificates
+         ])
+
+  defp handshake_certificates(_bytes, :tls13, _certificates),
+    do:
+      handshake_alert(
+        {:tls_handshake_1_3, :decode_cert_entries, 2},
+        0,
+        50,
+        :truncated_certificate_entry
+      )
+
+  defp handshake_certificates(_bytes, :legacy, _certificates), do: handshake_decode_error()
+
+  defp decode_handshake_extensions(bytes, version, kind, hello?) do
+    defaults =
+      case {hello?, version, kind} do
+        {false, _, _} -> []
+        {true, {3, 4}, :server_hello} -> [:key_share, :pre_shared_key, :server_hello_selected_version]
+        {true, {3, 4}, :hello_retry_request} -> [:key_share, :cookie, :server_hello_selected_version]
+        {true, {3, 4}, :client_hello} ->
+          [:sni, :max_frag_enum, :status_request, :elliptic_curves, :signature_algs, :use_srtp,
+           :alpn, :key_share, :pre_shared_key, :psk_key_exchange_modes, :early_data, :cookie,
+           :client_hello_versions, :certificate_authorities, :signature_algs_cert]
+        {true, {3, 3}, :client_hello} ->
+          [:renegotiation_info, :alpn, :next_protocol_negotiation, :srp, :ec_point_formats,
+           :elliptic_curves, :sni, :signature_algs]
+        {true, _, :client_hello} ->
+          [:renegotiation_info, :alpn, :next_protocol_negotiation, :srp, :ec_point_formats,
+           :elliptic_curves, :sni]
+        {true, _, :server_hello} ->
+          [:renegotiation_info, :alpn, :next_protocol_negotiation, :ec_point_formats]
+      end
+
+    parse_handshake_extensions(bytes, version, kind, Map.new(defaults, &{&1, :undefined}))
+  end
+
+  defp parse_handshake_extensions(
+         <<type::16, size::16, bytes::binary-size(size), rest::binary>>,
+         version,
+         kind,
+         extensions
+       ) do
+    extensions =
+      case handshake_extension(type, bytes, version, kind, rest) do
+        :ignore -> extensions
+        {key, value} ->
+          unless Map.get(extensions, key, :undefined) == :undefined do
+            handshake_alert(
+              {:ssl_handshake, :assert_unique_extension, 2},
+              0,
+              47,
+              {:duplicate_extension, key}
+            )
+          end
+
+          Map.put(extensions, key, value)
+      end
+
+    parse_handshake_extensions(rest, version, kind, extensions)
+  end
+
+  # OTP ignores incomplete extension suffixes; the complete raw bytes remain
+  # observed and therefore acquire no cross-side allowance from that behavior.
+  defp parse_handshake_extensions(_rest, _version, _kind, extensions), do: extensions
+
+  defp handshake_extension(16, <<size::16, bytes::binary-size(size)>>, _version, kind, _)
+       when kind in [:client_hello, :server_hello, :encrypted_extensions],
+       do: {:alpn, {:alpn, bytes}}
+
+  defp handshake_extension(13172, bytes, _version, kind, _)
+       when kind in [:client_hello, :server_hello],
+       do: {:next_protocol_negotiation, {:next_protocol_negotiation, bytes}}
+
+  defp handshake_extension(65281, bytes, _version, kind, _)
+       when kind in [:client_hello, :server_hello] do
+    info = if byte_size(bytes) == 1, do: bytes, else: handshake_vector8(bytes)
+    {:renegotiation_info, {:renegotiation_info, info}}
+  end
+
+  defp handshake_extension(12, bytes, _version, :client_hello, _),
+    do: {:srp, {:srp, handshake_vector8(bytes)}}
+
+  defp handshake_extension(13, bytes, version, kind, _)
+       when kind in [:client_hello, :certificate_request] do
+    schemes = handshake_signature_list(handshake_vector(bytes), version)
+    tag = if version == {3, 4}, do: :signature_algorithms, else: :hash_sign_algos
+    {:signature_algs, {tag, schemes}}
+  end
+
+  defp handshake_extension(50, bytes, _version, kind, _)
+       when kind in [:client_hello, :certificate_request],
+       do:
+         {:signature_algs_cert,
+          {:signature_algorithms_cert, handshake_signature_list(handshake_vector(bytes), {3, 4})}}
+
+  defp handshake_extension(14, <<size::16, profiles::binary-size(size), tail::binary>>, _version, kind, _)
+       when kind in [:client_hello, :server_hello, :encrypted_extensions],
+       do:
+         {:use_srtp, {:use_srtp, for(<<profile::binary-size(2) <- profiles>>, do: profile),
+                     handshake_vector8(tail)}}
+
+  defp handshake_extension(10, <<_size::16, bytes::binary>>, {3, 4}, kind, _)
+       when kind in [:client_hello, :encrypted_extensions],
+       do:
+         {:elliptic_curves,
+          {:supported_groups, for(<<enum::16 <- bytes>>, is_map_key(@handshake_groups, enum),
+                                 do: Map.fetch!(@handshake_groups, enum))}}
+
+  defp handshake_extension(10, <<_size::16, bytes::binary>>, version, kind, _)
+       when version < {3, 4} and kind in [:client_hello, :server_hello],
+       do:
+         {:elliptic_curves,
+          {:elliptic_curves, for(<<enum::16 <- bytes>>, is_map_key(@handshake_curve_oids, enum),
+                                do: Map.fetch!(@handshake_curve_oids, enum))}}
+
+  defp handshake_extension(11, <<_size, bytes::binary>>, _version, kind, _)
+       when kind in [:client_hello, :server_hello],
+       do: {:ec_point_formats, {:ec_point_formats, :binary.bin_to_list(bytes)}}
+
+  defp handshake_extension(0, <<>>, _version, kind, _)
+       when kind in [:server_hello, :encrypted_extensions], do: {:sni, {:sni, []}}
+
+  defp handshake_extension(0, <<_size::16, names::binary>>, _version, kind, _)
+       when kind in [:client_hello, :server_hello, :encrypted_extensions],
+       do: {:sni, handshake_server_name(names)}
+
+  defp handshake_extension(1, <<enum>>, _version, kind, _)
+       when kind in [:client_hello, :server_hello, :encrypted_extensions],
+       do: {:max_frag_enum, {:max_frag_enum, enum}}
+
+  defp handshake_extension(43, <<major, minor>>, _version, kind, _)
+       when kind in [:client_hello, :server_hello, :hello_retry_request],
+       do: {:server_hello_selected_version, {:server_hello_selected_version, {major, minor}}}
+
+  defp handshake_extension(43, <<_size, versions::binary>>, _version, kind, _)
+       when byte_size(versions) > 1 and kind in [:client_hello, :server_hello, :hello_retry_request],
+       do: {:client_hello_versions, {:client_hello_versions, handshake_versions(versions, [])}}
+
+  defp handshake_extension(51, <<enum::16>>, _version, :hello_retry_request, _),
+    do: {:key_share, {:key_share_hello_retry_request, Map.get(@handshake_groups, enum, :undefined)}}
+
+  defp handshake_extension(51, <<enum::16, size::16, bytes::binary-size(size)>>, _version, :server_hello, _) do
+    group = Map.get(@handshake_groups, enum, :undefined)
+    {:key_share, {:key_share_server_hello, {:key_share_entry, group, handshake_peer_share(group, bytes)}}}
+  end
+
+  defp handshake_extension(51, <<_size::16, shares::binary>>, _version, :client_hello, _),
+    do: {:key_share, {:key_share_client_hello, handshake_peer_shares(shares, [])}}
+
+  defp handshake_extension(45, bytes, _version, :client_hello, _),
+    do: {:psk_key_exchange_modes, {:psk_key_exchange_modes,
+          for(<<mode <- handshake_vector8(bytes)>>, do: Enum.fetch!([:psk_ke, :psk_dhe_ke], mode))}}
+
+  defp handshake_extension(41, <<identity::16>>, _version, :server_hello, _),
+    do: {:pre_shared_key, {:pre_shared_key_server_hello, identity}}
+
+  defp handshake_extension(41, <<identity_size::16, identities::binary-size(identity_size),
+                               binder_size::16, binders::binary-size(binder_size)>>,
+                           _version, :client_hello, <<>>),
+    do: {:pre_shared_key, {:pre_shared_key_client_hello,
+          {:offered_psks, handshake_psk_identities(identities, []), handshake_psk_binders(binders, [])},
+          binder_size + 2}}
+
+  defp handshake_extension(41, _bytes, _version, :client_hello, _rest),
+    do:
+      handshake_alert(
+        {:ssl_handshake, :decode_extensions, 4},
+        0,
+        47,
+        :pre_shared_key_not_last_extension
+      )
+
+  defp handshake_extension(44, bytes, _version, kind, _)
+       when kind in [:client_hello, :hello_retry_request],
+       do: {:cookie, {:cookie, handshake_vector(bytes)}}
+
+  defp handshake_extension(5, <<>>, _version, kind, _)
+       when kind in [:client_hello, :server_hello, :certificate_request, :certificate],
+       do: {:status_request, :undefined}
+
+  defp handshake_extension(5, <<1, size::24, response::binary-size(size)>>, _version, _kind, _),
+    do: {:status_request, {:certificate_status, :undefined, response}}
+
+  defp handshake_extension(42, <<>>, _version, kind, _)
+       when kind in [:client_hello, :encrypted_extensions], do: {:early_data, {:early_data_indication}}
+
+  defp handshake_extension(42, <<maximum::32>>, _version, :new_session_ticket, _),
+    do: {:early_data, {:early_data_indication_nst, maximum}}
+
+  defp handshake_extension(47, bytes, _version, kind, _)
+       when kind in [:client_hello, :certificate_request],
+       do: {:certificate_authorities, {:certificate_authorities, handshake_authorities(handshake_vector(bytes))}}
+
+  defp handshake_extension(_type, _bytes, _version, _kind, _rest), do: :ignore
+
+  defp handshake_vector8(<<size, bytes::binary-size(size)>>), do: bytes
+
+  defp handshake_server_name(<<0, size::16, hostname::binary-size(size), _rest::binary>>),
+    do: {:sni, :binary.bin_to_list(hostname)}
+
+  defp handshake_server_name(<<_type, size::16, _::binary-size(size), rest::binary>>),
+    do: handshake_server_name(rest)
+
+  defp handshake_server_name(_rest), do: :undefined
+
+  defp handshake_versions(<<>>, versions), do: Enum.reverse(versions)
+  defp handshake_versions(<<major, minor, rest::binary>>, versions),
+    do: handshake_versions(rest, [{major, minor} | versions])
+
+  defp handshake_peer_share(:x25519mlkem768, <<kem::binary-size(1088), curve::binary-size(32)>>),
+    do: {kem, curve}
+  defp handshake_peer_share(:secp256r1mlkem768, <<curve::binary-size(65), kem::binary-size(1088)>>),
+    do: {curve, kem}
+  defp handshake_peer_share(:secp384r1mlkem1024, <<curve::binary-size(97), kem::binary-size(1568)>>),
+    do: {curve, kem}
+  defp handshake_peer_share(_group, bytes), do: bytes
+
+  defp handshake_peer_shares(<<>>, shares), do: Enum.reverse(shares)
+  defp handshake_peer_shares(<<enum::16, size::16, bytes::binary-size(size), rest::binary>>, shares) do
+    group = Map.get(@handshake_groups, enum, :undefined)
+    # Client hybrid encodings carry public keys rather than encapsulation ciphertexts.
+    public =
+      case {group, bytes} do
+        {:x25519mlkem768, <<kem::binary-size(1184), curve::binary-size(32)>>} -> {kem, curve}
+        {:secp256r1mlkem768, <<curve::binary-size(65), kem::binary-size(1184)>>} -> {curve, kem}
+        {:secp384r1mlkem1024, <<curve::binary-size(97), kem::binary-size(1568)>>} -> {curve, kem}
+        _ -> bytes
+      end
+    shares = if group == :undefined, do: shares, else: [{:key_share_entry, group, public} | shares]
+    handshake_peer_shares(rest, shares)
+  end
+
+  defp handshake_psk_identities(<<>>, identities), do: Enum.reverse(identities)
+  defp handshake_psk_identities(<<size::16, identity::binary-size(size), age::32, rest::binary>>, identities),
+    do: handshake_psk_identities(rest, [{:psk_identity, identity, age} | identities])
+
+  defp handshake_psk_binders(<<>>, binders), do: Enum.reverse(binders)
+  defp handshake_psk_binders(<<size, binder::binary-size(size), rest::binary>>, binders),
+    do: handshake_psk_binders(rest, [binder | binders])
+
+  defp handshake_signature(enum) do
+    Map.get_lazy(@handshake_signatures, enum, fn ->
+      hash = handshake_hash(Bitwise.bsr(enum, 8))
+      sign = handshake_sign(Bitwise.band(enum, 255))
+      if hash == :unassigned or sign == :unassigned, do: :unassigned, else: {hash, sign}
+    end)
+  end
+
+  defp handshake_hash(enum) when enum in 0..6,
+    do: Enum.fetch!([:null, :md5, :sha, :sha224, :sha256, :sha384, :sha512], enum)
+  defp handshake_hash(enum) when enum in 224..255, do: enum
+  defp handshake_hash(_enum), do: :unassigned
+  defp handshake_sign(enum) when enum in 0..3, do: Enum.fetch!([:anon, :rsa, :dsa, :ecdsa], enum)
+  defp handshake_sign(enum) when enum in 224..255, do: enum
+  defp handshake_sign(_enum), do: :unassigned
+
+  defp handshake_signature_list(bytes, version) when version < {3, 3},
+    do: for(<<hash, sign <- bytes>>, do: {handshake_hash(hash), handshake_sign(sign)})
+
+  defp handshake_signature_list(bytes, version) do
+    for <<enum::16 <- bytes>>,
+        scheme = handshake_signature(enum),
+        scheme != :unassigned,
+        value = handshake_signature_version(scheme, enum, version),
+        value != :unassigned,
+        do: value
+  end
+
+  defp handshake_signature_version(scheme, _enum, {3, 4}), do: scheme
+  defp handshake_signature_version(scheme, _enum, _version) when is_tuple(scheme), do: scheme
+  defp handshake_signature_version(_scheme, enum, {3, 3}) do
+    case enum do
+      n when n in [0x0401, 0x0501, 0x0601] -> {handshake_hash(Bitwise.bsr(n, 8)), :rsa}
+      n when n in [0x0403, 0x0503, 0x0603] -> {handshake_hash(Bitwise.bsr(n, 8)), :ecdsa}
+      n when n in 0x0804..0x0806 -> {handshake_hash(n - 0x0800), :rsa_pss_rsae}
+      n when n in 0x0809..0x080B -> {handshake_hash(n - 0x0805), :rsa_pss_pss}
+      0x0201 -> {:sha, :rsa}
+      0x0203 -> {:sha, :ecdsa}
+      n when n in 0x081A..0x081C -> {handshake_hash(n - 0x0816), :ecdsa}
+      _ -> :unassigned
+    end
+  end
+  defp handshake_signature_version(_scheme, enum, _version),
+    do: {handshake_hash(Bitwise.bsr(enum, 8)), handshake_sign(Bitwise.band(enum, 255))}
+
+  # X.509 Name is decoded from its wire DER, including unknown attribute open
+  # types. Only singleton PrintableString RDNs receive OTP's space/case folding.
+  # Neither a checked certificate helper return nor a live certificate database
+  # supplies a name. OTP ignores an authority whose own DER cannot be decoded.
+  defp handshake_authorities(bytes), do: handshake_authorities(bytes, [])
+  defp handshake_authorities(<<>>, names), do: Enum.reverse(names)
+  defp handshake_authorities(<<size::16, der::binary-size(size), rest::binary>>, names) do
+    names =
+      case handshake_authority(der) do
+        {:ok, name} -> [name | names]
+        :error -> names
+      end
+
+    handshake_authorities(rest, names)
+  end
+
+  defp handshake_authority(der) do
+    {48, sequence, <<>>} = handshake_der(der)
+    {:ok, {:rdnSequence, handshake_rdns(sequence, [])}}
+  rescue
+    _error -> :error
+  catch
+    :invalid_handshake -> :error
+  end
+
+  defp handshake_rdns(<<>>, rdns), do: Enum.reverse(rdns)
+  defp handshake_rdns(bytes, rdns) do
+    {49, set, rest} = handshake_der(bytes)
+    attributes = handshake_name_attributes(set, [])
+    true = attributes != []
+
+    normalized =
+      case attributes do
+        [{:AttributeTypeAndValue, oid, {:printableString, value}}] ->
+          value = value |> :string.trim() |> :string.split(~c"  ", :all)
+
+          value =
+            case value do
+              [single] -> single
+              parts ->
+                parts
+                |> Enum.reject(&(&1 == []))
+                |> Enum.map(&:string.trim(&1, :leading, ~c" "))
+                |> Enum.intersperse(~c" ")
+                |> :unicode.characters_to_list()
+            end
+
+          [{:AttributeTypeAndValue, oid, {:printableString, :string.casefold(value)}}]
+
+        attributes -> attributes
+      end
+
+    handshake_rdns(rest, [normalized | rdns])
+  end
+
+  defp handshake_name_attributes(<<>>, attributes), do: Enum.reverse(attributes)
+  defp handshake_name_attributes(bytes, attributes) do
+    {48, attribute, rest} = handshake_der(bytes)
+    {6, encoded_oid, encoded_value} = handshake_der(attribute)
+    oid = handshake_name_oid(encoded_oid)
+    {tag, value, <<>>} = handshake_der(encoded_value)
+    value = handshake_name_value(oid, tag, value, encoded_value)
+    handshake_name_attributes(rest, [{:AttributeTypeAndValue, oid, value} | attributes])
+  end
+
+  defp handshake_der(<<tag, size, tail::binary>>) when size < 128 do
+    <<value::binary-size(^size), rest::binary>> = tail
+    {tag, value, rest}
+  end
+
+  defp handshake_der(<<tag, size_size, tail::binary>>) when size_size in 129..255 do
+    count = size_size - 128
+    <<encoded_size::binary-size(^count), tail::binary>> = tail
+    size = :binary.decode_unsigned(encoded_size)
+    <<value::binary-size(^size), rest::binary>> = tail
+    {tag, value, rest}
+  end
+
+  defp handshake_name_oid(bytes) do
+    [head | tail] = handshake_oid_components(bytes, 0, [])
+    first = min(div(head, 40), 2)
+    List.to_tuple([first, head - first * 40 | tail])
+  end
+
+  defp handshake_oid_components(<<>>, 0, values), do: Enum.reverse(values)
+  defp handshake_oid_components(<<byte, rest::binary>>, partial, values) do
+    value = partial * 128 + Bitwise.band(byte, 127)
+    if byte < 128,
+      do: handshake_oid_components(rest, 0, [value | values]),
+      else: handshake_oid_components(rest, value, values)
+  end
+
+  defp handshake_name_value({2, 5, 4, 6}, 19, bytes, _encoded) when byte_size(bytes) == 2,
+    do: :binary.bin_to_list(bytes)
+  defp handshake_name_value({2, 5, 4, 5}, 19, bytes, _encoded) when byte_size(bytes) in 1..64,
+    do: :binary.bin_to_list(bytes)
+  defp handshake_name_value({2, 5, 4, 46}, 19, bytes, _encoded), do: :binary.bin_to_list(bytes)
+  defp handshake_name_value({0, 9, 2342, 19200300, 100, 1, 25}, 22, bytes, _encoded),
+    do: :binary.bin_to_list(bytes)
+  defp handshake_name_value({1, 2, 840, 113549, 1, 9, 1}, 22, bytes, _encoded)
+       when byte_size(bytes) in 1..255, do: :binary.bin_to_list(bytes)
+
+  defp handshake_name_value({2, 5, 4, attribute}, tag, bytes, _encoded)
+       when attribute in [3, 4, 7, 8, 10, 11, 12, 41, 42, 43, 44, 65] do
+    limit =
+      cond do
+        attribute in [4, 41, 42, 43, 44] -> 32768
+        attribute in [7, 8, 65] -> 128
+        true -> 64
+      end
+
+    {type, value} =
+      case tag do
+        12 -> {:utf8String, bytes}
+        19 -> {:printableString, :binary.bin_to_list(bytes)}
+        20 -> {:teletexString, :binary.bin_to_list(bytes)}
+        30 ->
+          true = rem(byte_size(bytes), 2) == 0
+          {:bmpString, for(<<a, b <- bytes>>, do: if(a == 0, do: b, else: {0, 0, a, b}))}
+        28 ->
+          true = rem(byte_size(bytes), 4) == 0
+          {:universalString,
+           for(<<a, b, c, d <- bytes>>, do: if({a, b, c} == {0, 0, 0}, do: d, else: {a, b, c, d}))}
+      end
+
+    unless type == :utf8String or length(value) in 1..limit, do: throw(:invalid_handshake)
+    {type, value}
+  end
+
+  defp handshake_name_value(oid, _tag, _bytes, encoded) do
+    if oid in [{2, 5, 4, 6}, {2, 5, 4, 5}, {2, 5, 4, 46},
+               {0, 9, 2342, 19200300, 100, 1, 25}, {1, 2, 840, 113549, 1, 9, 1}],
+      do: throw(:invalid_handshake),
+      else: {:asn1_OPENTYPE, encoded}
   end
 
   defp handshake_events(packets, rest) do
@@ -5413,6 +6160,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       handshake_copy(state, source, [3, position], expected, input.origin)
     end)
   end
+
+  defp record_result(state, source, %{kind: :handshake_exception}, _actual),
+    do: tls_failure(state, source, :tls_handshake_copy)
 
   defp record_result(state, source, %{kind: :handshake_value} = record, _actual),
     do: handshake_copy(state, source, [3], record.result, record.origin)
@@ -6937,15 +7687,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp handshake_finished(state, source, data, direction, drop_peer?) do
     connection = Map.fetch!(elem(data, 10), direction)
-    hash = elem(connection.security_parameters, 8)
-    key = elem(connection.cipher_state, 3)
     {messages, _previous} = elem(elem(data, 6), 3)
     messages = if drop_peer?, do: Enum.drop(messages, 1), else: messages
     scope = Map.fetch!(state.pairs, source.index)
 
-    with {:ok, transcript} <-
+    with {:cipher_state, _iv, _traffic_key, key, _nonce, _state, _tag_length} <-
+           connection.cipher_state,
+         hash = elem(connection.security_parameters, 8),
+         true <- hash in [:sha256, :sha384, :sha512],
+         {:ok, transcript} <-
            handshake_primitive(state, scope, {:crypto, :hash, 2}, [hash, Enum.reverse(messages)]) do
       handshake_mac(state, scope, hash, key, transcript)
+    else
+      _ -> :error
     end
   end
 

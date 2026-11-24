@@ -9308,7 +9308,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         server_name_indication: ~c"no-such-native-tls-host.invalid"
       )
 
-    assert match?({:caught, :error, %MatchError{}}, run.result)
+    assert match?(
+             {:caught, :error, {:badmatch, {:error, %DBConnection.ConnectionError{}}}},
+             run.result
+           )
     events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
 
     assert Enum.any?(events, fn source ->
@@ -9362,6 +9365,49 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       )
 
     assert Enum.filter(calls, &match?({:call, _, _}, &1)) == []
+  end
+
+  @tag connection_streams: :tls
+  test "Connection streams: the handshake parser cannot replay its native decoder" do
+    run = ConnectionNative.observe_tls_startup()
+    assert run.result == :ok
+    events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+    births = ConnectionTls.births(%{events: events})
+    assert births.errors == []
+
+    functions = [
+      {:tls_handshake, :get_tls_handshakes, 4},
+      {:tls_handshake, :decode_handshake, 3},
+      {:tls_handshake_1_3, :decode_handshake, 2},
+      {:ssl_handshake, :decode_handshake, 3},
+      {:ssl_handshake, :decode_hello_extensions, 4},
+      {:ssl_handshake, :decode_extensions, 3},
+      {:ssl_handshake, :decode_extensions, 4},
+      {:public_key, :pkix_normalize_name, 1}
+    ]
+
+    calls = fn ->
+      comparator_call_order(
+        fn ->
+          proof = ConnectionTls.build(%{events: events}, births.bindings)
+          assert proof.errors == []
+
+          assert Enum.any?(proof.terms, fn term ->
+                   match?({:tls_handshakes, _}, Map.get(term, :origin))
+                 end)
+        end,
+        functions
+      )
+      |> Enum.filter(&match?({:call, _, _}, &1))
+    end
+
+    assert calls.() == []
+
+    ComparatorMutants.with_mutant(:stream_tls_handshake_decode_replay, fn ->
+      assert calls.() != []
+    end)
+
+    assert calls.() == []
   end
 
   @tag connection_streams: :tls

@@ -856,6 +856,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_tls_handshake_decode_replay) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original: "    packet = decode_handshake_packet(version, type, body)\n",
+        mutated:
+          "    _ = body\n    {[{packet, _}], <<>>} = :tls_handshake.get_tls_handshakes(version, raw, <<>>, %{log_level: :none})\n"
+      }
+    ]
+  end
+
   def edits(:stream_frame_ownership) do
     [
       %{
