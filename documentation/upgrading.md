@@ -7,13 +7,22 @@ Security-driven dependency floors follow the documented minor-release policy in
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md);
 their required dependency edits appear here too.
 
-This guide targets v2.0.0:
+This guide targets v2.0.0.
+
+This version is in development and is not yet on Hex; use the [published release documentation on HexDocs](https://hexdocs.pm/ash_onetime/).
+
+Dependency requirement:
 
 ```elixir
 {:ash_onetime, "~> 2.0.0"}
 ```
 
 ## 2.0.0 — Durable external recovery and response expiry
+
+**Ash security floor.** Update any direct Ash constraint to `>= 3.38.0 and < 4.0.0`
+and resolve and audit the lock with `mix deps.update ash`, `mix hex.audit`, and
+`mix deps.audit`. Ash 3.38.0 patches
+[GHSA-m5v6-3qwf-6w9r (CVE-2026-124283)](https://github.com/ash-project/ash/security/advisories/GHSA-m5v6-3qwf-6w9r).
 
 Existing installations apply the operation-hold migration, then the external-state migration,
 then the optional maintenance migration. A single operation-hold generator request writes
@@ -138,7 +147,7 @@ do not declare the section are unaffected.
 
 ## v1.7.0 — Ash, AshPostgres, and AshSql security floors
 
-Use current floors: Ash `>= 3.37.2 and < 4.0.0`, AshPostgres `~> 2.15 and >= 2.15.2`,
+Use current floors: Ash `>= 3.38.0 and < 4.0.0`, AshPostgres `~> 2.15 and >= 2.15.2`,
 and AshSql `~> 0.8 and >= 0.8.6` (the patched floor for the query cache).
 Run `mix deps.update ash ash_postgres ash_sql`, `mix hex.audit`, and `mix deps.audit`.
 For application resources, run `mix ash.codegen` and migrate the AshPostgres helpers.
@@ -172,7 +181,7 @@ configured retention.
 
 ## v1.5.0 — Ash and Mint security floors
 
-Raise direct constraints to the current Ash floor `>= 3.37.2 and < 4.0.0` and optional
+Raise direct constraints to the current Ash floor `>= 3.38.0 and < 4.0.0` and optional
 Mint `~> 1.10 and >= 1.10.2`, then run `mix deps.unlock --all` and `mix deps.get`.
 Run `mix hex.audit` and `mix deps.audit`. Mint's patched 1.10 line remains supported.
 Consumers upgrading from older feature lines must apply the later migration instructions above.
@@ -404,14 +413,14 @@ See [Telemetry](telemetry.md) and [Security](security.md) for the public contrac
 ## Ash floor raised in v0.7.0
 
 The old 3.31.3 minimum addressed forged keyset-cursor injection. Current installs require
-Ash `>= 3.37.2 and < 4.0.0`; earlier floors do not include subsequent security fixes.
+Ash `>= 3.38.0 and < 4.0.0` for the subsequent security fixes.
 Update direct constraints and run `mix deps.update ash`, `mix hex.audit`, and `mix deps.audit`.
 See [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md).
 
 ## Ash floor raised in v0.3.0
 
 The old 3.31.1 minimum addressed relationship predicate injection and keyset deserialization.
-Current installs require Ash `>= 3.37.2 and < 4.0.0`; do not retain the earlier constraint.
+Current installs require Ash `>= 3.38.0 and < 4.0.0`.
 Update direct constraints and run `mix deps.update ash`, `mix hex.audit`, and `mix deps.audit`.
 See [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md).
 

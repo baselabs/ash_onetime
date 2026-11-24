@@ -1,7 +1,7 @@
 defmodule AshOnetime.MixProject do
   use Mix.Project
 
-  @version "1.10.0"
+  @version "2.0.0-dev"
   @source_url "https://github.com/baselabs/ash_onetime"
 
   def project do
@@ -87,11 +87,11 @@ defmodule AshOnetime.MixProject do
     ]
   end
 
-  # Consumer Ash support is >= 3.37.2 and < 4.0.0 (security floors: ADR 0004).
+  # Consumer Ash support is >= 3.38.0 and < 4.0.0 (security floors: ADR 0004).
   # ASH_ONETIME_ASH_VERSION may pin only a plain release inside that range;
   # latest or unset preserves the floating consumer requirement.
   # rule:mixpin-ash-floor
-  @ash_floor "3.37.2"
+  @ash_floor "3.38.0"
 
   defp ash_requirement do
     case System.get_env("ASH_ONETIME_ASH_VERSION") do
@@ -160,7 +160,7 @@ defmodule AshOnetime.MixProject do
   defp docs do
     [
       main: "readme",
-      source_ref: "v#{@version}",
+      source_ref: if(Version.parse!(@version).pre == [], do: "v#{@version}", else: "main"),
       source_url: @source_url,
       extras: [
         "README.md",

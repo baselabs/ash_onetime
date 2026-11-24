@@ -11,11 +11,19 @@ defmodule AshOnetime.PublishHexArtifacts do
       raise "publication must run without a Mix project"
     end
 
+    case arguments do
+      [command, version | _] when command in ["plan", "upload", "read-back"] ->
+        require_release!(version)
+
+      _ ->
+        :ok
+    end
+
     run(arguments)
   end
 
   defp run(["plan", version, archive, docs]) do
-    {package_bytes, _docs_bytes} = archives!(version, archive, docs)
+    {package_bytes, _docs_bytes} = archives!(archive, docs)
     Hex.start()
     {package_state, docs_state} = states!(version, package_bytes)
     output("package", package_state)
@@ -29,7 +37,7 @@ defmodule AshOnetime.PublishHexArtifacts do
     if key in [nil, ""], do: raise("HEX_API_KEY is required; publication stopped")
 
     # Read both inspected files before any upload, then recheck the keyless plan.
-    {package_bytes, docs_bytes} = archives!(version, archive, docs)
+    {package_bytes, docs_bytes} = archives!(archive, docs)
     Hex.start()
     auth = [key: key]
     {package_state, docs_state} = states!(version, package_bytes)
@@ -73,7 +81,7 @@ defmodule AshOnetime.PublishHexArtifacts do
 
   defp run(["read-back", version, archive, docs, staged, repository, commit])
        when staged in ["true", "false"] do
-    {package_bytes, _docs_bytes} = archives!(version, archive, docs)
+    {package_bytes, _docs_bytes} = archives!(archive, docs)
     Hex.start()
 
     case read_back!(version, package_bytes, 12) do
@@ -101,13 +109,21 @@ defmodule AshOnetime.PublishHexArtifacts do
             "read-back VERSION PACKAGE DOCS STAGED REPOSITORY COMMIT"
   end
 
-  defp archives!(version, archive, docs) do
-    case Version.parse(version) do
-      {:ok, _version} -> :ok
-      :error -> raise "invalid release version"
-    end
-
+  defp archives!(archive, docs) do
     {File.read!(archive), File.read!(docs)}
+  end
+
+  defp require_release!(version) do
+    case Version.parse(version) do
+      {:ok, %Version{pre: [], build: nil}} ->
+        :ok
+
+      {:ok, %Version{pre: [_ | _]}} ->
+        raise "pre-release version #{version} cannot be published; declare a plain release in mix.exs"
+
+      _ ->
+        raise "invalid release version; expected a plain release"
+    end
   end
 
   defp states!(version, package_bytes) do

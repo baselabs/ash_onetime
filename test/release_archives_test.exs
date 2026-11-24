@@ -67,6 +67,73 @@ defmodule AshOnetime.ReleaseArchivesTest do
     assert manifest(context)["commit"] == context.ancestor
   end
 
+  test "reads the development declaration but refuses pre-release notes even with a dated section",
+       context do
+    development = "#{@version}-dev"
+    File.write!(Path.join(context.directory, "mix.exs"), "@version \"#{development}\"\n")
+
+    File.write!(
+      Path.join(context.directory, "CHANGELOG.md"),
+      "## v#{development} — November 23, 2026\n\nPrepared changes.\n"
+    )
+
+    assert {output, 0} = run(context.directory, ["version"])
+    assert String.trim(output) == development
+    {output, status} = run(context.directory, ["notes", context.assets])
+    assert status != 0
+    assert output =~ "pre-release version #{development} cannot be published"
+    refute File.exists?(Path.join(context.assets, "NOTES.md"))
+  end
+
+  test "plain release notes require a valid dated section and copy only that section", context do
+    path = Path.join(context.directory, "CHANGELOG.md")
+    section = "## v#{@version} — November 23, 2026\n\nReleased changes.\n"
+    File.write!(path, "# Changelog\n\n" <> section <> "\n## v0.9.0 — October 1, 2026\n\nOld.\n")
+    assert {"", 0} = run(context.directory, ["notes", context.assets])
+    assert File.read!(Path.join(context.assets, "NOTES.md")) == section
+
+    for heading <- ["Unreleased — #{@version}", "v#{@version} — February 30, 2026"] do
+      File.write!(path, "## #{heading}\n\nPrepared changes.\n")
+      {output, status} = run(context.directory, ["notes", context.assets])
+      assert status != 0
+      assert output =~ "CHANGELOG section"
+    end
+  end
+
+  test "served verification refuses a pre-release before opening archives", context do
+    {output, status} =
+      run(context.directory, [
+        "verify-docs",
+        "missing-docs.tar.gz",
+        "#{@version}-dev",
+        "--repository",
+        context.directory,
+        "--dispatched",
+        context.head
+      ])
+
+    assert status != 0
+    assert output =~ "pre-release version #{@version}-dev cannot be published"
+  end
+
+  test "served verification refuses build metadata and malformed versions", context do
+    for version <- ["#{@version}+build", "2.0"] do
+      {output, status} =
+        run(context.directory, [
+          "verify-docs",
+          "missing-docs.tar.gz",
+          version,
+          "--repository",
+          context.directory,
+          "--dispatched",
+          context.head
+        ])
+
+      assert status != 0
+      assert output =~ "expected a plain release version, got #{version}"
+    end
+  end
+
   test "refuses an invalid build commit instead of falling back to HEAD", context do
     for commit <- ["", "not-a-commit", String.duplicate("g", 40)] do
       {output, status} = write_release(context, commit)

@@ -149,7 +149,7 @@ Never commit secrets, provider-specific signature implementations, or reference-
 ## Dependency compatibility
 
 The consumer `mix.exs` bounds (`ash_postgres ~> 2.15 and >= 2.15.2`, `spark ~> 2.7`, and the
-Ash floor `>= 3.37.2`) allow forward drift within their major lines. AshSql additionally requires
+Ash floor `>= 3.38.0`) allow forward drift within their major lines. AshSql additionally requires
 `~> 0.8 and >= 0.8.6`; optional Igniter and Mint require `~> 0.8 and >= 0.8.4` and
 `~> 1.10 and >= 1.10.2`. These security floors follow ADR 0004.
 

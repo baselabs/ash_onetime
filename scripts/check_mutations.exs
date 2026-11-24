@@ -3876,19 +3876,19 @@ defmodule AshOnetime.MutationCheck do
     },
     "doctor-ash-floor" => %{
       path: "lib/mix/tasks/ash_onetime.doctor.ex",
-      original: "@ash_floor Version.parse!(\"3.37.2\")",
-      mutated: "@ash_floor Version.parse!(\"3.37.1\")",
+      original: "@ash_floor Version.parse!(\"3.38.0\")",
+      mutated: "@ash_floor Version.parse!(\"3.37.7\")",
       test: "test/mix/tasks/ash_onetime.doctor_test.exs",
       tag: "doctor_ash_floor_mutation",
       test_name:
-        "ash floor verdict (pure seam) rejects the Ash release preceding the patched multitenant-upsert floor",
-      assertion: "assert {:fail, message} = Doctor.floor_status(Version.parse!(\"3.37.1\"))",
+        "ash floor verdict (pure seam) rejects the last Ash release affected by CVE-2026-124283",
+      assertion: "assert {:fail, message} = Doctor.floor_status(Version.parse!(\"3.37.7\"))",
       assertion_line: 66
     },
     "mixpin-ash-floor" => %{
       path: "mix.exs",
-      original: "@ash_floor \"3.37.2\"",
-      mutated: "@ash_floor \"3.37.1\"",
+      original: "@ash_floor \"3.38.0\"",
+      mutated: "@ash_floor \"3.37.7\"",
       test: "test/mix/ash_pin_validation_test.exs",
       tag: "mixpin_ash_floor_mutation",
       test_name: "rejects a below-floor pin at config evaluation",
