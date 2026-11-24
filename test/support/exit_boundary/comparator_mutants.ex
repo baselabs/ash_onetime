@@ -572,8 +572,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_states.ex",
-        original: "          List.delete_at(arguments, 1),\n          List.delete_at(expected, 1)\n",
-        mutated: "          elem({List.delete_at(expected, 1), arguments}, 0),\n          List.delete_at(expected, 1)\n"
+        original:
+          "          List.delete_at(arguments, 1),\n          List.delete_at(expected, 1)\n",
+        mutated:
+          "          elem({List.delete_at(expected, 1), arguments}, 0),\n          List.delete_at(expected, 1)\n"
       }
     ]
   end
@@ -582,8 +584,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_states.ex",
-        original: "      |> exact(source, :state_owner_task_return, actual, {child, reference})\n",
-        mutated: "      |> exact(source, :state_owner_task_return, actual, elem({actual, {child, reference}}, 0))\n"
+        original:
+          "      |> exact(source, :state_owner_task_return, actual, {child, reference})\n",
+        mutated:
+          "      |> exact(source, :state_owner_task_return, actual, elem({actual, {child, reference}}, 0))\n"
       }
     ]
   end

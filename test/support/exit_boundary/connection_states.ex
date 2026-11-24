@@ -1981,26 +1981,34 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp owner_task_timer_cancelled?(state, call, source, timer) do
     calls = native_type_calls(state, call, source, {:erlang, :cancel_timer, 1})
 
-    valid? = with [cancel] <- calls,
-         {_, :call, {_, _, [^timer]}} <- cancel.source.event,
-         {_, :return_from, _, result} <- cancel.returned.event do
-      case result do
-        remaining when is_integer(remaining) and remaining >= 0 -> true
-        false -> owner_task_timer_flushed?(state, cancel, source, timer)
+    valid? =
+      with [cancel] <- calls,
+           {_, :call, {_, _, [^timer]}} <- cancel.source.event,
+           {_, :return_from, _, result} <- cancel.returned.event do
+        case result do
+          remaining when is_integer(remaining) and remaining >= 0 -> true
+          false -> owner_task_timer_flushed?(state, cancel, source, timer)
+          _ -> false
+        end
+      else
         _ -> false
       end
-    else
-      _ -> false
-    end
 
     unless valid? do
       AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TIMER_PROGRAM", %{
         index: source.index,
         from: call.index,
-        calls: Enum.map(calls, fn pair ->
-          result = elem(pair.returned.event, 3)
-          %{index: pair.source.index, target?: elem(pair.source.event, 2) == {:erlang, :cancel_timer, [timer]}, integer?: is_integer(result), false?: result === false}
-        end)
+        calls:
+          Enum.map(calls, fn pair ->
+            result = elem(pair.returned.event, 3)
+
+            %{
+              index: pair.source.index,
+              target?: elem(pair.source.event, 2) == {:erlang, :cancel_timer, [timer]},
+              integer?: is_integer(result),
+              false?: result === false
+            }
+          end)
       })
     end
 

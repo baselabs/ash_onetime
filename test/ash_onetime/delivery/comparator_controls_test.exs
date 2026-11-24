@@ -5175,7 +5175,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       historical = Historical.capture(context.prefix)
       callback = unquote(callback)
       boundary = unquote(boundary)
-      observe = fn -> ConnectionNative.observe_pool_startup({:after_connect_failure, :rand, callback}) end
+
+      observe = fn ->
+        ConnectionNative.observe_pool_startup({:after_connect_failure, :rand, callback})
+      end
+
       positive = observe.()
       side = observation_side(context, positive, %{}, row!(:issue, :execute), historical)
       assert ConnectionHistory.build(side).errors == []
@@ -5222,12 +5226,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp task_factory_copy?(
          {_, :call, {DBConnection.Task, :run_child, [_, _, {:native_foreign_helper, _}, _]}},
          :input
-       ), do: true
+       ),
+       do: true
 
   defp task_factory_copy?(
          {_, :return_from, {DBConnection.Task, :run_child, 4}, {_, {:native_foreign_return, _}}},
          :output
-       ), do: true
+       ),
+       do: true
 
   defp task_factory_copy?(_event, _boundary), do: false
 
