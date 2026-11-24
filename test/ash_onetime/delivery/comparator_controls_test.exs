@@ -1759,6 +1759,63 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert_native_helper_inputs(%{{:do_send, 3} => [1]}, &native_query_factory/0)
   end
 
+  @tag connection_streams: :driver
+  test "Connection streams: frontend IOdata shape stays exact when its bytes are unchanged" do
+    captured = ComparatorMutants.with_postgrex_iodata(&native_query_factory/0)
+    assert captured.native.errors == []
+    assert captured.streams.errors == []
+    assert captured.decoders.errors == []
+
+    calls =
+      for %{event: {_, :call, {Postgrex.Protocol, :do_send, [_protocol, data, _buffer]}}} =
+            source <- captured.events do
+        [original] = data
+        assert data !== original
+
+        [%{bytes: bytes}] =
+          Enum.filter(captured.native.writes, fn write ->
+            write.source.pid == source.pid and source.index < write.source.index and
+              write.returned.index < captured.native.pairs[source.index].returned.index
+          end)
+
+        assert IO.iodata_to_binary(original) == bytes
+        {source.index, [2, 2, 1]}
+      end
+
+    assert calls != []
+
+    copies =
+      for write <- captured.native.writes,
+          copy <- write.copies,
+          %{source: source} <- [Map.get(captured.native.pairs, copy.index)],
+          source.mfa in [
+            {:gen_tcp, :send, 2},
+            {:prim_inet, :send, 3},
+            {:prim_inet, :send, 4},
+            {:erlang, :port_command, 3},
+            {:erts_internal, :port_command, 3}
+          ],
+          do: {copy.index, copy.path}
+
+    assert copies != []
+    states = native_copy_states(captured)
+    coordinates = calls ++ copies
+
+    assert Enum.map(states.errors, & &1.rule) ==
+             List.duplicate(:state_helper_copy, length(coordinates))
+
+    assert Enum.sort(Enum.map(states.errors, &{&1.index, &1.path})) == Enum.sort(coordinates)
+
+    for mutant <- [:stream_buffer_copy, :stream_helper_copy, :stream_error_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> native_copy_states(captured) end)
+      expected = if mutant == :stream_helper_copy, do: [], else: states.errors
+      assert checked.errors == expected
+    end
+
+    assert native_copy_states(captured).errors == states.errors
+    assert native_copy_states(native_query_factory()).errors == []
+  end
+
   for {function, arity, size, field} <- [
         {:describe_params, 3, 2, :param_oids},
         {:describe_result, 5, 2, :ref},

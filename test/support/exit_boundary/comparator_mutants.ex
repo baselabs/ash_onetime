@@ -1081,6 +1081,28 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     )
   end
 
+  def with_postgrex_iodata(callback) do
+    with_owner_mutant(Postgrex.Protocol, 2, &frontend_iodata_form/2, callback)
+  end
+
+  defp frontend_iodata_form(
+         {:call, location, {:atom, _, :do_send} = function, [protocol, data, buffer]},
+         sites
+       ) do
+    nested = {:cons, location, data, {nil, location}}
+    {{:call, location, function, [protocol, nested, buffer]}, sites + 1}
+  end
+
+  defp frontend_iodata_form(form, sites) when is_tuple(form) do
+    {values, sites} = form |> Tuple.to_list() |> Enum.map_reduce(sites, &frontend_iodata_form/2)
+    {List.to_tuple(values), sites}
+  end
+
+  defp frontend_iodata_form(form, sites) when is_list(form),
+    do: Enum.map_reduce(form, sites, &frontend_iodata_form/2)
+
+  defp frontend_iodata_form(form, sites), do: {form, sites}
+
   def with_postgrex_repeated_decoder(kind, callback) when kind in [:message, :rows] do
     owner = if kind == :message, do: {:msg_recv, 3}, else: {:rows_recv, 4}
     with_owner_mutant(Postgrex.Protocol, 1, &repeated_decoder_form(&1, &2, owner, kind), callback)

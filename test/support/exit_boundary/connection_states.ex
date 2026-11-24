@@ -4755,7 +4755,144 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     helper_messages(state, source, frame, version, messages)
   end
 
+  defp helper_input(state, source, :do_send, [_protocol, actual, _buffer], _version) do
+    with [%{source: %{mfa: {Postgrex.Protocol, :msg_send, 3}} = owner} | _] <-
+           Map.get(state.frames, source.pid, []),
+         {:ok, %{value: messages, origin: origin}} <-
+           Map.fetch(state.term_values, {owner.index, [2, 2, 1]}) do
+      expected = frontend_iodata(messages)
+      origin = {:frontend_encoding, owner.index, origin}
+
+      state
+      |> helper_copy(source, [2, 2, 1], actual, expected, origin)
+      |> frontend_write_copies(source, expected, origin)
+    else
+      _ -> failure(state, source, :state_helper_send_origin)
+    end
+  end
+
   defp helper_input(state, _source, _function, _arguments, _version), do: state
+
+  # Postgrex 0.23.0 msg_send/3 folds a message list into binary-tailed
+  # IOdata. Keep that construction exactly, starting with the message value
+  # already derived from its caller; do_send's checked argument is no oracle.
+  defp frontend_iodata(messages) when is_list(messages) do
+    Enum.reduce(messages, [], fn message, accumulated ->
+      encoded = if is_tuple(message), do: frontend_message(message), else: message
+      [accumulated | encoded]
+    end)
+  end
+
+  defp frontend_iodata(message), do: frontend_message(message)
+
+  defp frontend_message(message) do
+    {tag, payload} = frontend_payload(message)
+    length = IO.iodata_length(payload) + 4
+    true = length <= 0xFFFFFFFF
+    if tag, do: [tag, <<length::32>>, payload], else: [<<length::32>>, payload]
+  end
+
+  defp frontend_payload({:msg_startup, parameters}) do
+    parameters =
+      Enum.reduce(parameters, [], fn {key, value}, accumulated ->
+        [accumulated, to_string(key), 0, value, 0]
+      end)
+
+    {nil, [<<3::16, 0::16>>, parameters, 0]}
+  end
+
+  defp frontend_payload({:msg_password, password}), do: {?p, [password]}
+  defp frontend_payload({:msg_query, statement}), do: {?Q, [statement, 0]}
+
+  defp frontend_payload({:msg_parse, name, statement, oids}) do
+    encoded = for oid <- oids, into: <<>>, do: <<oid::32>>
+    {?P, [name, 0, statement, 0, <<length(oids)::16>>, encoded]}
+  end
+
+  defp frontend_payload({:msg_describe, type, name}),
+    do: {?D, [frontend_object(type), name, 0]}
+
+  defp frontend_payload({:msg_close, type, name}),
+    do: {?C, [frontend_object(type), name, 0]}
+
+  defp frontend_payload({:msg_bind, port, statement, formats, parameters, results}) do
+    encoded_formats = for format <- formats, into: <<>>, do: <<frontend_format(format)::16>>
+    encoded_results = for format <- results, into: <<>>, do: <<frontend_format(format)::16>>
+
+    {?B,
+     [
+       port,
+       0,
+       statement,
+       0,
+       <<length(formats)::16>>,
+       encoded_formats,
+       <<length(parameters)::16>>,
+       parameters,
+       <<length(results)::16>>,
+       encoded_results
+     ]}
+  end
+
+  defp frontend_payload({:msg_execute, portal, rows}), do: {?E, [portal, 0, <<rows::signed-32>>]}
+  defp frontend_payload({:msg_flush}), do: {?H, <<>>}
+  defp frontend_payload({:msg_sync}), do: {?S, <<>>}
+  defp frontend_payload({:msg_terminate}), do: {?X, <<>>}
+  defp frontend_payload({:msg_ssl_request}), do: {nil, <<1234::16, 5679::16>>}
+
+  defp frontend_payload({:msg_cancel_request, pid, key}),
+    do: {nil, <<1234::16, 5678::16, pid::signed-32, key::signed-32>>}
+
+  defp frontend_payload({:msg_copy_data, data}), do: {?d, data}
+  defp frontend_payload({:msg_copy_done}), do: {?c, <<>>}
+  defp frontend_payload({:msg_copy_fail, message}), do: {?f, [message, 0]}
+  defp frontend_object(:statement), do: ?S
+  defp frontend_object(:portal), do: ?P
+  defp frontend_format(:text), do: 0
+  defp frontend_format(:binary), do: 1
+
+  defp frontend_write_copies(state, source, expected, origin) do
+    %{returned: returned} = Map.fetch!(state.pairs, source.index)
+
+    writes =
+      Enum.filter(state.native.writes, fn write ->
+        write.source.pid == source.pid and source.index < write.source.index and
+          write.returned.index < returned.index
+      end)
+
+    Enum.reduce(writes, state, fn write, state ->
+      encoded = frontend_transport_iodata(write, expected)
+
+      Enum.reduce(write.copies, state, fn copy, state ->
+        frontend_write_copy(state, copy, expected, encoded, origin)
+      end)
+    end)
+  end
+
+  defp frontend_transport_iodata(%{reference: reference}, expected) do
+    reference = :erlang.term_to_binary(reference, [:local])
+    [<<byte_size(reference)::16, reference::binary>>, expected]
+  end
+
+  defp frontend_transport_iodata(_write, expected), do: expected
+
+  defp frontend_write_copy(state, copy, expected, encoded, origin) do
+    case Map.get(state.pairs, copy.index) do
+      %{source: %{event: {_, :call, {_, _, [_socket, actual | _]}}} = source} ->
+        value =
+          if source.mfa in [{:gen_tcp, :send, 2}, {:prim_inet, :send, 3}, {:ssl, :send, 2}],
+            do: expected,
+            else: encoded
+
+        helper_copy(state, source, copy.path, actual, value, origin)
+
+      _ ->
+        # The driver's port receipt is an IOdata ingress. NativeTransport proves
+        # its bytes against this very command, after all Erlang copies above
+        # have retained the exact message and monitor-header construction.
+        state
+    end
+  end
 
   defp transaction_tag_copy(state, source, path, actual, protocol, reverse?) do
     case transaction_tags(state, source, protocol) do
