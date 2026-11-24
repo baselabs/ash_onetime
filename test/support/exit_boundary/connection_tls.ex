@@ -3022,6 +3022,62 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp server_hello_next_input(state, source, _arguments, parent),
+    do: change_cipher_spec_next_input(state, source, parent)
+
+  defp change_cipher_spec_next_input(
+         state,
+         source,
+         %{
+           source: %{mfa: {:tls_client_connection_1_3, name, 3}},
+           event: %{value: {:internal, {:change_cipher_spec, _type}}}
+         } = parent
+       )
+       when name in [
+              :hello_middlebox_assert,
+              :hello_retry_middlebox_assert,
+              :start,
+              :wait_sh,
+              :wait_ee,
+              :wait_cert_cr,
+              :wait_cert,
+              :wait_cv,
+              :wait_finished
+            ] do
+    version = parent.current
+
+    {state, name, data} =
+      case name do
+        :hello_middlebox_assert ->
+          {state, :wait_ee, version.data}
+
+        :hello_retry_middlebox_assert ->
+          {state, :wait_sh, version.data}
+
+        name ->
+          specific = elem(version.data, 7)
+
+          state =
+            tls_exact(
+              state,
+              source,
+              :tls_middlebox_origin,
+              Map.fetch!(specific, :change_cipher_spec),
+              :ignore
+            )
+
+          specific = Map.put(specific, :change_cipher_spec, :fail)
+          {state, name, put_elem(version.data, 7, specific)}
+      end
+
+    arguments = elem(elem(source.event, 2), 2)
+
+    state =
+      tls_exact(state, source, :tls_callback_input, Enum.take(arguments, 2), [name, :no_record])
+
+    {state, %{version | name: name, data: data, origin: {:tls_middlebox, parent.source.index}}}
+  end
+
+  defp change_cipher_spec_next_input(state, source, parent),
     do: passive_input(state, source, parent)
 
   defp worker_record_input(state, source, parent) do
@@ -4247,12 +4303,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp callback_result(
          state,
-         %{mfa: {:tls_client_connection_1_3, :wait_sh, 3}} = source,
+         %{mfa: {:tls_client_connection_1_3, name, 3}} = source,
          %{event: %{value: {:enter, _}}},
          version,
          actual
-       ),
-       do: callback_result_exact(state, source, actual, {:next_state, :wait_sh, version.data, []})
+       )
+       when name in [:start, :wait_sh, :wait_ee, :wait_cert_cr, :wait_cert, :wait_cv, :wait_finished],
+       do: callback_result_exact(state, source, actual, {:next_state, name, version.data, []})
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_client_connection_1_3, name, 3}} = source,
+         %{event: %{value: {:enter, _}}},
+         version,
+         actual
+       )
+       when name in [:hello_middlebox_assert, :hello_retry_middlebox_assert],
+       do: callback_result_exact(state, source, actual, {:keep_state, version.data})
 
   defp callback_result(
          state,
@@ -4262,6 +4329,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          actual
        ) do
     expected = {:next_state, :start, version.data, [{:next_event, :internal, hello}]}
+    callback_result_exact(state, source, actual, expected)
+  end
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_gen_connection, :handle_protocol_record, 3}} = source,
+         %{arguments: [{:ssl_tls, 20, _, _, _} | _]},
+         version,
+         actual
+       ) do
+    {:ssl_tls, 20, _, fragment, _} = handshake_record(state, source.pid)
+    actions = [{:next_event, :internal, {:change_cipher_spec, fragment}}]
+    expected = {:next_state, version.name, version.data, actions}
     callback_result_exact(state, source, actual, expected)
   end
 
@@ -4400,7 +4480,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
            event: %{value: {:enter, _}}
          } = frame
        )
-       when name in [:wait_sh, :start] do
+       when name in [:start, :wait_sh, :wait_ee, :wait_cert_cr, :wait_cert, :wait_cv, :wait_finished] do
     data = frame.input.data
     specific = Map.put(elem(data, 7), :change_cipher_spec, :ignore)
 
@@ -4940,7 +5020,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp tls_event_class({:enter, _}), do: :enter
-  defp tls_event_class({:internal, {:change_cipher_spec}}), do: :change_cipher_spec
+  defp tls_event_class({:internal, {:change_cipher_spec, _type}}), do: :change_cipher_spec
   defp tls_event_class({:internal, {:server_hello, _, _, _, _, _}}), do: :server_hello
   defp tls_event_class({:internal, _}), do: :internal
   defp tls_event_class({{:call, _}, _}), do: :call
