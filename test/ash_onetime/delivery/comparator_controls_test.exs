@@ -5778,6 +5778,34 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag connection_streams: :driver
+  test "Connection streams: OPEN reuses whole raw proof after origin collection", context do
+    pair = observe(context, row!(:issue, :execute), Values.set()[:va])
+
+    proofs = [
+      {NativeTransport, :build, 3},
+      {ConnectionReads, :build, 3},
+      {ConnectionDecoders, :build, 5},
+      {ConnectionStates, :build, 5}
+    ]
+
+    origin = {Origins, :build, 1}
+    events = comparator_call_order(pair, proofs ++ [origin])
+    first_origin = Enum.find_index(events, &match?({:call, ^origin, _}, &1))
+    assert is_integer(first_origin)
+
+    for proof <- proofs do
+      assert Enum.count(Enum.take(events, first_origin), &match?({:return, ^proof, true}, &1)) == 3
+    end
+
+    later_raw? =
+      events
+      |> Enum.drop(first_origin)
+      |> Enum.any?(fn {kind, mfa, _} -> kind == :call and mfa in proofs end)
+
+    refute later_raw?, "OPEN must reuse its whole raw proof instead of validating a cut capture"
+  end
+
+  @tag connection_streams: :driver
   test "Connection streams: every prior raw history finishes before origin collection", context do
     pair = observe(context, row!(:issue, :replay), Values.set()[:va])
     assert pair.run.prior != nil and pair.twin.prior != nil
