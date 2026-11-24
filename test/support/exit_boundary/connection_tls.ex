@@ -4520,7 +4520,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp tls_branch(state, pid) do
-    case Map.get(state.frames, pid, []) do
+    case state |> Map.get(:frames, %{}) |> Map.get(pid, []) do
       [%{source: source, event: %{value: event}} | _] ->
         %{mfa: source.mfa, event: tls_event_class(event)}
 
