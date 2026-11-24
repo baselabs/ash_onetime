@@ -5323,24 +5323,47 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         for {_index, %{source: source, returned: returned}} <- pairs,
             {owner, :call, {:erlang, :cancel_timer, [timer]}} <- [source.event],
             returned.event == {owner, :return_from, {:erlang, :cancel_timer, 1}, false},
-            {DBConnection.Connection, :cancel_timer, 1} in source.stack,
-            do: %{owner: owner, timer: timer, source: source, returned: returned}
+            {_index, started} <- pairs,
+            started.returned.event ==
+              {owner, :return_from, {:erlang, :start_timer, 3}, timer},
+            {^owner, :call,
+             {:erlang, :start_timer, [timeout, ^owner, {DBConnection.Connection, task, timeout}]}} <-
+              [started.source.event],
+            started.returned.index < source.index,
+            do: %{
+              owner: owner,
+              timer: timer,
+              task: task,
+              timeout: timeout,
+              started: started,
+              source: source,
+              returned: returned
+            }
 
       assert cancellations != [], "the real owner must execute the false cancellation branch"
 
       for cancellation <- cancellations do
-        %{owner: owner, timer: timer} = cancellation
+        %{owner: owner, timer: timer, task: task, timeout: timeout} = cancellation
+
+        assert [holder] =
+                 for(
+                   %{event: {^owner, :receive, {:"ETS-TRANSFER", _, ^task, {:checkin, _, _}}}} =
+                     event <- indexed,
+                   do: event
+                 )
 
         assert [expiry] =
                  for(
                    %{
                      event:
-                       {^owner, :receive, {:timeout, ^timer, {DBConnection.Connection, _, _}}}
+                       {^owner, :receive,
+                        {:timeout, ^timer, {DBConnection.Connection, ^task, ^timeout}}}
                    } = event <- indexed,
                    do: event
                  )
 
-        assert expiry.index < cancellation.source.index
+        assert cancellation.started.returned.index < holder.index
+        assert holder.index < expiry.index and expiry.index < cancellation.source.index
 
         assert [flush] =
                  for(
@@ -9313,6 +9336,12 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert corrupted != []
     native = ConnectionTls.build(%{events: events}, run.tls_binding)
+
+    Diagnostics.emit("CONNECTION_TLS_CALLBACK_ACTION_PROOF", %{
+      constructors: Enum.map(corrupted, & &1.index),
+      errors: Enum.map(native.errors, &Map.take(&1, [:index, :rule, :path]))
+    })
+
     assert Enum.map(native.errors, & &1.rule) == [:tls_callback_result]
     assert hd(native.errors).index == hd(corrupted).index
 
