@@ -9,7 +9,14 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
   def build(indexed, native) do
     events = indexed.events
     transport = if tls = Map.get(native, :tls), do: tls.transport, else: native
-    state = %{claimed: MapSet.new(), moves: %{}, rewrites: %{}, errors: [], writes: transport.writes}
+
+    state = %{
+      claimed: MapSet.new(),
+      moves: %{},
+      rewrites: %{},
+      errors: [],
+      writes: transport.writes
+    }
 
     state = Enum.reduce(events, state, &schedule(&1, &2, events))
 

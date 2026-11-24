@@ -6027,14 +6027,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              %{
                event:
                  {_, :call,
-                  {:prim_inet, :send,
-                   [_, {:connection_byte_span, _, :frontend, _, _, _}, _, _]}}
+                  {:prim_inet, :send, [_, {:connection_byte_span, _, :frontend, _, _, _}, _, _]}}
              } ->
                true
 
              _ ->
                false
-           end), "the MAIN witness must exercise a rendered native send copy"
+           end),
+           "the MAIN witness must exercise a rendered native send copy"
 
     scheduled = Scheduling.build(%{proof.indexed | events: rendered.events}, proof.native)
     assert scheduled.errors == []
@@ -7114,6 +7114,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       corrupted = Scheduling.build(view, proof.native)
       assert corrupted.errors == []
       refute scheduled_write_origins?(proof.native.writes, corrupted.events)
+
       assert Enum.sort_by(corrupted.events, &Capture.address/1) ===
                Enum.sort_by(scheduled.events, &Capture.address/1)
     end)
@@ -7123,8 +7124,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert fresh.errors == []
     fresh_rendered = Registry.compute(:connection_stream, [fresh, fresh_indexed])
     assert fresh_rendered.errors == []
+
     fresh_scheduled =
       Scheduling.build(%{fresh_indexed | events: fresh_rendered.events}, fresh.native)
+
     assert fresh_scheduled.errors == []
     assert scheduled_write_origins?(fresh.native.writes, fresh_scheduled.events)
   end
@@ -9212,14 +9215,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
 
       coordinates =
-        for %{index: index, event: {_, :return_from, ^mfa, {{:native_foreign_return, _}, _}}} <- events,
+        for %{index: index, event: {_, :return_from, ^mfa, {{:native_foreign_return, _}, _}}} <-
+              events,
             do: {:tls_record_output, index}
 
       assert coordinates != []
       proof = ConnectionTls.build(%{events: events}, run.tls_binding)
       assert Enum.map(proof.errors, &{&1.rule, &1.index}) == coordinates
 
-      for mutant <- [:stream_tls_record_output, :stream_tls_record_copy, :stream_tls_worker_state_copy] do
+      for mutant <- [
+            :stream_tls_record_output,
+            :stream_tls_record_copy,
+            :stream_tls_worker_state_copy
+          ] do
         checked =
           ComparatorMutants.with_mutant(mutant, fn ->
             ConnectionTls.build(%{events: events}, run.tls_binding)

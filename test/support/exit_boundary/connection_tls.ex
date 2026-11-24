@@ -3737,7 +3737,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             do: {:pending_read, :current_read},
             else: {:pending_write, :current_write}
 
-        next = states |> Map.fetch!(pending) |> Map.put(:sequence_number, 0) |> Map.delete(:aead_handle)
+        next =
+          states
+          |> Map.fetch!(pending)
+          |> Map.put(:sequence_number, 0)
+          |> Map.delete(:aead_handle)
+
         Map.put(states, current, next)
       end)
 
@@ -4001,7 +4006,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
           true ->
             {:ok,
-             record_alert({:tls_record_1_3, :decode_cipher_text, 2}, 0, 20, {:record_type_mismatch, 23})}
+             record_alert(
+               {:tls_record_1_3, :decode_cipher_text, 2},
+               0,
+               20,
+               {:record_type_mismatch, 23}
+             )}
         end
     end
   end
@@ -4024,7 +4034,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp decode_record_13(_state, _source, {:ssl_tls, type, _, _, _}, _states),
     do:
       {:ok,
-       record_alert({:tls_record_1_3, :decode_cipher_text, 2}, 0, 20, {:record_type_mismatch, type})}
+       record_alert(
+         {:tls_record_1_3, :decode_cipher_text, 2},
+         0,
+         20,
+         {:record_type_mismatch, type}
+       )}
 
   defp decode_record_13_aead(state, source, fragment, states, handle, early?) do
     read = states.current_read
@@ -4044,7 +4059,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
       {:ok, {tag, _reason}} when tag in [:return_from, :exception_from] ->
         if early? and read.early_data.trial_decryption and
-             not read.early_data.early_data_accepted and read.early_data.pending_early_data_size > 0 do
+             not read.early_data.early_data_accepted and
+             read.early_data.pending_early_data_size > 0 do
           ignore_early_record(fragment, states, handle)
         else
           ordinal = if tag == :return_from, do: 0, else: 1
@@ -4066,8 +4082,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     <<content::binary-size(^length), type>> = plaintext
 
     cond do
-      type == 0 -> decode_inner_record(content)
-      type not in [21, 22, 23] -> decode_inner_record(<<>>)
+      type == 0 ->
+        decode_inner_record(content)
+
+      type not in [21, 22, 23] ->
+        decode_inner_record(<<>>)
+
       length > 16_384 ->
         record_alert(
           {:tls_record_1_3, :decode_inner_plaintext, 1},
@@ -4076,7 +4096,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           {:plain_text_too_long, length}
         )
 
-      true -> {:ssl_tls, type, {3, 4}, content, false}
+      true ->
+        {:ssl_tls, type, {3, 4}, content, false}
     end
   end
 
@@ -4105,7 +4126,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     case decode_inner_record(plaintext) do
       {:ssl_tls, 22, _, <<5, _::binary>>, _} = record ->
-        {:ok, {record, Map.put(states, :current_read, %{read | sequence_number: read.sequence_number + 1})}}
+        {:ok,
+         {record,
+          Map.put(states, :current_read, %{read | sequence_number: read.sequence_number + 1})}}
 
       {:ssl_tls, 23, _, data, _} = record ->
         remaining = read.early_data.pending_early_data_size - max(1, byte_size(data))
@@ -4127,14 +4150,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
       {:ssl_tls, type, _, _, _} ->
         {:ok,
-         record_alert({:tls_record_1_3, :process_early_data, 6}, 1, 10, {:unexpected_inner_type, type})}
+         record_alert(
+           {:tls_record_1_3, :process_early_data, 6},
+           1,
+           10,
+           {:unexpected_inner_type, type}
+         )}
 
       _alert ->
         :error
     end
   end
 
-  defp decode_record_aead(state, source, {:ssl_tls, type, {major, minor}, fragment, _} = record, states) do
+  defp decode_record_aead(
+         state,
+         source,
+         {:ssl_tls, type, {major, minor}, fragment, _} = record,
+         states
+       ) do
     read = states.current_read
     cipher = read.cipher_state
     bulk = elem(read.security_parameters, 3)
@@ -4151,7 +4184,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
       nonce =
         if bulk == 9 do
-          record_primitive(state, source, {:crypto, :exor, 2}, [<<0::32, sequence::64>>, elem(cipher, 1)])
+          record_primitive(state, source, {:crypto, :exor, 2}, [
+            <<0::32, sequence::64>>,
+            elem(cipher, 1)
+          ])
         else
           <<salt::binary-size(4), _::binary>> = elem(cipher, 1)
           {:ok, salt <> explicit}
@@ -4161,8 +4197,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
            {:ok, algorithm} <- record_aead_algorithm(bulk, elem(cipher, 2)),
            {:ok, {kind, plaintext}} <-
              record_primitive_event(state, source, {:crypto, :crypto_one_time_aead, 7}, [
-               algorithm, elem(cipher, 2), nonce, content,
-               <<sequence::64, type, major, minor, length::16>>, tag, false
+               algorithm,
+               elem(cipher, 2),
+               nonce,
+               content,
+               <<sequence::64, type, major, minor, length::16>>,
+               tag,
+               false
              ]) do
         if kind == :return_from and is_binary(plaintext) do
           read = %{read | cipher_state: cipher, sequence_number: sequence + 1}
@@ -4177,7 +4218,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp decode_record_cipher(state, source, {:ssl_tls, type, version, fragment, _} = record, states, padding) do
+  defp decode_record_cipher(
+         state,
+         source,
+         {:ssl_tls, type, version, fragment, _} = record,
+         states,
+         padding
+       ) do
     read = states.current_read
 
     case decipher_record(state, source, fragment, version, read, padding) do
@@ -4191,8 +4238,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           end
         end
 
-      {:alert, alert} -> {:ok, alert}
-      :error -> :error
+      {:alert, alert} ->
+        {:ok, alert}
+
+      :error ->
+        :error
     end
   end
 
@@ -4203,7 +4253,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp record_read_mac(state, source, type, plaintext, {major, minor}, read) do
     with {:ok, algorithm} <- record_mac_algorithm(elem(read.security_parameters, 7)) do
       header = <<read.sequence_number::64, type, major, minor, byte_size(plaintext)::16>>
-      record_primitive(state, source, {:crypto, :mac, 4}, [:hmac, algorithm, read.mac_secret, [header, plaintext]])
+
+      record_primitive(state, source, {:crypto, :mac, 4}, [
+        :hmac,
+        algorithm,
+        read.mac_secret,
+        [header, plaintext]
+      ])
     end
   end
 
@@ -4216,14 +4272,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     bulk = elem(read.security_parameters, 3)
 
     case bulk do
-      1 -> decipher_stream_record(state, source, fragment, read)
-      3 -> decipher_block_record(state, source, fragment, version, read, padding, :des_cbc)
-      4 -> decipher_block_record(state, source, fragment, version, read, padding, :des_ede3_cbc)
+      1 ->
+        decipher_stream_record(state, source, fragment, read)
+
+      3 ->
+        decipher_block_record(state, source, fragment, version, read, padding, :des_cbc)
+
+      4 ->
+        decipher_block_record(state, source, fragment, version, read, padding, :des_ede3_cbc)
+
       7 when byte_size(elem(cipher, 2)) == 16 ->
         decipher_block_record(state, source, fragment, version, read, padding, :aes_128_cbc)
+
       7 when byte_size(elem(cipher, 2)) == 32 ->
         decipher_block_record(state, source, fragment, version, read, padding, :aes_256_cbc)
-      _ -> :error
+
+      _ ->
+        :error
     end
   end
 
@@ -4234,11 +4299,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       case elem(cipher, 4) do
         {:stream_init, :rc4, key, _iv} ->
           record_primitive(state, source, {:crypto, :crypto_init, 3}, [:rc4, key, false])
-        handle -> {:ok, handle}
+
+        handle ->
+          {:ok, handle}
       end
 
     with {:ok, handle} <- initialized,
-         {:ok, {kind, plaintext}} <- record_primitive_event(state, source, {:crypto, :crypto_update, 2}, [handle, fragment]) do
+         {:ok, {kind, plaintext}} <-
+           record_primitive_event(state, source, {:crypto, :crypto_update, 2}, [handle, fragment]) do
       hash = elem(read.security_parameters, 9)
 
       if kind == :return_from and is_binary(plaintext) and byte_size(plaintext) >= hash do
@@ -4257,13 +4325,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     cipher = read.cipher_state
 
     case record_primitive_event(state, source, {:crypto, :crypto_one_time, 5}, [
-           algorithm, elem(cipher, 2), elem(cipher, 1), fragment, false
+           algorithm,
+           elem(cipher, 2),
+           elem(cipher, 1),
+           fragment,
+           false
          ]) do
       {:ok, {:return_from, plaintext}} when is_binary(plaintext) ->
         decipher_block_plaintext(plaintext, fragment, version, read, padding?)
+
       {:ok, {:exception_from, _exception}} ->
         {:alert, record_alert({:ssl_cipher, :block_decipher, 6}, 0, 20, :decryption_failed)}
-      _ -> :error
+
+      _ ->
+        :error
     end
   end
 
@@ -4285,8 +4360,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           do: binary_part(fragment, byte_size(fragment) - iv_size, iv_size),
           else: explicit
 
-      valid? = actual_pad == pad and
-        ((version == {3, 1} and not padding?) or padding == :binary.copy(<<pad>>, pad))
+      valid? =
+        actual_pad == pad and
+          ((version == {3, 1} and not padding?) or padding == :binary.copy(<<pad>>, pad))
+
       content = if valid?, do: content, else: <<240, content::binary>>
       {:ok, content, mac, put_elem(read.cipher_state, 1, next_iv)}
     else
@@ -4402,8 +4479,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {:ok, {Enum.reverse(records), {header, queue}}}
 
       length > record_maximum(versions, maximum) ->
-        {:alert,
-         record_alert({:tls_record, :validate_tls_record_length, 8}, 0, 22, :undefined)}
+        {:alert, record_alert({:tls_record, :validate_tls_record_length, 8}, 0, 22, :undefined)}
 
       length > size ->
         {:ok, {Enum.reverse(records), {header, queue}}}
@@ -5780,7 +5856,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp handshake_connection_result(state, source, function, frame)
        when function in [:calculate_read_traffic_secrets, :calculate_write_traffic_secrets] do
     data = frame.current.data
-    direction = if function == :calculate_read_traffic_secrets, do: :pending_read, else: :pending_write
+
+    direction =
+      if function == :calculate_read_traffic_secrets, do: :pending_read, else: :pending_write
 
     with {:ok, pending} <- handshake_application_secret(state, source, data, direction) do
       states = Map.put(elem(data, 10), direction, pending)
@@ -5788,7 +5866,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp handshake_connection_result(state, source, :maybe_calculate_resumption_master_secret, frame) do
+  defp handshake_connection_result(
+         state,
+         source,
+         :maybe_calculate_resumption_master_secret,
+         frame
+       ) do
     data = frame.current.data
 
     if Map.fetch!(elem(data, 4), :session_tickets) == :disabled do
@@ -5801,8 +5884,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
       with {:ok, profile} <- handshake_cipher(elem(parameters, 1)),
            {:master_secret, master} <- elem(parameters, 10),
-           {:ok, transcript} <- handshake_primitive(state, scope, {:crypto, :hash, 2}, [profile.hash, Enum.reverse(messages)]),
-           {:ok, secret} <- handshake_expand(state, scope, profile, master, "res master", transcript, profile.size) do
+           {:ok, transcript} <-
+             handshake_primitive(state, scope, {:crypto, :hash, 2}, [
+               profile.hash,
+               Enum.reverse(messages)
+             ]),
+           {:ok, secret} <-
+             handshake_expand(
+               state,
+               scope,
+               profile,
+               master,
+               "res master",
+               transcript,
+               profile.size
+             ) do
         states =
           Enum.reduce([:pending_read, :pending_write], elem(data, 10), fn direction, states ->
             pending = Map.fetch!(states, direction)
@@ -5825,8 +5921,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     with {:ok, profile} <- handshake_cipher(elem(parameters, 1)),
          {:master_secret, master} <- elem(parameters, 10),
-         {:ok, transcript} <- handshake_primitive(state, scope, {:crypto, :hash, 2}, [profile.hash, handshake_context(data)]),
-         {:ok, secret} <- handshake_expand(state, scope, profile, master, "exp master", transcript, profile.size) do
+         {:ok, transcript} <-
+           handshake_primitive(state, scope, {:crypto, :hash, 2}, [
+             profile.hash,
+             handshake_context(data)
+           ]),
+         {:ok, secret} <-
+           handshake_expand(state, scope, profile, master, "exp master", transcript, profile.size) do
       specific = Map.put(elem(data, 7), :exporter_master_secret, secret)
       role = elem(elem(data, 2), 1)
       keep = role == :client and match?({:keylog_hs, _}, Map.get(elem(data, 4), :keep_secrets))
@@ -5836,10 +5937,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           elem(data, 10)
         else
           Map.new(elem(data, 10), fn
-            {direction, connection} when direction in [:pending_read, :pending_write, :current_read, :current_write] ->
+            {direction, connection}
+            when direction in [:pending_read, :pending_write, :current_read, :current_write] ->
               parameters = put_elem(connection.security_parameters, 10, {:master_secret, <<0>>})
               {direction, %{connection | security_parameters: parameters}}
-            entry -> entry
+
+            entry ->
+              entry
           end)
         end
 
@@ -5857,7 +5961,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     messages = if drop_peer?, do: Enum.drop(messages, 1), else: messages
     scope = Map.fetch!(state.pairs, source.index)
 
-    with {:ok, transcript} <- handshake_primitive(state, scope, {:crypto, :hash, 2}, [hash, Enum.reverse(messages)]) do
+    with {:ok, transcript} <-
+           handshake_primitive(state, scope, {:crypto, :hash, 2}, [hash, Enum.reverse(messages)]) do
       handshake_mac(state, scope, hash, key, transcript)
     end
   end
@@ -5867,15 +5972,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     parameters = pending.security_parameters
     role = elem(elem(data, 2), 1)
     scope = Map.fetch!(state.pairs, source.index)
-    label = if {role, direction} in [{:client, :pending_read}, {:server, :pending_write}], do: "s ap traffic", else: "c ap traffic"
+
+    label =
+      if {role, direction} in [{:client, :pending_read}, {:server, :pending_write}],
+        do: "s ap traffic",
+        else: "c ap traffic"
 
     with {:ok, profile} <- handshake_cipher(elem(parameters, 1)),
          {:handshake_secret, handshake} <- elem(parameters, 10),
-         {:ok, empty} <- handshake_primitive(state, scope, {:crypto, :hash, 2}, [profile.hash, <<>>]),
-         {:ok, derived} <- handshake_expand(state, scope, profile, handshake, "derived", empty, profile.size),
-         {:ok, master} <- handshake_mac(state, scope, profile.hash, derived, :binary.copy(<<0>>, profile.size)),
-         {:ok, transcript} <- handshake_primitive(state, scope, {:crypto, :hash, 2}, [profile.hash, handshake_context(data)]),
-         {:ok, traffic} <- handshake_expand(state, scope, profile, master, label, transcript, profile.size),
+         {:ok, empty} <-
+           handshake_primitive(state, scope, {:crypto, :hash, 2}, [profile.hash, <<>>]),
+         {:ok, derived} <-
+           handshake_expand(state, scope, profile, handshake, "derived", empty, profile.size),
+         {:ok, master} <-
+           handshake_mac(state, scope, profile.hash, derived, :binary.copy(<<0>>, profile.size)),
+         {:ok, transcript} <-
+           handshake_primitive(state, scope, {:crypto, :hash, 2}, [
+             profile.hash,
+             handshake_context(data)
+           ]),
+         {:ok, traffic} <-
+           handshake_expand(state, scope, profile, master, label, transcript, profile.size),
          {:ok, key} <- handshake_expand(state, scope, profile, traffic, "key", <<>>, profile.key),
          {:ok, iv} <- handshake_expand(state, scope, profile, traffic, "iv", <<>>, 12) do
       parameters = parameters |> put_elem(10, {:master_secret, master}) |> put_elem(12, traffic)
