@@ -2,7 +2,6 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary
   alias AshOnetime.Test.ExitBoundary.Capture
-  alias AshOnetime.Test.ExitBoundary.Registry
   alias AshOnetime.Test.ExitBoundary.{Comparator, Historical, Origins, Withheld}
   @root {AshOnetime.Store, :committed_completion, 2}
 
@@ -77,10 +76,8 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
     historical = prepared.historical
     reference = prepared.run
     proof = prepared.connection_history
-    rendered = Registry.compute(:connection_stream, [proof, proof.indexed])
-
     reference_side =
-      %{side | run: %{reference | events: rendered.events}, delta: %{}, historical: historical}
+      %{side | run: reference, delta: %{}, historical: historical}
       |> Map.put(:connection_history, proof)
       |> Map.put(:origin_phase_override, :open)
       |> Map.put(:claim_origins, [bound.c_admit])

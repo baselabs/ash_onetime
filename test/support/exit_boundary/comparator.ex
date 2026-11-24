@@ -94,12 +94,33 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
     %{
       prepared
-      | run: %{prepared.run | run: %{prepared.run.run | events: rr.events}},
-        twin: %{prepared.twin | run: %{prepared.twin.run | events: tr.events}},
+      | run: render_side(prepared.run, rr),
+        twin: render_side(prepared.twin, tr),
         prior: prior,
         connections:
           {%{rc | errors: rc.errors ++ rr.errors}, %{tc | errors: tc.errors ++ tr.errors}}
     }
+  end
+
+  defp render_side(side, rendered) do
+    side = %{side | run: %{side.run | events: rendered.events}}
+
+    case Map.fetch(side, :readback_reference) do
+      {:ok, reference} ->
+        proof = reference.connection_history
+        view = Registry.compute(:connection_stream, [proof, proof.indexed])
+
+        reference = %{
+          reference
+          | run: %{reference.run | events: view.events},
+            connection_history: %{proof | errors: proof.errors ++ view.errors}
+        }
+
+        Map.put(side, :readback_reference, reference)
+
+      :error ->
+        side
+    end
   end
 
   defp compare_prepared(prepared, reference?) do

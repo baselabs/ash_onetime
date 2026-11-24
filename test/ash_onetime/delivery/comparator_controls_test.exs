@@ -5869,7 +5869,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     ]
 
     origin = {Origins, :build, 1}
-    events = comparator_call_order(fn -> Comparator.compare(pair) end, proofs ++ [origin])
+    renderer = {ConnectionHistory, :render, 2}
+
+    events =
+      comparator_call_order(fn -> Comparator.compare(pair) end, proofs ++ [renderer, origin])
     first_origin = Enum.find_index(events, &match?({:call, ^origin, _}, &1))
     assert is_integer(first_origin)
     before_origin = Enum.take(events, first_origin)
@@ -5878,6 +5881,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert Enum.count(before_origin, &match?({:return, ^proof, true}, &1)) == 3,
              "run, twin and complete read-only reference must pass raw proof before origins"
     end
+
+    assert Enum.count(before_origin, &match?({:return, ^renderer, true}, &1)) == 3,
+           "the complete read-only reference must be rendered before any origin collection"
   end
 
   @tag connection_streams: :driver
@@ -5919,6 +5925,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert proof.errors == [] and reference_proof.errors == []
     rendered = Registry.compute(:connection_stream, [proof, proof.indexed])
     assert rendered.errors == []
+    reference_rendered = Registry.compute(:connection_stream, [reference_proof, reference_proof.indexed])
+    assert reference_rendered.errors == []
+    reference = %{reference | run: %{reference.run | events: reference_rendered.events}}
 
     side =
       pair.run
@@ -6067,14 +6076,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
 
     consumed = Enum.count(events, &match?({:return, ^renderer, true}, &1))
-    assert consumed >= 2, "MAIN must consume both validated logical connection observations"
+    assert consumed >= 3, "MAIN must consume both observations and the complete OPEN reference"
 
     first_origins = Enum.find_index(events, &match?({:call, {Origins, :build, 1}, _}, &1))
     assert is_integer(first_origins)
     before_origins = Enum.take(events, first_origins)
 
-    assert Enum.count(before_origins, &match?({:return, ^renderer, true}, &1)) == 2,
-           "both whole logical renderings must finish before origin collection"
+    assert Enum.count(before_origins, &match?({:return, ^renderer, true}, &1)) == 3,
+           "both whole observations and their complete reference render before origin collection"
 
     legacy? = Enum.any?(events, fn {kind, mfa, _} -> kind == :call and mfa in legacy end)
     refute legacy?, "MAIN cannot compare native packet boundaries as logical messages"
@@ -7300,11 +7309,31 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     pair = observe(context, row, Values.set()[:va])
     events = pair.run.run.events
+    histories = %{run: ConnectionHistory.build(pair.run), twin: ConnectionHistory.build(pair.twin)}
+    reference = pair.run.readback_reference
+    reference_proof = ConnectionHistory.build(reference)
+    assert Enum.all?([histories.run, histories.twin, reference_proof], &(&1.errors == []))
+    reference_view = Registry.compute(:connection_stream, [reference_proof, reference_proof.indexed])
+    assert reference_view.errors == []
+    reference = %{reference | run: %{reference.run | events: reference_view.events}}
+    reference = Map.put(reference, :connection_history, reference_proof)
+
+    sides =
+      Map.new([:run, :twin], fn name ->
+        side = Map.fetch!(pair, name)
+        proof = Map.fetch!(histories, name)
+        view = Registry.compute(:connection_stream, [proof, proof.indexed])
+        assert view.errors == []
+        side = %{side | run: %{side.run | events: view.events}}
+        {name, Map.put(side, :connection_history, proof)}
+      end)
+
+    sides = put_in(sides.run.readback_reference, reference)
 
     checkpoint = {Scenarios, :allocation_checkpoint, 0}
 
     checkpoint_events =
-      pair.twin
+      sides.twin
       |> Origins.build()
       |> Map.fetch!(:events)
       |> Enum.filter(&(&1.mfa == checkpoint or checkpoint in &1.stack))
@@ -7344,8 +7373,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                false
            end)
 
-    wire = pair.run |> Origins.build() |> TransportReferences.build() |> Wire.build()
-    rows = wire |> Enum.flat_map(&wire_terms(&1.event, :data_row))
+    wire = Origins.build(sides.run).events
+    rows = Enum.flat_map(wire, &wire_terms(&1.event, :data_row))
 
     assert Enum.any?(rows, fn {:data_row, columns} ->
              Enum.any?(columns, fn
@@ -7357,41 +7386,27 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              end)
            end)
 
-    history = ConnectionHistory.build(pair.run)
-    assert history.errors == []
-    side = Map.put(pair.run, :connection_history, history)
+    history = histories.run
+    side = sides.run
     indexed = Origins.build(side)
     scheduled = Scheduling.build(indexed, history.native)
     indexed = %{indexed | events: scheduled.events}
     permitted = PermittedTrace.match(side, indexed)
     readback = Readback.check(side, indexed, permitted.bound)
 
-    root = {AshOnetime.Store, :committed_completion, 2}
-    start = Enum.find(indexed.events, &(&1.mfa == root and elem(&1.event, 1) == :call))
-    stop = Enum.find(indexed.events, &(&1.mfa == root and elem(&1.event, 1) == :return_from))
-
-    outside = Enum.reject(readback.claimed, &(&1 >= start.index and &1 <= stop.index))
+    assert readback.errors == []
 
     origins =
-      for event <- Wire.build(indexed, readback.claimed),
-          is_port(event.pid),
+      for %{wire_frame: frame} = event <- indexed.events,
           {:data_column, sql, {origin, _}, 0, _, _, _, _, _, _} <-
-            wire_terms(event.event, :data_column) do
-        raw = Enum.at(pair.run.run.events, event.index).event
-        {_, :send, message, _} = raw
-
-        payload =
-          case message do
-            {:inet_async, _, _, {:ok, bytes}} -> bytes
-            {:tcp, _, bytes} -> bytes
-          end
-
+            wire_terms(frame.decoded, :data_column) do
         %{
-          index: event.index,
+          address: Capture.address(event),
           origin: origin,
           sql_sha256: :crypto.hash(:sha256, sql),
-          packet_sha256: :crypto.hash(:sha256, payload),
-          columns: length(wire_terms(event.event, :data_column))
+          frame_sha256: :crypto.hash(:sha256, frame.payload),
+          native_sources: Enum.map(frame.provenance, & &1.index),
+          columns: length(wire_terms(frame.decoded, :data_column))
         }
       end
 
@@ -7403,35 +7418,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         ": " <> Diagnostics.render(origins, pretty: true, limit: :infinity)
     )
 
-    for side <- [pair.run, pair.twin] do
-      wire = side |> Origins.build() |> TransportReferences.build() |> Wire.build()
-
-      counts =
-        for event <- wire,
-            is_port(event.pid) do
-          claimed? = side.resource == Withheld and MapSet.member?(readback.claimed, event.index)
-          sql = if event.wire_sql, do: :crypto.hash(:sha256, event.wire_sql)
-          {event.role, claimed?, sql}
-        end
-        |> Enum.frequencies()
-
-      IO.puts(
-        "U2_NATIVE_TRANSPORT_OWNERSHIP" <>
-          ": " <>
-          Diagnostics.render(%{side: side.resource, instances: counts},
-            pretty: true,
-            limit: :infinity
-          )
-      )
-
-      u2_command_ownership(
-        side,
-        if(side.resource == Withheld, do: readback.claimed, else: MapSet.new())
-      )
+    for side <- [sides.run, sides.twin] do
+      indexed = Origins.build(side)
+      claimed = if(side.resource == Withheld, do: readback.claimed, else: MapSet.new())
+      u2_command_ownership(side, indexed, claimed)
     end
-
-    assert outside == [],
-           "OPEN claimed transport outside its native interval: #{Diagnostics.render(outside)}"
 
     assert_green(pair)
   end
@@ -8653,120 +8644,41 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   defp event_mfa({_, tag, mfa, _}) when tag in [:return_from, :exception_from], do: mfa
   defp event_mfa(_), do: nil
 
-  # Read-only diagnosis over the same captured U2 pair. The comparator and its
-  # whole-run physical identity rule remain unchanged while the design is ruled.
-  defp u2_command_ownership(side, open_claimed) do
-    history = ConnectionHistory.build(side)
-    indexed = Origins.build(side)
-    scheduled = Scheduling.build(indexed, history.native)
-    indexed = %{indexed | events: scheduled.events}
-    wire = indexed |> TransportReferences.build() |> Wire.build()
+  # The diagnostic consumes the same complete proof and logical view as MAIN.
+  defp u2_command_ownership(side, indexed, open_claimed) do
+    leases = Allocation.leases(side, indexed)
 
-    leases = u2_leases(indexed, open_claimed)
-    commands = u2_commands(wire, leases, indexed, open_claimed)
+    commands =
+      for %{wire_frame: %{direction: :frontend} = frame} = event <- indexed.events,
+          sources = MapSet.new(frame.provenance, & &1.index),
+          write <- side.connection_history.native.writes,
+          MapSet.member?(sources, write.command.index) do
+        caller = write.source.pid
 
-    checkouts =
-      Enum.map(leases, fn lease ->
-        %{
-          lease
-          | caller: indexed.roles[lease.caller],
-            port: indexed.roles[lease.port],
-            pool: indexed.roles[lease.pool],
-            holder: indexed.roles[lease.holder]
-        }
-      end)
-
-    IO.puts(
-      "U2_CANONICAL_COMMAND_OWNERSHIP" <>
-        ": " <>
-        Diagnostics.render(
-          %{
-            side: side.resource,
-            scheduling_errors: scheduled.errors,
-            checkouts: checkouts,
-            commands: commands
-          },
-          pretty: true,
-          limit: :infinity
-        )
-    )
-  end
-
-  defp u2_leases(indexed, open_claimed) do
-    for %{
-          event:
-            {caller, :return_from, {DBConnection.Holder, :checkout, 3},
-             {:ok, {:pool_ref, pool, _, _, holder, _} = pool_ref, Postgrex.Protocol, _,
-              %Postgrex.Protocol{sock: socket}}}
-        } = source <- indexed.events do
-      port = u2_socket(socket)
-
-      stop =
-        Enum.find(indexed.events, fn event ->
-          event.index > source.index and
-            match?(
-              %{event: {^caller, :call, {DBConnection.Holder, :checkin, [^pool_ref]}}},
-              event
-            )
-        end)
-
-      %{
-        start: source.index,
-        stop: if(stop, do: stop.index),
-        caller: caller,
-        port: port,
-        pool: pool,
-        holder: holder,
-        open?: MapSet.member?(open_claimed, source.index),
-        stack:
-          Enum.filter(source.stack, fn {module, _, _} ->
-            String.starts_with?(Atom.to_string(module), "Elixir.AshOnetime.")
+        lease =
+          Enum.find(leases, fn lease ->
+            lease.source.pid == caller and is_integer(lease.terminal_return) and
+              lease.acquired < write.source.index and
+              write.returned.index < lease.terminal_return
           end)
-      }
-    end
-  end
 
-  defp u2_commands(wire, leases, indexed, open_claimed) do
-    for %{event: {port, :receive, {caller, {:command, payload}}}} = event <- wire,
-        is_port(port) do
-      u2_command(event, port, caller, payload, leases, indexed, open_claimed)
-    end
-  end
-
-  defp u2_socket({:gen_tcp, port}), do: port
-  defp u2_socket({:gen_tcp, port, _}), do: port
-  defp u2_socket(port) when is_port(port), do: port
-  defp u2_socket(_socket), do: nil
-
-  defp u2_command(event, port, caller, payload, leases, indexed, open_claimed) do
-    lease =
-      leases
-      |> Enum.filter(&u2_lease_owns?(&1, caller, event.index))
-      |> Enum.max_by(& &1.start, fn -> nil end)
-
-    messages =
-      case payload do
-        {:pg_transport, :driver_command, _, messages} -> Enum.map(messages, &elem(&1, 0))
-        _ -> :undecoded
+        %{
+          address: Capture.address(event),
+          port: indexed.roles[write.port],
+          caller: indexed.roles[caller],
+          lease: if(lease, do: lease.acquired),
+          owner_matches?: lease != nil and write.port === lease.port,
+          open?: MapSet.member?(open_claimed, Capture.address(event)),
+          sql: if(event.wire_sql, do: Base.encode16(:crypto.hash(:sha256, event.wire_sql))),
+          message: elem(frame.decoded, 0)
+        }
       end
 
-    %{
-      index: event.index,
-      port: indexed.roles[port],
-      caller: indexed.roles[caller],
-      lease: if(lease, do: lease.start),
-      owner_port: if(lease, do: indexed.roles[lease.port]),
-      owner_matches?: lease != nil and port === lease.port,
-      open?: MapSet.member?(open_claimed, event.index),
-      sql: if(event.wire_sql, do: Base.encode16(:crypto.hash(:sha256, event.wire_sql))),
-      messages: messages
-    }
+    IO.puts(
+      "U2_CANONICAL_COMMAND_OWNERSHIP: " <>
+        Diagnostics.render(%{side: side.resource, commands: commands}, pretty: true, limit: :infinity)
+    )
   end
-
-  defp u2_lease_owns?(lease, caller, index),
-    do:
-      lease.caller == caller and lease.start < index and
-        (lease.stop == nil or index < lease.stop)
 
   defp wire_terms(value, tag) when is_tuple(value) do
     own = if tuple_size(value) > 0 and elem(value, 0) == tag, do: [value], else: []
