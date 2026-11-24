@@ -2497,11 +2497,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     |> Map.values()
     |> Enum.flat_map(fn
       %{
-        source: %{event: {pid, :call, {module, :call, [target, request | _]}}} = source,
-        returned: %{event: {_, :return_from, _, result}} = returned
+        source: %{event: {pid, :call, {:gen, :call, [destination, label, request, _]}}} = source,
+        returned: %{event: {reply_pid, :return_from, {:gen, :call, 4}, {:ok, result}}} = returned
       }
-      when module in [:gen_statem, :gen_server] and is_pid(target) ->
-        call_receipt(arrivals, occurrences, source, returned, pid, target, request, result)
+      when reply_pid == pid ->
+        case call_target(occurrences, source, returned, destination) do
+          {:ok, target, origin} ->
+            source = Map.put(source, :resolved_at, origin)
+            call_receipt(arrivals, occurrences, source, returned, pid, target, label, request, result)
+
+          :error ->
+            []
+        end
 
       _ ->
         []
@@ -2509,10 +2516,30 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     |> MapSet.new()
   end
 
-  defp call_receipt(events, pairs, source, returned, pid, target, request, result) do
+  defp call_target(_pairs, source, _returned, target) when is_pid(target),
+    do: {:ok, target, source.index}
+
+  defp call_target(pairs, source, returned, name) when is_atom(name) do
+    resolutions =
+      for pair <- Map.get(pairs, {source.pid, {:erlang, :whereis, 1}}, []),
+          pair.source.event === {source.pid, :call, {:erlang, :whereis, [name]}},
+          pair.source.index > source.index and pair.returned.index < returned.index,
+          {_, :return_from, _, target} <- [pair.returned.event],
+          is_pid(target),
+          do: {target, pair.returned.index}
+
+    case resolutions do
+      [{target, origin}] -> {:ok, target, origin}
+      _ -> :error
+    end
+  end
+
+  defp call_target(_pairs, _source, _returned, _destination), do: :error
+
+  defp call_receipt(events, pairs, source, returned, pid, target, label, request, result) do
     requests =
       Enum.filter(Map.get(events, {pid, :send}, []), fn
-        %{event: {^pid, :send, {:"$gen_call", {^pid, _tag}, ^request}, ^target}} = sent ->
+        %{event: {^pid, :send, {^label, {^pid, _tag}, ^request}, ^target}} = sent ->
           sent.index > source.index and sent.index < returned.index
 
         _ ->
@@ -2521,10 +2548,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     case requests do
       [%{event: {_, :send, {_, {_, tag}, _}, _}} = sent] ->
-        if call_monitor?(pairs, source, sent, pid, target, tag) do
-          call_reply(events, sent, returned, pid, target, tag, result)
-        else
-          []
+        case call_monitor(pairs, source, sent, pid, target, tag) do
+          {:ok, ref} -> call_reply(events, pairs, sent, returned, pid, target, tag, result, ref)
+          :error -> []
         end
 
       _ ->
@@ -2532,32 +2558,32 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp call_monitor?(pairs, source, sent, pid, target, tag) do
+  defp call_monitor(pairs, source, sent, pid, target, tag) do
+    {^pid, :call, {:gen, :call, [_, _, _, timeout]}} = source.event
+    alias? = timeout != :infinity or node(target) != node()
+
     candidates =
       Map.get(pairs, {pid, {:erlang, :monitor, 2}}, []) ++
         Map.get(pairs, {pid, {:erlang, :monitor, 3}}, [])
 
-    Enum.any?(candidates, fn
-      %{
-        source: %{event: {^pid, :call, {:erlang, :monitor, arguments}}} = monitor,
-        returned: %{event: {_, :return_from, _, ref}} = returned
-      }
-      when is_reference(ref) ->
-        expected =
-          case tag do
-            ^ref -> [:process, target]
-            [:alias | ^ref] -> [:process, target, [alias: :demonitor]]
-            _ -> :invalid_monitor_tag
-          end
+    expected = if alias?, do: [:process, target, [alias: :demonitor]], else: [:process, target]
 
-        arguments === expected and monitor.index > source.index and returned.index < sent.index
+    matches =
+      for %{source: monitor, returned: returned} <- candidates,
+          monitor.event === {pid, :call, {:erlang, :monitor, expected}},
+          monitor.index > source.resolved_at and returned.index < sent.index,
+          {_, :return_from, _, ref} <- [returned.event],
+          is_reference(ref),
+          tag === if(alias?, do: [:alias | ref], else: ref),
+          do: ref
 
-      _ ->
-        false
-    end)
+    case matches do
+      [ref] -> {:ok, ref}
+      _ -> :error
+    end
   end
 
-  defp call_reply(events, sent, returned, pid, target, tag, result) do
+  defp call_reply(events, pairs, sent, returned, pid, target, tag, result, ref) do
     destination =
       case tag do
         [:alias | ref] -> ref
@@ -2575,14 +2601,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     case replies do
       [reply] ->
-        call_reply_received(events, reply, returned, pid, tag, result)
+        if call_request_received?(events, sent, reply, target),
+          do: call_reply_received(events, pairs, reply, returned, pid, tag, result, ref),
+          else: []
 
       _ ->
         []
     end
   end
 
-  defp call_reply_received(events, reply, returned, pid, tag, result) do
+  defp call_request_received?(events, sent, reply, target) do
+    {_, :send, message, ^target} = sent.event
+
+    Enum.count(Map.get(events, {target, :receive}, []), fn received ->
+      received.event === {target, :receive, message} and
+        sent.index < received.index and received.index < reply.index
+    end) == 1
+  end
+
+  defp call_reply_received(events, pairs, reply, returned, pid, tag, result, ref) do
     {_, :send, message, _} = reply.event
 
     receipts =
@@ -2592,12 +2629,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           do: received
 
     case receipts do
-      [%{event: {_, :receive, ^message}, index: index}] when elem(message, 1) === result ->
-        [index]
+      [%{event: {_, :receive, ^message}} = receipt] when elem(message, 1) === result ->
+        if call_demonitored?(pairs, receipt, returned, pid, ref), do: [receipt.index], else: []
 
       _ ->
         []
     end
+  end
+
+  defp call_demonitored?(pairs, receipt, returned, pid, ref) do
+    Enum.any?(Map.get(pairs, {pid, {:erlang, :demonitor, 2}}, []), fn pair ->
+      pair.source.event === {pid, :call, {:erlang, :demonitor, [ref, [:flush]]}} and
+        receipt.index < pair.source.index and pair.returned.index < returned.index and
+        elem(pair.returned.event, 3) in [true, false]
+    end)
   end
 
   defp callback_message({:"$gen_call", from, message}), do: {{:call, from}, message}
@@ -3324,7 +3369,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       for error <- Enum.reverse(state.errors) do
         Diagnostics.emit(
           "CONNECTION_COLD_TLS_PREFIX_FAILURE",
-          Map.take(error, [:index, :at, :rule, :path])
+              Map.take(error, [:index, :rule, :path]) |> Map.put(:mfa, error.at.mfa)
         )
       end
 
