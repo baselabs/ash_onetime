@@ -5690,6 +5690,31 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag connection_streams: :driver
+  test "Connection streams: the complete OPEN reference passes raw proof before origin collection",
+       context do
+    pair = observe(context, row!(:issue, :execute), Values.set()[:va])
+    assert Map.has_key?(pair.run, :readback_reference)
+
+    proofs = [
+      {NativeTransport, :build, 3},
+      {ConnectionReads, :build, 3},
+      {ConnectionDecoders, :build, 5},
+      {ConnectionStates, :build, 5}
+    ]
+
+    origin = {Origins, :build, 1}
+    events = comparator_call_order(pair, proofs ++ [origin])
+    first_origin = Enum.find_index(events, &match?({:call, ^origin, _}, &1))
+    assert is_integer(first_origin)
+    before_origin = Enum.take(events, first_origin)
+
+    for proof <- proofs do
+      assert Enum.count(before_origin, &match?({:return, ^proof, true}, &1)) == 3,
+             "run, twin and complete read-only reference must pass raw proof before origins"
+    end
+  end
+
+  @tag connection_streams: :driver
   test "Connection streams: every prior raw history finishes before origin collection", context do
     pair = observe(context, row!(:issue, :replay), Values.set()[:va])
     assert pair.run.prior != nil and pair.twin.prior != nil
