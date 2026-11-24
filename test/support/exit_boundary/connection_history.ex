@@ -173,6 +173,155 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
     }
   end
 
+  # A rendering is a view of this exact whole proof. Its stream addresses use
+  # the original physical port; they introduce no identity map. Only complete,
+  # successful native receive programs can leave the ordinary event sequence.
+  # Writes, including empty writes, and all other events keep their occurrences.
+  def render(proof, indexed) do
+    errors =
+      proof.errors ++ proof.native.errors ++ proof.reads.errors ++ proof.decoders.errors ++
+        proof.states.errors
+
+    cond do
+      errors != [] ->
+        %{events: indexed.events, consumed: MapSet.new(), errors: Enum.uniq(errors)}
+
+      indexed.events !== proof.indexed.events ->
+        source = List.first(indexed.events)
+
+        error = %{
+          index: if(source, do: source.index, else: 0),
+          at: if(source, do: Map.take(source, [:mfa, :stack]), else: %{}),
+          rule: :connection_render_source,
+          actual: false,
+          expected: :whole_raw_observation
+        }
+
+        %{events: indexed.events, consumed: MapSet.new(), errors: [error]}
+
+      true ->
+        render_native(proof, indexed)
+    end
+  end
+
+  defp render_native(proof, indexed) do
+    writes = MapSet.new(proof.native.writes, & &1.command.index)
+    spans = connection_spans(proof.reads)
+
+    consumed =
+      (proof.native.reads ++ proof.native.active)
+      |> Enum.filter(fn read ->
+        is_binary(read.bytes) and byte_size(read.bytes) > 0 and
+          complete_span?(spans, read.delivered.index, byte_size(read.bytes))
+      end)
+      |> Enum.flat_map(&Map.get(&1, :indexes, []))
+      |> MapSet.new()
+
+    # A write program is never an incidental receive. Keep every one of its
+    # instructions even if another validated native interval overlaps it.
+    consumed =
+      Enum.reduce(proof.native.writes, consumed, fn write, indexes ->
+        Enum.reduce(Map.get(write, :indexes, []), indexes, &MapSet.delete(&2, &1))
+      end)
+
+    copies = frontend_spans(proof, writes, spans)
+    messages = ConnectionReads.messages(proof.reads, indexed)
+
+    retained =
+      indexed.events
+      |> Enum.reject(&MapSet.member?(consumed, &1.index))
+      |> Enum.map(fn source ->
+        event =
+          Enum.reduce(Map.get(copies, source.index, []), source.event, fn copy, event ->
+            replace_connection_copy(event, copy.path, copy.value)
+          end)
+
+        %{source | event: event}
+      end)
+
+    events =
+      (retained ++ messages)
+      |> Enum.sort_by(fn source ->
+        {source.index, if(Map.has_key?(source, :message_address), do: 1, else: 0),
+         get_in(source, [:wire_frame, :start]) || 0}
+      end)
+
+    %{events: events, consumed: consumed, errors: []}
+  end
+
+  # The one reassembly already bound every byte to its native write. Copies
+  # refer to that exact span, while the logical messages retain all its content.
+  # No binary outside the native ledger is inspected or rewritten.
+  defp frontend_spans(proof, writes, spans) do
+    qualified =
+      for %{origin: {:frontend_encoding, _, _}} = copy <- proof.states.terms,
+          into: MapSet.new(),
+          do: {copy.index, copy.path}
+
+    for write <- proof.native.writes,
+        write.bytes != <<>>,
+        MapSet.member?(writes, write.command.index),
+        complete_span?(spans, write.command.index, byte_size(write.bytes)),
+        Enum.all?(write.copies, fn copy ->
+          copy.index == write.command.index or MapSet.member?(qualified, {copy.index, copy.path})
+        end),
+        [%{port: port, span: first} | _] = Map.fetch!(spans, write.command.index),
+        port == write.port,
+        start = first.offset - first.source_offset + write.header_size,
+        copy <- write.copies do
+      %{
+        index: copy.index,
+        path: copy.path,
+        value:
+          {:connection_byte_span, port, :frontend, start, start + byte_size(write.bytes),
+           if(Map.get(copy, :offset, 0) > 0, do: Map.fetch!(write, :reference), else: nil)}
+      }
+    end
+    |> Enum.group_by(& &1.index)
+  end
+
+  defp connection_spans(reads) do
+    for {port, connection} <- reads.connections,
+        message <- connection.protocol.messages,
+        span <- message.provenance do
+      %{index: span.index, port: port, direction: message.direction, span: span}
+    end
+    |> Enum.group_by(& &1.index)
+  end
+
+  defp complete_span?(spans, index, length) do
+    parts = Map.get(spans, index, [])
+    intervals = parts |> Enum.map(& &1.span) |> Enum.sort_by(& &1.offset)
+
+    case intervals do
+      [first | _] ->
+        {stop, contiguous?} =
+          Enum.reduce(intervals, {first.offset, true}, fn span, {stop, valid?} ->
+            {span.offset + span.length, valid? and span.offset == stop}
+          end)
+
+        contiguous? and stop - first.offset == length and
+          length(Enum.uniq_by(parts, &{&1.port, &1.direction})) == 1
+
+      [] ->
+        false
+    end
+  end
+
+  defp replace_connection_copy(_value, [], replacement), do: replacement
+
+  defp replace_connection_copy(value, [position | path], replacement) when is_tuple(value),
+    do:
+      put_elem(
+        value,
+        position,
+        replace_connection_copy(elem(value, position), path, replacement)
+      )
+
+  defp replace_connection_copy(value, [position | path], replacement) when is_list(value),
+    do:
+      List.update_at(value, position, &replace_connection_copy(&1, path, replacement))
+
   defp native_history(indexed, connections, bindings) do
     births = ConnectionTls.births(indexed)
     native_history(indexed, connections, bindings ++ births.bindings, births.errors)
