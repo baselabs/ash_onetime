@@ -573,6 +573,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {Postgrex.Protocol, :ping, 2},
         {Postgrex.Protocol, :ping_recv, 4},
         {Postgrex.Protocol, :msg_send, 3},
+        {Postgrex.Protocol, :do_send, 3},
         {Postgrex.Protocol, :msg_recv, :_},
         {Postgrex.Protocol, :rows_recv, :_},
         {Postgrex.Protocol, :msg_decode, 1},

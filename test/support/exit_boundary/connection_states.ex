@@ -73,6 +73,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   ]
   @copies [
     :msg_send,
+    :do_send,
     :msg_recv,
     :rows_recv,
     :redescribe,
