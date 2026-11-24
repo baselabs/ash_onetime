@@ -5401,7 +5401,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     # Every raw projection boundary in the current comparator, including the
     # registered rules. A new consumer must join this same ordering obligation.
     consumers = [
-      {ConnectionHistory, :render, 2},
       {Origins, :build, 1},
       {Declarations, :pair, 2},
       {Scheduling, :build, 1},
@@ -5424,6 +5423,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       {DatabaseOrigins, :build, 2},
       {DatabaseOrigins, :sql_contexts, 1}
     ]
+
+    consumers =
+      if function_exported?(ConnectionHistory, :render, 2),
+        do: [{ConnectionHistory, :render, 2} | consumers],
+        else: consumers
 
     events = comparator_call_order(pair, proofs ++ consumers)
 
