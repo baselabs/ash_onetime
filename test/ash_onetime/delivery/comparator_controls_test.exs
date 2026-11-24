@@ -4998,14 +4998,15 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  for type <- [:default, :stop, :rand, :exp, :rand_exp] do
+  for type <- [:default, :stop, :rand, :exp, :rand_exp], callback <- [:function, :mfa] do
     @tag connection_streams: :pool
-    test "Connection streams: a failed after-connect Task retains #{type} backoff state",
+    test "Connection streams: a failed after-connect #{callback} Task retains #{type} backoff state",
          context do
       Repo.put_dynamic_repo(context.repo)
       historical = Historical.capture(context.prefix)
       type = unquote(type)
-      run = ConnectionNative.observe_pool_startup({:after_connect_failure, type})
+      callback = unquote(callback)
+      run = ConnectionNative.observe_pool_startup({:after_connect_failure, type, callback})
       assert run.result == :ok
 
       assert Enum.any?(run.events, fn

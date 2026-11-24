@@ -86,7 +86,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   def observe_pool_startup(mode \\ :default) do
     ExitBoundary.observe(
       fn ->
-        if mode in [{:connect_failure, :stop}, {:after_connect_failure, :stop}],
+        if mode == {:connect_failure, :stop} or match?({:after_connect_failure, :stop, _}, mode),
           do: Process.flag(:trap_exit, true)
         :ok
       end,
@@ -158,10 +158,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     options |> Keyword.put(:database, database) |> pool_failure_options(type)
   end
 
-  defp pool_startup_options(options, {:after_connect_failure, type})
+  defp pool_startup_options(options, {:after_connect_failure, type, callback})
        when type in [:default, :stop, :rand, :exp, :rand_exp] do
+    after_connect =
+      case callback do
+        :function -> &__MODULE__.after_connect_pool_failure/1
+        :mfa -> {__MODULE__, :after_connect_pool_failure, []}
+      end
+
     options
-    |> Keyword.put(:after_connect, &__MODULE__.after_connect_pool_failure/1)
+    |> Keyword.put(:after_connect, after_connect)
     |> pool_failure_options(type)
   end
 
@@ -179,8 +185,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     if type == :stop, do: Keyword.put(options, :max_restarts, 0), else: options
   end
 
-  defp pool_startup_query(pool, {failure, _type})
-       when failure in [:connect_failure, :after_connect_failure] do
+  defp pool_startup_query(pool, {:connect_failure, _type}), do: pool_failure_query(pool)
+
+  defp pool_startup_query(pool, {:after_connect_failure, _type, _callback}),
+    do: pool_failure_query(pool)
+
+  defp pool_startup_query(pool, _mode) do
+    %{rows: [[17]]} = Postgrex.query!(pool, "SELECT 17::int4 AS connection_owner_birth", [])
+    :ok
+  end
+
+  defp pool_failure_query(pool) do
     # The authoritative server rejects either startup or the Task's SQL. Every
     # actual retry and timeout remains inside this same native observation.
     case Postgrex.query(pool, "SELECT 17::int4 AS connection_owner_birth", [], timeout: 3_500) do
@@ -189,11 +204,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   catch
     :exit, {_reason, {DBConnection.Holder, :checkout, [^pool, _options]}} -> :ok
-  end
-
-  defp pool_startup_query(pool, _mode) do
-    %{rows: [[17]]} = Postgrex.query!(pool, "SELECT 17::int4 AS connection_owner_birth", [])
-    :ok
   end
 
   defp stop_startup_pool(pool) do
