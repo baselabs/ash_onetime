@@ -906,6 +906,24 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     )
   end
 
+  def with_backoff_output(callback) do
+    targets = %{{:backoff, 1} => %{kind: :element, size: 2, position: 0, total?: true}}
+
+    with_owner_mutant(
+      DBConnection.Connection,
+      &(&1 > 0),
+      &remote_outputs_form(&1, &2, DBConnection.Backoff, targets),
+      fn ->
+        with_owner_mutant(
+          DBConnection.Backoff,
+          &(&1 > 0),
+          &owner_outputs_form(&1, &2, targets),
+          callback
+        )
+      end
+    )
+  end
+
   def with_postgrex_inputs(targets, callback, module \\ Postgrex.Protocol)
 
   def with_postgrex_inputs(targets, callback, Postgrex.Protocol) do
