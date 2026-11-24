@@ -5022,6 +5022,17 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert Enum.map(proof.states.errors, &{&1.rule, &1.index, &1.path}) ==
              Enum.map(coordinates, fn {index, path} -> {:state_owner_backoff_input, index, path} end)
+
+    for mutant <- [:stream_owner_backoff_input, :stream_owner_backoff_result, :stream_owner_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
+      expected = if mutant == :stream_owner_backoff_input, do: [], else: proof.errors
+      assert checked.errors == expected
+    end
+
+    assert ConnectionHistory.build(side).errors == proof.errors
+    restored = observe.()
+    side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+    assert ConnectionHistory.build(side).errors == []
   end
 
   @tag connection_streams: :pool
@@ -5048,6 +5059,17 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert Enum.map(proof.states.errors, &{&1.rule, &1.index, &1.path}) ==
              Enum.map(coordinates, fn {index, path} -> {:state_owner_backoff_result, index, path} end)
+
+    for mutant <- [:stream_owner_backoff_input, :stream_owner_backoff_result, :stream_owner_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
+      expected = if mutant == :stream_owner_backoff_result, do: [], else: proof.errors
+      assert checked.errors == expected
+    end
+
+    assert ConnectionHistory.build(side).errors == proof.errors
+    restored = observe.()
+    side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+    assert ConnectionHistory.build(side).errors == []
   end
 
   for lifecycle <- [:idle_ping, :reconnect] do

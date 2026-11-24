@@ -544,6 +544,26 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_owner_backoff_input) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: "        state = exact(state, source, :state_owner_backoff_input, input, expected)\n",
+        mutated: "        _ = input\n        state = exact(state, source, :state_owner_backoff_input, expected, expected)\n"
+      }
+    ]
+  end
+
+  def edits(:stream_owner_backoff_result) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: "        state = exact(state, source, :state_owner_backoff_result, actual, expected)\n",
+        mutated: "        _ = actual\n        state = exact(state, source, :state_owner_backoff_result, expected, expected)\n"
+      }
+    ]
+  end
+
   def edits(:stream_monitor_source) do
     [
       %{
@@ -893,12 +913,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     with_owner_mutant(
       DBConnection.Connection,
-      &(&1 > 0),
+      2,
       &remote_inputs_form(&1, &2, DBConnection.Backoff, targets),
       fn ->
         with_owner_mutant(
           DBConnection.Backoff,
-          &(&1 > 0),
+          4,
           &owner_inputs_form(&1, &2, targets),
           callback
         )
@@ -911,12 +931,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
     with_owner_mutant(
       DBConnection.Connection,
-      &(&1 > 0),
+      2,
       &remote_outputs_form(&1, &2, DBConnection.Backoff, targets),
       fn ->
         with_owner_mutant(
           DBConnection.Backoff,
-          &(&1 > 0),
+          4,
           &owner_outputs_form(&1, &2, targets),
           callback
         )
