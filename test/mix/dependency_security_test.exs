@@ -1,5 +1,5 @@
 defmodule AshOnetime.MixDependencySecurityTest do
-  # ADR 0004 (2026-09-15 amendment): no published requirement may resolve to a
+  # ADR 0004: no published requirement may resolve to a
   # version with a known unpatched advisory. Each test pins its package's consumer
   # requirement against the exact advised and patched versions from publisher/OSV
   # records, and the mutation battery mutates each requirement string to prove
@@ -30,7 +30,10 @@ defmodule AshOnetime.MixDependencySecurityTest do
       refute Version.match?("3.36.1", requirement)
       refute Version.match?("3.37.0", requirement)
       refute Version.match?("3.37.1", requirement)
-      assert Version.match?("3.37.2", requirement)
+      # CVE-2026-124283 affects Ash >= 3.31.3 and < 3.38.0.
+      refute Version.match?("3.37.2", requirement)
+      refute Version.match?("3.37.7", requirement)
+      assert Version.match?("3.38.0", requirement)
     end
   end
 

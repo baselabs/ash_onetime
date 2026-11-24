@@ -11,7 +11,7 @@ inputs:
     required: true
   cell:
     description: >-
-      The build this cache holds: ash<version> for an Ash compatibility cell (ash3.37.2,
+      The build this cache holds: ash<version> for an Ash compatibility cell (ash3.38.0,
       ashlatest), compatibility for the second-toolchain lane, release for the release gates,
       mutation battery, PostgreSQL compatibility and work runs
     required: true

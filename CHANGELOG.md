@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased — 2.0.0
 
+- Raise the Ash security floor to `>= 3.38.0 and < 4.0.0` for
+  [GHSA-m5v6-3qwf-6w9r (CVE-2026-124283)](https://github.com/ash-project/ash/security/advisories/GHSA-m5v6-3qwf-6w9r),
+  which affects keyset pagination cursor handling.
+
 - Declare the development version only in `mix.exs`; check documentation claims against it,
   distinguish unpublished guides from HexDocs, and refuse pre-release publication.
 

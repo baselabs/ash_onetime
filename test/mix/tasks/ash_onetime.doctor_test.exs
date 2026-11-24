@@ -62,10 +62,10 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
     end
 
     @tag :doctor_ash_floor_mutation
-    test "rejects the Ash release preceding the patched multitenant-upsert floor" do
-      assert {:fail, message} = Doctor.floor_status(Version.parse!("3.37.1"))
+    test "rejects the last Ash release affected by CVE-2026-124283" do
+      assert {:fail, message} = Doctor.floor_status(Version.parse!("3.37.7"))
       assert message =~ "below the security floor"
-      assert message =~ "3.37.2"
+      assert message =~ "3.38.0"
     end
 
     test "rejects the former 3.34.6 floor, inside EEF-CVE-2026-96581's range" do
@@ -73,8 +73,8 @@ defmodule Mix.Tasks.AshOnetime.DoctorTest do
       assert message =~ "below the security floor"
     end
 
-    test "accepts the 3.37.2 security floor" do
-      assert :ok = Doctor.floor_status(Version.parse!("3.37.2"))
+    test "accepts the 3.38.0 security floor" do
+      assert :ok = Doctor.floor_status(Version.parse!("3.38.0"))
     end
   end
 

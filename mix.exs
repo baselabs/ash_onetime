@@ -87,11 +87,11 @@ defmodule AshOnetime.MixProject do
     ]
   end
 
-  # Consumer Ash support is >= 3.37.2 and < 4.0.0 (security floors: ADR 0004).
+  # Consumer Ash support is >= 3.38.0 and < 4.0.0 (security floors: ADR 0004).
   # ASH_ONETIME_ASH_VERSION may pin only a plain release inside that range;
   # latest or unset preserves the floating consumer requirement.
   # rule:mixpin-ash-floor
-  @ash_floor "3.37.2"
+  @ash_floor "3.38.0"
 
   defp ash_requirement do
     case System.get_env("ASH_ONETIME_ASH_VERSION") do
