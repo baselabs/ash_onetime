@@ -340,6 +340,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         holder_queued?: false,
         expired?: false,
         released?: false,
+        resumed?: false,
         finished?: false
       })
     after
@@ -355,6 +356,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp owner_timer_fixture_loop(state) do
     receive do
       {:stop, token} when token == state.token ->
+        AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TIMER_FIXTURE", %{
+          task?: not is_nil(state.task),
+          pending: map_size(state.pending),
+          timers: map_size(state.timers),
+          released?: state.released?,
+          resumed?: state.resumed?,
+          holder_queued?: state.holder_queued?,
+          expired?: state.expired?,
+          finished?: state.finished?
+        })
+
         :ok
 
       {:DOWN, monitor, :process, parent, _reason}
@@ -412,7 +424,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp owner_timer_fixture_event({:resume_owner, token, owner}, %{token: token} = state) do
     resume_timer_owner(owner)
     Process.delete(:ash_onetime_timer_fixture_owner)
-    state
+    %{state | resumed?: true}
   end
 
   defp owner_timer_fixture_event(_message, state), do: state
