@@ -536,13 +536,15 @@ defmodule AshOnetime.DeliveryComparatorControls do
         assertion: "U_STORE_SNAPSHOT_WITNESS"
       },
       "u_wire_statement_phase" => %{
-        path: "test/support/exit_boundary/comparator.ex",
-        original: "    rw = Wire.build(rt, readback.claimed)\n",
-        mutated: "    rw = Wire.build(rt)\n",
+        path: "test/support/exit_boundary/connection_reads.ex",
+        original:
+          "      if MapSet.member?(state.readback, write.command.index), do: :committed_read, else: :shared\n",
+        mutated: "      :shared\n",
         test: "test/ash_onetime/delivery/comparator_controls_test.exs",
         tag: "u2",
         test_name: "U2 and U4: hold release reaches GREATEST and its next wire row",
-        assertion: "comparator differences:"
+        assertion:
+          "assert Enum.any?(origins, &match?(%{origin: {:wire_statement, :committed_read, _}}, &1))"
       },
       "u_allocation_happens_before" => %{
         path: "test/support/exit_boundary/allocation.ex",

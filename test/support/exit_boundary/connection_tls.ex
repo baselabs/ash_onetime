@@ -5093,14 +5093,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       record = record_packet(type, {3, 3}, fragment)
       {:ok, record, Map.put(states, :current_write, %{write | sequence_number: sequence + 1})}
     else
-      cipher = write.cipher_state
-      iv = elem(cipher, 1)
-      tag_length = elem(cipher, 6)
-      nonce = record_nonce(sequence, iv)
-      plaintext = [fragment, type]
-      aad = <<23, 3, 3, IO.iodata_length(plaintext) + tag_length::16>>
-
-      with {:ok, handle} <- record_aead_handle(state, source, write, true),
+      with {:cipher_state, iv, _key, _finished, _nonce, _cipher, tag_length} <- write.cipher_state,
+           nonce = record_nonce(sequence, iv),
+           plaintext = [fragment, type],
+           aad = <<23, 3, 3, IO.iodata_length(plaintext) + tag_length::16>>,
+           {:ok, handle} <- record_aead_handle(state, source, write, true),
            {:ok, encrypted} <-
              record_primitive(state, source, {:crypto, :crypto_one_time_aead, 4}, [
                handle,
@@ -5412,7 +5409,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         <<_type, length::24, _::binary>> = fragment
         <<first::binary-size(^length + 4), rest::binary>> = fragment
 
-        {packets, remaining} = parse_handshake_stream(highest, <<buffer::binary, first::binary>>, [])
+        {packets, remaining} =
+          parse_handshake_stream(highest, <<buffer::binary, first::binary>>, [])
+
         {:ok, {packets, remaining, rest}}
 
       _ ->
@@ -5472,6 +5471,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
            cipher::binary-size(2), compression, extensions::binary>>
        ) do
     retry? = version == {3, 4} and random == @hello_retry_random
+
     unless compression == 0 or retry? do
       handshake_alert(
         {:ssl_handshake, :decode_handshake, 3},
@@ -5480,9 +5480,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {:invalid_compression_method, compression}
       )
     end
+
     absent? = extensions == <<>>
     extensions = handshake_vector(extensions)
-    selected = if absent?, do: version, else: handshake_extension_version(extensions, version, {major, minor})
+
+    selected =
+      if absent?,
+        do: version,
+        else: handshake_extension_version(extensions, version, {major, minor})
+
     kind = if retry?, do: :hello_retry_request, else: :server_hello
 
     {:server_hello, {major, minor}, random, session, cipher,
@@ -5509,7 +5515,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp decode_handshake_packet(
          {3, 4},
          11,
-         <<context_size, context::binary-size(context_size), size::24, entries::binary-size(size)>>
+         <<context_size, context::binary-size(context_size), size::24,
+           entries::binary-size(size)>>
        ),
        do: {:certificate_1_3, context, handshake_certificates(entries, :tls13, [])}
 
@@ -5535,7 +5542,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
            names_size::16, names::binary-size(names_size)>>
        ),
        do:
-         {:certificate_request, types, {:hash_sign_algos, handshake_signature_list(signs, {3, 3})},
+         {:certificate_request, types,
+          {:hash_sign_algos, handshake_signature_list(signs, {3, 3})},
           handshake_authorities(names)}
 
   defp decode_handshake_packet(
@@ -5547,10 +5555,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp decode_handshake_packet(_version, 14, <<>>), do: {:server_hello_done}
 
-  defp decode_handshake_packet({3, 4}, 15, <<algorithm::16, size::16, signature::binary-size(size)>>),
-    do: {:certificate_verify_1_3, handshake_signature(algorithm), signature}
+  defp decode_handshake_packet(
+         {3, 4},
+         15,
+         <<algorithm::16, size::16, signature::binary-size(size)>>
+       ),
+       do: {:certificate_verify_1_3, handshake_signature(algorithm), signature}
 
-  defp decode_handshake_packet({3, 3}, 15, <<algorithm::16, size::16, signature::binary-size(size)>>) do
+  defp decode_handshake_packet(
+         {3, 3},
+         15,
+         <<algorithm::16, size::16, signature::binary-size(size)>>
+       ) do
     [scheme] = handshake_signature_list(<<algorithm::16>>, {3, 3})
     {:certificate_verify, scheme, signature}
   end
@@ -5568,7 +5584,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp decode_handshake_packet({3, 4}, 24, <<1>>), do: {:key_update, :update_requested}
 
   defp decode_handshake_packet({3, 4}, 24, <<request>>),
-    do: handshake_alert({:tls_handshake_1_3, :decode_key_update, 1}, 0, 47, {:request_update, request})
+    do:
+      handshake_alert(
+        {:tls_handshake_1_3, :decode_key_update, 1},
+        0,
+        47,
+        {:request_update, request}
+      )
 
   defp decode_handshake_packet(
          _version,
@@ -5601,7 +5623,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp handshake_vector(<<>>), do: <<>>
   defp handshake_vector(<<size::16, bytes::binary-size(size)>>), do: bytes
 
-  defp handshake_extension_version(<<43::16, size::16, data::binary-size(size), _::binary>>, local, _)
+  defp handshake_extension_version(
+         <<43::16, size::16, data::binary-size(size), _::binary>>,
+         local,
+         _
+       )
        when size > 2 do
     <<_size, versions::binary>> = data
     [highest | _] = handshake_versions(versions, [])
@@ -5611,15 +5637,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp handshake_extension_version(<<43::16, 2::16, major, minor, _::binary>>, local, _),
     do: min(local, {major, minor})
 
-  defp handshake_extension_version(<<_type::16, size::16, _::binary-size(size), rest::binary>>, local, legacy),
-    do: handshake_extension_version(rest, local, legacy)
+  defp handshake_extension_version(
+         <<_type::16, size::16, _::binary-size(size), rest::binary>>,
+         local,
+         legacy
+       ),
+       do: handshake_extension_version(rest, local, legacy)
 
   defp handshake_extension_version(_rest, local, legacy), do: min(local, legacy)
 
   defp handshake_certificates(<<>>, _kind, certificates), do: Enum.reverse(certificates)
 
-  defp handshake_certificates(<<size::24, der::binary-size(size), rest::binary>>, :legacy, certificates),
-    do: handshake_certificates(rest, :legacy, [der | certificates])
+  defp handshake_certificates(
+         <<size::24, der::binary-size(size), rest::binary>>,
+         :legacy,
+         certificates
+       ),
+       do: handshake_certificates(rest, :legacy, [der | certificates])
 
   defp handshake_certificates(
          <<size::24, der::binary-size(size), extension_size::16,
@@ -5648,19 +5682,57 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp decode_handshake_extensions(bytes, version, kind, hello?) do
     defaults =
       case {hello?, version, kind} do
-        {false, _, _} -> []
-        {true, {3, 4}, :server_hello} -> [:key_share, :pre_shared_key, :server_hello_selected_version]
-        {true, {3, 4}, :hello_retry_request} -> [:key_share, :cookie, :server_hello_selected_version]
+        {false, _, _} ->
+          []
+
+        {true, {3, 4}, :server_hello} ->
+          [:key_share, :pre_shared_key, :server_hello_selected_version]
+
+        {true, {3, 4}, :hello_retry_request} ->
+          [:key_share, :cookie, :server_hello_selected_version]
+
         {true, {3, 4}, :client_hello} ->
-          [:sni, :max_frag_enum, :status_request, :elliptic_curves, :signature_algs, :use_srtp,
-           :alpn, :key_share, :pre_shared_key, :psk_key_exchange_modes, :early_data, :cookie,
-           :client_hello_versions, :certificate_authorities, :signature_algs_cert]
+          [
+            :sni,
+            :max_frag_enum,
+            :status_request,
+            :elliptic_curves,
+            :signature_algs,
+            :use_srtp,
+            :alpn,
+            :key_share,
+            :pre_shared_key,
+            :psk_key_exchange_modes,
+            :early_data,
+            :cookie,
+            :client_hello_versions,
+            :certificate_authorities,
+            :signature_algs_cert
+          ]
+
         {true, {3, 3}, :client_hello} ->
-          [:renegotiation_info, :alpn, :next_protocol_negotiation, :srp, :ec_point_formats,
-           :elliptic_curves, :sni, :signature_algs]
+          [
+            :renegotiation_info,
+            :alpn,
+            :next_protocol_negotiation,
+            :srp,
+            :ec_point_formats,
+            :elliptic_curves,
+            :sni,
+            :signature_algs
+          ]
+
         {true, _, :client_hello} ->
-          [:renegotiation_info, :alpn, :next_protocol_negotiation, :srp, :ec_point_formats,
-           :elliptic_curves, :sni]
+          [
+            :renegotiation_info,
+            :alpn,
+            :next_protocol_negotiation,
+            :srp,
+            :ec_point_formats,
+            :elliptic_curves,
+            :sni
+          ]
+
         {true, _, :server_hello} ->
           [:renegotiation_info, :alpn, :next_protocol_negotiation, :ec_point_formats]
       end
@@ -5676,7 +5748,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        ) do
     extensions =
       case handshake_extension(type, bytes, version, kind, rest) do
-        :ignore -> extensions
+        :ignore ->
+          extensions
+
         {key, value} ->
           unless Map.get(extensions, key, :undefined) == :undefined do
             handshake_alert(
@@ -5727,25 +5801,36 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          {:signature_algs_cert,
           {:signature_algorithms_cert, handshake_signature_list(handshake_vector(bytes), {3, 4})}}
 
-  defp handshake_extension(14, <<size::16, profiles::binary-size(size), tail::binary>>, _version, kind, _)
+  defp handshake_extension(
+         14,
+         <<size::16, profiles::binary-size(size), tail::binary>>,
+         _version,
+         kind,
+         _
+       )
        when kind in [:client_hello, :server_hello, :encrypted_extensions],
        do:
-         {:use_srtp, {:use_srtp, for(<<profile::binary-size(2) <- profiles>>, do: profile),
-                     handshake_vector8(tail)}}
+         {:use_srtp,
+          {:use_srtp, for(<<profile::binary-size(2) <- profiles>>, do: profile),
+           handshake_vector8(tail)}}
 
   defp handshake_extension(10, <<_size::16, bytes::binary>>, {3, 4}, kind, _)
        when kind in [:client_hello, :encrypted_extensions],
        do:
          {:elliptic_curves,
-          {:supported_groups, for(<<enum::16 <- bytes>>, is_map_key(@handshake_groups, enum),
-                                 do: Map.fetch!(@handshake_groups, enum))}}
+          {:supported_groups,
+           for(<<enum::16 <- bytes>>, is_map_key(@handshake_groups, enum),
+             do: Map.fetch!(@handshake_groups, enum)
+           )}}
 
   defp handshake_extension(10, <<_size::16, bytes::binary>>, version, kind, _)
        when version < {3, 4} and kind in [:client_hello, :server_hello],
        do:
          {:elliptic_curves,
-          {:elliptic_curves, for(<<enum::16 <- bytes>>, is_map_key(@handshake_curve_oids, enum),
-                                do: Map.fetch!(@handshake_curve_oids, enum))}}
+          {:elliptic_curves,
+           for(<<enum::16 <- bytes>>, is_map_key(@handshake_curve_oids, enum),
+             do: Map.fetch!(@handshake_curve_oids, enum)
+           )}}
 
   defp handshake_extension(11, <<_size, bytes::binary>>, _version, kind, _)
        when kind in [:client_hello, :server_hello],
@@ -5767,33 +5852,52 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        do: {:server_hello_selected_version, {:server_hello_selected_version, {major, minor}}}
 
   defp handshake_extension(43, <<_size, versions::binary>>, _version, kind, _)
-       when byte_size(versions) > 1 and kind in [:client_hello, :server_hello, :hello_retry_request],
+       when byte_size(versions) > 1 and
+              kind in [:client_hello, :server_hello, :hello_retry_request],
        do: {:client_hello_versions, {:client_hello_versions, handshake_versions(versions, [])}}
 
   defp handshake_extension(51, <<enum::16>>, _version, :hello_retry_request, _),
-    do: {:key_share, {:key_share_hello_retry_request, Map.get(@handshake_groups, enum, :undefined)}}
+    do:
+      {:key_share, {:key_share_hello_retry_request, Map.get(@handshake_groups, enum, :undefined)}}
 
-  defp handshake_extension(51, <<enum::16, size::16, bytes::binary-size(size)>>, _version, :server_hello, _) do
+  defp handshake_extension(
+         51,
+         <<enum::16, size::16, bytes::binary-size(size)>>,
+         _version,
+         :server_hello,
+         _
+       ) do
     group = Map.get(@handshake_groups, enum, :undefined)
-    {:key_share, {:key_share_server_hello, {:key_share_entry, group, handshake_peer_share(group, bytes)}}}
+
+    {:key_share,
+     {:key_share_server_hello, {:key_share_entry, group, handshake_peer_share(group, bytes)}}}
   end
 
   defp handshake_extension(51, <<_size::16, shares::binary>>, _version, :client_hello, _),
     do: {:key_share, {:key_share_client_hello, handshake_peer_shares(shares, [])}}
 
   defp handshake_extension(45, bytes, _version, :client_hello, _),
-    do: {:psk_key_exchange_modes, {:psk_key_exchange_modes,
-          for(<<mode <- handshake_vector8(bytes)>>, do: Enum.fetch!([:psk_ke, :psk_dhe_ke], mode))}}
+    do:
+      {:psk_key_exchange_modes,
+       {:psk_key_exchange_modes,
+        for(<<mode <- handshake_vector8(bytes)>>, do: Enum.fetch!([:psk_ke, :psk_dhe_ke], mode))}}
 
   defp handshake_extension(41, <<identity::16>>, _version, :server_hello, _),
     do: {:pre_shared_key, {:pre_shared_key_server_hello, identity}}
 
-  defp handshake_extension(41, <<identity_size::16, identities::binary-size(identity_size),
-                               binder_size::16, binders::binary-size(binder_size)>>,
-                           _version, :client_hello, <<>>),
-    do: {:pre_shared_key, {:pre_shared_key_client_hello,
-          {:offered_psks, handshake_psk_identities(identities, []), handshake_psk_binders(binders, [])},
-          binder_size + 2}}
+  defp handshake_extension(
+         41,
+         <<identity_size::16, identities::binary-size(identity_size), binder_size::16,
+           binders::binary-size(binder_size)>>,
+         _version,
+         :client_hello,
+         <<>>
+       ),
+       do:
+         {:pre_shared_key,
+          {:pre_shared_key_client_hello,
+           {:offered_psks, handshake_psk_identities(identities, []),
+            handshake_psk_binders(binders, [])}, binder_size + 2}}
 
   defp handshake_extension(41, _bytes, _version, :client_hello, _rest),
     do:
@@ -5816,14 +5920,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     do: {:status_request, {:certificate_status, :undefined, response}}
 
   defp handshake_extension(42, <<>>, _version, kind, _)
-       when kind in [:client_hello, :encrypted_extensions], do: {:early_data, {:early_data_indication}}
+       when kind in [:client_hello, :encrypted_extensions],
+       do: {:early_data, {:early_data_indication}}
 
   defp handshake_extension(42, <<maximum::32>>, _version, :new_session_ticket, _),
     do: {:early_data, {:early_data_indication_nst, maximum}}
 
   defp handshake_extension(47, bytes, _version, kind, _)
        when kind in [:client_hello, :certificate_request],
-       do: {:certificate_authorities, {:certificate_authorities, handshake_authorities(handshake_vector(bytes))}}
+       do:
+         {:certificate_authorities,
+          {:certificate_authorities, handshake_authorities(handshake_vector(bytes))}}
 
   defp handshake_extension(_type, _bytes, _version, _kind, _rest), do: :ignore
 
@@ -5838,19 +5945,33 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp handshake_server_name(_rest), do: :undefined
 
   defp handshake_versions(<<>>, versions), do: Enum.reverse(versions)
+
   defp handshake_versions(<<major, minor, rest::binary>>, versions),
     do: handshake_versions(rest, [{major, minor} | versions])
 
   defp handshake_peer_share(:x25519mlkem768, <<kem::binary-size(1088), curve::binary-size(32)>>),
     do: {kem, curve}
-  defp handshake_peer_share(:secp256r1mlkem768, <<curve::binary-size(65), kem::binary-size(1088)>>),
-    do: {curve, kem}
-  defp handshake_peer_share(:secp384r1mlkem1024, <<curve::binary-size(97), kem::binary-size(1568)>>),
-    do: {curve, kem}
+
+  defp handshake_peer_share(
+         :secp256r1mlkem768,
+         <<curve::binary-size(65), kem::binary-size(1088)>>
+       ),
+       do: {curve, kem}
+
+  defp handshake_peer_share(
+         :secp384r1mlkem1024,
+         <<curve::binary-size(97), kem::binary-size(1568)>>
+       ),
+       do: {curve, kem}
+
   defp handshake_peer_share(_group, bytes), do: bytes
 
   defp handshake_peer_shares(<<>>, shares), do: Enum.reverse(shares)
-  defp handshake_peer_shares(<<enum::16, size::16, bytes::binary-size(size), rest::binary>>, shares) do
+
+  defp handshake_peer_shares(
+         <<enum::16, size::16, bytes::binary-size(size), rest::binary>>,
+         shares
+       ) do
     group = Map.get(@handshake_groups, enum, :undefined)
     # Client hybrid encodings carry public keys rather than encapsulation ciphertexts.
     public =
@@ -5860,15 +5981,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {:secp384r1mlkem1024, <<curve::binary-size(97), kem::binary-size(1568)>>} -> {curve, kem}
         _ -> bytes
       end
-    shares = if group == :undefined, do: shares, else: [{:key_share_entry, group, public} | shares]
+
+    shares =
+      if group == :undefined, do: shares, else: [{:key_share_entry, group, public} | shares]
+
     handshake_peer_shares(rest, shares)
   end
 
   defp handshake_psk_identities(<<>>, identities), do: Enum.reverse(identities)
-  defp handshake_psk_identities(<<size::16, identity::binary-size(size), age::32, rest::binary>>, identities),
-    do: handshake_psk_identities(rest, [{:psk_identity, identity, age} | identities])
+
+  defp handshake_psk_identities(
+         <<size::16, identity::binary-size(size), age::32, rest::binary>>,
+         identities
+       ),
+       do: handshake_psk_identities(rest, [{:psk_identity, identity, age} | identities])
 
   defp handshake_psk_binders(<<>>, binders), do: Enum.reverse(binders)
+
   defp handshake_psk_binders(<<size, binder::binary-size(size), rest::binary>>, binders),
     do: handshake_psk_binders(rest, [binder | binders])
 
@@ -5882,6 +6011,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp handshake_hash(enum) when enum in 0..6,
     do: Enum.fetch!([:null, :md5, :sha, :sha224, :sha256, :sha384, :sha512], enum)
+
   defp handshake_hash(enum) when enum in 224..255, do: enum
   defp handshake_hash(_enum), do: :unassigned
   defp handshake_sign(enum) when enum in 0..3, do: Enum.fetch!([:anon, :rsa, :dsa, :ecdsa], enum)
@@ -5902,6 +6032,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp handshake_signature_version(scheme, _enum, {3, 4}), do: scheme
   defp handshake_signature_version(scheme, _enum, _version) when is_tuple(scheme), do: scheme
+
   defp handshake_signature_version(_scheme, enum, {3, 3}) do
     case enum do
       n when n in [0x0401, 0x0501, 0x0601] -> {handshake_hash(Bitwise.bsr(n, 8)), :rsa}
@@ -5914,6 +6045,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       _ -> :unassigned
     end
   end
+
   defp handshake_signature_version(_scheme, enum, _version),
     do: {handshake_hash(Bitwise.bsr(enum, 8)), handshake_sign(Bitwise.band(enum, 255))}
 
@@ -5923,6 +6055,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   # supplies a name. OTP ignores an authority whose own DER cannot be decoded.
   defp handshake_authorities(bytes), do: handshake_authorities(bytes, [])
   defp handshake_authorities(<<>>, names), do: Enum.reverse(names)
+
   defp handshake_authorities(<<size::16, der::binary-size(size), rest::binary>>, names) do
     names =
       case handshake_authority(der) do
@@ -5943,6 +6076,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp handshake_rdns(<<>>, rdns), do: Enum.reverse(rdns)
+
   defp handshake_rdns(bytes, rdns) do
     {49, set, rest} = handshake_der(bytes)
     attributes = handshake_name_attributes(set, [])
@@ -5955,7 +6089,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
           value =
             case value do
-              [single] -> single
+              [single] ->
+                single
+
               parts ->
                 parts
                 |> Enum.reject(&(&1 == []))
@@ -5966,13 +6102,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
           [{:AttributeTypeAndValue, oid, {:printableString, :string.casefold(value)}}]
 
-        attributes -> attributes
+        attributes ->
+          attributes
       end
 
     handshake_rdns(rest, [normalized | rdns])
   end
 
   defp handshake_name_attributes(<<>>, attributes), do: Enum.reverse(attributes)
+
   defp handshake_name_attributes(bytes, attributes) do
     {48, attribute, rest} = handshake_der(bytes)
     {6, encoded_oid, encoded_value} = handshake_der(attribute)
@@ -6002,8 +6140,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp handshake_oid_components(<<>>, 0, values), do: Enum.reverse(values)
+
   defp handshake_oid_components(<<byte, rest::binary>>, partial, values) do
     value = partial * 128 + Bitwise.band(byte, 127)
+
     if byte < 128,
       do: handshake_oid_components(rest, 0, [value | values]),
       else: handshake_oid_components(rest, value, values)
@@ -6011,12 +6151,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp handshake_name_value({2, 5, 4, 6}, 19, bytes, _encoded) when byte_size(bytes) == 2,
     do: :binary.bin_to_list(bytes)
+
   defp handshake_name_value({2, 5, 4, 5}, 19, bytes, _encoded) when byte_size(bytes) in 1..64,
     do: :binary.bin_to_list(bytes)
+
   defp handshake_name_value({2, 5, 4, 46}, 19, bytes, _encoded), do: :binary.bin_to_list(bytes)
-  defp handshake_name_value({0, 9, 2342, 19200300, 100, 1, 25}, 22, bytes, _encoded),
+
+  defp handshake_name_value({0, 9, 2342, 19_200_300, 100, 1, 25}, 22, bytes, _encoded),
     do: :binary.bin_to_list(bytes)
-  defp handshake_name_value({1, 2, 840, 113549, 1, 9, 1}, 22, bytes, _encoded)
+
+  defp handshake_name_value({1, 2, 840, 113_549, 1, 9, 1}, 22, bytes, _encoded)
        when byte_size(bytes) in 1..255, do: :binary.bin_to_list(bytes)
 
   defp handshake_name_value({2, 5, 4, attribute}, tag, bytes, _encoded)
@@ -6030,14 +6174,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     {type, value} =
       case tag do
-        12 -> {:utf8String, bytes}
-        19 -> {:printableString, :binary.bin_to_list(bytes)}
-        20 -> {:teletexString, :binary.bin_to_list(bytes)}
+        12 ->
+          {:utf8String, bytes}
+
+        19 ->
+          {:printableString, :binary.bin_to_list(bytes)}
+
+        20 ->
+          {:teletexString, :binary.bin_to_list(bytes)}
+
         30 ->
           true = rem(byte_size(bytes), 2) == 0
           {:bmpString, for(<<a, b <- bytes>>, do: if(a == 0, do: b, else: {0, 0, a, b}))}
+
         28 ->
           true = rem(byte_size(bytes), 4) == 0
+
           {:universalString,
            for(<<a, b, c, d <- bytes>>, do: if({a, b, c} == {0, 0, 0}, do: d, else: {a, b, c, d}))}
       end
@@ -6047,10 +6199,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp handshake_name_value(oid, _tag, _bytes, encoded) do
-    if oid in [{2, 5, 4, 6}, {2, 5, 4, 5}, {2, 5, 4, 46},
-               {0, 9, 2342, 19200300, 100, 1, 25}, {1, 2, 840, 113549, 1, 9, 1}],
-      do: throw(:invalid_handshake),
-      else: {:asn1_OPENTYPE, encoded}
+    if oid in [
+         {2, 5, 4, 6},
+         {2, 5, 4, 5},
+         {2, 5, 4, 46},
+         {0, 9, 2342, 19_200_300, 100, 1, 25},
+         {1, 2, 840, 113_549, 1, 9, 1}
+       ],
+       do: throw(:invalid_handshake),
+       else: {:asn1_OPENTYPE, encoded}
   end
 
   defp handshake_events(packets, rest) do
@@ -7862,6 +8019,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           index: scope.source.index,
           mfa: mfa,
           matches: length(values)
+        })
+
+        candidates =
+          Enum.filter(Map.get(state.pair_index, {scope.source.pid, mfa}, []), fn pair ->
+            scope.source.index < pair.source.index and pair.returned.index < scope.returned.index
+          end)
+
+        stage =
+          cond do
+            candidates == [] -> :missing_call
+            values == [] -> :input_mismatch
+            true -> :ambiguous_output
+          end
+
+        Diagnostics.emit("CONNECTION_TLS_SERVER_HELLO_PRIMITIVE", %{
+          index: scope.source.index,
+          mfa: scope.source.mfa,
+          stage: stage
         })
 
         :error

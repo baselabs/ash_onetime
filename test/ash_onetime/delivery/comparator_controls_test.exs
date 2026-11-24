@@ -5024,6 +5024,80 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  for type <- [:default, :stop, :rand, :exp, :rand_exp], callback <- [:none, :function, :mfa] do
+    @tag connection_streams: :pool
+    test "Connection streams: #{type} backoff with #{callback} never replays native constructors",
+         context do
+      Repo.put_dynamic_repo(context.repo)
+      historical = Historical.capture(context.prefix)
+      type = unquote(type)
+      callback = unquote(callback)
+      observe = fn -> ConnectionNative.observe_pool_startup({:backoff_success, type, callback}) end
+      run = observe.()
+      assert run.result == :ok
+
+      native = fn function ->
+        Enum.filter(run.events, fn
+          %{event: {_, :call, {DBConnection.Backoff, ^function, [_]}}} -> true
+          _ -> false
+        end)
+      end
+
+      assert native.(:new) != []
+      if type == :stop, do: assert(native.(:reset) == []), else: assert(native.(:reset) != [])
+
+      if callback != :none do
+        assert Enum.any?(run.events, fn
+                 %{event: {_, :call, {ConnectionNative, :after_connect_pool_owner, [_]}}} -> true
+                 _ -> false
+               end)
+
+        assert Enum.any?(run.events, fn
+                 %{
+                   event:
+                     {_, :call,
+                      {DBConnection.Connection, :handle_event,
+                       [:info, {:"ETS-TRANSFER", _, _, {:checkin, _, _}}, :no_state, _]}}
+                 } ->
+                   true
+
+                 _ ->
+                   false
+               end)
+      else
+        assert Enum.any?(run.events, fn
+                 %{
+                   event:
+                     {_, :call,
+                      {DBConnection.Connection, :handle_event,
+                       [:internal, {:connect, _}, :no_state, _]}}
+                 } ->
+                   true
+
+                 _ ->
+                   false
+               end)
+      end
+
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+
+      calls =
+        comparator_call_order(
+          fn ->
+            proof = ConnectionHistory.build(side)
+            assert proof.errors == []
+
+            assert Enum.any?(proof.states.owner_commits, fn commit ->
+                     commit.index >= 0 and commit.machine != nil
+                   end)
+          end,
+          [{DBConnection.Backoff, :new, 1}, {DBConnection.Backoff, :reset, 1}]
+        )
+
+      assert Enum.filter(calls, &match?({:call, _, _}, &1)) == []
+    end
+  end
+
   for type <- [:default, :stop, :rand, :exp, :rand_exp], callback <- [:function, :mfa] do
     @tag connection_streams: :pool
     test "Connection streams: a refused configure #{callback} retains native #{type} backoff",
@@ -7210,6 +7284,54 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag connection_streams: :driver
+  test "Connection streams: frontend message copies share their proved physical write span",
+       context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+
+    run =
+      ExitBoundary.observe(
+        fn -> :ok end,
+        fn _ -> SQL.query!(context.repo, "SELECT $1::int4 AS native_frontend_copy", [17]) end,
+        %{host: [], callbacks: []}
+      )
+
+    assert %{rows: [[17]]} = run.result
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+    assert proof.errors == []
+    rendered = Registry.compute(:connection_stream, [proof, proof.indexed])
+    assert rendered.errors == []
+
+    constructions =
+      for %{origin: {:frontend_encoding, owner, _}, index: index, path: [2, 2, 1]} <-
+            proof.states.terms,
+          write <- proof.native.writes,
+          write.source.index == index,
+          uniq: true,
+          do: {owner, write.port}
+
+    assert constructions != []
+
+    for {owner, port} <- constructions do
+      [original] = Enum.filter(proof.indexed.events, &(&1.index == owner))
+      assert {pid, :call, {Postgrex.Protocol, :msg_send, [_, _, _]}} =
+               original.event
+
+      [retained] = Enum.filter(rendered.events, &(&1.index == owner))
+      assert Map.take(retained, [:pid, :mfa, :stack]) == Map.take(original, [:pid, :mfa, :stack])
+      refute MapSet.member?(rendered.consumed, owner)
+
+      assert {^pid, :call,
+              {Postgrex.Protocol, :msg_send,
+               [_, {:connection_byte_span, ^port, :frontend, first, last, nil}, _]}} =
+               retained.event
+
+      assert is_integer(first) and last > first
+    end
+  end
+
+  @tag connection_streams: :driver
   test "Connection streams: a write without logical bytes remains an observed operation" do
     {proof, indexed} = native_render_fixture(:empty_write)
     assert proof.errors == []
@@ -9312,6 +9434,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              {:caught, :error, {:badmatch, {:error, %DBConnection.ConnectionError{}}}},
              run.result
            )
+
     events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
 
     assert Enum.any?(events, fn source ->

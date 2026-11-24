@@ -1870,11 +1870,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_connect_transition(state, call, returned, machine) do
-    with [connect] <- native_type_calls(state, call, returned, {Postgrex.Protocol, :connect, 1}),
-         {:ok, expected_options} <- owner_connect_options(state, call, connect, machine.data.opts),
-         {_, :call, {_, _, [options]}} <- connect.source.event,
-         true <- options === expected_options do
-      owner_connect_result(state, connect, returned, machine)
+    with {:ok, configured} <- owner_connect_options(state, call, returned, machine.data.opts) do
+      case {configured, native_type_calls(state, call, returned, {Postgrex.Protocol, :connect, 1})} do
+        {{:error, %{__exception__: true}}, []} ->
+          owner_failed_connection(state, call, returned, machine)
+
+        {expected_options, [connect]} when is_list(expected_options) ->
+          case connect.source.event do
+            {_, :call, {_, _, [^expected_options]}} ->
+              owner_connect_result(state, connect, returned, machine)
+
+            _ ->
+              :error
+          end
+
+        _ ->
+          :error
+      end
     else
       _ -> :error
     end
@@ -1886,21 +1898,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          returned,
          machine
        ) do
-    with backoff when not is_nil(backoff) <- machine.data.backoff,
-         [retry] <-
-           native_type_calls(
-             state,
-             connect.returned,
-             returned,
-             {DBConnection.Backoff, :backoff, 1}
-           ),
-         {:ok, timeout, next_backoff} <- owner_backoff(state, retry, backoff) do
-      data = %{machine.data | backoff: next_backoff}
-      next = Map.put(%{machine | data: data}, :backoff_program, {returned.index, timeout})
-      {:ok, next, {:keep_state, data, {{:timeout, :backoff}, timeout, nil}}}
-    else
-      _ -> :error
-    end
+    owner_failed_connection(state, connect.returned, returned, machine)
   end
 
   defp owner_connect_result(
@@ -1937,6 +1935,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_connect_result(_state, _connect, _returned, _machine), do: :error
+
+  defp owner_failed_connection(state, failed, returned, machine) do
+    with backoff when not is_nil(backoff) <- machine.data.backoff,
+         [retry] <-
+           native_type_calls(
+             state,
+             failed,
+             returned,
+             {DBConnection.Backoff, :backoff, 1}
+           ),
+         {:ok, timeout, next_backoff} <- owner_backoff(state, retry, backoff) do
+      data = %{machine.data | backoff: next_backoff}
+      next = Map.put(%{machine | data: data}, :backoff_program, {returned.index, timeout})
+      {:ok, next, {:keep_state, data, {{:timeout, :backoff}, timeout, nil}}}
+    else
+      _ -> :error
+    end
+  end
 
   defp owner_backoff_result(state, source, retry, backoff, actual) do
     case owner_backoff(state, retry, backoff) do
@@ -2312,28 +2328,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
-  defp owner_connect_options(state, call, connect, options) do
+  defp owner_connect_options(state, call, returned, options) do
     case Keyword.get(options, :configure) do
       nil ->
         {:ok, options}
 
       {module, function, arguments} ->
-        owner_configure_result(state, call, connect, module, function, [options | arguments])
+        owner_configure_result(state, call, returned, module, function, [options | arguments])
 
       callback when is_function(callback, 1) ->
         {:module, module} = Function.info(callback, :module)
         {:name, function} = Function.info(callback, :name)
-        owner_configure_result(state, call, connect, module, function, [options])
+        owner_configure_result(state, call, returned, module, function, [options])
     end
   end
 
-  defp owner_configure_result(state, call, connect, module, function, arguments) do
+  defp owner_configure_result(state, call, returned, module, function, arguments) do
     callbacks =
       for pair <-
-            native_type_calls(state, call, connect.source, {module, function, length(arguments)}),
+            native_type_calls(state, call, returned, {module, function, length(arguments)}),
           pair.source.event === {call.pid, :call, {module, function, arguments}},
           {_, :return_from, _, configured} <- [pair.returned.event],
-          is_list(configured),
           do: configured
 
     case callbacks do

@@ -87,8 +87,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     ExitBoundary.observe(
       fn ->
         if mode == {:connect_failure, :stop} or
-             match?({kind, :stop, _} when kind in [:after_connect_failure, :configure_refusal], mode),
-          do: Process.flag(:trap_exit, true)
+             match?(
+               {kind, :stop, _} when kind in [:after_connect_failure, :configure_refusal],
+               mode
+             ),
+           do: Process.flag(:trap_exit, true)
 
         :ok
       end,
@@ -143,6 +146,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   end
 
   defp pool_startup_options(options, :default), do: options
+
+  defp pool_startup_options(options, {:backoff_success, type, callback})
+       when type in [:default, :stop, :rand, :exp, :rand_exp] do
+    options = if type == :default, do: options, else: Keyword.put(options, :backoff_type, type)
+
+    case callback do
+      :none -> options
+      :function -> Keyword.put(options, :after_connect, &__MODULE__.after_connect_pool_owner/1)
+      :mfa -> Keyword.put(options, :after_connect, {__MODULE__, :after_connect_pool_owner, []})
+    end
+  end
 
   defp pool_startup_options(options, :configure_function),
     do: Keyword.put(options, :configure, &__MODULE__.configure_pool_owner/1)
