@@ -4958,20 +4958,55 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     {_, :return_from, _, 0} = size.returned.event
     server_version = Postgrex.Utils.parse_version(version.protocol.parameters["server_version"])
-    type_module = Keyword.fetch!(context.options, :types)
-    disable_composite_types = version.protocol.disable_composite_types
 
-    # The short-lived owner retires the independently created table without
-    # inspecting Postgrex's opaque state or borrowing the observed table.
-    query =
-      Task.async(fn ->
-        types = Postgrex.Types.new(type_module)
-        input = %{types: types, disable_composite_types: disable_composite_types}
-        Postgrex.Types.bootstrap_query(server_version, input)
-      end)
-      |> Task.await()
+    {:msg_query, bootstrap_query(server_version, version.protocol.disable_composite_types)}
+  end
 
-    {:msg_query, query}
+  # Postgrex.Types builds this query from the server version and composite
+  # option when its native table-size read returns zero, as proved above.
+  # Construct the SQL forward without opening an opaque Types.state or using
+  # the checked query as its own expected value.
+  defp bootstrap_query(version, disable_composite_types) do
+    {base_oid, join_range} =
+      cond do
+        version >= {14, 0, 0} ->
+          {"coalesce(r.rngsubtype, t.typbasetype)",
+           "LEFT JOIN pg_range AS r ON r.rngtypid = t.oid OR r.rngmultitypid = t.oid"}
+
+        version >= {9, 2, 0} ->
+          {"coalesce(r.rngsubtype, t.typbasetype)",
+           "LEFT JOIN pg_range AS r ON r.rngtypid = t.oid"}
+
+        true ->
+          {"t.typbasetype", ""}
+      end
+
+    comp_oids =
+      if disable_composite_types do
+        "null"
+      else
+        """
+        ARRAY (
+          SELECT a.atttypid
+          FROM pg_attribute AS a
+          WHERE a.attrelid =  t.typrelid AND a.attnum > 0 AND NOT a.attisdropped
+          ORDER BY a.attnum
+        )
+        """
+      end
+
+    filter_oids = """
+    WHERE (t.typrelid = 0)
+    AND (t.typelem = 0 OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_type s WHERE s.typrelid != 0 AND s.oid = t.typelem))
+    """
+
+    """
+    SELECT t.oid, t.typname, t.typtype, t.typsend, t.typreceive, t.typoutput, t.typinput,
+           t.typelem, #{base_oid}, #{comp_oids}
+    FROM pg_type AS t
+    #{join_range}
+    #{filter_oids}
+    """
   end
 
   defp callback_messages(state, source, actual) do
