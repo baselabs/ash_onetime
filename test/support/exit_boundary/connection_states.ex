@@ -960,7 +960,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
                  {pid, :return_from, {:gen_statem, :get_callback_mode, 2}, params}
            end) do
       version = %{holder: nil, protocol: nil, origin: {:owner_birth, init.source.index}}
-      machine = %{name: :no_state, data: data, version: version, params: params, backoff_timer: nil}
+
+      machine = %{
+        name: :no_state,
+        data: data,
+        version: version,
+        params: params,
+        backoff_timer: nil
+      }
+
       {:ok, mode.returned.index, machine}
     else
       _ -> :error
@@ -1534,8 +1542,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          _returned,
          machine
        ) do
-    {:ok, machine,
-     {:keep_state, machine.data, {:next_event, :internal, {:connect, :backoff}}}}
+    {:ok, machine, {:keep_state, machine.data, {:next_event, :internal, {:connect, :backoff}}}}
   end
 
   defp owner_transition(
@@ -1584,12 +1591,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
        ) do
     with backoff when not is_nil(backoff) <- machine.data.backoff,
          [retry] <-
-           native_type_calls(state, connect.returned, returned, {DBConnection.Backoff, :backoff, 1}),
-         true <- retry.source.event === {returned.pid, :call, {DBConnection.Backoff, :backoff, [backoff]}},
+           native_type_calls(
+             state,
+             connect.returned,
+             returned,
+             {DBConnection.Backoff, :backoff, 1}
+           ),
+         true <-
+           retry.source.event ===
+             {returned.pid, :call, {DBConnection.Backoff, :backoff, [backoff]}},
          {:ok, timeout, next_backoff} <- owner_backoff(state, retry, backoff),
          true <-
            retry.returned.event ===
-             {returned.pid, :return_from, {DBConnection.Backoff, :backoff, 1}, {timeout, next_backoff}} do
+             {returned.pid, :return_from, {DBConnection.Backoff, :backoff, 1},
+              {timeout, next_backoff}} do
       data = %{machine.data | backoff: next_backoff}
       next = Map.put(%{machine | data: data}, :backoff_program, {returned.index, timeout})
       {:ok, next, {:keep_state, data, {{:timeout, :backoff}, timeout, nil}}}
@@ -1645,17 +1660,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     {:ok, timeout, %{backoff | state: timeout}}
   end
 
-  defp owner_backoff(state, retry, %DBConnection.Backoff{type: :rand_exp, state: {previous, lower}} = backoff) do
+  defp owner_backoff(
+         state,
+         retry,
+         %DBConnection.Backoff{type: :rand_exp, state: {previous, lower}} = backoff
+       ) do
     with {:ok, timeout} <-
-           owner_backoff_random(state, retry, min(previous, lower), min(previous * 3, backoff.max)) do
+           owner_backoff_random(
+             state,
+             retry,
+             min(previous, lower),
+             min(previous * 3, backoff.max)
+           ) do
       {:ok, timeout, %{backoff | state: {timeout, lower}}}
     end
   end
 
   defp owner_backoff_random(state, retry, minimum, maximum) do
     with [random] <- native_type_calls(state, retry.source, retry.returned, {:rand, :uniform, 1}),
-         true <- random.source.event === {retry.source.pid, :call, {:rand, :uniform, [maximum - minimum + 1]}},
-         {_, :return_from, _, draw} when is_integer(draw) and draw > 0 and draw <= maximum - minimum + 1 <-
+         true <-
+           random.source.event ===
+             {retry.source.pid, :call, {:rand, :uniform, [maximum - minimum + 1]}},
+         {_, :return_from, _, draw}
+         when is_integer(draw) and draw > 0 and draw <= maximum - minimum + 1 <-
            random.returned.event do
       {:ok, draw + minimum - 1}
     else
@@ -1913,7 +1940,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         state
         |> owner_data_copy(source, [2, 2, 10, 1], next)
         |> owner_protocol_copy(source, [2, 2, 10, 1, :state], next.version)
-        |> owner_result_copy(source, owner_term(source.event, [2, 2, 10]), state.owner_results[source.pid])
+        |> owner_result_copy(
+          source,
+          owner_term(source.event, [2, 2, 10]),
+          state.owner_results[source.pid]
+        )
       else
         state
       end
@@ -1940,7 +1971,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     case machine do
       %{backoff_timer: {reference, _}, backoff_received: received} ->
         message = {{:timeout, :backoff}, nil}
-        state = exact(state, source, :state_owner_backoff_event, owner_term(source.event, [2, 2, 3]), message)
+
+        state =
+          exact(
+            state,
+            source,
+            :state_owner_backoff_event,
+            owner_term(source.event, [2, 2, 3]),
+            message
+          )
+
         machine =
           machine
           |> Map.put(:backoff_timer, nil)
@@ -1961,12 +2001,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp owner_backoff_loop(state, source, function, machine, next) do
     state =
       if Map.has_key?(machine, :backoff_timer) and function in @owner_loop_current do
-        timers = case machine.backoff_timer do
-          nil -> %{}
-          {reference, _} -> %{{:timeout, :backoff} => {reference, nil}}
-        end
+        timers =
+          case machine.backoff_timer do
+            nil -> %{}
+            {reference, _} -> %{{:timeout, :backoff} => {reference, nil}}
+          end
 
-        exact(state, source, :state_owner_backoff_timers, owner_term(source.event, [2, 2, 2, 3]), timers)
+        exact(
+          state,
+          source,
+          :state_owner_backoff_timers,
+          owner_term(source.event, [2, 2, 2, 3]),
+          timers
+        )
       else
         state
       end
@@ -1980,37 +2027,63 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     end
   end
 
-  defp owner_action_copy(state, source, :loop_actions, action, _next) when elem(source.mfa, 2) == 12,
-    do: exact(state, source, :state_owner_actions, owner_term(source.event, [2, 2, 11]), action)
+  defp owner_action_copy(state, source, :loop_actions, action, _next)
+       when elem(source.mfa, 2) == 12,
+       do:
+         exact(state, source, :state_owner_actions, owner_term(source.event, [2, 2, 11]), action)
 
-  defp owner_action_copy(state, source, :loop_actions_list, action, _next) when elem(source.mfa, 2) == 12 do
+  defp owner_action_copy(state, source, :loop_actions_list, action, _next)
+       when elem(source.mfa, 2) == 12 do
     callback = owner_callback_return(state, source)
     previous = owner_program_calls(state, source, callback, {:gen_statem, :loop_actions_list, 12})
     actions = if previous == [], do: [action], else: []
     exact(state, source, :state_owner_actions, owner_term(source.event, [2, 2, 11]), actions)
   end
 
-  defp owner_action_copy(state, source, :loop_actions_next_event, {:next_event, type, content}, _next) do
+  defp owner_action_copy(
+         state,
+         source,
+         :loop_actions_next_event,
+         {:next_event, type, content},
+         _next
+       ) do
     state
     |> exact(source, :state_owner_actions, owner_term(source.event, [2, 2, 11]), [])
     |> exact(source, :state_owner_actions, owner_term(source.event, [2, 2, 12]), type)
     |> exact(source, :state_owner_actions, owner_term(source.event, [2, 2, 13]), content)
   end
 
-  defp owner_action_copy(state, source, function, {{:timeout, :backoff}, timeout, nil} = action, next)
+  defp owner_action_copy(
+         state,
+         source,
+         function,
+         {{:timeout, :backoff}, timeout, nil} = action,
+         next
+       )
        when function in [:loop_timeouts, :loop_timeouts_register] do
     {epoch, ^timeout} = next.backoff_program
-    registered = owner_program_calls(state, source, epoch, {:gen_statem, :loop_timeouts_register, 15}) != []
-    timers = if registered do
-      case owner_backoff_timer(state, source, next) do
-        {:ok, reference} -> %{{:timeout, :backoff} => {reference, nil}}
-        :error -> :missing_native_backoff_timer
-      end
-    else
-      %{}
-    end
 
-    state = exact(state, source, :state_owner_backoff_timers, owner_term(source.event, [2, 2, 9]), timers)
+    registered =
+      owner_program_calls(state, source, epoch, {:gen_statem, :loop_timeouts_register, 15}) != []
+
+    timers =
+      if registered do
+        case owner_backoff_timer(state, source, next) do
+          {:ok, reference} -> %{{:timeout, :backoff} => {reference, nil}}
+          :error -> :missing_native_backoff_timer
+        end
+      else
+        %{}
+      end
+
+    state =
+      exact(
+        state,
+        source,
+        :state_owner_backoff_timers,
+        owner_term(source.event, [2, 2, 9]),
+        timers
+      )
 
     case {function, elem(source.mfa, 2)} do
       {:loop_timeouts, 12} ->
@@ -2018,19 +2091,38 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         exact(state, source, :state_owner_actions, owner_term(source.event, [2, 2, 7]), actions)
 
       {:loop_timeouts, 16} ->
-        owner_backoff_fields(state, source, [12, 13, 14, 15], [{:timeout, :backoff}, timeout, nil, []])
+        owner_backoff_fields(state, source, [12, 13, 14, 15], [
+          {:timeout, :backoff},
+          timeout,
+          nil,
+          []
+        ])
 
       {:loop_timeouts_register, arity} when arity in [15, 17] ->
         case owner_backoff_timer(state, source, next) do
           {:ok, reference} ->
             if arity == 17,
-              do: owner_backoff_fields(state, source, [12, 13, 14, 15, 16], [{:timeout, :backoff}, timeout, nil, [], reference]),
-              else: owner_backoff_fields(state, source, [12, 13, 14], [{:timeout, :backoff}, reference, nil])
+              do:
+                owner_backoff_fields(state, source, [12, 13, 14, 15, 16], [
+                  {:timeout, :backoff},
+                  timeout,
+                  nil,
+                  [],
+                  reference
+                ]),
+              else:
+                owner_backoff_fields(state, source, [12, 13, 14], [
+                  {:timeout, :backoff},
+                  reference,
+                  nil
+                ])
 
-          :error -> failure(state, source, :state_owner_backoff_timer_origin)
+          :error ->
+            failure(state, source, :state_owner_backoff_timer_origin)
         end
 
-      _ -> state
+      _ ->
+        state
     end
   end
 
@@ -2039,18 +2131,32 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp owner_backoff_fields(state, source, positions, values) do
     Enum.zip(positions, values)
     |> Enum.reduce(state, fn {position, value}, state ->
-      exact(state, source, :state_owner_actions, owner_term(source.event, [2, 2, position]), value)
+      exact(
+        state,
+        source,
+        :state_owner_actions,
+        owner_term(source.event, [2, 2, position]),
+        value
+      )
     end)
   end
 
   defp owner_program_calls(state, source, after_index, mfa) do
-    Enum.filter(state.events, &(&1.pid == source.pid and &1.index > after_index and &1.index < source.index and &1.mfa == mfa and elem(&1.event, 1) == :call))
+    Enum.filter(
+      state.events,
+      &(&1.pid == source.pid and &1.index > after_index and &1.index < source.index and
+          &1.mfa == mfa and elem(&1.event, 1) == :call)
+    )
   end
 
   defp owner_callback_return(state, source) do
     state.pairs
     |> Map.values()
-    |> Enum.filter(&(&1.source.pid == source.pid and &1.source.mfa == {DBConnection.Connection, :handle_event, 4} and &1.returned.index < source.index))
+    |> Enum.filter(
+      &(&1.source.pid == source.pid and
+          &1.source.mfa == {DBConnection.Connection, :handle_event, 4} and
+          &1.returned.index < source.index)
+    )
     |> Enum.map(& &1.returned.index)
     |> Enum.max(fn -> -1 end)
   end
@@ -2058,10 +2164,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp owner_backoff_timer(state, source, %{backoff_program: {epoch, timeout}}) do
     timers =
       for {_index, pair} <- state.pairs,
-          pair.source.pid == source.pid and pair.source.index > epoch and pair.returned.index < source.index,
-          pair.source.event === {source.pid, :call, {:erlang, :start_timer, [timeout, source.pid, {:timeout, :backoff}, []]}},
+          pair.source.pid == source.pid and pair.source.index > epoch and
+            pair.returned.index < source.index,
+          pair.source.event ===
+            {source.pid, :call,
+             {:erlang, :start_timer, [timeout, source.pid, {:timeout, :backoff}, []]}},
           {_, :return_from, {:erlang, :start_timer, 4}, reference} <- [pair.returned.event],
-          is_reference(reference), do: reference
+          is_reference(reference),
+          do: reference
 
     case timers do
       [reference] -> {:ok, reference}
@@ -2125,7 +2235,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp owner_backoff_commit(state, source, %{backoff_program: {epoch, _}} = next) do
     case next.backoff_timer do
-      {_reference, ^epoch} -> {state, next}
+      {_reference, ^epoch} ->
+        {state, next}
+
       _ ->
         case owner_backoff_timer(state, source, next) do
           {:ok, reference} -> {state, %{next | backoff_timer: {reference, epoch}}}

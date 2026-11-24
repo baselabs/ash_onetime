@@ -5076,6 +5076,22 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert lease.backend == elem(row, 3).connection_id
       assert is_integer(lease.checkin) and is_integer(lease.giveaway)
 
+      assert is_nil(initial_lease.conn_ref)
+      assert is_reference(lease.conn_ref)
+      allocation_index = Origins.build(allocation_side)
+
+      allocation =
+        Allocation.pair(
+          %{forward: %{}, reverse: %{}, errors: []},
+          allocation_side,
+          allocation_side,
+          allocation_index,
+          allocation_index
+        )
+
+      assert allocation.errors == [],
+             "direct Holder leases close at their native handoff without a DBConnection wrapper"
+
       [barrier] =
         Enum.filter(proof.indexed.events, fn
           %{event: {_, :receive, {:native_holder_cut, ^token, :renewed, :observed}}} -> true
