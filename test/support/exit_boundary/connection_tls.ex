@@ -4006,7 +4006,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     size = bit_size(iv) - 64
     <<head::bitstring-size(^size), high::32, low::32>> = iv
 
-    <<head::bitstring, Bitwise.bxor(high, Bitwise.band(Bitwise.bsr(sequence, 32), 0xFFFFFFFF))::32,
+    <<head::bitstring,
+      Bitwise.bxor(high, Bitwise.band(Bitwise.bsr(sequence, 32), 0xFFFFFFFF))::32,
       Bitwise.bxor(low, Bitwise.band(sequence, 0xFFFFFFFF))::32>>
   end
 
@@ -4104,6 +4105,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp record_mac(state, source, fragment, {major, minor}, write) do
     with {:ok, algorithm} <- record_mac_algorithm(elem(write.security_parameters, 7)) do
       header = <<write.sequence_number::64, 23, major, minor, IO.iodata_length(fragment)::16>>
+
       record_primitive(state, source, {:crypto, :mac, 4}, [
         :hmac,
         algorithm,
@@ -4657,7 +4659,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          version,
          actual
        )
-       when name in [:start, :wait_sh, :wait_ee, :wait_cert_cr, :wait_cert, :wait_cv, :wait_finished],
+       when name in [
+              :start,
+              :wait_sh,
+              :wait_ee,
+              :wait_cert_cr,
+              :wait_cert,
+              :wait_cv,
+              :wait_finished
+            ],
        do: callback_result_exact(state, source, actual, {:next_state, name, version.data, []})
 
   defp callback_result(
@@ -4860,7 +4870,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
            event: %{value: {:enter, _}}
          } = frame
        )
-       when name in [:start, :wait_sh, :wait_ee, :wait_cert_cr, :wait_cert, :wait_cv, :wait_finished] do
+       when name in [
+              :start,
+              :wait_sh,
+              :wait_ee,
+              :wait_cert_cr,
+              :wait_cert,
+              :wait_cv,
+              :wait_finished
+            ] do
     data = frame.input.data
     specific = Map.put(elem(data, 7), :change_cipher_spec, :ignore)
 
