@@ -167,8 +167,6 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
   end
 
   defp role(identity, state) do
-    registered = if is_pid(identity), do: Process.info(identity, :registered_name)
-
     kind =
       cond do
         is_port(identity) -> :port
@@ -177,12 +175,9 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
       end
 
     n = Map.get(state.role_counts, kind, 0)
-
-    role =
-      case registered do
-        {:registered_name, name} when is_atom(name) -> {:registered, name}
-        _ -> {kind, n}
-      end
+    # Named services were bound in the capture. Every other pre-existing
+    # identity uses its first structural occurrence in that immutable capture.
+    role = {kind, n}
 
     {role,
      %{

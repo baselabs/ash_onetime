@@ -40,13 +40,26 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         prepare_raw(%{run: run.prior, twin: twin.prior, row: run.prior.row}, false)
       end
 
+    connections = {ConnectionHistory.build(run), ConnectionHistory.build(twin)}
+
     %{
-      run: run,
-      twin: twin,
+      run: if(reference?, do: Map.delete(run, :readback_reference), else: prepare_reference(run)),
+      twin: if(reference?, do: Map.delete(twin, :readback_reference), else: prepare_reference(twin)),
       row: row,
       prior: prior,
-      connections: {ConnectionHistory.build(run), ConnectionHistory.build(twin)}
+      connections: connections
     }
+  end
+
+  defp prepare_reference(side) do
+    case Map.fetch(side, :readback_reference) do
+      {:ok, reference} ->
+        proof = ConnectionHistory.build(reference)
+        Map.put(side, :readback_reference, Map.put(reference, :connection_history, proof))
+
+      :error ->
+        side
+    end
   end
 
   defp compare_prepared(prepared, reference?) do
@@ -59,8 +72,9 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     compare_matched(matches, row, reference?, prior)
   end
 
-  defp raw_failure(%{connections: {rc, tc}, prior: prepared_prior}) do
+  defp raw_failure(%{connections: {rc, tc}, prior: prepared_prior} = prepared) do
     prior = if prepared_prior, do: raw_failure(prepared_prior)
+    proofs = raw_proofs(prepared)
 
     cond do
       prior ->
@@ -69,17 +83,27 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
           | errors: Enum.map(prior.errors, &Map.update!(&1, :at, fn at -> {:prior, at} end))
         }
 
-      rc.errors != [] or tc.errors != [] ->
-        raw_failure(rc.indexed, tc.indexed, rc, tc)
+      Enum.any?(proofs, fn {_side, proof} -> proof.errors != [] end) ->
+        raw_failure(rc.indexed, tc.indexed, prepared, proofs)
 
       true ->
         nil
     end
   end
 
-  defp raw_failure(ri, ti, rc, tc) do
+  defp raw_proofs(%{run: run, twin: twin, connections: {rc, tc}}) do
+    references =
+      for {name, side} <- [run_reference_index: run, twin_reference_index: twin],
+          reference = Map.get(side, :readback_reference),
+          not is_nil(reference),
+          do: {name, reference.connection_history}
+
+    [run_index: rc, twin_index: tc] ++ references
+  end
+
+  defp raw_failure(ri, ti, prepared, proofs) do
     errors =
-      for {side, proof} <- [run_index: rc, twin_index: tc],
+      for {side, proof} <- proofs,
           error <- proof.errors do
         %{
           at: Map.put(error.at, side, error.index),
@@ -102,7 +126,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       databases: nil,
       derivations: nil,
       clocks: nil,
-      connections: {rc, tc}
+      connections: prepared.connections
     }
   end
 

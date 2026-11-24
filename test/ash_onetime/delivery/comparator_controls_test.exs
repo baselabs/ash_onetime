@@ -5736,8 +5736,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     for mfa <- proofs do
       completed = Enum.filter(preceding, &match?({:return, ^mfa, true}, &1))
 
-      assert length(completed) == 2,
-             "both raw connection ledgers must finish before any projected consumer"
+      assert length(completed) == 3,
+             "both raw ledgers and the complete OPEN reference must finish before projection"
     end
   end
 
@@ -5785,8 +5785,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     before_origin = Enum.take(events, first_origin)
 
     for proof <- proofs do
-      assert Enum.count(before_origin, &match?({:return, ^proof, true}, &1)) == 4,
-             "both sides of every prior and current invocation must pass their raw proof first"
+      assert Enum.count(before_origin, &match?({:return, ^proof, true}, &1)) == 5,
+             "every prior/current side and the prior OPEN reference must pass raw proof first"
     end
   end
 
