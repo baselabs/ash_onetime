@@ -3146,6 +3146,35 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         expected_args =
           if module == :tls_record, do: [plaintext, version, states], else: [plaintext, states]
 
+        if Map.get(state.owners[source.pid].family, :born?, false) and arguments !== expected_args do
+          for error <- Enum.reverse(state.errors) do
+            Diagnostics.emit(
+              "CONNECTION_COLD_TLS_PREFIX_FAILURE",
+              Map.take(error, [:index, :at, :rule, :path])
+            )
+          end
+
+          hello_origins =
+            for %{origin: {:tls_initial_hello, callback, completed}} <- state.terms,
+                uniq: true,
+                do: {callback, completed}
+
+          transitions =
+            for %{event: {_, :call, {:tls_sender, function, [:cast, {:new_write, _, negotiated, _}, _]}}} = event <-
+                  state.events,
+                event.index < source.index,
+                do: %{index: event.index, mfa: event.mfa, callback: function, version: negotiated}
+
+          Diagnostics.emit("CONNECTION_COLD_TLS_ENCODE_ORIGIN", %{
+            index: source.index,
+            mfa: source.mfa,
+            sender_state: frame.input.name,
+            version: version,
+            initial_hello_origins: hello_origins,
+            transitions: transitions
+          })
+        end
+
         expected = :tls_record.encode_data(plaintext, version, states)
 
         state
