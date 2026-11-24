@@ -6806,7 +6806,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     }
 
     assert function_exported?(ConnectionHistory, :render, 2)
-    rendered = apply(ConnectionHistory, :render, [proof, indexed])
+    render = Function.capture(ConnectionHistory, :render, 2)
+    rendered = render.(proof, indexed)
     assert rendered.errors == []
     refute Enum.any?(empty.indexes, &MapSet.member?(rendered.consumed, &1))
 

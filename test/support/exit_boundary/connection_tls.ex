@@ -1736,35 +1736,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {state, context}
 
       {:change_callback_module, module} when is_atom(module) ->
-        before = state.machine_states[source.pid].params
-        modules = [module | tl(elem(before, 4))]
-
-        case tls_callback_mode(module) do
-          {:ok, _mode, enter?} when context.state_call ->
-            result =
-              before
-              |> put_elem(1, :state_functions)
-              |> put_elem(2, enter?)
-              |> put_elem(4, modules)
-
-            change = %{
-              before: before,
-              modules: modules,
-              result: result,
-              origin: context.origin,
-              action: action
-            }
-
-            {state, %{context | module_action: change}}
-
-          _ ->
-            {tls_failure(state, source, :tls_callback_module_origin), context}
-        end
+        program_callback_module(state, source, context, module)
 
       _ ->
-        if timeout_action(action) == :error,
-          do: {tls_failure(state, source, :tls_machine_program_action_origin), context},
-          else: {state, context}
+        program_timeout_action(state, source, context, action)
     end
   end
 
@@ -1856,6 +1831,39 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        do: {state, %{context | reply: {from, reply}, replies: rest}}
 
   defp program_after(state, _source, _function, _arity, context), do: {state, context}
+
+  defp program_timeout_action(state, source, context, action) do
+    if timeout_action(action) == :error,
+      do: {tls_failure(state, source, :tls_machine_program_action_origin), context},
+      else: {state, context}
+  end
+
+  defp program_callback_module(state, source, context, module) do
+    before = state.machine_states[source.pid].params
+    modules = [module | tl(elem(before, 4))]
+
+    case tls_callback_mode(module) do
+      {:ok, _mode, enter?} when context.state_call ->
+        result =
+          before
+          |> put_elem(1, :state_functions)
+          |> put_elem(2, enter?)
+          |> put_elem(4, modules)
+
+        change = %{
+          before: before,
+          modules: modules,
+          result: result,
+          origin: context.origin,
+          action: context.action
+        }
+
+        {state, %{context | module_action: change}}
+
+      _ ->
+        {tls_failure(state, source, :tls_callback_module_origin), context}
+    end
+  end
 
   defp program_stop_result({:stop_and_reply, reason, replies, next_data}, context) do
     {name, _data} = context.data
@@ -2612,7 +2620,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
               occurrences,
               source,
               returned,
-              pid,
               target,
               label,
               request,
@@ -2649,7 +2656,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp call_target(_pairs, _source, _returned, _destination), do: :error
 
-  defp call_receipt(events, pairs, source, returned, pid, target, label, request, result) do
+  defp call_receipt(events, pairs, source, returned, target, label, request, result) do
+    pid = source.pid
+
     requests =
       Enum.filter(Map.get(events, {pid, :send}, []), fn
         %{event: {^pid, :send, {^label, {^pid, _tag}, ^request}, ^target}} = sent ->
@@ -2662,7 +2671,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case requests do
       [%{event: {_, :send, {_, {_, tag}, _}, _}} = sent] ->
         case call_monitor(pairs, source, sent, pid, target, tag) do
-          {:ok, ref} -> call_reply(events, pairs, sent, returned, pid, target, tag, result, ref)
+          {:ok, ref} -> call_reply(events, pairs, sent, returned, tag, result, ref)
           :error -> []
         end
 
@@ -2696,7 +2705,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp call_reply(events, pairs, sent, returned, pid, target, tag, result, ref) do
+  defp call_reply(events, pairs, sent, returned, tag, result, ref) do
+    {pid, :send, _, target} = sent.event
+
     destination =
       case tag do
         [:alias | ref] -> ref
@@ -2971,10 +2982,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case source.mfa do
       {:tls_gen_connection, function, arity}
       when {function, arity} in [{:next_record, 5}, {:next_record, 7}, {:next_record_done, 4}] ->
-        case Map.get(state.parsed, source.pid) do
-          %{input: input} -> {state, input}
-          nil -> {tls_failure(state, source, :tls_record_origin), parent.current}
-        end
+        worker_record_input(state, source, parent)
 
       {:ssl_gen_statem, :passive_receive, 3} ->
         recv_input(state, source, parent)
@@ -2984,14 +2992,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {sender_forward_copies(state, source, arguments, parent), version}
 
       {:tls_gen_connection, :next_event, 4} ->
-        case parent.source.mfa do
-          {module, :initial_hello, 3}
-          when module in [:tls_client_connection, :tls_client_connection_1_3] ->
-            initial_hello_input(state, source, parent)
-
-          _ ->
-            buffered_input(state, source, parent)
-        end
+        worker_next_event_input(state, source, parent)
 
       {:tls_gen_connection, :next_event, 3} ->
         passive_input(state, source, parent)
@@ -2999,6 +3000,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       _ ->
         _ = arguments
         {state, parent.current}
+    end
+  end
+
+  defp worker_record_input(state, source, parent) do
+    case Map.get(state.parsed, source.pid) do
+      %{input: input} -> {state, input}
+      nil -> {tls_failure(state, source, :tls_record_origin), parent.current}
+    end
+  end
+
+  defp worker_next_event_input(state, source, parent) do
+    case parent.source.mfa do
+      {module, :initial_hello, 3}
+      when module in [:tls_client_connection, :tls_client_connection_1_3] ->
+        initial_hello_input(state, source, parent)
+
+      _ ->
+        buffered_input(state, source, parent)
     end
   end
 
@@ -3690,16 +3709,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         tls_failure(state, source, :tls_handshake_origin)
 
       program ->
-        {arguments, result} =
-          if function == :tls_handshake_events do
-            recursive? =
-              List.first(source.stack) == {:tls_gen_connection, :tls_handshake_events, 2}
-
-            rest = if recursive?, do: <<>>, else: program.rest
-            {[program.packets, rest], handshake_events(program.packets, rest)}
-          else
-            {[program.events], length(program.events) - 1}
-          end
+        {arguments, result} = handshake_program_call(source, function, program)
 
         state =
           arguments
@@ -3749,6 +3759,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp record_call(state, _source, _module, _function, _arguments), do: state
+
+  defp handshake_program_call(source, :tls_handshake_events, program) do
+    recursive? = List.first(source.stack) == {:tls_gen_connection, :tls_handshake_events, 2}
+    rest = if recursive?, do: <<>>, else: program.rest
+    {[program.packets, rest], handshake_events(program.packets, rest)}
+  end
+
+  defp handshake_program_call(_source, :unprocessed_events, program),
+    do: {[program.events], length(program.events) - 1}
 
   # Decode only the independently selected plaintext record and the modeled
   # pre-call handshake buffer. This parser creates no entropy and executes no

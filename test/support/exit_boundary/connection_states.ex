@@ -1,6 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary.ConnectionTypes
+  alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.NativeTransport
   alias AshOnetime.Test.ExitBoundary.Root
 
@@ -1610,19 +1611,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          _returned,
          machine
        ) do
-    with {:ok, _message, reason, origin} <- owner_task_down(state, call, machine) do
-      task = machine.after_connect_task.pid
-      message = "client #{inspect(task)} exited: " <> Exception.format_exit(reason)
-      error = %DBConnection.ConnectionError{message: message}
-      log = owner_down_log(reason)
-      data = %{machine.data | client: {nil, :after_connect}}
+    case owner_task_down(state, call, machine) do
+      {:ok, _message, reason, origin} ->
+        task = machine.after_connect_task.pid
+        message = "client #{inspect(task)} exited: " <> Exception.format_exit(reason)
+        error = %DBConnection.ConnectionError{message: message}
+        log = owner_down_log(reason)
+        data = %{machine.data | client: {nil, :after_connect}}
 
-      next =
-        Map.put(%{machine | data: data}, :task_failure, %{error: error, log: log, origin: origin})
+        next =
+          Map.put(%{machine | data: data}, :task_failure, %{error: error, log: log, origin: origin})
 
-      {:ok, next, {:keep_state, data, {:next_event, :internal, {:disconnect, {log, error}}}}}
-    else
-      _ -> :error
+        {:ok, next, {:keep_state, data, {:next_event, :internal, {:disconnect, {log, error}}}}}
+
+      _ ->
+        :error
     end
   end
 
@@ -1960,7 +1963,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       {:ok, machine |> Map.put(:data, data) |> owner_task_clear()}
     else
       _ ->
-        AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_CHECKIN_PROGRAM", %{
+        Diagnostics.emit("CONNECTION_OWNER_CHECKIN_PROGRAM", %{
           index: source.index,
           reference_match?:
             is_tuple(machine.data.client) and
@@ -2007,7 +2010,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       end
 
     unless valid? do
-      AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TIMER_PROGRAM", %{
+      Diagnostics.emit("CONNECTION_OWNER_TIMER_PROGRAM", %{
         index: source.index,
         from: call.index,
         calls:
@@ -2081,7 +2084,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     # the native child program and modeled owner state, even when that copy is bad.
     with [task] <- tasks,
          {:ok, child, reference} <- owner_task_origin(state, task, machine),
-         [started] <-
+         {:ok, connected_at} <- owner_task_holder_update(state, source, task, child, reference) do
+      {:ok, machine, version, child, reference, connected_at}
+    else
+      _ ->
+        diagnose_owner_task_holder(state, source, machine, tasks)
+        :error
+    end
+  end
+
+  defp owner_task_holder_update(state, source, task, child, reference) do
+    with [started] <-
            native_type_calls(state, task.source, source, {Task.Supervisor, :start_child, 4}),
          [monitor] <- native_type_calls(state, started.returned, source, {:erlang, :monitor, 2}),
          true <-
@@ -2098,66 +2111,51 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
            update.source.event,
          [clock] <- native_type_calls(state, update.source, source, {:erlang, :monotonic_time, 0}),
          {_, :return_from, _, connected_at} <- clock.returned.event do
-      {:ok, machine, version, child, reference, connected_at}
+      {:ok, connected_at}
     else
-      _ ->
-        programs =
-          Enum.map(tasks, fn task ->
-            origin = owner_task_origin(state, task, machine)
-
-            monitors =
-              for pair <- native_type_calls(state, task.source, source, {:erlang, :monitor, 2}) do
-                target? =
-                  case origin do
-                    {:ok, child, reference} ->
-                      pair.source.event ===
-                        {source.pid, :call, {:erlang, :monitor, [:process, child]}} and
-                        elem(pair.returned.event, 3) === reference
-
-                    _ ->
-                      false
-                  end
-
-                %{index: pair.source.index, target?: target?}
-              end
-
-            updates =
-              for pair <-
-                    native_type_calls(
-                      state,
-                      task.source,
-                      task.returned,
-                      {DBConnection.Holder, :update, 4}
-                    ) do
-                clocks =
-                  for clock <-
-                        native_type_calls(
-                          state,
-                          pair.source,
-                          source,
-                          {:erlang, :monotonic_time, 0}
-                        ),
-                      do: %{index: clock.source.index}
-
-                %{index: pair.source.index, clocks: clocks}
-              end
-
-            %{
-              index: task.source.index,
-              origin?: match?({:ok, _, _}, origin),
-              monitors: monitors,
-              updates: updates
-            }
-          end)
-
-        AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TASK_HOLDER_PROGRAM", %{
-          index: source.index,
-          programs: programs
-        })
-
-        :error
+      _ -> :error
     end
   end
+
+  defp diagnose_owner_task_holder(state, source, machine, tasks) do
+    Diagnostics.emit("CONNECTION_OWNER_TASK_HOLDER_PROGRAM", %{
+      index: source.index,
+      programs: Enum.map(tasks, &owner_task_holder_program(state, source, machine, &1))
+    })
+  end
+
+  defp owner_task_holder_program(state, source, machine, task) do
+    origin = owner_task_origin(state, task, machine)
+
+    monitors =
+      for pair <- native_type_calls(state, task.source, source, {:erlang, :monitor, 2}) do
+        %{index: pair.source.index, target?: owner_task_monitor?(pair, source.pid, origin)}
+      end
+
+    updates =
+      for pair <-
+            native_type_calls(state, task.source, task.returned, {DBConnection.Holder, :update, 4}) do
+        clocks =
+          for clock <- native_type_calls(state, pair.source, source, {:erlang, :monotonic_time, 0}),
+              do: %{index: clock.source.index}
+
+        %{index: pair.source.index, clocks: clocks}
+      end
+
+    %{
+      index: task.source.index,
+      origin?: match?({:ok, _, _}, origin),
+      monitors: monitors,
+      updates: updates
+    }
+  end
+
+  defp owner_task_monitor?(pair, owner, {:ok, child, reference}) do
+    pair.source.event === {owner, :call, {:erlang, :monitor, [:process, child]}} and
+      elem(pair.returned.event, 3) === reference
+  end
+
+  defp owner_task_monitor?(_pair, _owner, _origin), do: false
 
   # The child comes from the primitive spawn and the owner's actual startup
   # message; the monitor reference comes from its own primitive return. Neither
@@ -3610,14 +3608,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp status_options(_frame), do: :error
 
-  defp status_input(state, source, :handle_msg, [_protocol, actual, _message])
-       when is_map_key(state.starting, source.pid) do
-    context = state.starting[source.pid]
+  defp startup_status(context, lock) do
     options = startup_options(context.options)
     options = if context.authenticated?, do: Keyword.delete(options, :password), else: options
-    lock = state.type_locks[source.pid]
 
-    expected = %{
+    %{
       opts: options,
       types_mod: context.options[:types],
       types_key: if(context.options[:types], do: context.endpoint),
@@ -3629,6 +3624,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       channel_binding: context.options[:channel_binding] || :prefer,
       target_server_type: context.options[:target_server_type] || :any
     }
+  end
+
+  defp status_input(state, source, :handle_msg, [_protocol, actual, _message])
+       when is_map_key(state.starting, source.pid) do
+    context = state.starting[source.pid]
+    expected = startup_status(context, state.type_locks[source.pid])
 
     if actual !== expected do
       fields =
@@ -3637,7 +3638,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
             Enum.filter(Map.keys(expected), &(Map.get(actual, &1) !== Map.fetch!(expected, &1))),
           else: [:shape]
 
-      AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_RECONNECT_STATUS_PROGRAM", %{
+      Diagnostics.emit("CONNECTION_RECONNECT_STATUS_PROGRAM", %{
         index: source.index,
         fields: fields
       })
