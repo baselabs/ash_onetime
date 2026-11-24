@@ -5386,6 +5386,45 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert proof.errors == [],
              "false cancellation requires its actual expiry and successful native selective flush"
+
+      observe = fn -> ConnectionNative.observe_pool_timer_flush(unquote(callback)) end
+
+      corrupted =
+        ComparatorMutants.with_owner_outputs(
+          DBConnection.Connection,
+          %{{:flush_timer, 1} => %{kind: :value}},
+          observe
+        )
+
+      assert corrupted.result == :ok
+      side = observation_side(context, corrupted, %{}, row!(:issue, :execute), historical)
+      rejected = ConnectionHistory.build(side)
+      assert rejected.native.errors == [] and rejected.reads.errors == [] and rejected.decoders.errors == []
+      assert rejected.errors != [] and rejected.errors == rejected.states.errors
+
+      assert [%{index: flushed, pid: owner}] =
+               for %{event: {_, :return_from, {DBConnection.Connection, :flush_timer, 1},
+                    {:native_foreign_return, :ok}}} = event <- rejected.indexed.events,
+                   do: event
+
+      update =
+        Enum.find(rejected.indexed.events, fn event ->
+          event.pid == owner and event.index > flushed and
+            event.mfa == {DBConnection.Connection, :pool_update, 2} and elem(event.event, 1) == :call
+        end)
+
+      assert hd(rejected.errors).rule == :state_owner_update_origin
+      assert hd(rejected.errors).index == update.index
+
+      for mutant <- [:stream_owner_timer_flush, :stream_owner_copy, :stream_owner_task_return] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
+        assert checked.errors == if(mutant == :stream_owner_timer_flush, do: [], else: rejected.errors)
+      end
+
+      assert ConnectionHistory.build(side).errors == rejected.errors
+      restored = observe.()
+      side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+      assert ConnectionHistory.build(side).errors == []
     end
   end
 
@@ -5949,7 +5988,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                do: source
              )
 
-    {:bind, _, _, _, parameters, _} = request.wire_frame.decoded
+    {:bind, portal, _, _, parameters, _} = request.wire_frame.decoded
     claim = permitted.bound.c_admit
 
     assert Enum.map(parameters, &elem(&1, 4)) == [
@@ -5968,7 +6007,35 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              match?(
                %{
                  message_address: {:connection_message, ^port, :backend, _},
-                 wire_frame: %{request: ^ordinal, decoded: {:data_row, _}}
+                 wire_frame: %{request: ^ordinal, decoded: {:exact_payload, ?2, <<>>}}
+               },
+               source
+             ) and MapSet.member?(readback.claimed, Capture.address(source))
+           end)
+
+    statement = request.wire_frame.statement
+
+    assert [execution] =
+             for(
+               %{
+                 message_address: {:connection_message, ^port, :frontend, _},
+                 wire_frame: %{
+                   statement: ^statement,
+                   decoded: {:exact_payload, ?E, payload}
+                 }
+               } = source <- indexed.events,
+               payload == portal <> <<0, 0::32>>,
+               MapSet.member?(readback.claimed, Capture.address(source)),
+               do: source
+             )
+
+    {:connection_message, ^port, :frontend, execution_ordinal} = execution.message_address
+
+    assert Enum.any?(indexed.events, fn source ->
+             match?(
+               %{
+                 message_address: {:connection_message, ^port, :backend, _},
+                 wire_frame: %{request: ^execution_ordinal, decoded: {:data_row, _}}
                },
                source
              ) and MapSet.member?(readback.claimed, Capture.address(source))

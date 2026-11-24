@@ -47,6 +47,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_owner_timer_flush) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: "{^owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok}",
+        mutated: "{^owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, _result}"
+      }
+    ]
+  end
+
   # Disable K's expression at its source, while still binding that return and
   # checking every later copy. The captured events are passed through unchanged.
   def edits(:k) do
@@ -1564,6 +1574,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   def with_owner_outputs(module, targets, callback) do
     required = fn sites -> sites > map_size(targets) end
+    {:module, ^module} = :code.ensure_loaded(module)
+    {^module, object, _path} = :code.get_object_code(module)
+
+    {:ok, {^module, [abstract_code: {:raw_abstract_v1, forms}]}} =
+      :beam_lib.chunks(object, [:abstract_code])
+
+    records =
+      for {:attribute, _, :record, {name, fields}} <- forms,
+          into: %{},
+          do: {name, length(fields) + 1}
+
+    targets = Map.new(targets, fn {mfa, target} -> {mfa, Map.put(target, :records, records)} end)
 
     with_owner_mutant(
       module,
@@ -2077,6 +2099,12 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
        do: :unchanged
 
   defp helper_output_mode({:tuple, _, _fields}, _target, :corrupt), do: :total
+
+  defp helper_output_mode({:record, _, name, _fields}, %{records: records, size: size}, :corrupt) do
+    # Record syntax fixes the tuple arity just as a tuple literal does. A
+    # nonmatching record is outside this element mutation's return domain.
+    if Map.fetch!(records, name) == size, do: :total, else: :unchanged
+  end
 
   defp helper_output_mode(_expression, target, _operation) do
     if Map.get(target, :total?, false), do: :total, else: :partial

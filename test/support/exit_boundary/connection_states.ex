@@ -2036,6 +2036,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_task_timer_flushed?(state, cancel, source, timer) do
+    owner = source.pid
+
     starts =
       for {_index, pair} <- state.pairs,
           pair.source.pid == source.pid and pair.returned.index < cancel.source.index,
@@ -2043,14 +2045,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           pair.returned.event === {source.pid, :return_from, {:erlang, :start_timer, 3}, timer},
           {_, :call, {_, _, [_timeout, owner, message]}} <- [pair.source.event],
           owner == source.pid,
-          do: message
+          do: {message, pair.source.index}
 
     case starts do
-      [message] ->
-        Enum.count(state.events, fn event ->
-          cancel.returned.index < event.index and event.index < source.index and
-            event.event === {source.pid, :receive, {:timeout, timer, message}}
-        end) == 1
+      [{message, started}] ->
+        # A zero-time timer can arrive before start_timer returns. Its own
+        # call, returned reference and exact expiry still establish ownership.
+        with [flush] <-
+               native_type_calls(state, cancel.returned, source, {DBConnection.Connection, :flush_timer, 1}),
+             {^owner, :call, {DBConnection.Connection, :flush_timer, [^timer]}} <- flush.source.event,
+             {^owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok} <- flush.returned.event do
+          Enum.count(state.events, fn event ->
+            started < event.index and event.index < flush.returned.index and
+              event.event === {owner, :receive, {:timeout, timer, message}}
+          end) == 1
+        else
+          _ -> false
+        end
 
       _ ->
         false

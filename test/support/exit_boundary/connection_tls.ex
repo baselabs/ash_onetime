@@ -5429,16 +5429,83 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             do:
               put_in(
                 state.machine_callbacks[source.pid],
-                callback_program(state, source, frame, expected)
+                callback_program(
+                  state,
+                  source,
+                  frame,
+                  if(Map.has_key?(frame, :callback_form),
+                    do: callback_source_form(frame.callback_form.value, version),
+                    else: expected
+                  )
+                )
               ),
             else: state
 
-        advance_worker(state, source, version, rest)
+        state = advance_worker(state, source, version, rest)
+        forward_callback_form(state, source, result, rest)
 
       _ ->
         state
     end
   end
+
+  # A tail-return is a copy of the earlier constructor's concrete source form.
+  # Its state still comes from the independent worker model. The native action
+  # interpreter receives that source form after the constructor/copy checks;
+  # it never learns an expected state or state name from the checked return.
+  defp callback_source_form({:next_state, _name, _data}, version),
+    do: {:next_state, version.name, version.data}
+
+  defp callback_source_form({:next_state, _name, _data, actions}, version),
+    do: {:next_state, version.name, version.data, actions}
+
+  defp callback_source_form({:keep_state, _data}, version),
+    do: {:keep_state, version.data}
+
+  defp callback_source_form({:keep_state, _data, actions}, version),
+    do: {:keep_state, version.data, actions}
+
+  defp callback_source_form(:keep_state_and_data, _version), do: :keep_state_and_data
+
+  defp callback_source_form({:keep_state_and_data, actions}, _version),
+    do: {:keep_state_and_data, actions}
+
+  defp callback_source_form({:repeat_state, _data}, version),
+    do: {:repeat_state, version.data}
+
+  defp callback_source_form({:repeat_state, _data, actions}, version),
+    do: {:repeat_state, version.data, actions}
+
+  defp callback_source_form(:repeat_state_and_data, _version), do: :repeat_state_and_data
+
+  defp callback_source_form({:repeat_state_and_data, actions}, _version),
+    do: {:repeat_state_and_data, actions}
+
+  defp callback_source_form(:stop, _version), do: :stop
+  defp callback_source_form({:stop, reason}, _version), do: {:stop, reason}
+
+  defp callback_source_form({:stop, reason, _data}, version),
+    do: {:stop, reason, version.data}
+
+  defp callback_source_form({:stop_and_reply, reason, replies}, _version),
+    do: {:stop_and_reply, reason, replies}
+
+  defp callback_source_form({:stop_and_reply, reason, replies, _data}, version),
+    do: {:stop_and_reply, reason, replies, version.data}
+
+  defp callback_source_form(_invalid, _version), do: :invalid_callback_source_form
+
+  defp forward_callback_form(state, source, result, [_parent | _])
+       when source.mfa in [
+              {:tls_sender, :hibernate_after, 3},
+              {:tls_sender, :send_application_data, 4}
+            ] do
+    [parent | rest] = state.frames[source.pid]
+    parent = Map.put(parent, :callback_form, %{value: result, origin: source.index})
+    put_in(state.frames[source.pid], [parent | rest])
+  end
+
+  defp forward_callback_form(state, _source, _result, _rest), do: state
 
   # State entry runs inside the original transition. Its own callback result
   # drives the native callback-result helper, while the original action program
@@ -5640,11 +5707,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp callback_result(
          state,
          %{mfa: {:tls_sender, :connection, 3}} = source,
-         %{event: %{value: {{:call, _from}, {:application_data, _data}}}},
+         %{event: %{value: {{:call, _from}, {:application_data, _data}}}} = frame,
          version,
          actual
        ),
-       do: callback_result_exact(state, source, actual, sender_hibernate_result(version, []))
+       do: forwarded_callback_result(state, source, frame, version, actual)
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_sender, :send_application_data, 4}} = source,
+         %{callback_form: _form} = frame,
+         version,
+         actual
+       ),
+       do: forwarded_callback_result(state, source, frame, version, actual)
 
   defp callback_result(
          state,
@@ -5656,6 +5732,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        do: callback_result_exact(state, source, actual, sender_hibernate_result(version, []))
 
   defp callback_result(state, _source, _frame, _version, _actual), do: state
+
+  defp forwarded_callback_result(state, source, frame, version, actual) do
+    expected = sender_hibernate_result(version, [])
+
+    case Map.get(frame, :callback_form) do
+      %{value: source_form} ->
+        state
+        |> callback_result_exact(source, actual, source_form)
+        |> put_in([:callback_results, source.index], expected)
+
+      nil ->
+        callback_result_exact(state, source, actual, expected)
+    end
+  end
 
   defp sender_hibernate_result(version, actions) do
     timeout = elem(elem(version.data, 1), 11)
