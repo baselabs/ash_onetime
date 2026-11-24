@@ -5102,6 +5102,51 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  for type <- [:rand, :exp, :rand_exp],
+      {bounds, minimum, maximum} <- [
+        {[backoff_min: 0, backoff_max: 0], 0, 0},
+        {[backoff_min: 17], 17, 30_000},
+        {[backoff_max: 17], 17, 17},
+        {[backoff_min: 40_000], 40_000, 40_000},
+        {[backoff_min: 17, backoff_max: 19], 17, 19}
+      ] do
+    @tag connection_streams: :pool
+    test "Connection streams: #{type} backoff bounds #{inspect(bounds)} have an independent constructor",
+         context do
+      Repo.put_dynamic_repo(context.repo)
+      historical = Historical.capture(context.prefix)
+      type = unquote(type)
+      bounds = unquote(Macro.escape(bounds))
+      minimum = unquote(minimum)
+      maximum = unquote(maximum)
+      run = ConnectionNative.observe_pool_startup({:backoff_success, type, :none, bounds})
+      assert run.result == :ok
+
+      initial =
+        if type == :rand_exp,
+          do: {minimum, max(minimum, div(maximum, 3))},
+          else: nil
+
+      expected = %DBConnection.Backoff{type: type, min: minimum, max: maximum, state: initial}
+
+      native =
+        for %{event: {_, :return_from, {DBConnection.Backoff, :new, 1}, backoff}} <- run.events,
+            do: backoff
+
+      assert native != []
+      assert Enum.all?(native, &(&1 === expected))
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+
+      calls =
+        comparator_call_order(
+          fn -> assert ConnectionHistory.build(side).errors == [] end,
+          [{DBConnection.Backoff, :new, 1}, {DBConnection.Backoff, :reset, 1}]
+        )
+
+      assert Enum.filter(calls, &match?({:call, _, _}, &1)) == []
+    end
+  end
+
   for type <- [:default, :stop, :rand, :exp, :rand_exp], callback <- [:function, :mfa] do
     @tag connection_streams: :pool
     test "Connection streams: a refused configure #{callback} retains native #{type} backoff",

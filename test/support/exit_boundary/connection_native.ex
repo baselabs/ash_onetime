@@ -147,6 +147,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp pool_startup_options(options, :default), do: options
 
+  defp pool_startup_options(options, {:backoff_success, type, callback, bounds}) do
+    options
+    |> Keyword.merge(bounds)
+    |> pool_startup_options({:backoff_success, type, callback})
+  end
+
   defp pool_startup_options(options, {:backoff_success, type, callback})
        when type in [:default, :stop, :rand, :exp, :rand_exp] do
     options = if type == :default, do: options, else: Keyword.put(options, :backoff_type, type)
