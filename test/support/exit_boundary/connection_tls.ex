@@ -3896,6 +3896,33 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp record_call(state, source, :tls_handshake_1_3, :calculate_handshake_secrets, _arguments),
     do: server_hello_helper(state, source, :secrets)
 
+  defp record_call(state, source, :tls_handshake_1_3, :replace_ch1_with_message_hash, _arguments) do
+    frame = hd(state.frames[source.pid])
+    data = frame.current.data
+    handshake = elem(data, 6)
+    parameters = Map.fetch!(elem(data, 10), :pending_read).security_parameters
+    hash = elem(parameters, 8)
+    scope = Map.fetch!(state.pairs, source.index)
+
+    with {[retry, first | previous], last} <- elem(handshake, 3),
+         {:ok, digest} <- handshake_primitive(state, scope, {:crypto, :hash, 2}, [hash, first]) do
+      message_hash = [254, 0, 0, byte_size(digest), digest]
+      history = {[retry, message_hash | previous], last}
+      expected = put_elem(data, 6, put_elem(handshake, 3, history))
+      origin = {:tls_retry_history, source.index}
+
+      state
+      |> handshake_copy(source, [2, 2], [data], frame.current.origin)
+      |> put_in([:records, source.index], %{
+        kind: :handshake_state,
+        result: expected,
+        origin: origin
+      })
+    else
+      _ -> tls_failure(state, source, :tls_handshake_origin)
+    end
+  end
+
   defp record_call(state, source, :tls_handshake_1_3, function, _arguments)
        when function in [
               :validate_finished,

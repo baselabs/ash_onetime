@@ -9099,45 +9099,56 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
-  @tag connection_streams: :tls
-  test "Connection streams: native start-state results retain their independent program" do
-    build = fn run ->
-      assert run.result == :ok
-      events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
-      births = ConnectionTls.births(%{events: events})
-      assert births.errors == []
-      ConnectionTls.build(%{events: events}, births.bindings)
+  for {function, arity} <- [update_start_state: 2, replace_ch1_with_message_hash: 1] do
+    @tag connection_streams: :tls
+    test "Connection streams: native #{function} results retain their independent program" do
+      function = unquote(function)
+      mfa = {:tls_handshake_1_3, function, unquote(arity)}
+
+      observe = fn ->
+        ConnectionNative.observe_tls_startup(versions: [:"tlsv1.3"], psk_groups: [])
+      end
+
+      build = fn run ->
+        assert run.result == :ok
+        events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+
+        assert Enum.any?(events, fn source ->
+          source.mfa == {:tls_handshake_1_3, :replace_ch1_with_message_hash, 1} and
+            elem(source.event, 1) == :call
+        end), "an empty initial share list must execute the real retry transcript"
+
+        births = ConnectionTls.births(%{events: events})
+        assert births.errors == []
+        ConnectionTls.build(%{events: events}, births.bindings)
+      end
+
+      assert build.(observe.()).errors == []
+      run = ComparatorMutants.with_tls_handshake_state(function, observe)
+      proof = build.(run)
+
+      coordinates =
+        for {event, index} <- Enum.with_index(run.events),
+            match?(%{event: {_, :return_from, ^mfa, {:native_foreign_return, _}}}, event),
+            do: {:tls_handshake_copy, index, [3]}
+
+      assert coordinates != []
+      assert Enum.map(proof.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) == coordinates
+
+      for mutant <- [
+            :stream_tls_handshake_copy,
+            :stream_tls_worker_state_copy,
+            :stream_tls_machine_copy,
+            :stream_tls_state_copy
+          ] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> build.(run) end)
+        expected = if mutant == :stream_tls_handshake_copy, do: [], else: proof.errors
+        assert checked.errors == expected
+      end
+
+      assert build.(run).errors == proof.errors
+      assert build.(observe.()).errors == []
     end
-
-    assert build.(ConnectionNative.observe_tls_startup()).errors == []
-    run = ComparatorMutants.with_tls_start_state(&ConnectionNative.observe_tls_startup/0)
-    proof = build.(run)
-
-    coordinates =
-      for {event, index} <- Enum.with_index(run.events),
-          match?(
-            %{event: {_, :return_from, {:tls_handshake_1_3, :update_start_state, 2},
-              {:native_foreign_return, _}}},
-            event
-          ),
-          do: {:tls_handshake_copy, index, [3]}
-
-    assert coordinates != []
-    assert Enum.map(proof.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) == coordinates
-
-    for mutant <- [
-          :stream_tls_handshake_copy,
-          :stream_tls_worker_state_copy,
-          :stream_tls_machine_copy,
-          :stream_tls_state_copy
-        ] do
-      checked = ComparatorMutants.with_mutant(mutant, fn -> build.(run) end)
-      expected = if mutant == :stream_tls_handshake_copy, do: [], else: proof.errors
-      assert checked.errors == expected
-    end
-
-    assert build.(run).errors == proof.errors
-    assert build.(ConnectionNative.observe_tls_startup()).errors == []
   end
 
   @tag connection_streams: :tls
@@ -9223,6 +9234,46 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     positive = ConnectionNative.observe_tls()
     indexed = %{events: Enum.with_index(positive.events, &Map.put(&1, :index, &2))}
     assert ConnectionTls.build(indexed, positive.tls_binding).errors == []
+  end
+
+  @tag connection_streams: :tls
+  test "Connection streams: cold proof never reexecutes handshake constructors or decoders" do
+    run = ConnectionNative.observe_tls_startup()
+    assert run.result == :ok
+    events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+    births = ConnectionTls.births(%{events: events})
+    assert births.errors == []
+
+    for mfa <- [
+          {:tls_gen_connection, :encode_handshake, 4},
+          {:tls_gen_connection, :get_tls_handshakes, 3}
+        ] do
+      assert Enum.any?(events, &(&1.mfa == mfa and elem(&1.event, 1) == :call))
+    end
+
+    functions = [
+      {:tls_handshake, :encode_handshake, 2},
+      {:tls_handshake, :get_tls_handshakes, 4},
+      {:tls_record, :encode_handshake, 3},
+      {:tls_record_1_3, :encode_handshake, 2}
+    ]
+
+    calls =
+      comparator_call_order(
+        fn ->
+          proof = ConnectionTls.build(%{events: events}, births.bindings)
+
+          for kind <- [:tls_initial_hello, :tls_handshakes] do
+            assert Enum.any?(proof.terms, fn term ->
+                     origin = Map.get(term, :origin)
+                     is_tuple(origin) and elem(origin, 0) == kind
+                   end), "the rebuilt proof must reach each native handshake program"
+          end
+        end,
+        functions
+      )
+
+    assert Enum.filter(calls, &match?({:call, _, _}, &1)) == []
   end
 
   @tag connection_streams: :tls

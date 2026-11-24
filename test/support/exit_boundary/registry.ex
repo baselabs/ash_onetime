@@ -680,6 +680,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {:tls_client_connection_1_3, :handle_certificate, 2},
         {:tls_client_connection_1_3, :handle_certificate_request, 2},
         {:tls_handshake_1_3, :update_start_state, 2},
+        {:tls_handshake_1_3, :replace_ch1_with_message_hash, 1},
         {:tls_handshake_1_3, :calculate_handshake_secrets, 5},
         {:tls_handshake_1_3, :calculate_read_traffic_secrets, 1},
         {:tls_handshake_1_3, :calculate_write_traffic_secrets, 1},
