@@ -379,7 +379,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       phase: startup_phase(options)
     }
 
-    put_in(state.starting[pid], context)
+    # These bindings belong to one constructor invocation. A reconnect starts
+    # with no type lock even when the same owner initialized an earlier socket.
+    state
+    |> update_in([:type_locations], &Map.delete(&1, pid))
+    |> update_in([:type_locks], &Map.delete(&1, pid))
+    |> update_in([:type_owners], &Map.delete(&1, pid))
+    |> put_in([:starting, pid], context)
   end
 
   defp startup_event(%{event: {pid, :return_from, mfa, result}} = source, state) do
@@ -2085,7 +2091,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          {_, :call, {DBConnection.Task, :run_child, task_arguments}} <- task.source.event,
          true <- List.delete_at(task_arguments, 1) === [Postgrex.Protocol, function, arguments],
          {:ok, child, reference} <- owner_task_origin(state, task, machine),
-         [monitor] <- native_type_calls(state, task.source, source, {:erlang, :monitor, 2}),
+         [started] <-
+           native_type_calls(state, task.source, source, {Task.Supervisor, :start_child, 4}),
+         [monitor] <- native_type_calls(state, started.returned, source, {:erlang, :monitor, 2}),
+         true <- monitor.source.event === {source.pid, :call, {:erlang, :monitor, [:process, child]}},
+         true <- elem(monitor.returned.event, 3) === reference,
          [update] <-
            native_type_calls(
              state,
