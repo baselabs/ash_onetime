@@ -14,11 +14,15 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
 
     # Move only validated scheduling signals. Their complete payloads continue to
     # compare at the fixed anchor; all other event order is untouched.
-    moved = MapSet.new(for {_anchor, signals} <- state.moves, signal <- signals, do: Capture.address(signal))
+    moved =
+      MapSet.new(
+        for {_anchor, signals} <- state.moves, signal <- signals, do: Capture.address(signal)
+      )
 
     result =
       Enum.flat_map(events, fn e ->
-        if MapSet.member?(state.claimed, Capture.address(e)) or MapSet.member?(moved, Capture.address(e)) do
+        if MapSet.member?(state.claimed, Capture.address(e)) or
+             MapSet.member?(moved, Capture.address(e)) do
           []
         else
           e = Map.get(state.rewrites, Capture.address(e), e)
@@ -146,7 +150,9 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
              _ ->
                false
            end) do
-      s |> move(received, {:before, Capture.address(returned)}) |> move(sent, {:after, Capture.address(command)})
+      s
+      |> move(received, {:before, Capture.address(returned)})
+      |> move(sent, {:after, Capture.address(command)})
     else
       _ -> failure(s, source, :inet_reply, :incomplete, :same_port_monitor_and_status)
     end

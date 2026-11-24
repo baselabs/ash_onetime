@@ -105,7 +105,9 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
           s
       end
 
-    if MapSet.member?(s.host_owned, Capture.address(e)), do: s, else: typed_copies(e.event, [], e, s)
+    if MapSet.member?(s.host_owned, Capture.address(e)),
+      do: s,
+      else: typed_copies(e.event, [], e, s)
   end
 
   # First bind the date flowing through the completion to its native SELECT.

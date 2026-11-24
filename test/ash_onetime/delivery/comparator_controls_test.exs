@@ -455,6 +455,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @tag connection_streams: :driver
   @tag prepare: :named, pool_size: 1
   test "Connection streams: native owner replacement preserves historical observation", context do
+    observer = Process.whereis(ConnectionHistory)
+    assert is_pid(observer)
+    {:memory, initial_memory} = Process.info(observer, :memory)
     before = native_history_query(context, "history_before_reload")
     assert Enum.all?(before.coverage, & &1.traced?)
     assert before.descriptors != []
@@ -482,6 +485,22 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert Enum.all?(after_restore.coverage, & &1.traced?)
       assert after_restore.descriptors != []
     end
+
+    assert Process.whereis(ConnectionHistory) == observer
+    {snapshot_us, origins} = :timer.tc(&ConnectionHistory.snapshot/0)
+    {:memory, final_memory} = Process.info(observer, :memory)
+
+    for original <- before.descriptors do
+      source = Map.delete(original, :port)
+      retained? = Enum.any?(origins, &(&1.query.ref === source.query.ref and &1 === source))
+      assert retained?, "a live historical Query origin must survive native code replacement"
+    end
+
+    IO.puts(
+      "CONNECTION_HISTORY_MEASUREMENT: " <>
+        "initial_memory_bytes=#{initial_memory} final_memory_bytes=#{final_memory} " <>
+        "snapshot_us=#{snapshot_us} origins=#{length(origins)}"
+    )
   end
 
   defp native_history_query(context, name) do
@@ -5325,7 +5344,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       {Refusals, :check, 2},
       {Origins, :pair, 3},
       {Origins, :permitted_sources, 2},
-      {HostCall, :indexes, 1},
+      {HostCall, :addresses, 1},
       {Registry, :compute, 2},
       {Allocation, :check, 2},
       {Allocation, :pair, 5},

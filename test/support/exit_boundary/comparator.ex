@@ -465,6 +465,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         |> Map.take([:role, :mfa, :stack])
         |> Map.put(:run_index, e.index)
         |> Map.put(:run_address, Capture.address(e))
+
       readback_backends(e.event, backend, %{state | at: at}, [:event])
     else
       state
@@ -629,9 +630,15 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
        ) do
     state = %{
       state
-      | at: %{role: a.role, run_index: a.index, twin_index: b.index,
-          run_address: Capture.address(a), twin_address: Capture.address(b),
-          mfa: a.mfa, stack: a.stack}
+      | at: %{
+          role: a.role,
+          run_index: a.index,
+          twin_index: b.index,
+          run_address: Capture.address(a),
+          twin_address: Capture.address(b),
+          mfa: a.mfa,
+          stack: a.stack
+        }
     }
 
     expected = PathFrames.expected(twin_stack, state.path_frames, state.backtrace_depth)
@@ -651,9 +658,15 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     if descriptor(a, state.run) == descriptor(b, state.twin) do
       state = %{
         state
-        | at: %{role: a.role, run_index: a.index, twin_index: b.index,
-          run_address: Capture.address(a), twin_address: Capture.address(b),
-          mfa: a.mfa, stack: a.stack}
+        | at: %{
+            role: a.role,
+            run_index: a.index,
+            twin_index: b.index,
+            run_address: Capture.address(a),
+            twin_address: Capture.address(b),
+            mfa: a.mfa,
+            stack: a.stack
+          }
       }
 
       state = event(a, b, query_context(a, b, state))
@@ -668,9 +681,15 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
       state = %{
         state
-        | at: %{role: a.role, run_index: a.index, twin_index: b.index,
-          run_address: Capture.address(a), twin_address: Capture.address(b),
-          mfa: a.mfa, stack: a.stack}
+        | at: %{
+            role: a.role,
+            run_index: a.index,
+            twin_index: b.index,
+            run_address: Capture.address(a),
+            twin_address: Capture.address(b),
+            mfa: a.mfa,
+            stack: a.stack
+          }
       }
 
       cond do
@@ -692,8 +711,16 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         as,
         [],
         error(
-          %{state | at: %{mfa: a.mfa, role: a.role, run_index: a.index,
-            run_address: Capture.address(a), stack: a.stack}},
+          %{
+            state
+            | at: %{
+                mfa: a.mfa,
+                role: a.role,
+                run_index: a.index,
+                run_address: Capture.address(a),
+                stack: a.stack
+              }
+          },
           :extra_event,
           [],
           a.event,
@@ -707,8 +734,16 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         [],
         bs,
         error(
-          %{state | at: %{mfa: b.mfa, role: b.role, twin_index: b.index,
-            twin_address: Capture.address(b), stack: b.stack}},
+          %{
+            state
+            | at: %{
+                mfa: b.mfa,
+                role: b.role,
+                twin_index: b.index,
+                twin_address: Capture.address(b),
+                stack: b.stack
+              }
+          },
           :missing_event,
           [],
           :absent,

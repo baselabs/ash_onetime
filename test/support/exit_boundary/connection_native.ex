@@ -153,10 +153,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp pool_startup_options(options, {:connect_failure, type})
        when type in [:default, :stop, :rand, :exp, :rand_exp] do
     database = "ash_onetime_missing_" <> Integer.to_string(System.unique_integer([:positive]))
-    # Holder.checkout waits for the pool's queue reply before it can install a
-    # query deadline. Three native CoDel polls must fit inside the observation;
-    # the failure tests still require the real 3D000 and each actual backoff.
-    options = options |> Keyword.put(:database, database) |> Keyword.put(:queue_interval, 1_000)
+    # Holder.checkout waits for CoDel before it can install a query deadline.
+    # The suite's 5s queue target would retain this caller past the observer's
+    # deadline even with 1s polls. Use the native default 50ms target here, so
+    # the real 3D000 and backoff run precede CoDel's ordinary queue refusal.
+    options =
+      options
+      |> Keyword.put(:database, database)
+      |> Keyword.put(:queue_target, 50)
+      |> Keyword.put(:queue_interval, 1_000)
     options = if type == :default, do: options, else: Keyword.put(options, :backoff_type, type)
     if type == :stop, do: Keyword.put(options, :max_restarts, 0), else: options
   end
