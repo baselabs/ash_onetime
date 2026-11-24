@@ -5384,6 +5384,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert proof.native.errors == [] and proof.reads.errors == [] and
                proof.decoders.errors == []
 
+      if proof.errors != [] do
+        Diagnostics.emit("CONNECTION_OWNER_TIMER_PROGRAM", %{
+          errors:
+            Enum.map(proof.errors, fn error ->
+              %{
+                index: error.index,
+                rule: error.rule,
+                path: Map.get(error, :path),
+                mfa: error.at.mfa
+              }
+            end)
+        })
+      end
+
       assert proof.errors == [],
              "false cancellation requires its actual expiry and successful native selective flush"
 

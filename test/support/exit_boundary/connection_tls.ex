@@ -3025,6 +3025,63 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp hibernate_input(state, _source, _arguments, _frames, _version), do: state
 
+  defp receiver_actions(
+         [%{handshake_program: %{packets: [_ | _], events: events}} | _],
+         _version
+       ),
+    do: events
+
+  defp receiver_actions(frames, version) do
+    finished = Enum.find(frames, &Map.has_key?(&1, :connection_ready))
+
+    hello =
+      Enum.find(frames, fn
+        %{source: %{mfa: {module, :initial_hello, 3}}}
+        when module in [:tls_client_connection, :tls_client_connection_1_3] ->
+          true
+
+        _ ->
+          false
+      end)
+
+    recv =
+      Enum.find_value(frames, fn frame ->
+        case frame.event do
+          %{value: {{:call, _from}, {:recv, _length, timeout}}} -> {:recv, timeout}
+          _ -> nil
+        end
+      end)
+
+    delivered? =
+      Enum.any?(frames, fn frame ->
+        frame.source.mfa == {:tls_gen_connection, :handle_protocol_record, 3} and
+          elem(elem(frame.input.data, 9), 1) != :undefined and
+          elem(elem(version.data, 9), 1) == :undefined
+      end)
+
+    cond do
+      finished ->
+        Enum.at(finished.connection_ready, 2)
+
+      hello ->
+        [{:call, _from}, {:start, timeout}, _data] = hello.arguments
+        [{{:timeout, :handshake}, timeout, :close}]
+
+      delivered? ->
+        [{{:timeout, :recv}, :infinity, :timeout}]
+
+      recv ->
+        {:recv, timeout} = recv
+        timeout = if elem(elem(version.data, 9), 1) == :undefined, do: :infinity, else: timeout
+        [{{:timeout, :recv}, timeout, :timeout}]
+
+      true ->
+        if Enum.any?(frames, &(&1.source.mfa == {:tls_gen_connection, :next_event, 3})),
+          do: [],
+          else: :missing_receiver_actions
+    end
+  end
+
   defp worker_input(state, source, arguments, []) do
     current = state.owners[source.pid].version
 
@@ -4856,7 +4913,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp encode_record(state, source, fragment, version, states, type) do
+  defp encode_record(state, source, fragment, {major, minor} = version, states, type)
+       when major in 0..255 and minor in 0..255 do
     write = states.current_write
     parameters = write.security_parameters
 
@@ -4874,6 +4932,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         :error
     end
   end
+
+  defp encode_record(_state, _source, _fragment, _version, _states, _type), do: :error
 
   defp record_packet(type, {major, minor}, fragment),
     do: [<<type, major, minor, IO.iodata_length(fragment)::16>>, fragment]
@@ -5471,6 +5531,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
+  # A modeled constructor or an exact copy of one supplies each root result.
+  # A checked native return is never its own semantic expectation.
   defp worker_frame_return(state, source, result) do
     case Map.get(state.frames, source.pid, []) do
       [%{source: %{mfa: mfa}} = frame | rest] when mfa == source.mfa ->
@@ -5483,9 +5545,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             do: worker_copy(state, source, [3 | path], version.data, version.origin),
             else: state
 
-        {expected, results} = Map.pop(state.callback_results, source.index, result)
+        {expected, results} = Map.pop(state.callback_results, source.index)
         state = %{state | callback_results: results}
         state = put_in(state.frames[source.pid], rest)
+
+        state =
+          if rest == [] and is_nil(expected),
+            do: tls_failure(state, source, :tls_callback_origin),
+            else: state
 
         state =
           if rest == [],
@@ -5505,7 +5572,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             else: state
 
         state = advance_worker(state, source, version, rest)
-        forward_callback_form(state, source, result, rest)
+        forward_callback_form(state, source, result, expected, rest)
 
       _ ->
         state
@@ -5558,17 +5625,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp callback_source_form(_invalid, _version), do: :invalid_callback_source_form
 
-  defp forward_callback_form(state, source, result, [_parent | _])
+  defp forward_callback_form(state, source, result, expected, [_parent | _])
        when source.mfa in [
               {:tls_sender, :hibernate_after, 3},
               {:tls_sender, :send_application_data, 4}
             ] do
     [parent | rest] = state.frames[source.pid]
-    parent = Map.put(parent, :callback_form, %{value: result, origin: source.index})
+
+    parent =
+      parent
+      |> Map.put(:callback_form, %{value: result, origin: source.index})
+      |> Map.put(:callback_expected, expected)
+
     put_in(state.frames[source.pid], [parent | rest])
   end
 
-  defp forward_callback_form(state, _source, _result, _rest), do: state
+  defp forward_callback_form(state, _source, _result, expected, [_parent | _])
+       when not is_nil(expected) do
+    [parent | rest] = state.frames[source.pid]
+    parent = Map.put(parent, :callback_expected, expected)
+    put_in(state.frames[source.pid], [parent | rest])
+  end
+
+  defp forward_callback_form(state, _source, _result, _expected, _rest), do: state
 
   # State entry runs inside the original transition. Its own callback result
   # drives the native callback-result helper, while the original action program
@@ -5598,7 +5677,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          state,
          %{mfa: {:tls_gen_connection, function, _}} = source,
          _frame,
-         _version,
+         version,
          actual
        )
        when function in [:next_record, :next_record_done] do
@@ -5609,11 +5688,153 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         state
         |> tls_exact(source, :tls_record_selection, record, selected_record(parsed))
         |> tls_error_path(source, [3, 0], :tls_record_selection)
+        |> put_in([:callback_results, source.index], {selected_record(parsed), version.data})
 
       _ ->
         tls_failure(state, source, :tls_record_selection)
     end
   end
+
+  defp callback_result(
+         state,
+         %{mfa: {:ssl_gen_statem, :hibernate_after, 3}} = source,
+         %{arguments: [name, _data, actual_actions]},
+         version,
+         actual
+       ) do
+    [_current | parents] = state.frames[source.pid]
+    actions = receiver_actions(parents, version)
+
+    if is_list(actions) do
+      state
+      |> tls_exact(source, :tls_callback_input, [name, actual_actions], [version.name, actions])
+      |> callback_result_exact(source, actual, receiver_hibernate_result(version, actions))
+    else
+      tls_failure(state, source, :tls_callback_input_origin)
+    end
+  end
+
+  defp callback_result(
+         state,
+         %{mfa: {:ssl_gen_statem, :connection, 3}} = source,
+         %{event: %{value: {{:call, from}, {:close, _timeout}}}} = frame,
+         version,
+         actual
+       ) do
+    port = state.owners[source.pid].family.port
+
+    closed? = elem(elem(frame.input.data, 3), 3)
+
+    shutdown = record_primitive(state, frame.source, {:gen_tcp, :shutdown, 2}, [port, :write])
+    received = record_primitive(state, frame.source, {:gen_tcp, :recv, 3}, [port, 0, 5_000])
+
+    if closed? or (match?({:ok, _}, shutdown) and match?({:ok, _}, received)) do
+      callback_result_exact(
+        state,
+        source,
+        actual,
+        {:stop_and_reply, {:shutdown, :normal}, {:reply, from, :ok}, version.data}
+      )
+    else
+      tls_failure(state, source, :tls_callback_origin)
+    end
+  end
+
+  defp callback_result(
+         state,
+         %{mfa: {:ssl_gen_statem, :read_application_data, 2}} = source,
+         _frame,
+         version,
+         actual
+       ),
+       do: callback_result_exact(state, source, actual, {:no_record, version.data})
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_gen_connection, :next_event, _arity}} = source,
+         frame,
+         version,
+         actual
+       ) do
+    case Map.fetch(frame, :callback_expected) do
+      {:ok, expected} ->
+        case transition_result(expected, version.name, version.data) do
+          {:ok, _, _, _} -> callback_result_exact(state, source, actual, expected)
+          :error -> next_record_callback_result(state, source, version, actual)
+        end
+
+      :error ->
+        next_record_callback_result(state, source, version, actual)
+    end
+  end
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_sender, :connection, 3}} = source,
+         %{event: %{value: {{:call, from}, {:ack_alert, _alert}}}},
+         version,
+         actual
+       ) do
+    expected = {:next_state, :connection, version.data, [{:reply, from, :ok}]}
+    callback_result_exact(state, source, actual, expected)
+  end
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_sender, :connection, 3}} = source,
+         %{event: %{value: {:cast, {:alert, _, _, _, _, _}}}},
+         version,
+         actual
+       ),
+       do: callback_result_exact(state, source, actual, {:next_state, :connection, version.data})
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_sender, :handle_common, 4}} = source,
+         %{event: %{value: {:info, {:EXIT, _supervisor, reason}}}},
+         version,
+         actual
+       ) do
+    distribution = elem(elem(version.data, 1), 9)
+
+    expected =
+      case {distribution, reason} do
+        {false, :shutdown} ->
+          {:stop, {:shutdown, :shutdown}, version.data}
+
+        {handle, :shutdown} when handle != :undefined ->
+          {:next_state, :death_row, version.data, [{:state_timeout, 5_000, :shutdown}]}
+
+        {:undefined, :shutdown} ->
+          {:stop, :shutdown, version.data}
+
+        {handle, reason} when handle != :undefined ->
+          {:stop, {:shutdown, reason}, version.data}
+
+        _ ->
+          sender_hibernate_result(version, [])
+      end
+
+    callback_result_exact(state, source, actual, expected)
+  end
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_sender, :connection, 3}} = source,
+         %{event: %{value: {:timeout, :hibernate}}},
+         _version,
+         actual
+       ),
+       do: callback_result_exact(state, source, actual, {:keep_state_and_data, [:hibernate]})
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_sender, :death_row, 3}} = source,
+         %{event: %{value: {:state_timeout, reason}}},
+         _version,
+         actual
+       ),
+       do: callback_result_exact(state, source, actual, {:stop, {:shutdown, reason}})
 
   defp callback_result(state, source, %{expected_handshake: expected} = frame, version, actual) do
     {handshake, _raw} = expected.packet
@@ -5794,7 +6015,45 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        ),
        do: callback_result_exact(state, source, actual, sender_hibernate_result(version, []))
 
+  defp callback_result(state, source, %{callback_expected: expected}, _version, actual)
+       when not is_nil(expected),
+       do: callback_result_exact(state, source, actual, expected)
+
   defp callback_result(state, _source, _frame, _version, _actual), do: state
+
+  defp next_record_callback_result(state, source, version, actual) do
+    [_current | parents] = state.frames[source.pid]
+
+    actions =
+      if source.mfa == {:tls_gen_connection, :next_event, 4},
+        do: receiver_actions(parents, version),
+        else: []
+
+    case {actions, Map.get(state.parsed, source.pid)} do
+      {actions, _parsed} when not is_list(actions) ->
+        tls_failure(state, source, :tls_callback_input_origin)
+
+      {_actions, nil} ->
+        tls_failure(state, source, :tls_callback_origin)
+
+      {actions, parsed} ->
+        record = selected_record(parsed)
+
+        if record == :no_record do
+          tls_failure(state, source, :tls_callback_origin)
+        else
+          event =
+            case record do
+              {:ssl_tls, _, _, _, _} -> {:protocol_record, record}
+              {:alert, _, _, _, _, _} -> record
+            end
+
+          expected =
+            {:next_state, version.name, version.data, [{:next_event, :internal, event} | actions]}
+          callback_result_exact(state, source, actual, expected)
+        end
+    end
+  end
 
   defp forwarded_callback_result(state, source, frame, version, actual) do
     expected = sender_hibernate_result(version, [])

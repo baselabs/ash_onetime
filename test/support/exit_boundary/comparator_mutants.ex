@@ -1044,21 +1044,37 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   end
 
   def with_tls_record_result(kind, callback) do
-    {caller, module, function, arity} =
+    {callers, module, function, arity} =
       case kind do
-        :parser -> {:tls_gen_connection, :tls_record, :get_tls_records, 5}
-        :decoder -> {:tls_record, :tls_record_1_3, :decode_cipher_text, 2}
-        :alert -> {:tls_sender, :tls_record, :encode_alert_record, 3}
+        :parser ->
+          {[{:tls_gen_connection, 1}], :tls_record, :get_tls_records, 5}
+
+        :decoder ->
+          {[{:tls_record, 1}, {:tls_gen_connection, 1}], :tls_record_1_3, :decode_cipher_text, 2}
+
+        :alert ->
+          {[{:tls_sender, 1}, {:tls_gen_connection, 1}], :tls_record, :encode_alert_record, 3}
       end
 
     targets = %{{function, arity} => %{kind: :element, size: 2, position: 0}}
 
-    with_owner_mutant(
-      caller,
-      1,
-      &remote_outputs_form(&1, &2, module, targets),
-      fn -> with_owner_outputs(module, targets, callback) end
-    )
+    # TLS 1.3 record processing calls its decoder directly as well as through
+    # tls_record's version dispatcher. Restore every pinned caller before any
+    # real connection is created; only the helper's observed return is foreign.
+    installed =
+      Enum.reduce(callers, fn -> with_owner_outputs(module, targets, callback) end, fn
+        {caller, required}, next ->
+          fn ->
+            with_owner_mutant(
+              caller,
+              required,
+              &remote_outputs_form(&1, &2, module, targets),
+              next
+            )
+          end
+      end)
+
+    installed.()
   end
 
   def with_tls_handshake_input(callback) do
