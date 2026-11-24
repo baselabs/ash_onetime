@@ -1727,7 +1727,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       for error <- Enum.reverse(state.errors) do
         IO.puts(
           "CONNECTION_COLD_TLS_PREFIX_FAILURE: " <>
-            inspect(Map.take(error, [:index, :at, :rule, :path]))
+            inspect(Map.take(error, [:index, :rule, :path]) |> Map.put(:mfa, error.at.mfa))
         )
       end
     end
@@ -2401,6 +2401,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case :queue.out(queue) do
       {{:value, %{message: message, source: origin}}, remaining}
       when origin.index < source.index ->
+        diagnose_receipt_mismatch(state, source, origin, message, Enum.at(arguments, 3))
         state = put_in(state.received[source.pid], remaining)
         state = tls_exact(state, source, :tls_event_copy, Enum.at(arguments, 3), message)
 
@@ -2416,6 +2417,42 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         tls_failure(state, source, :tls_event_origin)
     end
   end
+
+  defp diagnose_receipt_mismatch(_state, _source, _origin, message, message), do: :ok
+
+  defp diagnose_receipt_mismatch(state, source, origin, expected, actual) do
+    calls =
+      for {_index, pair} <- state.pairs,
+          pair.source.pid == source.pid,
+          pair.source.index < origin.index and origin.index < pair.returned.index,
+          elem(pair.source.mfa, 0) in [:gen, :gen_server, :gen_statem],
+          do: %{index: pair.source.index, mfa: pair.source.mfa}
+
+    IO.puts(
+      "CONNECTION_COLD_TLS_RECEIPT_MISMATCH: " <>
+        inspect(%{
+          index: source.index,
+          origin: origin.index,
+          expected: receipt_shape(expected),
+          actual: receipt_shape(actual),
+          calls: calls
+        })
+    )
+  end
+
+  defp receipt_shape(value) when is_tuple(value),
+    do: {:tuple, tuple_size(value), Enum.map(Tuple.to_list(value), &receipt_field/1)}
+
+  defp receipt_shape(value), do: receipt_field(value)
+
+  defp receipt_field(value) when is_reference(value), do: :reference
+  defp receipt_field(value) when is_pid(value), do: :pid
+  defp receipt_field(value) when is_port(value), do: :port
+  defp receipt_field(value) when is_tuple(value), do: {:tuple, tuple_size(value)}
+  defp receipt_field(value) when is_list(value), do: :list
+  defp receipt_field(value) when is_binary(value), do: :binary
+  defp receipt_field(value) when is_atom(value), do: :atom
+  defp receipt_field(_value), do: :other
 
   defp machine_message(state, pid, {:timeout, ref, type} = message, origin)
        when is_reference(ref) do
