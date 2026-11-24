@@ -1092,6 +1092,27 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     with_owner_outputs(:tls_client_connection_1_3, targets, callback)
   end
 
+  def with_tls_start_state(callback) do
+    module = :tls_handshake_1_3
+    targets = %{{:update_start_state, 2} => %{kind: :value}}
+
+    with_owner_mutant(
+      :tls_client_connection_1_3,
+      2,
+      &remote_outputs_form(&1, &2, module, targets),
+      fn ->
+        with_owner_mutant(
+          :tls_server_connection_1_3,
+          1,
+          &remote_outputs_form(&1, &2, module, targets),
+          fn ->
+            with_owner_mutant(module, 1, &owner_outputs_form(&1, &2, targets), callback)
+          end
+        )
+      end
+    )
+  end
+
   def with_backoff_input(callback) do
     targets = %{{:backoff, 1} => [0]}
 

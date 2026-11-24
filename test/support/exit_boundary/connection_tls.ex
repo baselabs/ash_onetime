@@ -7,6 +7,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   @hello_retry_random <<207, 33, 173, 116, 229, 154, 97, 17, 190, 29, 140, 2, 30, 101, 184, 145,
                         194, 162, 17, 22, 122, 187, 140, 94, 7, 158, 9, 226, 200, 168, 51, 156>>
 
+  # RFC 7919 constants from pinned OTP 29.1.2 ssl_dh_groups.
+  @ffdhe_primes %{
+    ffdhe2048: 0xFFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617AD3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797ABC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F619172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005C58EF1837D1683B2C6F34A26C1B2EFFA886B423861285C97FFFFFFFFFFFFFFFF,
+    ffdhe3072: 0xFFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617AD3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797ABC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F619172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035BBC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91CAEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B66C62E37FFFFFFFFFFFFFFFF,
+    ffdhe4096: 0xFFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617AD3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797ABC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F619172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035BBC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91CAEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B669E1EF16E6F52C3164DF4FB7930E9E4E58857B6AC7D5F42D69F6D187763CF1D5503400487F55BA57E31CC7A7135C886EFB4318AED6A1E012D9E6832A907600A918130C46DC778F971AD0038092999A333CB8B7A1A1DB93D7140003C2A4ECEA9F98D0ACC0A8291CDCEC97DCF8EC9B55A7F88A46B4DB5A851F44182E1C68A007E5E655F6AFFFFFFFFFFFFFFFF,
+    ffdhe6144: 0xFFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617AD3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797ABC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F619172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035BBC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91CAEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B669E1EF16E6F52C3164DF4FB7930E9E4E58857B6AC7D5F42D69F6D187763CF1D5503400487F55BA57E31CC7A7135C886EFB4318AED6A1E012D9E6832A907600A918130C46DC778F971AD0038092999A333CB8B7A1A1DB93D7140003C2A4ECEA9F98D0ACC0A8291CDCEC97DCF8EC9B55A7F88A46B4DB5A851F44182E1C68A007E5E0DD9020BFD64B645036C7A4E677D2C38532A3A23BA4442CAF53EA63BB454329B7624C8917BDD64B1C0FD4CB38E8C334C701C3ACDAD0657FCCFEC719B1F5C3E4E46041F388147FB4CFDB477A52471F7A9A96910B855322EDB6340D8A00EF092350511E30ABEC1FFF9E3A26E7FB29F8C183023C3587E38DA0077D9B4763E4E4B94B2BBC194C6651E77CAF992EEAAC0232A281BF6B3A739C1226116820AE8DB5847A67CBEF9C9091B462D538CD72B03746AE77F5E62292C311562A846505DC82DB854338AE49F5235C95B91178CCF2DD5CACEF403EC9D1810C6272B045B3B71F9DC6B80D63FDD4A8E9ADB1E6962A69526D43161C1A41D570D7938DAD4A40E329CD0E40E65FFFFFFFFFFFFFFFF,
+    ffdhe8192: 0xFFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617AD3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797ABC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F619172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035BBC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91CAEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B669E1EF16E6F52C3164DF4FB7930E9E4E58857B6AC7D5F42D69F6D187763CF1D5503400487F55BA57E31CC7A7135C886EFB4318AED6A1E012D9E6832A907600A918130C46DC778F971AD0038092999A333CB8B7A1A1DB93D7140003C2A4ECEA9F98D0ACC0A8291CDCEC97DCF8EC9B55A7F88A46B4DB5A851F44182E1C68A007E5E0DD9020BFD64B645036C7A4E677D2C38532A3A23BA4442CAF53EA63BB454329B7624C8917BDD64B1C0FD4CB38E8C334C701C3ACDAD0657FCCFEC719B1F5C3E4E46041F388147FB4CFDB477A52471F7A9A96910B855322EDB6340D8A00EF092350511E30ABEC1FFF9E3A26E7FB29F8C183023C3587E38DA0077D9B4763E4E4B94B2BBC194C6651E77CAF992EEAAC0232A281BF6B3A739C1226116820AE8DB5847A67CBEF9C9091B462D538CD72B03746AE77F5E62292C311562A846505DC82DB854338AE49F5235C95B91178CCF2DD5CACEF403EC9D1810C6272B045B3B71F9DC6B80D63FDD4A8E9ADB1E6962A69526D43161C1A41D570D7938DAD4A40E329CCFF46AAA36AD004CF600C8381E425A31D951AE64FDB23FCEC9509D43687FEB69EDD1CC5E0B8CC3BDF64B10EF86B63142A3AB8829555B2F747C932665CB2C0F1CC01BD70229388839D2AF05E454504AC78B7582822846C0BA35C35F5C59160CC046FD8251541FC68C9C86B022BB7099876A460E7451A8A93109703FEE1C217E6C3826E52C51AA691E0E423CFC99E9E31650C1217B624816CDAD9A95F9D5B8019488D9C0A0A1FE3075A577E23183F81D4A3F2FA4571EFC8CE0BA8A4FE8B6855DFE72B0A66EDED2FBABFBE58A30FAFABE1C5D71A87E2F741EF8C1FE86FEA6BBFDE530677F0D97D11D49F7A8443D0822E506A9F4614E011E2A94838FF88CD68C8BB7C5C6424CFFFFFFFFFFFFFFFF
+  }
+
   # Local formatter metadata must be frozen while a native owner mutant is
   # loaded. Its expected identity comes from that owner's independent BEAM.
   def freeze_debug(events, binding) do
@@ -3363,10 +3372,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     versions = Map.fetch!(options, :versions)
     hello_version = hd(versions)
     use_ticket = Map.fetch!(options, :use_ticket)
+    scope = Map.put(Map.fetch!(state.pairs, parent.source.index), :returned, source)
 
     with [{:call, from}, {:start, timeout}, _] <- parent.arguments,
          true <- Map.fetch!(options, :session_tickets) != :auto,
-         {:ok, shares, _} <-
+         {:ok, shares} <- hello_shares(state, scope, options),
+         {:ok, ^shares, _} <-
            hello_fact(
              state,
              parent,
@@ -3390,7 +3401,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
              {:tls_handshake_1_3, :get_ticket_data, 3},
              [source.pid, Map.fetch!(options, :session_tickets), use_ticket]
            ),
-         {:ok, nonce, _} <-
+         {:ok, nonce} <- hello_nonce(state, scope, options),
+         {:ok, ^nonce, _} <-
            hello_fact(state, parent, source, {:tls_handshake, :ocsp_nonce, 1}, [options]),
          arguments = [
            elem(environment, 9),
@@ -3407,7 +3419,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          ],
          {:ok, hello0, _} <-
            hello_fact(state, parent, source, {:tls_handshake, :client_hello, 11}, arguments),
-         {:ok, hello1, _} <-
+         hello1 = hello_early_data(hello0, Map.fetch!(options, :early_data), hello_version),
+         {:ok, ^hello1, _} <-
            hello_fact(
              state,
              parent,
@@ -3557,6 +3570,37 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     do: Map.put(states, :max_fragment_length, Bitwise.bsl(1, 8 + enum))
 
   defp hello_fragment_limit(_maximum, states), do: states
+
+  defp hello_shares(state, scope, %{versions: [{3, 4} | _], psk_groups: groups}) do
+    Enum.reduce_while(groups, {:ok, []}, fn group, {:ok, shares} ->
+      case handshake_generated_share(state, scope, group) do
+        {:ok, exchange} -> {:cont, {:ok, shares ++ [{:key_share_entry, group, exchange}]}}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, shares} -> {:ok, {:key_share_client_hello, shares}}
+      :error -> :error
+    end
+  end
+
+  defp hello_shares(_state, _scope, _options), do: {:ok, :undefined}
+
+  defp hello_nonce(state, scope, %{stapling: %{ocsp_nonce: true}}) do
+    with {:ok, nonce} when byte_size(nonce) == 32 <-
+           handshake_primitive(state, scope, {:crypto, :strong_rand_bytes, 1}, [32]) do
+      {:ok, <<4, 32, nonce::binary>>}
+    else
+      _ -> :error
+    end
+  end
+
+  defp hello_nonce(_state, _scope, _options), do: {:ok, :undefined}
+
+  defp hello_early_data(hello, bytes, {3, 4}) when is_binary(bytes) and byte_size(bytes) > 0,
+    do: put_elem(hello, 6, Map.put(elem(hello, 6), :early_data, {:early_data_indication}))
+
+  defp hello_early_data(hello, _bytes, _version), do: hello
 
   defp passive_input(
          state,
@@ -3842,8 +3886,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp record_call(state, source, :tls_handshake_1_3, :update_start_state, _arguments),
-    do: server_hello_helper(state, source, :start)
+  defp record_call(state, source, :tls_handshake_1_3, :update_start_state, _arguments) do
+    case hd(state.frames[source.pid]) do
+      %{server_hello_program: _program} -> server_hello_helper(state, source, :start)
+      frame -> retry_start_record(state, source, frame)
+    end
+  end
 
   defp record_call(state, source, :tls_handshake_1_3, :calculate_handshake_secrets, _arguments),
     do: server_hello_helper(state, source, :secrets)
@@ -6086,16 +6134,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp receiver_hibernate_result(version, actions) do
-    timeout = Map.fetch!(elem(version.data, 4), :hibernate_after)
-
-    cond do
-      version.name == :connection and timeout != :infinity ->
+    case {version.name, Map.fetch(elem(version.data, 4), :hibernate_after)} do
+      {:connection, {:ok, timeout}} when timeout != :infinity ->
         {:next_state, version.name, version.data, [{:timeout, timeout, :hibernate} | actions]}
 
-      actions == [] ->
+      _ when actions == [] ->
         {:next_state, version.name, version.data}
 
-      true ->
+      _ ->
         {:next_state, version.name, version.data, actions}
     end
   end
@@ -6275,6 +6321,105 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   # ServerHello transition. Crypto NIF returns are native origins only after
   # their arguments have been matched to that program; no state helper result
   # or checked callback is used to construct a subsequent expected state.
+  defp retry_start_record(
+         state,
+         source,
+         %{
+           source: %{mfa: {:tls_client_connection_1_3, :start, 3}},
+           event: %{value: {:internal, {:server_hello, _, random, session, cipher, extensions} = hello}}
+         } = frame
+       ) do
+    options = elem(frame.current.data, 4)
+    scope = Map.put(Map.fetch!(state.pairs, frame.source.index), :returned, source)
+
+    with {:server_hello_selected_version, {3, 4}} <-
+           Map.get(extensions, :server_hello_selected_version),
+         true <- {3, 4} in Map.fetch!(options, :versions),
+         true <- cipher in Map.fetch!(options, :ciphers),
+         {:supported_groups, groups} <- Map.fetch!(options, :supported_groups),
+         {:ok, group} <- retry_group(Map.get(extensions, :key_share), groups, options),
+         {:ok, exchange} <- handshake_generated_share(state, scope, group),
+         shares = {:key_share_client_hello, [{:key_share_entry, group, exchange}]},
+         {:ok, profile} <- handshake_cipher(cipher) do
+      updates = %{cipher: cipher, key_share: shares, session_id: session, group: group, random: random}
+      data = server_hello_start(frame.current.data, hello, shares, group, :undefined, profile)
+      origin = {:tls_retry_start, frame.source.index}
+
+      state
+      |> handshake_copy(source, [2, 2], [frame.current.data, updates], frame.current.origin)
+      |> put_in([:records, source.index], %{kind: :handshake_state, result: data, origin: origin})
+    else
+      _ -> tls_failure(state, source, :tls_server_hello_helper_origin)
+    end
+  end
+
+  defp retry_start_record(state, source, _frame),
+    do: tls_failure(state, source, :tls_server_hello_helper_origin)
+
+  defp retry_group({:key_share_hello_retry_request, group}, groups, options) do
+    offered = Map.get(options, :psk_groups, [hd(groups)])
+    if group in groups and group not in offered, do: {:ok, group}, else: :error
+  end
+
+  defp retry_group({:key_share_server_hello, {:key_share_entry, group, _public}}, groups, _options),
+    do: if(group in groups, do: {:ok, group}, else: :error)
+
+  defp retry_group(_share, _groups, _options), do: :error
+
+  defp handshake_generated_share(state, scope, group) when group in [:x25519, :x448],
+    do: handshake_crypto_origin(state, scope, {:crypto, :generate_key, 2}, [:ecdh, group])
+
+  defp handshake_generated_share(state, scope, group)
+       when group in [:mlkem512, :mlkem768, :mlkem1024],
+       do: handshake_crypto_origin(state, scope, {:crypto, :generate_key, 2}, [group, []])
+
+  defp handshake_generated_share(state, scope, group)
+       when is_map_key(@ffdhe_primes, group),
+       do:
+         handshake_crypto_origin(state, scope, {:crypto, :generate_key, 2}, [
+           :dh,
+           [Map.fetch!(@ffdhe_primes, group), 2]
+         ])
+
+  defp handshake_generated_share(state, scope, :x25519mlkem768) do
+    with {:ok, kem} <- handshake_generated_share(state, scope, :mlkem768),
+         {:ok, curve} <- handshake_generated_share(state, scope, :x25519) do
+      {:ok, {kem, curve}}
+    end
+  end
+
+  defp handshake_generated_share(state, scope, group)
+       when group in [:secp256r1mlkem768, :secp384r1mlkem1024] do
+    {curve, algorithm} =
+      if group == :secp256r1mlkem768,
+        do: {:secp256r1, :mlkem768},
+        else: {:secp384r1, :mlkem1024}
+
+    with {:ok, curve} <- handshake_generated_share(state, scope, curve),
+         {:ok, kem} <- handshake_generated_share(state, scope, algorithm) do
+      {:ok, {curve, kem}}
+    end
+  end
+
+  defp handshake_generated_share(state, scope, group)
+       when group in [
+              :secp256r1,
+              :secp384r1,
+              :secp521r1,
+              :brainpoolP256r1tls13,
+              :brainpoolP384r1tls13,
+              :brainpoolP512r1tls13
+            ] do
+    {curve, oid} = handshake_curve(group)
+
+    with {:ok, {public, private}} <-
+           handshake_crypto_origin(state, scope, {:crypto, :generate_key, 2}, [:ecdh, curve]) do
+      {:ok, {:ECPrivateKey, :ecPrivkeyVer1, private, {:namedCurve, oid}, public, :asn1_NOVALUE}}
+    end
+  end
+
+  defp handshake_generated_share(_state, _scope, _group), do: :error
+
   defp server_hello_program(
          _state,
          _source,
@@ -6323,7 +6468,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          {:supported_groups, groups} <- Map.fetch!(options, :supported_groups),
          true <- group in groups,
          {:key_share_client_hello, shares} = key_share <- elem(handshake, 30),
-         {:key_share_entry, ^group, {_, private}} <- List.keyfind(shares, group, 1),
+         {:key_share_entry, ^group, exchange} <- List.keyfind(shares, group, 1),
+         {:ok, private} <- handshake_private_key(exchange),
          {:ok, profile} <- handshake_cipher(cipher),
          {:ok, shared} <- handshake_shared_secret(state, scope, group, public, private),
          start = server_hello_start(data, hello, key_share, group, public, profile),
@@ -6429,6 +6575,49 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
            group
          ])
 
+  defp handshake_shared_secret(state, scope, group, public, private)
+       when is_map_key(@ffdhe_primes, group) do
+    prime = Map.fetch!(@ffdhe_primes, group)
+    size = byte_size(:binary.encode_unsigned(prime))
+
+    with {:ok, shared} <-
+           handshake_primitive(state, scope, {:crypto, :compute_key, 4}, [
+             :dh,
+             public,
+             private,
+             [prime, 2]
+           ]),
+         true <- byte_size(shared) <= size do
+      {:ok, :binary.copy(<<0>>, size - byte_size(shared)) <> shared}
+    else
+      _ -> :error
+    end
+  end
+
+  defp handshake_shared_secret(
+         state,
+         scope,
+         group,
+         public,
+         {:ECPrivateKey, _version, private, {:namedCurve, oid}, _public, _attributes}
+       )
+       when group in [
+              :secp256r1,
+              :secp384r1,
+              :secp521r1,
+              :brainpoolP256r1tls13,
+              :brainpoolP384r1tls13,
+              :brainpoolP512r1tls13
+            ] do
+    {curve, expected_oid} = handshake_curve(group)
+
+    if oid == expected_oid do
+      handshake_primitive(state, scope, {:crypto, :compute_key, 4}, [:ecdh, public, private, curve])
+    else
+      :error
+    end
+  end
+
   defp handshake_shared_secret(
          state,
          scope,
@@ -6456,7 +6645,48 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
            ciphertext
          ])
 
+  defp handshake_shared_secret(state, scope, group, {public, ciphertext}, {private, kem})
+       when group in [:secp256r1mlkem768, :secp384r1mlkem1024] do
+    {curve, algorithm} =
+      if group == :secp256r1mlkem768,
+        do: {:secp256r1, :mlkem768},
+        else: {:secp384r1, :mlkem1024}
+
+    with {:ok, kem} <-
+           handshake_primitive(state, scope, {:crypto, :decapsulate_key, 3}, [
+             algorithm,
+             kem,
+             ciphertext
+           ]),
+         {:ok, shared} <- handshake_shared_secret(state, scope, curve, public, private) do
+      {:ok, shared <> kem}
+    end
+  end
+
   defp handshake_shared_secret(_state, _scope, _group, _public, _private), do: :error
+
+  defp handshake_private_key({:ECPrivateKey, _, _, _, _, _} = private), do: {:ok, private}
+
+  defp handshake_private_key({{:ECPrivateKey, _, _, _, _, _} = private, {_public, kem}}),
+    do: {:ok, {private, kem}}
+
+  defp handshake_private_key({{_public1, private1}, {_public2, private2}}),
+    do: {:ok, {private1, private2}}
+
+  defp handshake_private_key({_public, private}), do: {:ok, private}
+  defp handshake_private_key(_exchange), do: :error
+
+  defp handshake_curve(:secp256r1), do: {:secp256r1, {1, 2, 840, 10045, 3, 1, 7}}
+  defp handshake_curve(:secp384r1), do: {:secp384r1, {1, 3, 132, 0, 34}}
+  defp handshake_curve(:secp521r1), do: {:secp521r1, {1, 3, 132, 0, 35}}
+  defp handshake_curve(:brainpoolP256r1tls13),
+    do: {:brainpoolP256r1, {1, 3, 36, 3, 3, 2, 8, 1, 1, 7}}
+
+  defp handshake_curve(:brainpoolP384r1tls13),
+    do: {:brainpoolP384r1, {1, 3, 36, 3, 3, 2, 8, 1, 1, 11}}
+
+  defp handshake_curve(:brainpoolP512r1tls13),
+    do: {:brainpoolP512r1, {1, 3, 36, 3, 3, 2, 8, 1, 1, 13}}
 
   defp reinitialized_receiver(data) do
     handshake =
@@ -6788,12 +7018,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp handshake_mac(state, scope, hash, key, bytes),
     do: handshake_primitive(state, scope, {:crypto, :mac, 4}, [:hmac, hash, key, bytes])
 
-  defp handshake_primitive(state, scope, {module, function, _} = mfa, arguments) do
+  defp handshake_primitive(state, scope, mfa, arguments) do
+    with {:ok, value} when is_binary(value) <-
+           handshake_crypto_origin(state, scope, mfa, arguments) do
+      {:ok, value}
+    else
+      _ -> :error
+    end
+  end
+
+  defp handshake_crypto_origin(state, scope, {module, function, _} = mfa, arguments) do
     values =
       for pair <- Map.get(state.pair_index, {scope.source.pid, mfa}, []),
           scope.source.index < pair.source.index and pair.returned.index < scope.returned.index,
           pair.source.event === {scope.source.pid, :call, {module, function, arguments}},
-          {_, :return_from, ^mfa, value} when is_binary(value) <- [pair.returned.event],
+          {_, :return_from, ^mfa, value} <- [pair.returned.event],
           do: value
 
     case Enum.uniq(values) do
