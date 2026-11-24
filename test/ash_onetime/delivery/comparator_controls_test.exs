@@ -5554,6 +5554,25 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag connection_streams: :driver
+  test "Connection streams: prior invocations retain the whole physical identity map", context do
+    pair = observe(context, row!(:issue, :replay), Values.set()[:va])
+    assert pair.run.prior != nil and pair.twin.prior != nil
+
+    prior_pair = %{run: pair.run.prior, twin: pair.twin.prior, row: pair.run.prior.row}
+    prior = Comparator.compare(prior_pair)
+    current = Comparator.compare(pair)
+    assert prior.raw_valid? and current.raw_valid?
+    assert map_size(prior.pairing.forward) > 0
+
+    assert Map.take(current.pairing.forward, Map.keys(prior.pairing.forward)) ==
+             prior.pairing.forward,
+           "every prior physical identity must retain its image in the same whole map"
+
+    assert Map.take(current.pairing.uuid_forward, Map.keys(prior.pairing.uuid_forward)) ==
+             prior.pairing.uuid_forward
+  end
+
+  @tag connection_streams: :driver
   test "Connection streams: MAIN consumes the validated logical observation", context do
     pair = observe(context, row!(:issue, :execute), Values.set()[:va])
 
