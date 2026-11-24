@@ -6880,11 +6880,23 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     render = Function.capture(ConnectionHistory, :render, 2)
     rendered = render.(proof, indexed)
     assert rendered.errors == []
-    assert rendered.consumed == native_indexes
+    assert MapSet.subset?(rendered.consumed, native_indexes)
     logical = Enum.filter(rendered.events, &Map.has_key?(&1, :message_address))
     assert logical === messages
     remaining = Enum.reject(rendered.events, &Map.has_key?(&1, :message_address))
-    assert remaining === untouched
+
+    # A successful write is an observed operation. Its validated program is
+    # not segmentation-forced multiplicity, so proving it grants no erasure.
+    for write <- native.writes, index <- write.indexes do
+      refute MapSet.member?(rendered.consumed, index)
+      source = Enum.find(indexed.events, &(&1.index == index))
+      [retained] = Enum.filter(remaining, &(&1.index == index))
+      assert Map.take(retained, [:pid, :mfa, :stack]) == Map.take(source, [:pid, :mfa, :stack])
+      assert elem(retained.event, 1) == elem(source.event, 1)
+    end
+
+    assert Enum.reject(remaining, &MapSet.member?(native_indexes, &1.index)) === untouched
+    assert length(remaining) == length(indexed.events) - MapSet.size(rendered.consumed)
   end
 
   @tag connection_streams: :driver
