@@ -427,7 +427,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       {:ok, {task, timeout}} ->
         %{state | timers: Map.put_new(state.timers, owner, {task, timer, timeout})}
 
-      :error -> state
+      :error ->
+        state
     end
   end
 
@@ -478,7 +479,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   end
 
   defp owner_timer_fixture_event(
-         {:trace_ts, owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok, _stamp},
+         {:trace_ts, owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok,
+          _stamp},
          %{task: {owner, _task}, flush_target?: true} = state
        ),
        do: %{state | flushed?: true, flush_target?: false}
