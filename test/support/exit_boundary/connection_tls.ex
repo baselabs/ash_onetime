@@ -7251,24 +7251,30 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     handshake = elem(data, 6)
     scope = Map.fetch!(state.pairs, source.index)
 
-    with %{value: {:internal, hello}} <- frame.event,
-         {:server_hello, {3, 3}, random, session, cipher, extensions} <- hello,
-         {:server_hello_selected_version, {3, 4}} <-
-           Map.get(extensions, :server_hello_selected_version),
-         true <- cipher in Map.fetch!(options, :ciphers),
-         true <- session === elem(elem(data, 8), 1),
-         :undefined <- Map.get(extensions, :pre_shared_key, :undefined),
-         {:key_share_server_hello, {:key_share_entry, group, public}} <-
-           Map.get(extensions, :key_share),
-         {:supported_groups, groups} <- Map.fetch!(options, :supported_groups),
-         true <- group in groups,
-         {:key_share_client_hello, shares} = key_share <- elem(handshake, 30),
-         {:key_share_entry, ^group, exchange} <- List.keyfind(shares, group, 1),
-         {:ok, private} <- handshake_private_key(exchange),
-         {:ok, profile} <- handshake_cipher(cipher),
-         {:ok, shared} <- handshake_shared_secret(state, scope, group, public, private),
+    with {:event, %{value: {:internal, hello}}} <- {:event, frame.event},
+         {:packet, {:server_hello, {3, 3}, random, session, cipher, extensions}} <-
+           {:packet, hello},
+         {:version, {:server_hello_selected_version, {3, 4}}} <-
+           {:version, Map.get(extensions, :server_hello_selected_version)},
+         {:cipher, true} <- {:cipher, cipher in Map.fetch!(options, :ciphers)},
+         {:session, true} <- {:session, session === elem(elem(data, 8), 1)},
+         {:psk, :undefined} <- {:psk, Map.get(extensions, :pre_shared_key, :undefined)},
+         {:peer_share, {:key_share_server_hello, {:key_share_entry, group, public}}} <-
+           {:peer_share, Map.get(extensions, :key_share)},
+         {:supported_groups, {:supported_groups, groups}} <-
+           {:supported_groups, Map.fetch!(options, :supported_groups)},
+         {:selected_group, true} <- {:selected_group, group in groups},
+         {:client_shares, {:key_share_client_hello, shares} = key_share} <-
+           {:client_shares, elem(handshake, 30)},
+         {:client_share, {:key_share_entry, ^group, exchange}} <-
+           {:client_share, List.keyfind(shares, group, 1)},
+         {:private_key, {:ok, private}} <- {:private_key, handshake_private_key(exchange)},
+         {:cipher_profile, {:ok, profile}} <- {:cipher_profile, handshake_cipher(cipher)},
+         {:shared_secret, {:ok, shared}} <-
+           {:shared_secret, handshake_shared_secret(state, scope, group, public, private)},
          start = server_hello_start(data, hello, key_share, group, public, profile),
-         {:ok, secrets, psk} <- handshake_secrets(state, scope, start, shared, profile) do
+         {:handshake_secrets, {:ok, secrets, psk}} <-
+           {:handshake_secrets, handshake_secrets(state, scope, start, shared, profile)} do
       states = elem(secrets, 10)
       current = states |> Map.fetch!(:pending_read) |> Map.put(:sequence_number, 0)
       states = Map.put(states, :current_read, Map.delete(current, :aead_handle))
@@ -7296,7 +7302,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          psk: psk
        }}
     else
-      _ -> :error
+      {stage, _value} ->
+        Diagnostics.emit("CONNECTION_TLS_SERVER_HELLO_PRIMITIVE", %{
+          index: source.index,
+          mfa: source.mfa,
+          stage: stage
+        })
+
+        :error
     end
   end
 
