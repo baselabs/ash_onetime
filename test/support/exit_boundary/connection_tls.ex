@@ -3275,8 +3275,67 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     {state, %{parent.current | name: program.next_name}}
   end
 
+  defp server_hello_next_input(
+         state,
+         source,
+         arguments,
+         %{
+           source: %{mfa: {:tls_client_connection_1_3, :wait_ee, 3}},
+           event: %{value: {:internal, {:encrypted_extensions, extensions}}}
+         } = parent
+       ) do
+    data = parent.current.data
+    options = elem(data, 4)
+    handshake = elem(data, 6)
+
+    maximum =
+      case Map.get(options, :max_fragment_length, :undefined) do
+        :undefined -> :undefined
+        512 -> {:max_frag_enum, 1}
+        1024 -> {:max_frag_enum, 2}
+        2048 -> {:max_frag_enum, 3}
+        4096 -> {:max_frag_enum, 4}
+      end
+
+    with true <- Map.get(extensions, :max_frag_enum, :undefined) === maximum,
+         {:ok, alpn} <- encrypted_extensions_alpn(Map.get(extensions, :alpn, :undefined)) do
+      accepted? =
+        hd(Map.fetch!(options, :versions)) == {3, 4} and
+          Map.fetch!(options, :use_ticket) != [:undefined] and
+          Map.fetch!(options, :early_data) != :undefined and
+          Map.get(extensions, :early_data, :undefined) != :undefined
+
+      handshake = if accepted?, do: put_elem(handshake, 10, true), else: handshake
+      resumed? = elem(handshake, 6) == true
+      name = if resumed?, do: :wait_finished, else: :wait_cert_cr
+      handshake = if resumed?, do: handshake, else: put_elem(handshake, 17, alpn)
+      data = put_elem(data, 6, handshake)
+
+      state =
+        tls_exact(state, source, :tls_callback_input, Enum.take(arguments, 2), [name, :no_record])
+
+      {state,
+       %{
+         parent.current
+         | name: name,
+           data: data,
+           origin: {:tls_encrypted_extensions, parent.source.index}
+       }}
+    else
+      _ ->
+        {tls_failure(state, source, :tls_encrypted_extensions_origin), parent.current}
+    end
+  end
+
   defp server_hello_next_input(state, source, _arguments, parent),
     do: change_cipher_spec_next_input(state, source, parent)
+
+  defp encrypted_extensions_alpn(:undefined), do: {:ok, :undefined}
+
+  defp encrypted_extensions_alpn({:alpn, <<size, protocol::binary-size(size)>>}),
+    do: {:ok, protocol}
+
+  defp encrypted_extensions_alpn(_invalid), do: :error
 
   defp change_cipher_spec_next_input(
          state,
