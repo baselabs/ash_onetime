@@ -5024,6 +5024,61 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  for type <- [:default, :stop, :rand, :exp, :rand_exp], callback <- [:function, :mfa] do
+    @tag connection_streams: :pool
+    test "Connection streams: a refused configure #{callback} retains native #{type} backoff",
+         context do
+      Repo.put_dynamic_repo(context.repo)
+      historical = Historical.capture(context.prefix)
+      type = unquote(type)
+      run = ConnectionNative.observe_pool_startup({:configure_refusal, type, unquote(callback)})
+      assert run.result == :ok
+
+      owners =
+        for %{event: {pid, :call, {DBConnection.Connection, :init, [_]}}} <- run.events,
+            uniq: true,
+            do: pid
+
+      assert owners != []
+
+      for owner <- owners do
+        assert Enum.any?(run.events, fn
+                 %{
+                   event:
+                     {^owner, :return_from, {ConnectionNative, :configure_pool_refusal, 1},
+                      {:error, %DBConnection.ConnectionError{}}}
+                 } ->
+                   true
+
+                 _ ->
+                   false
+               end)
+
+        refute Enum.any?(run.events, fn
+                 %{event: {^owner, :call, {Postgrex.Protocol, :connect, [_]}}} -> true
+                 _ -> false
+               end)
+
+        assert MapSet.member?(run.snapshot.down, owner)
+      end
+
+      retry? =
+        Enum.any?(run.events, fn
+          %{event: {_, :return_from, {DBConnection.Backoff, :backoff, 1}, _}} -> true
+          _ -> false
+        end)
+
+      if type == :stop, do: refute(retry?), else: assert(retry?)
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
+      assert proof.errors == [], "a configure refusal must retain the complete owner program"
+
+      for owner <- owners do
+        assert Enum.any?(proof.states.owner_commits, &(&1.owner == owner and &1.machine == nil))
+      end
+    end
+  end
+
   for type <- [:default, :stop, :rand, :exp, :rand_exp] do
     @tag connection_streams: :pool
     test "Connection streams: native connection failure retains #{type} backoff state", context do
@@ -9027,7 +9082,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     )
   end
 
-  for boundary <- [:input, :buffer] do
+  for boundary <- [:input, :buffer, :packets] do
     @tag connection_streams: :tls
     test "Connection streams: cold TLS handshake #{boundary} retains its native source" do
       boundary = unquote(boundary)
@@ -9043,9 +9098,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert build.(ConnectionNative.observe_tls_startup()).errors == []
 
       control =
-        if boundary == :input,
-          do: :with_tls_handshake_input,
-          else: :with_tls_handshake_buffer
+        case boundary do
+          :input -> :with_tls_handshake_input
+          :buffer -> :with_tls_handshake_buffer
+          :packets -> :with_tls_handshake_packets
+        end
 
       run = apply(ComparatorMutants, control, [&ConnectionNative.observe_tls_startup/0])
       proof = build.(run)
@@ -9073,6 +9130,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                 {_, {:native_foreign_return, _}, _}}
            }, index} ->
             [{index, [3, 1]}]
+
+          {%{
+             event:
+               {_, :return_from, {:tls_gen_connection, :get_tls_handshakes, 3},
+                {{:native_foreign_return, _}, _, _}}
+           }, index} ->
+            [{index, [3, 0]}]
 
           _ ->
             []

@@ -86,7 +86,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   def observe_pool_startup(mode \\ :default) do
     ExitBoundary.observe(
       fn ->
-        if mode == {:connect_failure, :stop} or match?({:after_connect_failure, :stop, _}, mode),
+        if mode == {:connect_failure, :stop} or
+             match?({kind, :stop, _} when kind in [:after_connect_failure, :configure_refusal], mode),
           do: Process.flag(:trap_exit, true)
 
         :ok
@@ -129,6 +130,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           {Task.Supervisor, :start_child, 4},
           {Task.Supervisor, :start_child, 5},
           {__MODULE__, :configure_pool_owner, 1},
+          {__MODULE__, :configure_pool_refusal, 1},
           {__MODULE__, :after_connect_pool_owner, 1},
           {__MODULE__, :after_connect_pool_failure, 1},
           {__MODULE__, :after_connect_pool_timer, 3},
@@ -147,6 +149,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp pool_startup_options(options, :configure_mfa),
     do: Keyword.put(options, :configure, {__MODULE__, :configure_pool_owner, []})
+
+  defp pool_startup_options(options, {:configure_refusal, type, callback}) do
+    configure =
+      case callback do
+        :function -> &__MODULE__.configure_pool_refusal/1
+        :mfa -> {__MODULE__, :configure_pool_refusal, []}
+      end
+
+    options |> Keyword.put(:configure, configure) |> pool_failure_options(type)
+  end
 
   defp pool_startup_options(options, :after_connect_function),
     do: Keyword.put(options, :after_connect, &__MODULE__.after_connect_pool_owner/1)
@@ -204,6 +216,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp pool_startup_query(pool, {:after_connect_failure, _type, _callback}),
     do: pool_failure_query(pool)
 
+  defp pool_startup_query(pool, {:configure_refusal, _type, _callback}),
+    do: pool_failure_query(pool)
+
   defp pool_startup_query(pool, _mode) do
     %{rows: [[17]]} = Postgrex.query!(pool, "SELECT 17::int4 AS connection_owner_birth", [])
     :ok
@@ -229,6 +244,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   # These are ordinary supported configuration callbacks. Their calls, returns,
   # real query and native Task handoff remain inside the same observation.
   def configure_pool_owner(options), do: Keyword.put(options, :timeout, 17_000)
+
+  def configure_pool_refusal(_options),
+    do: {:error, DBConnection.ConnectionError.exception("native configuration refused")}
 
   def after_connect_pool_owner(connection) do
     %{rows: [[19]]} =
