@@ -343,6 +343,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         finished?: false
       })
     after
+      if timer = Process.delete(:ash_onetime_timer_fixture_resume),
+        do: Process.cancel_timer(timer)
+
       resume_timer_owner(Process.delete(:ash_onetime_timer_fixture_owner))
       :trace.session_destroy(session)
       Process.demonitor(monitor, [:flush])
@@ -376,14 +379,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           _stamp},
          state
        ),
-       do: put_in(state.pending[owner], task)
+       do: put_in(state.pending[owner], {task, timeout})
 
   defp owner_timer_fixture_event(
          {:trace_ts, owner, :return_from, {:erlang, :start_timer, 3}, timer, _stamp},
          state
        ) do
     case Map.fetch(state.pending, owner) do
-      {:ok, task} -> put_in(state.timers[owner], {task, timer})
+      {:ok, {task, timeout}} -> put_in(state.timers[owner], {task, timer, timeout})
       :error -> state
     end
   end
@@ -401,20 +404,33 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
          %{task: {owner, task}} = state
        ) do
     case Map.fetch(state.timers, owner) do
-      {:ok, {^task, ^timer}} -> %{state | expired?: true}
+      {:ok, {^task, ^timer, _timeout}} -> %{state | expired?: true}
       _ -> state
     end
+  end
+
+  defp owner_timer_fixture_event({:resume_owner, token, owner}, %{token: token} = state) do
+    resume_timer_owner(owner)
+    Process.delete(:ash_onetime_timer_fixture_owner)
+    state
   end
 
   defp owner_timer_fixture_event(_message, state), do: state
 
   defp release_timer_task(%{task: {owner, task}, released?: false} = state) do
     case Map.fetch(state.timers, owner) do
-      {:ok, {^task, _timer}} ->
+      {:ok, {^task, _timer, timeout}} ->
         true = :erlang.suspend_process(owner)
         Process.put(:ash_onetime_timer_fixture_owner, owner)
         send(state.parent, {:timer_fixture_owner, state.token, owner})
         send(task, {:return_holder, state.token})
+
+        # A suspended process cannot drain its signal queue to emit receive
+        # traces. Resume on a separate timer started after the native timer,
+        # using its observed duration. Only the subsequent native receipt and
+        # false cancellation prove expiry; this wakeup grants no proof itself.
+        timer = Process.send_after(self(), {:resume_owner, state.token, owner}, timeout)
+        Process.put(:ash_onetime_timer_fixture_resume, timer)
         %{state | released?: true}
 
       _ ->
