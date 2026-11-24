@@ -4759,8 +4759,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     with [%{source: %{mfa: {Postgrex.Protocol, :msg_send, 3}} = owner} | _] <-
            Map.get(state.frames, source.pid, []),
          {:ok, %{value: messages, origin: origin}} <-
-           Map.fetch(state.term_values, {owner.index, [2, 2, 1]}) do
-      expected = frontend_iodata(messages)
+           Map.fetch(state.term_values, {owner.index, [2, 2, 1]}),
+         {:ok, expected} <- frontend_iodata(messages) do
       origin = {:frontend_encoding, owner.index, origin}
 
       state
@@ -4777,19 +4777,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   # IOdata. Keep that construction exactly, starting with the message value
   # already derived from its caller; do_send's checked argument is no oracle.
   defp frontend_iodata(messages) when is_list(messages) do
-    Enum.reduce(messages, [], fn message, accumulated ->
-      encoded = if is_tuple(message), do: frontend_message(message), else: message
-      [accumulated | encoded]
+    Enum.reduce_while(messages, {:ok, []}, fn message, {:ok, accumulated} ->
+      encoded = if is_tuple(message), do: frontend_message(message), else: {:ok, message}
+
+      case encoded do
+        {:ok, encoded} -> {:cont, {:ok, [accumulated | encoded]}}
+        :error -> {:halt, :error}
+      end
     end)
   end
 
   defp frontend_iodata(message), do: frontend_message(message)
 
   defp frontend_message(message) do
-    {tag, payload} = frontend_payload(message)
-    length = IO.iodata_length(payload) + 4
-    true = length <= 0xFFFFFFFF
-    if tag, do: [tag, <<length::32>>, payload], else: [<<length::32>>, payload]
+    with {tag, payload} <- frontend_payload(message),
+         length = IO.iodata_length(payload) + 4,
+         true <- length <= 0xFFFFFFFF do
+      {:ok, if(tag, do: [tag, <<length::32>>, payload], else: [<<length::32>>, payload])}
+    else
+      _ -> :error
+    end
   end
 
   defp frontend_payload({:msg_startup, parameters}) do
@@ -4846,6 +4853,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp frontend_payload({:msg_copy_data, data}), do: {?d, data}
   defp frontend_payload({:msg_copy_done}), do: {?c, <<>>}
   defp frontend_payload({:msg_copy_fail, message}), do: {?f, [message, 0]}
+  defp frontend_payload(_unqualified), do: :error
   defp frontend_object(:statement), do: ?S
   defp frontend_object(:portal), do: ?P
   defp frontend_format(:text), do: 0
