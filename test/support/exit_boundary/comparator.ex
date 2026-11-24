@@ -20,15 +20,20 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   alias AshOnetime.Test.ExitBoundary.Registry
   alias AshOnetime.Test.ExitBoundary.Returns
   alias AshOnetime.Test.ExitBoundary.Scheduling
-  alias AshOnetime.Test.ExitBoundary.TransportReferences
-  alias AshOnetime.Test.ExitBoundary.Wire
   @moduledoc false
 
   def compare(pair, options \\ []) do
     reference? = Keyword.get(options, :readback_reference?, false)
 
     prepared = prepare_raw(pair, reference?)
-    raw_failure(prepared) || compare_prepared(prepared, reference?)
+    case raw_failure(prepared) do
+      nil ->
+        rendered = render_prepared(prepared)
+        raw_failure(rendered) || compare_prepared(rendered, reference?)
+
+      failure ->
+        failure
+    end
   end
 
   # Prepare the complete invocation tree before any consumer can project a
@@ -61,6 +66,23 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       :error ->
         side
     end
+  end
+
+  # Every raw invocation and reference has passed the whole-history barrier.
+  # Render both sides before collecting any origins, preserving their physical
+  # ports and source coordinates for the one observation-wide identity map.
+  defp render_prepared(%{connections: {rc, tc}} = prepared) do
+    prior = if prepared.prior, do: render_prepared(prepared.prior)
+    rr = Registry.compute(:connection_stream, [rc, rc.indexed])
+    tr = Registry.compute(:connection_stream, [tc, tc.indexed])
+
+    %{
+      prepared
+      | run: %{prepared.run | run: %{prepared.run.run | events: rr.events}},
+        twin: %{prepared.twin | run: %{prepared.twin.run | events: tr.events}},
+        prior: prior,
+        connections: {%{rc | errors: rc.errors ++ rr.errors}, %{tc | errors: tc.errors ++ tr.errors}}
+    }
   end
 
   defp compare_prepared(prepared, reference?) do
@@ -392,22 +414,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
         end
       )
 
-    rt = TransportReferences.build(ri, readback.claimed)
-    tt = TransportReferences.build(ti)
-
-    state =
-      Enum.reduce(rt.errors ++ tt.errors, state, fn e, s ->
-        error(
-          %{s | at: Map.put(e.at, :run_index, e.index)},
-          :o2_transport,
-          [e.rule],
-          e.actual,
-          e.expected
-        )
-      end)
-
-    rw = Wire.build(rt, readback.claimed)
-    tw = Wire.build(tt)
+    rw = ri.events
+    tw = ti.events
     rdb = Registry.compute(:o4, [rw, run])
     tdb = Registry.compute(:o4, [tw, twin])
 

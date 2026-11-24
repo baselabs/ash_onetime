@@ -140,6 +140,13 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
       compute: {AshOnetime.Test.ExitBoundary.Allocation, :pair, 5}
     },
     %{
+      id: :connection_stream,
+      source: {AshOnetime.Test.ExitBoundary.ConnectionHistory, :build, 1},
+      locations: [:whole_connection_observation],
+      expression: :native_programs_and_qualified_stream_copies,
+      compute: {AshOnetime.Test.ExitBoundary.ConnectionHistory, :render, 2}
+    },
+    %{
       id: :attribute_copy,
       source: {AshOnetime.Admission, :reject_reserved, 1},
       locations: [
