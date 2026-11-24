@@ -1585,9 +1585,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          machine
        ) do
     with {_, phase} <- machine.data.client,
-         true <- owner_task_timer_cancelled?(state, call, returned, machine.data.timer),
          error = owner_disconnect_error(machine, error),
-         true <- owner_disconnect_call?(state, call, returned, error) do
+         {:ok, disconnect} <- owner_disconnect_call(state, call, returned, error),
+         true <-
+           owner_task_timer_cancelled?(state, call, disconnect.source, machine.data.timer) do
       data = %{machine.data | state: nil, client: :closed, timer: nil, connected_at: nil}
       version = %{machine.version | protocol: nil, origin: {:owner_disconnected, returned.index}}
       next = machine |> Map.merge(%{data: data, version: version}) |> owner_task_clear()
@@ -1746,18 +1747,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp owner_down_log({:shutdown, _}), do: :nolog
   defp owner_down_log(_reason), do: :log
 
-  defp owner_disconnect_call?(state, call, returned, error) do
+  defp owner_disconnect_call(state, call, returned, error) do
     case native_type_calls(state, call, returned, {Postgrex.Protocol, :disconnect, 2}) do
       [
         %{
           source: %{event: {_, :call, {_, _, [^error, _]}}},
           returned: %{event: {_, :return_from, _, :ok}}
-        }
+        } = disconnect
       ] ->
-        true
+        {:ok, disconnect}
 
       _ ->
-        false
+        :error
     end
   end
 
@@ -1960,7 +1961,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       data = %{machine.data | timer: nil, client: nil, backoff: backoff}
       {:ok, machine |> Map.put(:data, data) |> owner_task_clear()}
     else
-      _ -> :error
+      _ ->
+        AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_CHECKIN_PROGRAM", %{
+          index: source.index,
+          reference_match?:
+            is_tuple(machine.data.client) and
+              elem(machine.data.client, 0) === elem(elem(message, 3), 1),
+          phase_match?:
+            is_tuple(machine.data.client) and elem(machine.data.client, 1) === :after_connect,
+          lookup?: Map.has_key?(state.lookups, source.pid),
+          holder_match?:
+            match?(%{holder: holder} when holder === elem(message, 1), state.lookups[source.pid])
+        })
+
+        :error
     end
   end
 

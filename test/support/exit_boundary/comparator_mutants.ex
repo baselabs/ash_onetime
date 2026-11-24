@@ -950,7 +950,8 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   def with_tls_record_input(callback) do
     targets = %{{:next_record, 3} => [2]}
-    with_owner_mutant(:tls_gen_connection, 6, &owner_inputs_form(&1, &2, targets), callback)
+    # OTP 29.1.2 has five entry clauses and three native caller sites.
+    with_owner_mutant(:tls_gen_connection, 8, &owner_inputs_form(&1, &2, targets), callback)
   end
 
   def with_tls_record_output(callback) do

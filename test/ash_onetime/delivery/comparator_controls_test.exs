@@ -9195,6 +9195,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       native = ConnectionTls.build(%{events: events}, run.tls_binding)
       expected = tls_option_corruptions(events, native, run.tls_binding, corruption)
       assert expected != []
+
+      for error <- native.errors do
+        Diagnostics.emit(
+          "CONNECTION_TLS_OPTION_CONTROL_FAILURE",
+          Map.take(error, [:index, :rule, :path, :differences])
+        )
+      end
+
       assert Enum.map(native.errors, & &1.rule) == List.duplicate(rule, length(expected))
       assert Enum.map(native.errors, & &1.index) == expected
 

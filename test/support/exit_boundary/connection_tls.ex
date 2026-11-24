@@ -1730,7 +1730,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       for error <- Enum.reverse(state.errors) do
         IO.puts(
           "CONNECTION_COLD_TLS_PREFIX_FAILURE: " <>
-            inspect(Map.take(error, [:index, :rule, :path]) |> Map.put(:mfa, error.at.mfa))
+            inspect(
+              Map.take(error, [:index, :rule, :path, :differences])
+              |> Map.put(:mfa, error.at.mfa)
+            )
         )
       end
     end
@@ -3321,6 +3324,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     else
       actual = native_term(source.event, path)
       state = tls_exact(state, source, :tls_worker_state_copy, actual, expected)
+      state = tls_error_path(state, source, path, :tls_worker_state_copy)
 
       copy = %{index: source.index, path: path, origin: origin}
       Map.update!(state, :terms, &[copy | &1])
