@@ -2099,7 +2099,57 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          {_, :return_from, _, connected_at} <- clock.returned.event do
       {:ok, machine, version, child, reference, connected_at}
     else
-      _ -> :error
+      _ ->
+        programs =
+          Enum.map(tasks, fn task ->
+            origin = owner_task_origin(state, task, machine)
+
+            monitors =
+              for pair <- native_type_calls(state, task.source, source, {:erlang, :monitor, 2}) do
+                target? =
+                  case origin do
+                    {:ok, child, reference} ->
+                      pair.source.event ===
+                        {source.pid, :call, {:erlang, :monitor, [:process, child]}} and
+                        elem(pair.returned.event, 3) === reference
+
+                    _ ->
+                      false
+                  end
+
+                %{index: pair.source.index, target?: target?}
+              end
+
+            updates =
+              for pair <-
+                    native_type_calls(
+                      state,
+                      task.source,
+                      task.returned,
+                      {DBConnection.Holder, :update, 4}
+                    ) do
+                clocks =
+                  for clock <-
+                        native_type_calls(state, pair.source, source, {:erlang, :monotonic_time, 0}),
+                      do: %{index: clock.source.index}
+
+                %{index: pair.source.index, clocks: clocks}
+              end
+
+            %{
+              index: task.source.index,
+              origin?: match?({:ok, _, _}, origin),
+              monitors: monitors,
+              updates: updates
+            }
+          end)
+
+        AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TASK_HOLDER_PROGRAM", %{
+          index: source.index,
+          programs: programs
+        })
+
+        :error
     end
   end
 
@@ -3573,6 +3623,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       channel_binding: context.options[:channel_binding] || :prefer,
       target_server_type: context.options[:target_server_type] || :any
     }
+
+    if actual !== expected do
+      fields =
+        if is_map(actual),
+          do: Enum.filter(Map.keys(expected), &(Map.get(actual, &1) !== Map.fetch!(expected, &1))),
+          else: [:shape]
+
+      AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_RECONNECT_STATUS_PROGRAM", %{
+        index: source.index,
+        fields: fields
+      })
+    end
 
     helper_copy(
       state,

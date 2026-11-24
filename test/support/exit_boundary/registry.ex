@@ -691,6 +691,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {:tls_gen_connection, :gen_info, 3},
         {:tls_gen_connection, :next_event, :_},
         {:ssl_gen_statem, :connection, 3},
+        {:ssl_gen_statem, :handle_common_event, 4},
         {:ssl_gen_statem, :handle_info, 3},
         {:ssl_gen_statem, :passive_receive, 3},
         {:ssl_gen_statem, :read_application_data, 2},

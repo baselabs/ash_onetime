@@ -8498,6 +8498,79 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     )
   end
 
+  for boundary <- [:input, :buffer] do
+    @tag connection_streams: :tls
+    test "Connection streams: cold TLS handshake #{boundary} retains its native source" do
+      boundary = unquote(boundary)
+
+      build = fn run ->
+        assert run.result == :ok
+        events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+        births = ConnectionTls.births(%{events: events})
+        assert births.errors == []
+        ConnectionTls.build(%{events: events}, births.bindings)
+      end
+
+      assert build.(ConnectionNative.observe_tls_startup()).errors == []
+
+      control =
+        if boundary == :input,
+          do: :with_tls_handshake_input,
+          else: :with_tls_handshake_buffer
+
+      run = apply(ComparatorMutants, control, [&ConnectionNative.observe_tls_startup/0])
+      proof = build.(run)
+      rule = if boundary == :input, do: :tls_worker_state_copy, else: :tls_handshake_copy
+
+      owner =
+        if boundary == :input,
+          do: :stream_tls_worker_state_copy,
+          else: :stream_tls_handshake_copy
+
+      coordinates =
+        run.events
+        |> Enum.with_index()
+        |> Enum.flat_map(fn
+          {%{
+             event:
+               {_, :call,
+                {:tls_gen_connection, :get_tls_handshakes,
+                 [_, _, {:native_foreign_helper, _}]}}
+           }, index} ->
+            [{index, [2, 2, 2]}]
+
+          {%{
+             event:
+               {_, :return_from, {:tls_gen_connection, :get_tls_handshakes, 3},
+                {_, {:native_foreign_return, _}, _}}
+           }, index} ->
+            [{index, [3, 1]}]
+
+          _ ->
+            []
+        end)
+
+      assert coordinates != []
+
+      assert Enum.map(proof.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) ==
+               Enum.map(coordinates, fn {index, path} -> {rule, index, path} end)
+
+      for mutant <- [
+            :stream_tls_worker_state_copy,
+            :stream_tls_handshake_copy,
+            :stream_tls_machine_copy,
+            :stream_tls_state_copy
+          ] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> build.(run) end)
+        expected = if mutant == owner, do: [], else: proof.errors
+        assert checked.errors == expected
+      end
+
+      assert build.(run).errors == proof.errors
+      assert build.(ConnectionNative.observe_tls_startup()).errors == []
+    end
+  end
+
   for boundary <- [:input, :return, :record] do
     @tag connection_streams: :tls
     test "Connection streams: TLS record #{boundary} copy retains its native source" do

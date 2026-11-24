@@ -734,6 +734,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     {:tls_gen_connection, :next_record_done, 4} => 0,
     {:tls_gen_connection, :handle_protocol_record, 3} => 2,
     {:ssl_gen_statem, :connection, 3} => 2,
+    {:ssl_gen_statem, :handle_common_event, 4} => 3,
     {:ssl_gen_statem, :handle_info, 3} => 2,
     {:ssl_gen_statem, :passive_receive, 3} => 0,
     {:ssl_gen_statem, :read_application_data, 2} => 1,
@@ -820,6 +821,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       machine_queues: %{},
       machine_states: Map.new(owners, fn {pid, owner} -> {pid, owner.family.machines[pid]} end),
       machine_callbacks: %{},
+      callback_results: %{},
       machine_zero: %{},
       machine_programs: %{},
       machine_debug: %{},
@@ -832,6 +834,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       messages: %{},
       encoded: %{},
       parsed: %{},
+      handshake_rest: %{},
+      handshake_packets: %{},
       terms: [],
       errors: [],
       pairs: pairs,
@@ -945,6 +949,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       |> debug_return(source)
       |> active_option_return(source)
       |> worker_return(source, result)
+
+  defp worker_event(%{event: {pid, :exit, _reason}}, state) do
+    state
+    |> Map.update!(:handshake_rest, &Map.delete(&1, pid))
+    |> Map.update!(:handshake_packets, &Map.delete(&1, pid))
+  end
 
   defp worker_event(_source, state), do: state
 
@@ -2675,8 +2685,37 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     frame = %{source: source, input: version, current: version, arguments: arguments}
     frame = Map.put(frame, :event, Map.get(state.messages, source.pid))
     {state, frame} = worker_initialization(state, frame)
+    {state, frame} = worker_handshake_dispatch(state, frame, frames)
     put_in(state.frames[source.pid], [frame | frames])
   end
+
+  defp worker_handshake_dispatch(
+         state,
+         %{event: %{value: {:internal, {:handshake, _}}}} = frame,
+         []
+       ) do
+    case Map.get(state.handshake_packets, frame.source.pid, []) do
+      [%{packet: packet} = expected | rest] ->
+        state =
+          tls_exact(
+            state,
+            frame.source,
+            :tls_handshake_copy,
+            frame.event.value,
+            {:internal, {:handshake, packet}}
+          )
+        state = put_in(state.handshake_packets[frame.source.pid], rest)
+        {state, Map.put(frame, :expected_handshake, expected)}
+
+      [] ->
+        {tls_failure(state, frame.source, :tls_handshake_origin), frame}
+    end
+  end
+
+  defp worker_handshake_dispatch(state, frame, [%{expected_handshake: expected} | _]),
+    do: {state, Map.put(frame, :expected_handshake, expected)}
+
+  defp worker_handshake_dispatch(state, frame, _frames), do: {state, frame}
 
   defp worker_initialization(
          state,
@@ -2954,8 +2993,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       nil ->
         tls_failure(state, source, :tls_record_origin)
 
-      parsed ->
-        expected = [selected_record(parsed), version.name, version.data]
+      _parsed ->
+        expected = [handshake_record(state, source.pid), version.name, version.data]
         record_arguments(state, source, arguments, expected, position)
     end
   end
@@ -3471,6 +3510,63 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
+  defp record_call(state, source, :tls_gen_connection, :get_tls_handshakes, _arguments) do
+    frame = hd(state.frames[source.pid])
+    version = frame.current
+
+    case handshake_record(state, source.pid) do
+      {:ssl_tls, 22, _, fragment, _} ->
+        result = handshake_packets(fragment, version.name, version.data)
+        state = worker_copy(state, source, [2, 2, 2], version.data, version.origin)
+
+        state
+        |> handshake_copy(source, [2, 2, 0], fragment, version.origin)
+        |> handshake_copy(source, [2, 2, 1], version.name, version.origin)
+        |> Map.update!(:handshake_rest, &Map.delete(&1, source.pid))
+        |> put_in([:records, source.index], %{
+          kind: :handshakes,
+          result: result,
+          input: version
+        })
+
+      _ ->
+        tls_failure(state, source, :tls_handshake_origin)
+    end
+  end
+
+  defp record_call(state, source, :tls_gen_connection, function, _arguments)
+       when function in [:tls_handshake_events, :unprocessed_events] do
+    frame = hd(state.frames[source.pid])
+
+    case Map.get(frame, :handshake_program) do
+      nil ->
+        tls_failure(state, source, :tls_handshake_origin)
+
+      program ->
+        {arguments, result} =
+          if function == :tls_handshake_events do
+            recursive? = List.first(source.stack) == {:tls_gen_connection, :tls_handshake_events, 2}
+            rest = if recursive?, do: <<>>, else: program.rest
+            {[program.packets, rest], handshake_events(program.packets, rest)}
+          else
+            {[program.events], length(program.events) - 1}
+          end
+
+        state =
+          arguments
+          |> Enum.with_index()
+          |> Enum.reduce(state, fn {expected, position}, state ->
+            handshake_copy(state, source, [2, 2, position], expected, program.origin)
+          end)
+
+        put_in(state.records[source.index], %{
+          kind: :handshake_value,
+          result: result,
+          origin: program.origin
+        })
+    end
+  end
+
   defp record_call(state, source, module, :decode_cipher_text, arguments)
        when module in [:tls_record, :tls_record_1_3] do
     case Map.get(state.parsed, source.pid) do
@@ -3504,6 +3600,62 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp record_call(state, _source, _module, _function, _arguments), do: state
+
+  # Decode only the independently selected plaintext record and the modeled
+  # pre-call handshake buffer. This parser creates no entropy and executes no
+  # state callback. The initial server hello alone uses the highest offered
+  # version; any coalesced remainder is queued for the negotiated state.
+  defp handshake_packets(fragment, name, data) do
+    version = elem(elem(data, 3), 5)
+    options = elem(data, 4)
+    [highest | _] = Map.fetch!(options, :versions)
+    role = elem(elem(data, 2), 1)
+    buffer = elem(elem(data, 11), 2)
+
+    case {version, highest, role, name} do
+      {{3, 3}, {3, 4}, :client, :hello} ->
+        <<_type, length::24, _::binary>> = fragment
+        <<first::binary-size(length + 4), rest::binary>> = fragment
+        {packets, <<>> = buffer} =
+          :tls_handshake.get_tls_handshakes(highest, first, buffer, options)
+        {packets, buffer, rest}
+
+      _ ->
+        selected =
+          if version == :undefined or
+               (version == {3, 3} and highest == {3, 4} and role == :client and name == :wait_sh),
+            do: highest,
+            else: version
+
+        {packets, buffer} = :tls_handshake.get_tls_handshakes(selected, fragment, buffer, options)
+        {packets, buffer, <<>>}
+    end
+  end
+
+  defp handshake_events(packets, rest) do
+    events = Enum.map(packets, &{:next_event, :internal, {:handshake, &1}})
+
+    if rest == <<>>,
+      do: events,
+      else:
+        events ++
+          [{:next_event, :internal, {:protocol_record, {:ssl_tls, 22, :undefined, rest, false}}}]
+  end
+
+  defp handshake_record(state, pid) do
+    case get_in(state, [:handshake_rest, pid]) do
+      %{record: record} -> record
+      nil -> selected_record(Map.fetch!(state.parsed, pid))
+    end
+  end
+
+  defp handshake_copy(state, source, path, expected, origin) do
+    actual = native_term(source.event, path)
+    state = tls_exact(state, source, :tls_handshake_copy, actual, expected)
+    state = tls_error_path(state, source, path, :tls_handshake_copy)
+    copy = %{index: source.index, path: path, origin: origin}
+    Map.update!(state, :terms, &[copy | &1])
+  end
 
   defp diagnose_encode_origin(state, source, arguments, expected_args, frame, version) do
     if Map.get(state.owners[source.pid].family, :born?, false) and arguments !== expected_args do
@@ -3573,10 +3725,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       {record, records} ->
         state
         |> Map.put(:records, records)
-        |> tls_exact(source, :tls_record_output, result, record.result)
+        |> record_result(source, record, result)
         |> record_return(source, record)
     end
   end
+
+  defp record_result(state, source, %{kind: :handshakes, result: result, input: input}, _actual) do
+    result
+    |> Tuple.to_list()
+    |> Enum.with_index()
+    |> Enum.reduce(state, fn {expected, position}, state ->
+      handshake_copy(state, source, [3, position], expected, input.origin)
+    end)
+  end
+
+  defp record_result(state, source, %{kind: :handshake_value} = record, _actual),
+    do: handshake_copy(state, source, [3], record.result, record.origin)
+
+  defp record_result(state, source, record, actual),
+    do: tls_exact(state, source, :tls_record_output, actual, record.result)
 
   defp record_return(state, source, %{kind: :encode} = record),
     do: put_in(state.encoded[source.pid], Map.put(record, :origin, {:tls_record, source.index}))
@@ -3590,6 +3757,36 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     parsed = Map.fetch!(state.parsed, source.pid)
     parsed = decoded_record(parsed, record, states)
     put_in(state.parsed[source.pid], %{parsed | origin: source.index})
+  end
+
+  defp record_return(
+         state,
+         source,
+         %{kind: :handshakes, result: {packets, buffer, rest}, input: input}
+       ) do
+    events = handshake_events(packets, rest)
+    data = put_elem(input.data, 11, put_elem(elem(input.data, 11), 2, buffer))
+
+    data =
+      if packets != [] and input.name != :connection,
+        do: put_elem(data, 6, put_elem(elem(data, 6), 2, length(events) - 1)),
+        else: data
+
+    [frame | frames] = state.frames[source.pid]
+    version = %{input | data: data, origin: {:tls_handshakes, source.index}}
+    program = %{packets: packets, rest: rest, events: events, origin: source.index}
+    frame = frame |> Map.put(:current, version) |> Map.put(:handshake_program, program)
+    state = put_in(state.frames[source.pid], [frame | frames])
+    packets = Enum.map(packets, &%{packet: &1, origin: source.index})
+    state = update_in(state.handshake_packets[source.pid], &((&1 || []) ++ packets))
+
+    if rest == <<>> do
+      state
+    else
+      continuation = %{record: {:ssl_tls, 22, :undefined, rest, false}, origin: source.index}
+
+      put_in(state.handshake_rest[source.pid], continuation)
+    end
   end
 
   defp record_return(state, _source, _record), do: state
@@ -3658,6 +3855,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             do: worker_copy(state, source, [3 | path], version.data, version.origin),
             else: state
 
+        {expected, results} = Map.pop(state.callback_results, source.index, result)
+        state = %{state | callback_results: results}
         state = put_in(state.frames[source.pid], rest)
 
         state =
@@ -3665,7 +3864,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             do:
               put_in(state.machine_callbacks[source.pid], %{
                 source: source,
-                result: result,
+                result: expected,
                 fresh?: true
               }),
             else: state
@@ -3698,6 +3897,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
+  defp callback_result(state, source, %{expected_handshake: expected} = frame, version, actual) do
+    {handshake, _raw} = expected.packet
+
+    result =
+      if ignored_hello_request?(handshake, frame.input),
+        do: :keep_state_and_data,
+        else: {:next_state, version.name, version.data, [{:next_event, :internal, handshake}]}
+
+    callback_result_exact(state, source, actual, result)
+  end
+
   defp callback_result(
          state,
          %{mfa: {:tls_sender, :init, 3}} = source,
@@ -3706,6 +3916,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          actual
        ) do
     expected = {:next_state, :handshake, version.data, [{:reply, from, :ok}]}
+    callback_result_exact(state, source, actual, expected)
+  end
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_gen_connection, :handle_protocol_record, 3}} = source,
+         %{handshake_program: %{packets: [_ | _], events: events}},
+         version,
+         actual
+       ) do
+    expected =
+      if version.name == :connection,
+        do: receiver_hibernate_result(version, events),
+        else: {:next_state, version.name, version.data, events}
+
     callback_result_exact(state, source, actual, expected)
   end
 
@@ -3730,8 +3955,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp callback_result(state, _source, _frame, _version, _actual), do: state
 
+  defp receiver_hibernate_result(version, actions) do
+    timeout = Map.fetch!(elem(version.data, 4), :hibernate_after)
+
+    cond do
+      version.name == :connection and timeout != :infinity ->
+        {:next_state, version.name, version.data, [{:timeout, timeout, :hibernate} | actions]}
+
+      actions == [] ->
+        {:next_state, version.name, version.data}
+
+      true ->
+        {:next_state, version.name, version.data, actions}
+    end
+  end
+
   defp callback_result_exact(state, source, actual, expected) do
-    tls_exact(state, source, :tls_callback_result, actual, expected)
+    state
+    |> tls_exact(source, :tls_callback_result, actual, expected)
+    |> put_in([:callback_results, source.index], expected)
   end
 
   defp advance_worker(state, source, version, []) do
@@ -3804,6 +4046,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
+  defp worker_output(
+         state,
+         source,
+         %{expected_handshake: %{packet: {handshake, raw}}} = frame
+       ) do
+    if ignored_hello_request?(handshake, frame.input) do
+      {state, frame.input}
+    else
+      data = frame.input.data
+      environment = elem(data, 6)
+      history = :ssl_handshake.update_handshake_history(elem(environment, 3), raw)
+      data = put_elem(data, 6, put_elem(environment, 3, history))
+      {state, %{frame.input | data: data, origin: {:tls_handshake_history, source.index}}}
+    end
+  end
+
   defp worker_output(state, source, frame) do
     case {frame.source.mfa, frame.event} do
       {{:ssl_gen_statem, :connection, 3}, %{value: {{:call, _}, {:close, _}}}} ->
@@ -3817,6 +4075,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {state, frame.current}
     end
   end
+
+  defp ignored_hello_request?({:hello_request}, version),
+    do: version.name != :connection and elem(elem(version.data, 2), 1) == :client
+
+  defp ignored_hello_request?(_handshake, _version), do: false
 
   defp sender_alert(%{value: {{:call, _from}, {:ack_alert, alert}}}), do: {:ok, alert}
   defp sender_alert(%{value: {:cast, alert}}), do: {:ok, alert}
@@ -3951,10 +4214,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp tls_difference_paths(actual, expected)
-       when is_tuple(actual) and is_tuple(expected) and tuple_size(actual) == tuple_size(expected) do
-    for position <- 0..(tuple_size(expected) - 1),
-        elem(actual, position) !== elem(expected, position),
-        do: %{path: [position]}
+       when is_tuple(actual) and is_tuple(expected) and tuple_size(actual) == tuple_size(expected) and
+              tuple_size(expected) > 0 do
+    Enum.flat_map(0..(tuple_size(expected) - 1), fn position ->
+      a = elem(actual, position)
+      e = elem(expected, position)
+
+      cond do
+        a === e ->
+          []
+
+        is_tuple(a) and is_tuple(e) and tuple_size(a) == tuple_size(e) ->
+          Enum.map(tls_difference_paths(a, e), &%{path: [position | &1.path]})
+
+        true ->
+          [%{path: [position]}]
+      end
+    end)
   end
 
   defp tls_difference_paths(_actual, _expected), do: []

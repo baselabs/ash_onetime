@@ -778,6 +778,17 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_tls_handshake_copy) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original: "    state = tls_exact(state, source, :tls_handshake_copy, actual, expected)\n",
+        mutated:
+          "    _ = actual\n    state = tls_exact(state, source, :tls_handshake_copy, expected, expected)\n"
+      }
+    ]
+  end
+
   def edits(:stream_frame_ownership) do
     [
       %{
@@ -961,6 +972,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
 
   def with_tls_record_value(callback) do
     targets = %{{:next_record_done, 4} => %{kind: :element, size: 2, position: 0, total?: true}}
+    with_owner_outputs(:tls_gen_connection, targets, callback)
+  end
+
+  def with_tls_handshake_input(callback) do
+    targets = %{{:get_tls_handshakes, 3} => [2]}
+    with_owner_mutant(:tls_gen_connection, 2, &owner_inputs_form(&1, &2, targets), callback)
+  end
+
+  def with_tls_handshake_buffer(callback) do
+    targets = %{{:get_tls_handshakes, 3} => %{kind: :element, size: 3, position: 1, total?: true}}
     with_owner_outputs(:tls_gen_connection, targets, callback)
   end
 
