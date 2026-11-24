@@ -88,6 +88,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       fn ->
         if mode == {:connect_failure, :stop} or match?({:after_connect_failure, :stop, _}, mode),
           do: Process.flag(:trap_exit, true)
+
         :ok
       end,
       fn _ ->
