@@ -5032,7 +5032,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       historical = Historical.capture(context.prefix)
       type = unquote(type)
       callback = unquote(callback)
-      observe = fn -> ConnectionNative.observe_pool_startup({:backoff_success, type, callback}) end
+
+      observe = fn ->
+        ConnectionNative.observe_pool_startup({:backoff_success, type, callback})
+      end
+
       run = observe.()
       assert run.result == :ok
 
@@ -7315,6 +7319,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     for {owner, port} <- constructions do
       [original] = Enum.filter(proof.indexed.events, &(&1.index == owner))
+
       assert {pid, :call, {Postgrex.Protocol, :msg_send, [_, _, _]}} =
                original.event
 
@@ -7328,6 +7333,102 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                retained.event
 
       assert is_integer(first) and last > first
+    end
+  end
+
+  @tag connection_streams: :driver
+  test "Connection streams: backend decoder buffers retain their physical byte spans",
+       context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+
+    run =
+      ExitBoundary.observe(
+        fn -> :ok end,
+        fn _ -> SQL.query!(context.repo, "SELECT $1::int4 AS native_decoder_copy", [17]) end,
+        %{host: [], callbacks: []}
+      )
+
+    assert %{rows: [[17]]} = run.result
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+    assert proof.errors == []
+    rendered = Registry.compute(:connection_stream, [proof, proof.indexed])
+    assert rendered.errors == []
+
+    for mfa <- [{Postgrex.Protocol, :msg_decode, 1}, {Postgrex.Types, :decode_rows, 4}] do
+      instances = Enum.filter(proof.decoders.instances, &(&1.source.mfa == mfa))
+      assert instances != []
+
+      copies =
+        for instance <- instances,
+            copy <- instance.copies,
+            copy.length > 0,
+            do: {instance, copy}
+
+      assert copies != []
+
+      for {instance, copy} <- copies do
+        [retained] = Enum.filter(rendered.events, &(&1.index == copy.index))
+        refute MapSet.member?(rendered.consumed, copy.index)
+
+        value =
+          Enum.reduce(copy.path, retained.event, fn
+            position, tuple when is_tuple(tuple) -> elem(tuple, position)
+            position, list when is_list(list) -> Enum.fetch!(list, position)
+          end)
+
+        port = instance.port
+        first = if copy.index == instance.source.index, do: instance.start, else: instance.stop
+        last = first + copy.length
+        assert value == {:connection_byte_span, port, :backend, first, last, nil}
+      end
+    end
+  end
+
+  @tag connection_streams: :driver
+  test "Connection streams: backend helper buffers retain their proved cursor spans",
+       context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+
+    run =
+      ExitBoundary.observe(
+        fn -> :ok end,
+        fn _ -> SQL.query!(context.repo, "SELECT $1::int4 AS native_helper_buffer", [17]) end,
+        %{host: [], callbacks: []}
+      )
+
+    assert %{rows: [[17]]} = run.result
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+    assert proof.errors == []
+    rendered = Registry.compute(:connection_stream, [proof, proof.indexed])
+    assert rendered.errors == []
+
+    copies =
+      for copy <- proof.states.buffers,
+          original = Enum.find(proof.indexed.events, &(&1.index == copy.index)),
+          bytes = native_copy_bytes(original.event, copy.path),
+          is_binary(bytes) and byte_size(bytes) > 0,
+          do: {copy, original, byte_size(bytes)}
+
+    assert copies != []
+
+    for {copy, original, size} <- copies do
+      [retained] = Enum.filter(rendered.events, &(&1.index == copy.index))
+      refute MapSet.member?(rendered.consumed, copy.index)
+      assert Map.take(retained, [:pid, :mfa, :stack]) == Map.take(original, [:pid, :mfa, :stack])
+
+      value =
+        Enum.reduce(copy.path, retained.event, fn
+          position, tuple when is_tuple(tuple) -> elem(tuple, position)
+          position, list when is_list(list) -> Enum.fetch!(list, position)
+        end)
+
+      port = NativeTransport.physical_port(proof.native, copy.sock)
+      assert {:connection_byte_span, ^port, :backend, first, last, nil} = value
+      assert is_integer(first) and last - first == size
     end
   end
 

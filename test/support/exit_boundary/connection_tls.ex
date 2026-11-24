@@ -3467,31 +3467,36 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          version,
          position
        ) do
-    parsed = Map.fetch!(state.parsed, source.pid)
-    buffers = parsed.buffers
-    check = Map.get(elem(version.data, 4), :padding_check, true)
+    case Map.fetch(state.parsed, source.pid) do
+      {:ok, parsed} ->
+        buffers = parsed.buffers
+        check = Map.get(elem(version.data, 4), :padding_check, true)
 
-    expected =
-      case arity do
-        3 ->
-          [version.name, buffers, version.data]
+        expected =
+          case arity do
+            3 ->
+              [version.name, buffers, version.data]
 
-        5 ->
-          [version.data, parsed.remaining, parsed.states, buffers, check]
+            5 ->
+              [version.data, parsed.remaining, parsed.states, buffers, check]
 
-        7 ->
-          [
-            version.data,
-            parsed.remaining,
-            parsed.states,
-            check,
-            buffers,
-            parsed.early_data,
-            Enum.reverse(parsed.fragments)
-          ]
-      end
+            7 ->
+              [
+                version.data,
+                parsed.remaining,
+                parsed.states,
+                check,
+                buffers,
+                parsed.early_data,
+                Enum.reverse(parsed.fragments)
+              ]
+          end
 
-    record_arguments(state, source, arguments, expected, position)
+        record_arguments(state, source, arguments, expected, position)
+
+      :error ->
+        tls_failure(state, source, :tls_record_origin)
+    end
   end
 
   defp receiver_record_input(
@@ -3501,10 +3506,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          version,
          position
        ) do
-    parsed = Map.fetch!(state.parsed, source.pid)
-    buffers = parsed.buffers |> put_elem(3, parsed.remaining)
-    expected = [version.data, buffers, parsed.states, selected_record(parsed)]
-    record_arguments(state, source, arguments, expected, position)
+    case Map.fetch(state.parsed, source.pid) do
+      {:ok, parsed} ->
+        buffers = parsed.buffers |> put_elem(3, parsed.remaining)
+        expected = [version.data, buffers, parsed.states, selected_record(parsed)]
+        record_arguments(state, source, arguments, expected, position)
+
+      :error ->
+        tls_failure(state, source, :tls_record_origin)
+    end
   end
 
   defp receiver_record_input(
@@ -6280,9 +6290,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp handshake_record(state, pid) do
-    case get_in(state, [:handshake_rest, pid]) do
-      %{record: record} -> record
-      nil -> selected_record(Map.fetch!(state.parsed, pid))
+    case {get_in(state, [:handshake_rest, pid]), Map.fetch(state.parsed, pid)} do
+      {%{record: record}, _} -> record
+      {nil, {:ok, parsed}} -> selected_record(parsed)
+      {nil, :error} -> :missing_tls_record_origin
     end
   end
 
@@ -6480,9 +6491,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp record_return(state, source, %{kind: :decode, result: {record, states}}) do
-    parsed = Map.fetch!(state.parsed, source.pid)
-    parsed = decoded_record(parsed, record, states)
-    put_in(state.parsed[source.pid], %{parsed | origin: source.index})
+    case Map.fetch(state.parsed, source.pid) do
+      {:ok, parsed} ->
+        parsed = decoded_record(parsed, record, states)
+        put_in(state.parsed[source.pid], %{parsed | origin: source.index})
+
+      :error ->
+        tls_failure(state, source, :tls_record_origin)
+    end
   end
 
   defp record_return(state, source, %{kind: :decode, result: {:alert, _, _, _, _, _}}),
@@ -6727,14 +6743,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          actual
        )
        when function in [:next_record, :next_record_done] do
-    parsed = Map.fetch!(state.parsed, source.pid)
-
-    case actual do
-      {record, _data} ->
+    case {Map.fetch(state.parsed, source.pid), actual} do
+      {{:ok, parsed}, {record, _data}} ->
         state
         |> tls_exact(source, :tls_record_selection, record, selected_record(parsed))
         |> tls_error_path(source, [3, 0], :tls_record_selection)
         |> put_in([:callback_results, source.index], {selected_record(parsed), version.data})
+
+      {:error, _} ->
+        tls_failure(state, source, :tls_record_origin)
 
       _ ->
         tls_failure(state, source, :tls_record_selection)
@@ -6975,17 +6992,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
               :wait_cv,
               :wait_finished
             ] do
-    expected =
-      case selected_record(Map.fetch!(state.parsed, source.pid)) do
-        :no_record ->
-          receiver_hibernate_result(version, [])
+    case Map.fetch(state.parsed, source.pid) do
+      {:ok, parsed} ->
+        case selected_record(parsed) do
+          :no_record ->
+            callback_result_exact(state, source, actual, receiver_hibernate_result(version, []))
 
-        {:ssl_tls, _, _, _, _} = record ->
-          {:next_state, version.name, version.data,
-           [{:next_event, :internal, {:protocol_record, record}}]}
-      end
+          {:ssl_tls, _, _, _, _} = record ->
+            expected =
+              {:next_state, version.name, version.data,
+               [{:next_event, :internal, {:protocol_record, record}}]}
 
-    callback_result_exact(state, source, actual, expected)
+            callback_result_exact(state, source, actual, expected)
+
+          _ ->
+            tls_failure(state, source, :tls_record_selection)
+        end
+
+      :error ->
+        tls_failure(state, source, :tls_record_origin)
+    end
   end
 
   defp callback_result(
@@ -6995,10 +7021,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          version,
          actual
        ) do
-    {:ssl_tls, 20, _, fragment, _} = handshake_record(state, source.pid)
-    actions = [{:next_event, :internal, {:change_cipher_spec, fragment}}]
-    expected = {:next_state, version.name, version.data, actions}
-    callback_result_exact(state, source, actual, expected)
+    case handshake_record(state, source.pid) do
+      {:ssl_tls, 20, _, fragment, _} ->
+        actions = [{:next_event, :internal, {:change_cipher_spec, fragment}}]
+        expected = {:next_state, version.name, version.data, actions}
+        callback_result_exact(state, source, actual, expected)
+
+      _ ->
+        tls_failure(state, source, :tls_record_origin)
+    end
   end
 
   defp callback_result(
@@ -7184,10 +7215,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          source,
          %{source: %{mfa: {:tls_gen_connection, :next_record_done, 4}}} = frame
        ) do
-    parsed = Map.fetch!(state.parsed, source.pid)
-    buffers = parsed.buffers |> put_elem(3, parsed.remaining)
-    data = frame.input.data |> put_elem(10, parsed.states) |> put_elem(11, buffers)
-    {state, %{frame.input | data: data, origin: {:tls_record_selection, source.index}}}
+    case Map.fetch(state.parsed, source.pid) do
+      {:ok, parsed} ->
+        buffers = parsed.buffers |> put_elem(3, parsed.remaining)
+        data = frame.input.data |> put_elem(10, parsed.states) |> put_elem(11, buffers)
+        {state, %{frame.input | data: data, origin: {:tls_record_selection, source.index}}}
+
+      :error ->
+        {tls_failure(state, source, :tls_record_origin), frame.current}
+    end
   end
 
   defp worker_output(
@@ -7197,15 +7233,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        ) do
     handshake = elem(frame.input.data, 6)
     outstanding = elem(handshake, 2)
-    parsed = Map.fetch!(state.parsed, source.pid)
-    buffers = parsed.buffers |> put_elem(3, parsed.remaining)
-    data = put_elem(frame.current.data, 11, buffers)
+    case Map.fetch(state.parsed, source.pid) do
+      {:ok, parsed} ->
+        buffers = parsed.buffers |> put_elem(3, parsed.remaining)
+        data = put_elem(frame.current.data, 11, buffers)
 
-    if outstanding > 0 do
-      data = put_elem(data, 6, put_elem(handshake, 2, outstanding - 1))
-      {state, %{frame.input | data: data, origin: {:tls_handshake_count, source.index}}}
-    else
-      {state, %{frame.current | data: data}}
+        if outstanding > 0 do
+          data = put_elem(data, 6, put_elem(handshake, 2, outstanding - 1))
+          {state, %{frame.input | data: data, origin: {:tls_handshake_count, source.index}}}
+        else
+          {state, %{frame.current | data: data}}
+        end
+
+      :error ->
+        {tls_failure(state, source, :tls_record_origin), frame.current}
     end
   end
 

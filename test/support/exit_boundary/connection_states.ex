@@ -1871,7 +1871,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp owner_connect_transition(state, call, returned, machine) do
     with {:ok, configured} <- owner_connect_options(state, call, returned, machine.data.opts) do
-      case {configured, native_type_calls(state, call, returned, {Postgrex.Protocol, :connect, 1})} do
+      case {configured,
+            native_type_calls(state, call, returned, {Postgrex.Protocol, :connect, 1})} do
         {{:error, %{__exception__: true}}, []} ->
           owner_failed_connection(state, call, returned, machine)
 
