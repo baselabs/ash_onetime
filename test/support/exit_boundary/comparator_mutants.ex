@@ -25,6 +25,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       :host_multiplicity
     ]
 
+  def edits(:stream_render_erasure) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_history.ex",
+        original:
+          "    retained =\n      indexed.events\n      |> Enum.reject(&MapSet.member?(consumed, &1.index))\n",
+        mutated:
+          "    erased = proof.native.writes |> Enum.flat_map(& &1.indexes) |> MapSet.new()\n\n    retained =\n      indexed.events\n      |> Enum.reject(&(MapSet.member?(consumed, &1.index) or MapSet.member?(erased, &1.index)))\n"
+      }
+    ]
+  end
+
   # Disable K's expression at its source, while still binding that return and
   # checking every later copy. The captured events are passed through unchanged.
   def edits(:k) do

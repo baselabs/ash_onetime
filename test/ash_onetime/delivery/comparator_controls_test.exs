@@ -6943,30 +6943,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag connection_streams: :driver
   test "Connection streams: logical rendering consumes only proved native programs" do
-    run = ConnectionNative.observe(:pipeline)
-    assert run.result == :ok
-    indexed = %{events: Enum.with_index(run.events, &Map.put(&1, :index, &2))}
-    historical = run.native_history
-    native = NativeTransport.build(indexed, historical)
-    assert native.errors == []
-    reads = ConnectionReads.build(native)
-    assert reads.errors == []
-    decoders = ConnectionDecoders.build(indexed, native, reads, historical)
-    assert decoders.errors == []
-
-    states =
-      ConnectionStates.build(indexed, native, decoders, historical, {:initial, run.initial_state})
-
-    assert states.errors == []
-
-    proof = %{
-      indexed: indexed,
-      native: native,
-      reads: reads,
-      decoders: decoders,
-      states: states,
-      errors: []
-    }
+    {proof, indexed} = native_render_fixture(nil)
+    assert proof.errors == []
+    %{native: native, reads: reads} = proof
 
     messages = ConnectionReads.messages(reads, indexed)
     assert Enum.count(messages, &(&1.wire_frame.direction == :frontend)) == 2
@@ -7013,36 +6992,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   @tag connection_streams: :driver
   test "Connection streams: a write without logical bytes remains an observed operation" do
-    run = ConnectionNative.observe(:pipeline, :empty_write)
-    assert run.result == :ok
-    indexed = %{events: Enum.with_index(run.events, &Map.put(&1, :index, &2))}
-    native = NativeTransport.build(indexed, run.native_history)
-    assert native.errors == []
-    reads = ConnectionReads.build(native)
-    assert reads.errors == []
-    decoders = ConnectionDecoders.build(indexed, native, reads, run.native_history)
-    assert decoders.errors == []
-
-    states =
-      ConnectionStates.build(
-        indexed,
-        native,
-        decoders,
-        run.native_history,
-        {:initial, run.initial_state}
-      )
-
-    assert states.errors == []
-    [empty] = Enum.filter(native.writes, &(&1.bytes == <<>>))
-
-    proof = %{
-      indexed: indexed,
-      native: native,
-      reads: reads,
-      decoders: decoders,
-      states: states,
-      errors: []
-    }
+    {proof, indexed} = native_render_fixture(:empty_write)
+    assert proof.errors == []
+    [empty] = Enum.filter(proof.native.writes, &(&1.bytes == <<>>))
 
     assert function_exported?(ConnectionHistory, :render, 2)
     render = Function.capture(ConnectionHistory, :render, 2)
@@ -7054,6 +7006,89 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       source = Enum.find(indexed.events, &(&1.index == index))
       assert source in rendered.events
     end
+  end
+
+  @tag connection_streams: :driver
+  test "Connection streams: a write-erasing renderer is detected and exactly restored" do
+    {proof, indexed} = native_render_fixture(:empty_write)
+    assert proof.errors == []
+    rendered = Registry.compute(:connection_stream, [proof, indexed])
+    assert rendered_writes_retained?(proof, rendered)
+
+    ComparatorMutants.with_mutant(:stream_render_erasure, fn ->
+      erased = Registry.compute(:connection_stream, [proof, indexed])
+      refute rendered_writes_retained?(proof, erased)
+
+      assert Enum.filter(erased.events, &Map.has_key?(&1, :message_address)) ===
+               Enum.filter(rendered.events, &Map.has_key?(&1, :message_address))
+    end)
+
+    assert Registry.compute(:connection_stream, [proof, indexed]) === rendered
+    {fresh, fresh_indexed} = native_render_fixture(:empty_write)
+    assert fresh.errors == []
+    assert rendered_writes_retained?(
+             fresh,
+             Registry.compute(:connection_stream, [fresh, fresh_indexed])
+           )
+  end
+
+  @tag connection_streams: :driver
+  test "Connection streams: rendering refuses a foreign capture or an unproved native read" do
+    {proof, indexed} = native_render_fixture(nil)
+    {other, other_indexed} = native_render_fixture(nil)
+    assert proof.errors == [] and other.errors == []
+    foreign = Registry.compute(:connection_stream, [proof, other_indexed])
+    assert Enum.map(foreign.errors, & &1.rule) == [:connection_render_source]
+    assert foreign.events === other_indexed.events
+    assert foreign.consumed == MapSet.new()
+
+    {unproved, unproved_indexed} = native_render_fixture(:extra_read, :single)
+    assert unproved.errors != []
+    refused = Registry.compute(:connection_stream, [unproved, unproved_indexed])
+    assert refused.errors != []
+    assert refused.events === unproved_indexed.events
+    assert refused.consumed == MapSet.new()
+    assert Registry.compute(:connection_stream, [proof, indexed]).errors == []
+  end
+
+  defp rendered_writes_retained?(proof, rendered) do
+    retained =
+      MapSet.new(Enum.reject(rendered.events, &Map.has_key?(&1, :message_address)), & &1.index)
+
+    Enum.all?(proof.native.writes, fn write ->
+      Enum.all?(write.indexes, fn index ->
+        MapSet.member?(retained, index) and not MapSet.member?(rendered.consumed, index)
+      end)
+    end)
+  end
+
+  defp native_render_fixture(corruption, mode \\ :pipeline) do
+    run = ConnectionNative.observe(mode, corruption)
+    assert run.result == :ok
+    indexed = %{events: Enum.with_index(run.events, &Map.put(&1, :index, &2))}
+    native = NativeTransport.build(indexed, run.native_history)
+    reads = ConnectionReads.build(native)
+    decoders = ConnectionDecoders.build(indexed, native, reads, run.native_history)
+
+    states =
+      ConnectionStates.build(
+        indexed,
+        native,
+        decoders,
+        run.native_history,
+        {:initial, run.initial_state}
+      )
+
+    proof = %{
+      indexed: indexed,
+      native: native,
+      reads: reads,
+      decoders: decoders,
+      states: states,
+      errors: native.errors ++ reads.errors ++ decoders.errors ++ states.errors
+    }
+
+    {proof, indexed}
   end
 
   @tag :comparator_control
