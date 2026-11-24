@@ -8937,15 +8937,31 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   defp native_encoder_calls(run) do
-    events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
     encoders = [{:tls_record, :encode_data, 3}, {:tls_record_1_3, :encode_data, 2}]
+    native_record_calls(run, encoders)
+  end
+
+  for {name, functions} <- [
+        decoder: [{:tls_record, :decode_cipher_text, 4}, {:tls_record_1_3, :decode_cipher_text, 2}],
+        parser: [{:tls_record, :get_tls_records, 5}]
+      ] do
+    @tag connection_streams: :tls
+    test "Connection streams: record proof never reexecutes the native #{name}" do
+      functions = unquote(Macro.escape(functions))
+      run = ConnectionNative.observe_tls()
+      assert native_record_calls(run, functions) == []
+    end
+  end
+
+  defp native_record_calls(run, functions) do
+    events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
 
     calls =
       comparator_call_order(
         fn ->
           assert ConnectionTls.build(%{events: events}, run.tls_binding).errors == []
         end,
-        encoders
+        functions
       )
 
     Enum.filter(calls, &match?({:call, _, _}, &1))
