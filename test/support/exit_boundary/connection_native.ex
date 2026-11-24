@@ -281,10 +281,71 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         {:timer_fixture_done, ^token, :wrong_order} ->
           raise "the native timer expired before the Holder was queued"
       after
-        5_000 -> raise "the native timer fixture did not finish"
+        5_000 ->
+          diagnose_pool_timer(run)
+          raise "the native timer fixture did not finish"
       end
     after
       stop_owner_timer_fixture(fixture, monitor, token)
+    end
+  end
+
+  # Temporary native cause probe. It reads only this completed real capture and
+  # emits code coordinates and event counts, never a state or exception payload.
+  defp diagnose_pool_timer(run) do
+    events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+    pairs = AshOnetime.Test.ExitBoundary.NativeTransport.pairs(events)
+
+    for {_index, cancel} <- pairs,
+        {owner, :call, {:erlang, :cancel_timer, [timer]}} <- [cancel.source.event],
+        {^owner, :return_from, _, false} <- [cancel.returned.event],
+        {_index, started} <- pairs,
+        {^owner, :call,
+         {:erlang, :start_timer, [timeout, ^owner, {DBConnection.Connection, task, timeout}]}} <-
+          [started.source.event],
+        started.returned.event === {owner, :return_from, {:erlang, :start_timer, 3}, timer} do
+      expiry =
+        Enum.filter(events, fn event ->
+          event.event ===
+            {owner, :receive, {:timeout, timer, {DBConnection.Connection, task, timeout}}}
+        end)
+
+      holders =
+        Enum.filter(events, fn event ->
+          match?({^owner, :receive, {:"ETS-TRANSFER", _, ^task, {:checkin, _, _}}}, event.event)
+        end)
+
+      flushes =
+        for {_index, pair} <- pairs,
+            pair.source.event === {owner, :call, {DBConnection.Connection, :flush_timer, [timer]}},
+            do: pair
+
+      AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TIMER_NATIVE_CAUSE", %{
+        index: cancel.source.index,
+        start: %{index: started.source.index},
+        expiry: Enum.map(expiry, &%{index: &1.index}),
+        holders: Enum.map(holders, &%{index: &1.index}),
+        flushes:
+          Enum.map(flushes, fn pair ->
+            %{
+              index: pair.source.index,
+              returned: %{index: pair.returned.index},
+              ok?: elem(pair.returned.event, 3) === :ok
+            }
+          end)
+      })
+    end
+
+    for %{event: {_, :exception_from, {DBConnection.Connection, _, _} = mfa, {class, reason}}} =
+          source <- events do
+      exception = if is_struct(reason), do: reason.__struct__, else: :native_term
+
+      AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TIMER_NATIVE_EXCEPTION", %{
+        index: source.index,
+        mfa: mfa,
+        class: class,
+        exception: exception
+      })
     end
   end
 

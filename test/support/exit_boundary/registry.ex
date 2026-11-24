@@ -513,6 +513,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {DBConnection.Connection, :disconnect, 3},
         {DBConnection.Connection, :stop, 3},
         {DBConnection.Connection, :handle_event, 4},
+        {DBConnection.Connection, :flush_timer, 1},
         {DBConnection.Connection, :pool_update, 2},
         {AshOnetime.Test.ExitBoundary.Scenarios, :allocation_checkpoint, 0},
         {AshOnetime.Test.ExitBoundary.Scenarios, :"-allocation_checkpoint/0-fun-0-", 0},
