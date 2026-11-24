@@ -24,35 +24,57 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   alias AshOnetime.Test.ExitBoundary.Wire
   @moduledoc false
 
-  def compare(%{run: run, twin: twin, row: row}, options \\ []) do
+  def compare(pair, options \\ []) do
     reference? = Keyword.get(options, :readback_reference?, false)
 
+    prepared = prepare_raw(pair, reference?)
+    raw_failure(prepared) || compare_prepared(prepared, reference?)
+  end
+
+  # Prepare the complete invocation tree before any consumer can project a
+  # prior. Inherited database, derivation and clock values are comparison
+  # outputs; none is an input to an authoritative connection proof.
+  defp prepare_raw(%{run: run, twin: twin, row: row}, reference?) do
     prior =
       if not reference? and Map.get(run, :prior) do
-        compare(%{run: run.prior, twin: twin.prior, row: run.prior.row})
+        prepare_raw(%{run: run.prior, twin: twin.prior, row: run.prior.row}, false)
       end
 
-    if prior && not prior.raw_valid? do
-      %{prior | errors: Enum.map(prior.errors, &Map.update!(&1, :at, fn at -> {:prior, at} end))}
-    else
-      run = inherit(run, prior, :run)
-      twin = inherit(twin, prior, :twin)
+    %{
+      run: run,
+      twin: twin,
+      row: row,
+      prior: prior,
+      connections: {ConnectionHistory.build(run), ConnectionHistory.build(twin)}
+    }
+  end
 
-      # These indexes retain every captured event and the complete authoritative
-      # baseline. No registry rule, scheduling move or OPEN interval has run.
-      rc = ConnectionHistory.build(run)
-      tc = ConnectionHistory.build(twin)
+  defp compare_prepared(prepared, reference?) do
+    %{run: run, twin: twin, row: row, connections: {rc, tc}} = prepared
+    prior = if prepared.prior, do: compare_prepared(prepared.prior, false)
+    run = inherit(run, prior, :run)
+    twin = inherit(twin, prior, :twin)
 
-      if rc.errors == [] and tc.errors == [] do
-        matches = match_sides(run, twin, reference?, {rc, tc})
-        compare_matched(matches, row, reference?, prior)
-      else
-        raw_failure(rc.indexed, tc.indexed, rc, tc, prior)
-      end
+    matches = match_sides(run, twin, reference?, {rc, tc})
+    compare_matched(matches, row, reference?, prior)
+  end
+
+  defp raw_failure(%{connections: {rc, tc}, prior: prepared_prior}) do
+    prior = if prepared_prior, do: raw_failure(prepared_prior)
+
+    cond do
+      prior ->
+        %{prior | errors: Enum.map(prior.errors, &Map.update!(&1, :at, fn at -> {:prior, at} end))}
+
+      rc.errors != [] or tc.errors != [] ->
+        raw_failure(rc.indexed, tc.indexed, rc, tc)
+
+      true ->
+        nil
     end
   end
 
-  defp raw_failure(ri, ti, rc, tc, prior) do
+  defp raw_failure(ri, ti, rc, tc) do
     errors =
       for {side, proof} <- [run_index: rc, twin_index: tc],
           error <- proof.errors do
@@ -64,11 +86,6 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
           twin: error.expected
         }
       end
-
-    errors =
-      if prior,
-        do: Enum.map(prior.errors, &Map.update!(&1, :at, fn at -> {:prior, at} end)) ++ errors,
-        else: errors
 
     %{
       raw_valid?: false,
