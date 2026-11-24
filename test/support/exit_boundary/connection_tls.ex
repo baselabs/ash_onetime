@@ -4,9 +4,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.NativeTransport
 
-  @hello_retry_random <<207, 33, 173, 116, 229, 154, 97, 17, 190, 29, 140, 2, 30, 101, 184,
-                        145, 194, 162, 17, 22, 122, 187, 140, 94, 7, 158, 9, 226, 200, 168,
-                        51, 156>>
+  @hello_retry_random <<207, 33, 173, 116, 229, 154, 97, 17, 190, 29, 140, 2, 30, 101, 184, 145,
+                        194, 162, 17, 22, 122, 187, 140, 94, 7, 158, 9, 226, 200, 168, 51, 156>>
 
   # Local formatter metadata must be frozen while a native owner mutant is
   # loaded. Its expected identity comes from that owner's independent BEAM.
@@ -4566,20 +4565,25 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp server_hello_next_name(options, specific) do
     if Map.get(options, :middlebox_comp_mode) == false or
          Map.get(specific, :hello_retry, false),
-      do: :wait_ee,
-      else: :hello_middlebox_assert
+       do: :wait_ee,
+       else: :hello_middlebox_assert
   end
 
   defp handshake_cipher(<<19, 1>>),
     do: {:ok, %{bulk: 8, hash: :sha256, size: 32, key: 16, tag: 16}}
+
   defp handshake_cipher(<<19, 2>>),
     do: {:ok, %{bulk: 8, hash: :sha384, size: 48, key: 32, tag: 16}}
+
   defp handshake_cipher(<<19, 3>>),
     do: {:ok, %{bulk: 9, hash: :sha256, size: 32, key: 32, tag: 16}}
+
   defp handshake_cipher(<<19, 4>>),
     do: {:ok, %{bulk: 10, hash: :sha256, size: 32, key: 16, tag: 16}}
+
   defp handshake_cipher(<<19, 5>>),
     do: {:ok, %{bulk: 11, hash: :sha256, size: 32, key: 16, tag: 8}}
+
   defp handshake_cipher(_cipher), do: :error
 
   defp server_hello_start(data, hello, key_share, group, public, profile) do
@@ -4687,7 +4691,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         else: {"c hs traffic", :client_handshake_traffic_secret}
 
     with {:ok, traffic} <-
-           handshake_expand(state, scope, profile, elem(master, 1), label, transcript, profile.size),
+           handshake_expand(
+             state,
+             scope,
+             profile,
+             elem(master, 1),
+             label,
+             transcript,
+             profile.size
+           ),
          {:ok, key} <- handshake_expand(state, scope, profile, traffic, "key", <<>>, profile.key),
          {:ok, iv} <- handshake_expand(state, scope, profile, traffic, "iv", <<>>, 12),
          {:ok, finished} <-
@@ -4734,7 +4746,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           do: value
 
     case Enum.uniq(values) do
-      [value] -> {:ok, value}
+      [value] ->
+        {:ok, value}
 
       _ ->
         Diagnostics.emit("CONNECTION_TLS_SERVER_HELLO_PRIMITIVE", %{
@@ -4752,10 +4765,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       %{server_hello_program: program, input: input} ->
         arguments =
           case kind do
-            :start -> [input.data, program.updates]
+            :start ->
+              [input.data, program.updates]
+
             :secrets ->
               [program.public, program.private, program.group, program.psk, program.start]
-            :active -> [program.secrets]
+
+            :active ->
+              [program.secrets]
           end
 
         server_hello_record(state, source, arguments, Map.fetch!(program, kind))
