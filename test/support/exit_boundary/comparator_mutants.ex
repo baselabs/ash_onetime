@@ -801,6 +801,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_tls_record_output) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original:
+          "  defp record_result(state, source, record, actual),\n    do: tls_exact(state, source, :tls_record_output, actual, record.result)\n",
+        mutated:
+          "  defp record_result(state, source, record, _actual),\n    do: tls_exact(state, source, :tls_record_output, record.result, record.result)\n"
+      }
+    ]
+  end
+
   def edits(:stream_tls_handshake_copy) do
     [
       %{
@@ -997,6 +1009,23 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   def with_tls_record_value(callback) do
     targets = %{{:next_record_done, 4} => %{kind: :element, size: 2, position: 0, total?: true}}
     with_owner_outputs(:tls_gen_connection, targets, callback)
+  end
+
+  def with_tls_record_result(kind, callback) do
+    {caller, module, function, arity} =
+      case kind do
+        :parser -> {:tls_gen_connection, :tls_record, :get_tls_records, 5}
+        :decoder -> {:tls_record, :tls_record_1_3, :decode_cipher_text, 2}
+      end
+
+    targets = %{{function, arity} => %{kind: :element, size: 2, position: 0}}
+
+    with_owner_mutant(
+      caller,
+      1,
+      &remote_outputs_form(&1, &2, module, targets),
+      fn -> with_owner_outputs(module, targets, callback) end
+    )
   end
 
   def with_tls_handshake_input(callback) do

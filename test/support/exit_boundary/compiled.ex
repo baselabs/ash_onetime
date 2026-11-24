@@ -62,6 +62,34 @@ defmodule AshOnetime.Test.ExitBoundary.Compiled do
 
   defp object(module), do: Process.get({__MODULE__, :object, module}, :code.which(module))
 
+  # Alert locations are compile-time literals in OTP's ALERT_REC constructors.
+  # Read only that metadata from the installed program, never a checked alert.
+  def alert_location(module, function, arity, ordinal) do
+    References.memo(
+      {:alert_location, module, module.module_info(:md5), function, arity, ordinal},
+      fn ->
+        {:ok, {^module, chunks}} = :beam_lib.chunks(:code.which(module), [:debug_info])
+        {:debug_info_v1, backend, data} = chunks[:debug_info]
+        {:ok, forms} = backend.debug_info(:erlang_v1, module, data, [])
+
+        {:function, _, ^function, ^arity, clauses} =
+          Enum.find(forms, &match?({:function, _, ^function, ^arity, _}, &1))
+
+        clauses |> alert_locations() |> Enum.fetch!(ordinal) |> :erl_parse.normalise()
+      end
+    )
+  end
+
+  defp alert_locations({:record, _, :alert, fields}) do
+    for {:record_field, _, {:atom, _, :where}, location} <- fields, do: location
+  end
+
+  defp alert_locations(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> alert_locations()
+
+  defp alert_locations(list) when is_list(list), do: Enum.flat_map(list, &alert_locations/1)
+  defp alert_locations(_literal), do: []
+
   def identity(module, name, arity) do
     References.memo({:compiled_fun, module, module.module_info(:md5), name, arity}, fn ->
       object = object(module)

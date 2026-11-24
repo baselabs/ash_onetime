@@ -3813,6 +3813,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
               parsed: parsed
             })
 
+          {:alert, expected} ->
+            put_in(state.records[source.index], %{result: expected, kind: :record_alert})
+
           {:error, _reason} ->
             tls_failure(state, source, :tls_record_parser_origin)
         end
@@ -3886,8 +3889,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
               Map.get(elem(input.data, 4), :padding_check, true)
             ]
 
-        expected = apply(module, :decode_cipher_text, expected_args)
-
         nested? =
           Enum.any?(state.records, fn {_index, record} ->
             Map.get(record, :pid) == source.pid and record.kind == :decode
@@ -3895,9 +3896,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
         kind = if nested?, do: :decode_copy, else: :decode
 
-        state
-        |> tls_exact(source, :tls_record_input, arguments, expected_args)
-        |> put_in([:records, source.index], %{result: expected, kind: kind, pid: source.pid})
+        state = tls_exact(state, source, :tls_record_input, arguments, expected_args)
+
+        case decode_record(state, source, module, expected_args) do
+          {:ok, expected} ->
+            put_in(state.records[source.index], %{result: expected, kind: kind, pid: source.pid})
+
+          :error ->
+            tls_failure(state, source, :tls_decode_primitive_origin)
+        end
 
       _ ->
         tls_failure(state, source, :tls_record_origin)
@@ -3905,6 +3912,340 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp record_call(state, _source, _module, _function, _arguments), do: state
+
+  # Decryption is constructed from the modeled read state and exact native
+  # crypto arguments. A primitive's return is an origin; a TLS helper's return
+  # is the value being checked and cannot supply its own expectation.
+  defp decode_record(state, source, :tls_record_1_3, [record, states]),
+    do: decode_record_13(state, source, record, states)
+
+  defp decode_record(state, source, :tls_record, [{3, 4}, record, states, _padding]),
+    do: decode_record_13(state, source, record, states)
+
+  defp decode_record(state, source, :tls_record, [_version, record, states, padding]) do
+    read = states.current_read
+
+    if elem(read.security_parameters, 4) == 2,
+      do: decode_record_aead(state, source, record, states),
+      else: decode_record_cipher(state, source, record, states, padding)
+  end
+
+  defp decode_record_13(state, source, {:ssl_tls, 23, {3, 3}, fragment, _}, states) do
+    read = states.current_read
+
+    case Map.fetch(read, :aead_handle) do
+      {:ok, handle} ->
+        decode_record_13_aead(state, source, fragment, states, handle, false)
+
+      :error ->
+        cond do
+          elem(read.security_parameters, 4) == 2 and Map.has_key?(read, :early_data) ->
+            with {:ok, handle} <- record_aead_handle(state, source, read, false) do
+              decode_record_13_aead(state, source, fragment, states, handle, true)
+            end
+
+          elem(read.security_parameters, 1) == <<0, 0>> ->
+            {:ok, {{:ssl_tls, 23, {3, 4}, fragment, false}, states}}
+
+          true ->
+            {:ok,
+             record_alert({:tls_record_1_3, :decode_cipher_text, 2}, 0, 20, {:record_type_mismatch, 23})}
+        end
+    end
+  end
+
+  defp decode_record_13(_state, _source, {:ssl_tls, 21, {3, 3}, <<2, 47>>, _}, states),
+    do: {:ok, {{:ssl_tls, 21, {3, 4}, <<2, 47>>, false}, states}}
+
+  defp decode_record_13(_state, _source, {:ssl_tls, 21, {3, 3}, <<_level, alert>>, _}, states)
+       when alert in [0, 90] and
+              elem(states.current_read.security_parameters, 12) == :undefined,
+       do: {:ok, {{:ssl_tls, 21, {3, 4}, <<2, alert>>, false}, states}}
+
+  defp decode_record_13(_state, _source, {:ssl_tls, 20, {3, 3}, <<1>>, _}, states),
+    do: {:ok, {{:ssl_tls, 20, {3, 4}, <<1>>, false}, states}}
+
+  defp decode_record_13(_state, _source, {:ssl_tls, type, {3, 3}, fragment, _}, states)
+       when elem(states.current_read.security_parameters, 1) == <<0, 0>>,
+       do: {:ok, {{:ssl_tls, type, {3, 4}, fragment, false}, states}}
+
+  defp decode_record_13(_state, _source, {:ssl_tls, type, _, _, _}, _states),
+    do:
+      {:ok,
+       record_alert({:tls_record_1_3, :decode_cipher_text, 2}, 0, 20, {:record_type_mismatch, type})}
+
+  defp decode_record_13_aead(state, source, fragment, states, handle, early?) do
+    read = states.current_read
+    nonce = record_nonce(read.sequence_number, elem(read.cipher_state, 1))
+    arguments = [handle, nonce, fragment, <<23, 3, 3, IO.iodata_length(fragment)::16>>]
+
+    case record_primitive_event(state, source, {:crypto, :crypto_one_time_aead, 4}, arguments) do
+      {:ok, {:return_from, plaintext}} when is_binary(plaintext) ->
+        if early? and read.early_data.early_data_accepted and
+             read.early_data.pending_early_data_size > 0 do
+          decode_early_record(plaintext, states, handle)
+        else
+          read = read |> Map.put(:sequence_number, read.sequence_number + 1)
+          read = Map.put(read, :aead_handle, handle)
+          {:ok, {decode_inner_record(plaintext), Map.put(states, :current_read, read)}}
+        end
+
+      {:ok, {tag, _reason}} when tag in [:return_from, :exception_from] ->
+        if early? and read.early_data.trial_decryption and
+             not read.early_data.early_data_accepted and read.early_data.pending_early_data_size > 0 do
+          ignore_early_record(fragment, states, handle)
+        else
+          ordinal = if tag == :return_from, do: 0, else: 1
+
+          {:ok,
+           record_alert({:tls_record_1_3, :decipher_aead, 4}, ordinal, 20, :decryption_failed)}
+        end
+
+      :error ->
+        :error
+    end
+  end
+
+  defp decode_inner_record(<<>>),
+    do: record_alert({:tls_record_1_3, :decode_inner_plaintext, 1}, 1, 10, :empty_alert)
+
+  defp decode_inner_record(plaintext) do
+    length = byte_size(plaintext) - 1
+    <<content::binary-size(^length), type>> = plaintext
+
+    cond do
+      type == 0 -> decode_inner_record(content)
+      type not in [21, 22, 23] -> decode_inner_record(<<>>)
+      length > 16_384 ->
+        record_alert(
+          {:tls_record_1_3, :decode_inner_plaintext, 1},
+          0,
+          22,
+          {:plain_text_too_long, length}
+        )
+
+      true -> {:ssl_tls, type, {3, 4}, content, false}
+    end
+  end
+
+  defp ignore_early_record(fragment, states, handle) do
+    read = states.current_read
+    tag = if elem(read.security_parameters, 3) == 11, do: 8, else: 16
+    remaining = read.early_data.pending_early_data_size - max(1, byte_size(fragment) - 1 - tag)
+
+    if remaining < 0 do
+      {:ok,
+       record_alert(
+         {:tls_record_1_3, :ignore_early_data, 6},
+         0,
+         20,
+         {:decryption_failed, {:max_early_data_threshold_exceeded, remaining}}
+       )}
+    else
+      early = %{read.early_data | pending_early_data_size: remaining}
+      read = read |> Map.put(:early_data, early) |> Map.put(:aead_handle, handle)
+      {:ok, {:no_record, Map.put(states, :current_read, read)}}
+    end
+  end
+
+  defp decode_early_record(plaintext, states, handle) do
+    read = states.current_read
+
+    case decode_inner_record(plaintext) do
+      {:ssl_tls, 22, _, <<5, _::binary>>, _} = record ->
+        {:ok, {record, Map.put(states, :current_read, %{read | sequence_number: read.sequence_number + 1})}}
+
+      {:ssl_tls, 23, _, data, _} = record ->
+        remaining = read.early_data.pending_early_data_size - max(1, byte_size(data))
+
+        if remaining < 0 do
+          {:ok,
+           record_alert(
+             {:tls_record_1_3, :process_early_data, 6},
+             0,
+             10,
+             {:too_much_early_data, {:max_early_data_threshold_exceeded, remaining}}
+           )}
+        else
+          early = %{read.early_data | pending_early_data_size: remaining}
+          read = read |> Map.put(:early_data, early) |> Map.put(:aead_handle, handle)
+          read = Map.put(read, :sequence_number, read.sequence_number + 1)
+          {:ok, {put_elem(record, 4, true), Map.put(states, :current_read, read)}}
+        end
+
+      {:ssl_tls, type, _, _, _} ->
+        {:ok,
+         record_alert({:tls_record_1_3, :process_early_data, 6}, 1, 10, {:unexpected_inner_type, type})}
+
+      _alert ->
+        :error
+    end
+  end
+
+  defp decode_record_aead(state, source, {:ssl_tls, type, {major, minor}, fragment, _} = record, states) do
+    read = states.current_read
+    cipher = read.cipher_state
+    bulk = elem(read.security_parameters, 3)
+    sequence = read.sequence_number
+    cipher = if bulk == 9, do: put_elem(cipher, 5, <<sequence::64>>), else: cipher
+    tag_length = elem(cipher, 6)
+    prefix = if bulk == 9, do: 0, else: 8
+    length = byte_size(fragment) - prefix - tag_length
+
+    if length < 0 do
+      {:ok, record_alert({:ssl_record, :decipher_aead, 5}, 1, 20, :decryption_failed)}
+    else
+      <<explicit::binary-size(^prefix), content::binary-size(^length), tag::binary>> = fragment
+
+      nonce =
+        if bulk == 9 do
+          record_primitive(state, source, {:crypto, :exor, 2}, [<<0::32, sequence::64>>, elem(cipher, 1)])
+        else
+          <<salt::binary-size(4), _::binary>> = elem(cipher, 1)
+          {:ok, salt <> explicit}
+        end
+
+      with {:ok, nonce} <- nonce,
+           {:ok, algorithm} <- record_aead_algorithm(bulk, elem(cipher, 2)),
+           {:ok, {kind, plaintext}} <-
+             record_primitive_event(state, source, {:crypto, :crypto_one_time_aead, 7}, [
+               algorithm, elem(cipher, 2), nonce, content,
+               <<sequence::64, type, major, minor, length::16>>, tag, false
+             ]) do
+        if kind == :return_from and is_binary(plaintext) do
+          read = %{read | cipher_state: cipher, sequence_number: sequence + 1}
+          {:ok, {put_elem(record, 3, plaintext), Map.put(states, :current_read, read)}}
+        else
+          ordinal = if kind == :return_from, do: 0, else: 1
+          {:ok, record_alert({:ssl_record, :decipher_aead, 5}, ordinal, 20, :decryption_failed)}
+        end
+      else
+        _ -> :error
+      end
+    end
+  end
+
+  defp decode_record_cipher(state, source, {:ssl_tls, type, version, fragment, _} = record, states, padding) do
+    read = states.current_read
+
+    case decipher_record(state, source, fragment, version, read, padding) do
+      {:ok, plaintext, mac, cipher} ->
+        with {:ok, expected} <- record_read_mac(state, source, type, plaintext, version, read) do
+          if mac === expected do
+            read = %{read | cipher_state: cipher, sequence_number: read.sequence_number + 1}
+            {:ok, {put_elem(record, 3, plaintext), Map.put(states, :current_read, read)}}
+          else
+            {:ok, record_alert({:tls_record, :decode_cipher_text, 4}, 0, 20, :undefined)}
+          end
+        end
+
+      {:alert, alert} -> {:ok, alert}
+      :error -> :error
+    end
+  end
+
+  defp record_read_mac(_state, _source, _type, _plaintext, _version, read)
+       when elem(read.security_parameters, 7) == 0,
+       do: {:ok, <<>>}
+
+  defp record_read_mac(state, source, type, plaintext, {major, minor}, read) do
+    with {:ok, algorithm} <- record_mac_algorithm(elem(read.security_parameters, 7)) do
+      header = <<read.sequence_number::64, type, major, minor, byte_size(plaintext)::16>>
+      record_primitive(state, source, {:crypto, :mac, 4}, [:hmac, algorithm, read.mac_secret, [header, plaintext]])
+    end
+  end
+
+  defp decipher_record(_state, _source, fragment, _version, read, _padding)
+       when elem(read.security_parameters, 3) == 0,
+       do: {:ok, fragment, <<>>, read.cipher_state}
+
+  defp decipher_record(state, source, fragment, version, read, padding) do
+    cipher = read.cipher_state
+    bulk = elem(read.security_parameters, 3)
+
+    case bulk do
+      1 -> decipher_stream_record(state, source, fragment, read)
+      3 -> decipher_block_record(state, source, fragment, version, read, padding, :des_cbc)
+      4 -> decipher_block_record(state, source, fragment, version, read, padding, :des_ede3_cbc)
+      7 when byte_size(elem(cipher, 2)) == 16 ->
+        decipher_block_record(state, source, fragment, version, read, padding, :aes_128_cbc)
+      7 when byte_size(elem(cipher, 2)) == 32 ->
+        decipher_block_record(state, source, fragment, version, read, padding, :aes_256_cbc)
+      _ -> :error
+    end
+  end
+
+  defp decipher_stream_record(state, source, fragment, read) do
+    cipher = read.cipher_state
+
+    initialized =
+      case elem(cipher, 4) do
+        {:stream_init, :rc4, key, _iv} ->
+          record_primitive(state, source, {:crypto, :crypto_init, 3}, [:rc4, key, false])
+        handle -> {:ok, handle}
+      end
+
+    with {:ok, handle} <- initialized,
+         {:ok, {kind, plaintext}} <- record_primitive_event(state, source, {:crypto, :crypto_update, 2}, [handle, fragment]) do
+      hash = elem(read.security_parameters, 9)
+
+      if kind == :return_from and is_binary(plaintext) and byte_size(plaintext) >= hash do
+        length = byte_size(plaintext) - hash
+        <<content::binary-size(^length), mac::binary>> = plaintext
+        {:ok, content, mac, put_elem(cipher, 4, handle)}
+      else
+        {:alert, record_alert({:ssl_cipher, :decipher, 6}, 0, 20, :decryption_failed)}
+      end
+    else
+      _ -> :error
+    end
+  end
+
+  defp decipher_block_record(state, source, fragment, version, read, padding?, algorithm) do
+    cipher = read.cipher_state
+
+    case record_primitive_event(state, source, {:crypto, :crypto_one_time, 5}, [
+           algorithm, elem(cipher, 2), elem(cipher, 1), fragment, false
+         ]) do
+      {:ok, {:return_from, plaintext}} when is_binary(plaintext) ->
+        decipher_block_plaintext(plaintext, fragment, version, read, padding?)
+      {:ok, {:exception_from, _exception}} ->
+        {:alert, record_alert({:ssl_cipher, :block_decipher, 6}, 0, 20, :decryption_failed)}
+      _ -> :error
+    end
+  end
+
+  defp decipher_block_plaintext(plaintext, fragment, version, read, padding?) do
+    iv_size = byte_size(elem(read.cipher_state, 1))
+    hash = elem(read.security_parameters, 9)
+    size = byte_size(plaintext)
+    explicit_size = if version == {3, 1}, do: 0, else: iv_size
+    pad = if size > 0, do: :binary.last(plaintext), else: 0
+    actual_pad = if version == {3, 1} and pad >= size - 1, do: 0, else: pad
+    length = size - explicit_size - actual_pad - 1 - hash
+
+    if size > 0 and length >= 0 and byte_size(fragment) >= iv_size do
+      <<explicit::binary-size(^explicit_size), content::binary-size(^length),
+        mac::binary-size(^hash), padding::binary-size(^actual_pad), _pad>> = plaintext
+
+      next_iv =
+        if version == {3, 1},
+          do: binary_part(fragment, byte_size(fragment) - iv_size, iv_size),
+          else: explicit
+
+      valid? = actual_pad == pad and
+        ((version == {3, 1} and not padding?) or padding == :binary.copy(<<pad>>, pad))
+      content = if valid?, do: content, else: <<240, content::binary>>
+      {:ok, content, mac, put_elem(read.cipher_state, 1, next_iv)}
+    else
+      {:alert, record_alert({:ssl_cipher, :block_decipher, 6}, 0, 20, :decryption_failed)}
+    end
+  end
+
+  defp record_alert({module, function, arity}, ordinal, description, reason) do
+    where = Compiled.alert_location(module, function, arity, ordinal)
+    {:alert, 2, description, where, :undefined, reason}
+  end
 
   # OTP 29.1.2 tls_record's framing program, constructed from the qualified
   # transport bytes and modeled buffer. Keep its front/rear queue exactly;
@@ -3951,7 +4292,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {:ok, {Enum.reverse(records), {:undefined, queue}}}
 
       type not in 20..23 ->
-        {:error, {:unsupported_record_type, type}}
+        {:alert,
+         record_alert(
+           {:tls_record, :validate_tls_records_type, 8},
+           0,
+           10,
+           {:unsupported_record_type, type}
+         )}
 
       version == :undefined and size >= 2 ->
         {<<major, minor>>, queue} = record_queue_take(2, queue)
@@ -3969,7 +4316,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {:ok, {Enum.reverse(records), {header, queue}}}
 
       not record_version?(version, versions) ->
-        {:error, {:unsupported_version, version}}
+        ordinal = if is_list(versions), do: 0, else: 1
+
+        {:alert,
+         record_alert(
+           {:tls_record, :validate_tls_record_version, 8},
+           ordinal,
+           20,
+           {:unsupported_version, version}
+         )}
 
       length == :undefined and size >= 2 ->
         {<<length::16>>, queue} = record_queue_take(2, queue)
@@ -3987,7 +4342,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {:ok, {Enum.reverse(records), {header, queue}}}
 
       length > record_maximum(versions, maximum) ->
-        {:error, :record_overflow}
+        {:alert,
+         record_alert({:tls_record, :validate_tls_record_length, 8}, 0, 22, :undefined)}
 
       length > size ->
         {:ok, {Enum.reverse(records), {header, queue}}}
@@ -4366,15 +4722,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp record_primitive(state, source, {module, function, _} = mfa, arguments) do
+  defp record_primitive(state, source, mfa, arguments) do
+    case record_primitive_event(state, source, mfa, arguments) do
+      {:ok, {:return_from, value}} -> {:ok, value}
+      _ -> :error
+    end
+  end
+
+  defp record_primitive_event(state, source, {module, function, _} = mfa, arguments) do
     scope = Map.fetch!(state.pairs, source.index)
 
     values =
       for pair <- Map.get(state.pair_index, {source.pid, mfa}, []),
           source.index < pair.source.index and pair.returned.index < scope.returned.index,
           pair.source.event === {source.pid, :call, {module, function, arguments}},
-          {_, :return_from, ^mfa, value} <- [pair.returned.event],
-          do: value
+          {_, kind, ^mfa, value} <- [pair.returned.event],
+          kind in [:return_from, :exception_from],
+          do: {kind, value}
 
     case Enum.uniq(values) do
       [value] -> {:ok, value}
@@ -4555,6 +4919,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     put_in(state.parsed[source.pid], parsed)
   end
 
+  defp record_return(state, source, %{kind: :record_alert}),
+    do: Map.update!(state, :parsed, &Map.delete(&1, source.pid))
+
   defp record_return(state, source, %{kind: :server_hello} = record) do
     [frame | rest] = state.frames[source.pid]
     data = frame.current.data
@@ -4596,6 +4963,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     parsed = decoded_record(parsed, record, states)
     put_in(state.parsed[source.pid], %{parsed | origin: source.index})
   end
+
+  defp record_return(state, source, %{kind: :decode, result: {:alert, _, _, _, _, _}}),
+    do: Map.update!(state, :parsed, &Map.delete(&1, source.pid))
 
   defp record_return(
          state,
@@ -4655,6 +5025,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp decoded_record(%{fragments: []} = parsed, {:ssl_tls, _, _, _, _} = record, states) do
     [_cipher | remaining] = parsed.remaining
     %{parsed | remaining: remaining, states: states, record: record}
+  end
+
+  defp decoded_record(parsed, {:alert, _, _, _, _, _} = alert, states) do
+    [_cipher | remaining] = parsed.remaining
+    %{parsed | remaining: remaining, states: states, record: alert}
   end
 
   defp decoded_record(parsed, {:ssl_tls, _, _, _, _}, _states),

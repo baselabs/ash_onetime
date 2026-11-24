@@ -9095,6 +9095,47 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     Enum.filter(calls, &match?({:call, _, _}, &1))
   end
 
+  for {kind, mfa} <- [
+        parser: {:tls_record, :get_tls_records, 5},
+        decoder: {:tls_record_1_3, :decode_cipher_text, 2}
+      ] do
+    @tag connection_streams: :tls
+    test "Connection streams: native #{kind} results have an independent sole catcher" do
+      kind = unquote(kind)
+      mfa = unquote(Macro.escape(mfa))
+      positive = ConnectionNative.observe_tls()
+      events = Enum.with_index(positive.events, &Map.put(&1, :index, &2))
+      assert ConnectionTls.build(%{events: events}, positive.tls_binding).errors == []
+
+      run = ComparatorMutants.with_tls_record_result(kind, &ConnectionNative.observe_tls/0)
+      assert run.result == []
+      events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+
+      coordinates =
+        for %{index: index, event: {_, :return_from, ^mfa, {{:native_foreign_return, _}, _}}} <- events,
+            do: {:tls_record_output, index}
+
+      assert coordinates != []
+      proof = ConnectionTls.build(%{events: events}, run.tls_binding)
+      assert Enum.map(proof.errors, &{&1.rule, &1.index}) == coordinates
+
+      for mutant <- [:stream_tls_record_output, :stream_tls_record_copy, :stream_tls_worker_state_copy] do
+        checked =
+          ComparatorMutants.with_mutant(mutant, fn ->
+            ConnectionTls.build(%{events: events}, run.tls_binding)
+          end)
+
+        expected = if mutant == :stream_tls_record_output, do: [], else: proof.errors
+        assert checked.errors == expected
+      end
+
+      assert ConnectionTls.build(%{events: events}, run.tls_binding).errors == proof.errors
+      fresh = ConnectionNative.observe_tls()
+      fresh_events = Enum.with_index(fresh.events, &Map.put(&1, :index, &2))
+      assert ConnectionTls.build(%{events: fresh_events}, fresh.tls_binding).errors == []
+    end
+  end
+
   for boundary <- [:input, :return, :record] do
     @tag connection_streams: :tls
     test "Connection streams: TLS record #{boundary} copy retains its native source" do
