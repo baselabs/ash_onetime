@@ -5167,6 +5167,70 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  for callback <- [:function, :mfa], boundary <- [:input, :output] do
+    @tag connection_streams: :pool
+    test "Connection streams: after-connect #{callback} Task factory #{boundary} has one copy guard",
+         context do
+      Repo.put_dynamic_repo(context.repo)
+      historical = Historical.capture(context.prefix)
+      callback = unquote(callback)
+      boundary = unquote(boundary)
+      observe = fn -> ConnectionNative.observe_pool_startup({:after_connect_failure, :rand, callback}) end
+      positive = observe.()
+      side = observation_side(context, positive, %{}, row!(:issue, :execute), historical)
+      assert ConnectionHistory.build(side).errors == []
+
+      run =
+        case boundary do
+          :input -> ComparatorMutants.with_task_factory_input(observe)
+          :output -> ComparatorMutants.with_task_factory_output(observe)
+        end
+
+      assert run.result == :ok
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
+
+      coordinates =
+        for source <- proof.indexed.events,
+            task_factory_copy?(source.event, boundary),
+            do: source.index
+
+      assert coordinates != []
+      rule = if boundary == :input, do: :state_owner_task_factory, else: :state_owner_task_return
+      own = if boundary == :input, do: :stream_owner_task_factory, else: :stream_owner_task_return
+
+      assert Enum.map(proof.errors, &{&1.rule, &1.index}) == Enum.map(coordinates, &{rule, &1})
+
+      for mutant <- [
+            :stream_owner_task_factory,
+            :stream_owner_task_return,
+            :stream_owner_backoff_input,
+            :stream_owner_backoff_result,
+            :stream_owner_copy
+          ] do
+        checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
+        assert checked.errors == if(mutant == own, do: [], else: proof.errors)
+      end
+
+      assert ConnectionHistory.build(side).errors == proof.errors
+      restored = observe.()
+      side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+      assert ConnectionHistory.build(side).errors == []
+    end
+  end
+
+  defp task_factory_copy?(
+         {_, :call, {DBConnection.Task, :run_child, [_, _, {:native_foreign_helper, _}, _]}},
+         :input
+       ), do: true
+
+  defp task_factory_copy?(
+         {_, :return_from, {DBConnection.Task, :run_child, 4}, {_, {:native_foreign_return, _}}},
+         :output
+       ), do: true
+
+  defp task_factory_copy?(_event, _boundary), do: false
+
   for lifecycle <- [:idle_ping, :reconnect] do
     @tag connection_streams: :pool
     test "Connection streams: native #{lifecycle} retains the renewed holder's cut origin",
@@ -8452,8 +8516,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           %{
             index: index,
             event:
-              {_, :call,
-               {:tls_gen_connection, :next_record, [_, _, {:native_foreign_helper, _}]}}
+              {_, :call, {:tls_gen_connection, :next_record, [_, _, {:native_foreign_helper, _}]}}
           } ->
             [{index, [2, 2, 2]}]
 

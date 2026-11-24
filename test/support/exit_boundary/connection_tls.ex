@@ -2905,8 +2905,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     expected =
       case arity do
-        3 -> [version.name, buffers, version.data]
-        5 -> [version.data, parsed.remaining, parsed.states, buffers, check]
+        3 ->
+          [version.name, buffers, version.data]
+
+        5 ->
+          [version.data, parsed.remaining, parsed.states, buffers, check]
+
         7 ->
           [
             version.data,
@@ -3638,7 +3642,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp record_buffer_state(state, source, parsed) do
     data = parsed.input.data
     buffers = elem(data, 11) |> put_elem(1, parsed.buffer) |> put_elem(3, parsed.remaining)
-    version = %{parsed.input | data: put_elem(data, 11, buffers), origin: {:tls_records, source.index}}
+
+    version = %{
+      parsed.input
+      | data: put_elem(data, 11, buffers),
+        origin: {:tls_records, source.index}
+    }
+
     [frame | rest] = state.frames[source.pid]
     put_in(state.frames[source.pid], [%{frame | current: version} | rest])
   end
@@ -3690,7 +3700,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         |> tls_exact(source, :tls_record_selection, record, selected_record(parsed))
         |> tls_error_path(source, [3, 0], :tls_record_selection)
 
-      _ -> tls_failure(state, source, :tls_record_selection)
+      _ ->
+        tls_failure(state, source, :tls_record_selection)
     end
   end
 

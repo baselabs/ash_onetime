@@ -619,6 +619,11 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   defp inherit_pairing(pairing, nil), do: pairing
 
   defp inherit_pairing(pairing, prior) do
+    pairing =
+      Enum.reduce(prior.pairing.forward, pairing, fn {a, b}, p ->
+        Origins.bind(p, a, b, :prior_physical)
+      end)
+
     Enum.reduce(prior.pairing.uuid_forward, pairing, fn {a, b}, p ->
       p = Origins.bind(p, a, b, :prior_uuid)
 

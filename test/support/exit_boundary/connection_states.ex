@@ -1241,10 +1241,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     with machine when not is_nil(machine) <- state.owner_machines[source.pid],
          task when not is_nil(task) <- pair_returned(state, source),
          {:ok, child, reference} <- owner_task_origin(state, task, machine),
-         [started] <- native_type_calls(state, task.source, source, {Task.Supervisor, :start_child, 4}) do
+         [started] <-
+           native_type_calls(state, task.source, source, {Task.Supervisor, :start_child, 4}) do
       state
       |> exact(source, :state_owner_task_return, actual, {child, reference})
-      |> exact(started.returned, :state_owner_task_child, elem(started.returned.event, 3), {:ok, child})
+      |> exact(
+        started.returned,
+        :state_owner_task_child,
+        elem(started.returned.event, 3),
+        {:ok, child}
+      )
     else
       _ -> failure(state, source, :state_owner_task_origin)
     end
@@ -1499,12 +1505,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       pending ->
         state
         |> owner_result_copy(source, result, state.owner_results[source.pid])
-        |> owner_protocol_copy(source, [3, owner_result_data(state.owner_results[source.pid]), :state], pending.version)
+        |> owner_protocol_copy(
+          source,
+          [3, owner_result_data(state.owner_results[source.pid]), :state],
+          pending.version
+        )
     end
   end
 
   defp owner_event(
-         %{event: {_, :call, {DBConnection.Connection, :terminate, [reason, name, _data]}}} = source,
+         %{event: {_, :call, {DBConnection.Connection, :terminate, [reason, name, _data]}}} =
+           source,
          state
        ) do
     case {state.owner_machines[source.pid], state.owner_results[source.pid]} do
@@ -1598,7 +1609,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       error = %DBConnection.ConnectionError{message: message}
       log = owner_down_log(reason)
       data = %{machine.data | client: {nil, :after_connect}}
-      next = Map.put(%{machine | data: data}, :task_failure, %{error: error, log: log, origin: origin})
+
+      next =
+        Map.put(%{machine | data: data}, :task_failure, %{error: error, log: log, origin: origin})
+
       {:ok, next, {:keep_state, data, {:next_event, :internal, {:disconnect, {log, error}}}}}
     else
       _ -> :error
@@ -1671,10 +1685,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp owner_transition(_state, _call, _returned, _machine), do: :error
 
-  defp owner_task_event(state, source, machine, [:info, {:DOWN, _, _, _, _} = actual, :no_state, _]) do
+  defp owner_task_event(state, source, machine, [
+         :info,
+         {:DOWN, _, _, _, _} = actual,
+         :no_state,
+         _
+       ]) do
     case owner_task_down(state, source, machine) do
-      {:ok, expected, _reason, _origin} -> exact(state, source, :state_owner_task_down, actual, expected)
-      :error -> state
+      {:ok, expected, _reason, _origin} ->
+        exact(state, source, :state_owner_task_down, actual, expected)
+
+      :error ->
+        state
     end
   end
 
@@ -1700,15 +1722,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp owner_task_down(state, source, %{after_connect_task: task, data: data}) do
     with {reference, :after_connect} <- data.client,
          true <- reference === task.reference,
-         [death] <- Enum.filter(state.events, fn event ->
-           event.pid == task.pid and elem(event.event, 1) == :exit and event.index < source.index
-         end),
+         [death] <-
+           Enum.filter(state.events, fn event ->
+             event.pid == task.pid and elem(event.event, 1) == :exit and
+               event.index < source.index
+           end),
          {_, :exit, reason} <- death.event,
          message = {:DOWN, reference, :process, task.pid, reason},
-         [receipt] <- Enum.filter(state.events, fn event ->
-           event.event === {source.pid, :receive, message} and
-             death.index < event.index and event.index < source.index
-         end) do
+         [receipt] <-
+           Enum.filter(state.events, fn event ->
+             event.event === {source.pid, :receive, message} and
+               death.index < event.index and event.index < source.index
+           end) do
       {:ok, message, reason, receipt.index}
     else
       _ -> :error
@@ -1723,13 +1748,28 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp owner_disconnect_call?(state, call, returned, error) do
     case native_type_calls(state, call, returned, {Postgrex.Protocol, :disconnect, 2}) do
-      [%{source: %{event: {_, :call, {_, _, [^error, _]}}}, returned: %{event: {_, :return_from, _, :ok}}}] -> true
-      _ -> false
+      [
+        %{
+          source: %{event: {_, :call, {_, _, [^error, _]}}},
+          returned: %{event: {_, :return_from, _, :ok}}
+        }
+      ] ->
+        true
+
+      _ ->
+        false
     end
   end
 
-  defp owner_disconnect_result(_state, _call, _returned, %{data: %{backoff: nil}} = next, _phase, error),
-    do: {:ok, next, {:stop, {:shutdown, error}, next.data}}
+  defp owner_disconnect_result(
+         _state,
+         _call,
+         _returned,
+         %{data: %{backoff: nil}} = next,
+         _phase,
+         error
+       ),
+       do: {:ok, next, {:stop, {:shutdown, error}, next.data}}
 
   defp owner_disconnect_result(state, call, returned, next, :after_connect, _error) do
     with [retry] <- native_type_calls(state, call, returned, {DBConnection.Backoff, :backoff, 1}),
@@ -2034,27 +2074,55 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     options = [timeout: machine.data.after_connect_timeout] ++ machine.data.opts
     initial = [machine.data.after_connect, owner, %DBConnection.SensitiveData{data: options}]
 
-    with [started] <- native_type_calls(state, task.source, task.returned, {Task.Supervisor, :start_child, 4}),
-         true <- started.source.event ===
-           {owner, :call, {Task.Supervisor, :start_child, [DBConnection.Task, DBConnection.Task, :init, initial]}},
-         [identity] <- native_type_calls(state, started.source, started.returned, {:erlang, :make_ref, 0}),
-         {_, :return_from, _, startup_ref} when is_reference(startup_ref) <- identity.returned.event,
-         [birth] <- Enum.filter(state.events, fn
-           %{event: {_, :spawn, _, {Task.Supervised, :reply, [{_, _, ^owner}, _, :monitor]}}, index: index} ->
-             started.source.index < index and index < identity.source.index
-           _ -> false
-         end),
+    with [started] <-
+           native_type_calls(
+             state,
+             task.source,
+             task.returned,
+             {Task.Supervisor, :start_child, 4}
+           ),
+         true <-
+           started.source.event ===
+             {owner, :call,
+              {Task.Supervisor, :start_child,
+               [DBConnection.Task, DBConnection.Task, :init, initial]}},
+         [identity] <-
+           native_type_calls(state, started.source, started.returned, {:erlang, :make_ref, 0}),
+         {_, :return_from, _, startup_ref} when is_reference(startup_ref) <-
+           identity.returned.event,
+         [birth] <-
+           Enum.filter(state.events, fn
+             %{
+               event: {_, :spawn, _, {Task.Supervised, :reply, [{_, _, ^owner}, _, :monitor]}},
+               index: index
+             } ->
+               started.source.index < index and index < identity.source.index
+
+             _ ->
+               false
+           end),
          {_, :spawn, child, _} <- birth.event,
-         [sent] <- Enum.filter(state.events, fn
-           %{event: {^owner, :send, {^owner, ^startup_ref, ^startup_ref, _, {DBConnection.Task, :init, ^initial}}, ^child}, index: index} ->
-             identity.returned.index < index and index < started.returned.index
-           _ -> false
-         end),
+         [sent] <-
+           Enum.filter(state.events, fn
+             %{
+               event:
+                 {^owner, :send,
+                  {^owner, ^startup_ref, ^startup_ref, _, {DBConnection.Task, :init, ^initial}},
+                  ^child},
+               index: index
+             } ->
+               identity.returned.index < index and index < started.returned.index
+
+             _ ->
+               false
+           end),
          {_, :send, message, _} <- sent.event,
-         [_receipt] <- Enum.filter(state.events, fn event ->
-           sent.index < event.index and event.event === {child, :receive, message}
-         end),
-         [monitor] <- native_type_calls(state, started.returned, task.returned, {:erlang, :monitor, 2}),
+         [_receipt] <-
+           Enum.filter(state.events, fn event ->
+             sent.index < event.index and event.event === {child, :receive, message}
+           end),
+         [monitor] <-
+           native_type_calls(state, started.returned, task.returned, {:erlang, :monitor, 2}),
          true <- monitor.source.event === {owner, :call, {:erlang, :monitor, [:process, child]}},
          {_, :return_from, _, reference} when is_reference(reference) <- monitor.returned.event do
       {:ok, child, reference}

@@ -568,6 +568,26 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_owner_task_factory) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: "          List.delete_at(arguments, 1),\n          List.delete_at(expected, 1)\n",
+        mutated: "          elem({List.delete_at(expected, 1), arguments}, 0),\n          List.delete_at(expected, 1)\n"
+      }
+    ]
+  end
+
+  def edits(:stream_owner_task_return) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: "      |> exact(source, :state_owner_task_return, actual, {child, reference})\n",
+        mutated: "      |> exact(source, :state_owner_task_return, actual, elem({actual, {child, reference}}, 0))\n"
+      }
+    ]
+  end
+
   def edits(:stream_monitor_source) do
     [
       %{
@@ -971,6 +991,32 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
           &owner_outputs_form(&1, &2, targets),
           callback
         )
+      end
+    )
+  end
+
+  def with_task_factory_input(callback) do
+    targets = %{{:run_child, 4} => [2]}
+
+    with_owner_mutant(
+      DBConnection.Connection,
+      1,
+      &remote_inputs_form(&1, &2, DBConnection.Task, targets),
+      fn ->
+        with_owner_mutant(DBConnection.Task, 1, &owner_inputs_form(&1, &2, targets), callback)
+      end
+    )
+  end
+
+  def with_task_factory_output(callback) do
+    targets = %{{:run_child, 4} => %{kind: :element, size: 2, position: 1, total?: true}}
+
+    with_owner_mutant(
+      DBConnection.Connection,
+      1,
+      &remote_outputs_form(&1, &2, DBConnection.Task, targets),
+      fn ->
+        with_owner_mutant(DBConnection.Task, 1, &owner_outputs_form(&1, &2, targets), callback)
       end
     )
   end
