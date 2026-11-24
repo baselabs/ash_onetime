@@ -5792,9 +5792,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     events = comparator_call_order(pair, proofs ++ [origin])
     first_origin = Enum.find_index(events, &match?({:call, ^origin, _}, &1))
     assert is_integer(first_origin)
+    before_origin = Enum.take(events, first_origin)
 
     for proof <- proofs do
-      assert Enum.count(Enum.take(events, first_origin), &match?({:return, ^proof, true}, &1)) == 3
+      assert Enum.count(before_origin, &match?({:return, ^proof, true}, &1)) == 3
     end
 
     later_raw? =
