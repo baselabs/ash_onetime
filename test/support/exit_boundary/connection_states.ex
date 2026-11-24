@@ -345,8 +345,67 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     state = factory_event(source, state)
     state = type_service_event(source, state)
     state = owner_birth_event(source, state)
+    state = owner_system_event(source, state)
     state = owner_event(source, state)
     callback_event(source, state)
+  end
+
+  # sys carries gen_statem's {Params, State} without replacing the owner's
+  # callback data. Bind every nested Protocol to the current independently
+  # modeled owner, including the command return and resume continuation.
+  defp owner_system_event(%{event: {_, :call, {module, function, arguments}}} = source, state)
+       when module in [:sys, :gen_statem] do
+    position =
+      case {module, function, length(arguments)} do
+        {:sys, :handle_system_msg, 6} -> 5
+        {:sys, :handle_system_msg, 7} -> 5
+        {:sys, :handle_system_msg, 8} -> 6
+        {:sys, :do_cmd, 6} -> 5
+        {:sys, :suspend_loop, 6} -> 4
+        {:sys, :suspend_loop_hib, 6} -> 4
+        {:gen_statem, :system_continue, 3} -> 2
+        {:gen_statem, :system_terminate, 4} -> 3
+        {:gen_statem, :system_get_state, 1} -> 0
+        {:gen_statem, :system_replace_state, 2} -> 1
+        {:gen_statem, :system_code_change, 4} -> 0
+        _ -> nil
+      end
+
+    owner_system_misc(state, source, position && [2, 2, position])
+  end
+
+  defp owner_system_event(
+         %{event: {_, :return_from, {:sys, :do_cmd, 6}, _}} = source,
+         state
+       ),
+       do: owner_system_misc(state, source, [3, 3])
+
+  defp owner_system_event(
+         %{event: {_, :return_from, {:gen_statem, :system_get_state, 1}, _}} = source,
+         state
+       ) do
+    case state.owner_machines[source.pid] do
+      nil -> state
+      machine -> owner_system_data(state, source, [3, 1], machine)
+    end
+  end
+
+  defp owner_system_event(_source, state), do: state
+
+  defp owner_system_misc(state, _source, nil), do: state
+
+  defp owner_system_misc(state, source, path) do
+    case state.owner_machines[source.pid] do
+      nil -> state
+      machine -> owner_system_data(state, source, path ++ [1, 1], machine)
+    end
+  end
+
+  defp owner_system_data(state, source, path, machine) do
+    state
+    |> exact(source, :state_owner_machine, owner_term(source.event, path ++ [0]), machine.name)
+    |> owner_data_copy(source, path ++ [1], machine)
+    |> owner_protocol_copy(source, path ++ [1, :state], machine.version)
   end
 
   # The constructor starts from its original options. Every subsequent field
