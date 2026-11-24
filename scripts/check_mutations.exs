@@ -3858,6 +3858,15 @@ defmodule AshOnetime.MutationCheck do
       test_name: "ash_sql consumer requirement rejects advised versions",
       assertion: "refute Version.match?(\"0.8.5\", requirement)"
     },
+    "deps-db-connection-floor" => %{
+      path: "mix.exs",
+      original: "{:db_connection, \"~> 2.10 and >= 2.10.3\", runtime: false}",
+      mutated: "{:db_connection, \"~> 2.10 and >= 2.10.2\", runtime: false}",
+      test: "test/mix/dependency_security_test.exs",
+      tag: "deps_db_connection_floor_mutation",
+      test_name: "db_connection consumer requirement rejects advised versions",
+      assertion: "refute Version.match?(\"2.10.2\", requirement)"
+    },
     "deps-mint-floor" => %{
       path: "mix.exs",
       original: "{:mint, \"~> 1.10 and >= 1.10.2\", optional: true, runtime: false}",

@@ -61,6 +61,13 @@ defmodule AshOnetime.MixDependencySecurityTest do
     assert Version.match?("0.8.6", requirement)
   end
 
+  @tag :deps_db_connection_floor_mutation
+  test "db_connection consumer requirement rejects advised versions" do
+    requirement = requirement!(:db_connection)
+    refute Version.match?("2.10.2", requirement)
+    assert Version.match?("2.10.3", requirement)
+  end
+
   @tag :deps_mint_floor_mutation
   test "mint consumer requirement rejects advised versions" do
     requirement = requirement!(:mint)

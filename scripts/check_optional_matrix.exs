@@ -13,7 +13,8 @@ defmodule AshOnetime.OptionalMatrix do
      %{plug: true, oban: true, igniter: true}},
     {"mint-pin", [{:mint, "~> 1.9"}], %{plug: false, oban: false, igniter: false}},
     {"mint-floor", [{:mint, "== 1.10.2"}], %{plug: false, oban: false, igniter: false}},
-    {"core-floors", [{:ash, "== 3.38.1"}, {:ash_postgres, "== 2.15.2"}, {:ash_sql, "== 0.8.6"}],
+    {"core-floors",
+     [ash: "== 3.38.1", ash_postgres: "== 2.15.2", ash_sql: "== 0.8.6", db_connection: "== 2.10.3"],
      %{plug: false, oban: false, igniter: false}}
   ]
 
@@ -25,7 +26,8 @@ defmodule AshOnetime.OptionalMatrix do
     {"igniter-conflict", {:igniter, "== 0.8.3"}},
     {"mint-conflict", {:mint, "== 1.10.1"}},
     {"ash-sql-0.8.4-conflict", {:ash_sql, "== 0.8.4"}},
-    {"ash-sql-0.8.5-conflict", {:ash_sql, "== 0.8.5"}}
+    {"ash-sql-0.8.5-conflict", {:ash_sql, "== 0.8.5"}},
+    {"db-connection-conflict", {:db_connection, "== 2.10.2"}}
   ]
 
   @owned_applications [
@@ -144,13 +146,14 @@ defmodule AshOnetime.OptionalMatrix do
       raise("ash_onetime runtime applications drifted: \#{inspect(applications)}")
     end
 
-    # Security floors bind in a REAL consumer resolution (ADR 0004): the consumer
-    # pins the pre-floor ranges on purpose, so a green run proves ash_onetime's own
-    # requirements force the patched versions.
+    # Check the exact core floors and the minimums for the optional integrations.
+    # The conflict cases prove the requirements reject advised versions.
     resolved = fn app -> app |> Application.spec(:vsn) |> List.to_string() end
 
     if #{inspect(name)} == "core-floors" do
-      for {app, expected_version} <- [ash: "3.38.1", ash_postgres: "2.15.2", ash_sql: "0.8.6"] do
+      floors = [ash: "3.38.1", ash_postgres: "2.15.2", ash_sql: "0.8.6", db_connection: "2.10.3"]
+
+      for {app, expected_version} <- floors do
         unless resolved.(app) == expected_version,
           do: raise("core floor mismatch: \#{app}=\#{resolved.(app)}")
       end

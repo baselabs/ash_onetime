@@ -9,6 +9,10 @@ All notable changes to this project are documented in this file.
   an input validation bypass in `Ash.Type.Keyword`. This floor also includes the keyset pagination
   cursor fix for [GHSA-m5v6-3qwf-6w9r (CVE-2026-124283)](https://github.com/ash-project/ash/security/advisories/GHSA-m5v6-3qwf-6w9r).
 
+- Require DBConnection `~> 2.10 and >= 2.10.3` for
+  [EEF-CVE-2026-133555](https://cna.erlef.org/osv/EEF-CVE-2026-133555.html), which affects
+  logging on forged database streams.
+
 - Declare the development version only in `mix.exs`; check documentation claims against it,
   distinguish unpublished guides from HexDocs, and refuse pre-release publication.
 

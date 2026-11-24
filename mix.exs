@@ -61,6 +61,10 @@ defmodule AshOnetime.MixProject do
       {:spark, "~> 2.7"},
       {:ecto_sql, "~> 3.14"},
       {:postgrex, "~> 0.22"},
+      # DBConnection 2.10.3 hardens stream logging (EEF-CVE-2026-133555).
+      # Postgrex and Ecto SQL already start DBConnection.
+      # rule:deps-db-connection-floor
+      {:db_connection, "~> 2.10 and >= 2.10.3", runtime: false},
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.4"},
       # Optional integrations are host-owned: the host declares and starts them.

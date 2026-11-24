@@ -26,6 +26,11 @@ and resolve and audit the lock with `mix deps.update ash`, `mix hex.audit`, and
 pagination cursor fix for
 [GHSA-m5v6-3qwf-6w9r (CVE-2026-124283)](https://github.com/ash-project/ash/security/advisories/GHSA-m5v6-3qwf-6w9r).
 
+**DBConnection security floor.** Update any direct `db_connection` constraint to
+`~> 2.10 and >= 2.10.3`. Run `mix deps.update db_connection`, `mix hex.audit`, and `mix deps.audit`
+to resolve and audit the lock. DBConnection 2.10.3 hardens stream logging for
+[EEF-CVE-2026-133555 (GHSA-gmmq-fw75-wq46)](https://cna.erlef.org/osv/EEF-CVE-2026-133555.html).
+
 Existing installations apply the operation-hold migration, then the external-state migration,
 then the optional maintenance migration. A single operation-hold generator request writes
 both mandatory migrations in timestamp order. Adding `--maintenance --maintenance-role ROLE`
@@ -150,8 +155,9 @@ do not declare the section are unaffected.
 ## v1.7.0 — Ash, AshPostgres, and AshSql security floors
 
 Use current floors: Ash `>= 3.38.1 and < 4.0.0`, AshPostgres `~> 2.15 and >= 2.15.2`,
-and AshSql `~> 0.8 and >= 0.8.6` (the patched floor for the query cache).
-Run `mix deps.update ash ash_postgres ash_sql`, `mix hex.audit`, and `mix deps.audit`.
+AshSql `~> 0.8 and >= 0.8.6` (the patched floor for the query cache), and DBConnection
+`~> 2.10 and >= 2.10.3`. Run `mix deps.update ash ash_postgres ash_sql db_connection`,
+`mix hex.audit`, and `mix deps.audit`.
 For application resources, run `mix ash.codegen` and migrate the AshPostgres helpers.
 
 ## v1.6.0 — Separate nonce retention and Ash security floor
@@ -237,7 +243,8 @@ consumers did not gain a Mint runtime dependency.
 ## v1.3.0 — Security dependency floors
 
 Use the current dependency floors in [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md),
-then run `mix deps.update ash ash_postgres ash_sql`, `mix hex.audit`, and `mix deps.audit`.
+then run `mix deps.update ash ash_postgres ash_sql db_connection`, `mix hex.audit`, and
+`mix deps.audit`.
 Ash resources require `config :ash, default_string_length_count: :codepoints`.
 Codepoints match SQL length counting; grapheme counting does not bound stored value size.
 
