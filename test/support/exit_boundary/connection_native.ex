@@ -86,7 +86,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   def observe_pool_startup(mode \\ :default) do
     ExitBoundary.observe(
       fn ->
-        if mode == {:connect_failure, :stop}, do: Process.flag(:trap_exit, true)
+        if mode in [{:connect_failure, :stop}, {:after_connect_failure, :stop}],
+          do: Process.flag(:trap_exit, true)
         :ok
       end,
       fn _ ->
@@ -128,6 +129,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           {Task.Supervisor, :start_child, 5},
           {__MODULE__, :configure_pool_owner, 1},
           {__MODULE__, :after_connect_pool_owner, 1},
+          {__MODULE__, :after_connect_pool_failure, 1},
           {DBConnection.Backoff, :new, 1},
           {DBConnection.Backoff, :reset, 1},
           {DBConnection.Backoff, :backoff, 1}
@@ -153,13 +155,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp pool_startup_options(options, {:connect_failure, type})
        when type in [:default, :stop, :rand, :exp, :rand_exp] do
     database = "ash_onetime_missing_" <> Integer.to_string(System.unique_integer([:positive]))
+    options |> Keyword.put(:database, database) |> pool_failure_options(type)
+  end
+
+  defp pool_startup_options(options, {:after_connect_failure, type})
+       when type in [:default, :stop, :rand, :exp, :rand_exp] do
+    options
+    |> Keyword.put(:after_connect, &__MODULE__.after_connect_pool_failure/1)
+    |> pool_failure_options(type)
+  end
+
+  defp pool_failure_options(options, type) do
     # Holder.checkout waits for CoDel before it can install a query deadline.
     # The suite's 5s queue target would retain this caller past the observer's
     # deadline even with 1s polls. Use the native default 50ms target here, so
-    # the real 3D000 and backoff run precede CoDel's ordinary queue refusal.
+    # the real server rejection and backoff precede CoDel's ordinary refusal.
     options =
       options
-      |> Keyword.put(:database, database)
       |> Keyword.put(:queue_target, 50)
       |> Keyword.put(:queue_interval, 1_000)
 
@@ -167,9 +179,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     if type == :stop, do: Keyword.put(options, :max_restarts, 0), else: options
   end
 
-  defp pool_startup_query(pool, {:connect_failure, _type}) do
-    # The authoritative server rejects an absent database. No credential or
-    # service is substituted, and every actual retry and timeout is captured.
+  defp pool_startup_query(pool, {failure, _type})
+       when failure in [:connect_failure, :after_connect_failure] do
+    # The authoritative server rejects either startup or the Task's SQL. Every
+    # actual retry and timeout remains inside this same native observation.
     case Postgrex.query(pool, "SELECT 17::int4 AS connection_owner_birth", [], timeout: 3_500) do
       {:error, %DBConnection.ConnectionError{}} -> :ok
       {:ok, _} -> raise "the failure fixture unexpectedly obtained a real connection"
@@ -199,6 +212,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
     :ok
   end
+
+  def after_connect_pool_failure(connection),
+    do: Postgrex.query!(connection, "SELECT 1 / 0 AS connection_after_connect_failure", [])
 
   defp startup_observation(corruption, types, retirement) do
     ExitBoundary.observe(

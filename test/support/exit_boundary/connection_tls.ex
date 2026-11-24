@@ -1554,7 +1554,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     do: [{12, from}, {13, reply}]
 
   defp program_action_fields(:loop_actions_next_event, 14, %{action: {:next_event, type, content}}),
-    do: [{12, type}, {13, content}]
+       do: [{12, type}, {13, content}]
 
   defp program_action_fields(function, 12, _context)
        when function in [:loop_actions, :loop_actions_list],
@@ -3336,8 +3336,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       transitions =
         for %{
               event:
-                {_, :call,
-                 {:tls_sender, function, [:cast, {:new_write, _, negotiated, _}, _]}}
+                {_, :call, {:tls_sender, function, [:cast, {:new_write, _, negotiated, _}, _]}}
             } = event <-
               state.events,
             event.index < source.index,

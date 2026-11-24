@@ -4998,6 +4998,51 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  for type <- [:default, :stop, :rand, :exp, :rand_exp] do
+    @tag connection_streams: :pool
+    test "Connection streams: a failed after-connect Task retains #{type} backoff state",
+         context do
+      Repo.put_dynamic_repo(context.repo)
+      historical = Historical.capture(context.prefix)
+      type = unquote(type)
+      run = ConnectionNative.observe_pool_startup({:after_connect_failure, type})
+      assert run.result == :ok
+
+      assert Enum.any?(run.events, fn
+               %{
+                 event:
+                   {_, :exception_from, {ConnectionNative, :after_connect_pool_failure, 1},
+                    {:error, %Postgrex.Error{postgres: %{pg_code: "22012"}}}}
+               } ->
+                 true
+
+               _ ->
+                 false
+             end),
+             "the supported after-connect callback must fail on real PostgreSQL SQL"
+
+      retry? =
+        Enum.any?(run.events, fn
+          %{event: {_, :return_from, {DBConnection.Backoff, :backoff, 1}, _}} -> true
+          _ -> false
+        end)
+
+      if type == :stop, do: refute(retry?), else: assert(retry?)
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
+
+      for error <- proof.errors do
+        Diagnostics.emit(
+          "CONNECTION_POOL_BACKOFF_FAILURE",
+          Map.take(error, [:index, :rule, :path]) |> Map.put(:mfa, error.at.mfa)
+        )
+      end
+
+      assert proof.errors == [],
+             "failed after-connect Tasks must retain their native owner program"
+    end
+  end
+
   @tag connection_streams: :pool
   test "Connection streams: a retry retains its original native Backoff input", context do
     Repo.put_dynamic_repo(context.repo)
