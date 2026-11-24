@@ -6045,6 +6045,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
            end),
            "the MAIN witness must exercise a rendered native send copy"
 
+    assert Enum.any?(rendered.events, fn
+             %{
+               event:
+                 {_, :call,
+                  {Postgrex.Protocol, :do_send,
+                   [_, {:connection_byte_span, _, :frontend, _, _, _}, _]}}
+             } ->
+               true
+
+             _ ->
+               false
+           end),
+           "the MAIN witness must retain and render the qualified IOdata constructor copy"
+
     scheduled = Scheduling.build(%{proof.indexed | events: rendered.events}, proof.native)
     assert scheduled.errors == []
 

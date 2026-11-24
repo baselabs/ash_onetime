@@ -255,10 +255,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   # refer to that exact span, while the logical messages retain all its content.
   # No binary outside the native ledger is inspected or rewritten.
   defp frontend_spans(proof, spans) do
+    constructions =
+      for %{origin: {:frontend_encoding, _, _} = origin} = copy <- proof.states.terms,
+          into: %{},
+          do: {{copy.index, copy.path}, origin}
+
     qualified =
-      for %{origin: {:frontend_encoding, _, _}} = copy <- proof.states.terms,
-          into: MapSet.new(),
-          do: {copy.index, copy.path}
+      constructions |> Map.keys() |> MapSet.new()
 
     for write <- proof.native.writes,
         write.bytes != <<>>,
@@ -269,7 +272,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
         [%{port: port, span: first} | _] = Map.fetch!(spans, write.command.index),
         port == write.port,
         start = first.offset - first.source_offset + write.header_size,
-        copy <- write.copies do
+        copy <- frontend_copies(proof, write, constructions) do
       %{
         index: copy.index,
         path: copy.path,
@@ -279,6 +282,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       }
     end
     |> Enum.group_by(& &1.index)
+  end
+
+  defp frontend_copies(proof, write, constructions) do
+    origin = Map.fetch!(constructions, {write.source.index, [2, 2, 1]})
+
+    owners =
+      Enum.count(proof.native.writes, fn candidate ->
+        Map.get(constructions, {candidate.source.index, [2, 2, 1]}) == origin
+      end)
+
+    # An upstream IOdata construction can name this span only when its complete
+    # native program issued exactly this write. Its helpers are byte copies,
+    # not additional writes or an allowance to erase their call occurrences.
+    helpers = if owners == 1, do: Enum.filter(proof.states.terms, &(&1.origin == origin)), else: []
+
+    Enum.uniq_by(write.copies ++ helpers, &{&1.index, &1.path})
   end
 
   defp connection_spans(reads) do
