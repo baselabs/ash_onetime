@@ -1154,6 +1154,27 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     )
   end
 
+  def with_backoff_constructor(function, kind, callback)
+      when function in [:new, :reset] and kind in [:input, :output] do
+    targets = %{{function, 1} => if(kind == :input, do: [0], else: %{kind: :value})}
+    remote_sites = if function == :new, do: 1, else: 2
+    owner_sites = if function == :new, do: 1, else: 3
+
+    remote =
+      if kind == :input,
+        do: &remote_inputs_form(&1, &2, DBConnection.Backoff, targets),
+        else: &remote_outputs_form(&1, &2, DBConnection.Backoff, targets)
+
+    owner =
+      if kind == :input,
+        do: &owner_inputs_form(&1, &2, targets),
+        else: &owner_outputs_form(&1, &2, targets)
+
+    with_owner_mutant(DBConnection.Connection, remote_sites, remote, fn ->
+      with_owner_mutant(DBConnection.Backoff, owner_sites, owner, callback)
+    end)
+  end
+
   def with_backoff_output(callback) do
     targets = %{{:backoff, 1} => %{kind: :element, size: 2, position: 0, total?: true}}
 

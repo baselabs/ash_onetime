@@ -5102,6 +5102,52 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  for {function, kind, rule} <- [
+        {:new, :input, :state_owner_backoff_new_input},
+        {:new, :output, :state_owner_backoff_new_result},
+        {:reset, :input, :state_owner_backoff_reset_input},
+        {:reset, :output, :state_owner_backoff_reset_result}
+      ],
+      callback <- [:none, :function, :mfa] do
+    @tag connection_streams: :pool
+    test "Connection streams: #{function} #{kind} with #{callback} retains its own native backoff copy",
+         context do
+      Repo.put_dynamic_repo(context.repo)
+      historical = Historical.capture(context.prefix)
+      function = unquote(function)
+      kind = unquote(kind)
+      rule = unquote(rule)
+      callback = unquote(callback)
+      observe = fn -> ConnectionNative.observe_pool_startup({:backoff_success, :rand_exp, callback}) end
+      positive = observe.()
+      side = observation_side(context, positive, %{}, row!(:issue, :execute), historical)
+      assert ConnectionHistory.build(side).errors == []
+      run = ComparatorMutants.with_backoff_constructor(function, kind, observe)
+      assert run.result == :ok
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
+
+      coordinates =
+        for source <- proof.indexed.events,
+            source.mfa == {DBConnection.Backoff, function, 1},
+            path <-
+              case {kind, source.event} do
+                {:input, {_, :call, {_, _, [{:native_foreign_helper, _}]}}} -> [[2, 2, 0]]
+                {:output, {_, :return_from, _, {:native_foreign_return, _}}} -> [[3]]
+                _ -> []
+              end,
+            do: {rule, source.index, path}
+
+      assert coordinates != []
+      assert proof.native.errors == [] and proof.reads.errors == [] and proof.decoders.errors == []
+      assert Enum.map(proof.states.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) == coordinates
+      assert ConnectionHistory.build(side).errors == proof.errors
+      restored = observe.()
+      side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)
+      assert ConnectionHistory.build(side).errors == []
+    end
+  end
+
   for type <- [:rand, :exp, :rand_exp],
       {bounds, minimum, maximum} <- [
         {[backoff_min: 0, backoff_max: 0], 0, 0},
