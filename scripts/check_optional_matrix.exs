@@ -13,7 +13,7 @@ defmodule AshOnetime.OptionalMatrix do
      %{plug: true, oban: true, igniter: true}},
     {"mint-pin", [{:mint, "~> 1.9"}], %{plug: false, oban: false, igniter: false}},
     {"mint-floor", [{:mint, "== 1.10.2"}], %{plug: false, oban: false, igniter: false}},
-    {"core-floors", [{:ash, "== 3.38.0"}, {:ash_postgres, "== 2.15.2"}, {:ash_sql, "== 0.8.6"}],
+    {"core-floors", [{:ash, "== 3.38.1"}, {:ash_postgres, "== 2.15.2"}, {:ash_sql, "== 0.8.6"}],
      %{plug: false, oban: false, igniter: false}}
   ]
 
@@ -21,7 +21,7 @@ defmodule AshOnetime.OptionalMatrix do
   # consumer cannot hold these versions alongside this package. deps.get failing is
   # the non-vacuous proof the floors bind in a real resolution.
   @conflict_cases [
-    {"ash-conflict", {:ash, "== 3.37.7"}},
+    {"ash-conflict", {:ash, "== 3.38.0"}},
     {"igniter-conflict", {:igniter, "== 0.8.3"}},
     {"mint-conflict", {:mint, "== 1.10.1"}},
     {"ash-sql-0.8.4-conflict", {:ash_sql, "== 0.8.4"}},
@@ -150,7 +150,7 @@ defmodule AshOnetime.OptionalMatrix do
     resolved = fn app -> app |> Application.spec(:vsn) |> List.to_string() end
 
     if #{inspect(name)} == "core-floors" do
-      for {app, expected_version} <- [ash: "3.38.0", ash_postgres: "2.15.2", ash_sql: "0.8.6"] do
+      for {app, expected_version} <- [ash: "3.38.1", ash_postgres: "2.15.2", ash_sql: "0.8.6"] do
         unless resolved.(app) == expected_version,
           do: raise("core floor mismatch: \#{app}=\#{resolved.(app)}")
       end

@@ -1,7 +1,7 @@
 # Getting started
 
 `ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.5; the requirement admits later 1.x
-releases and excludes 2.0 or newer), Erlang/OTP 28 or 29, Ash `>= 3.38.0 and < 4.0.0`,
+releases and excludes 2.0 or newer), Erlang/OTP 28 or 29, Ash `>= 3.38.1 and < 4.0.0`,
 AshPostgres `~> 2.15 and >= 2.15.2`, and PostgreSQL 17 and 18. Work and qualification run the
 whole suite on both majors; maintenance uses `MAINTAIN`. This guide targets
 v2.0.0 (`{:ash_onetime, "~> 2.0.0"}`); see the

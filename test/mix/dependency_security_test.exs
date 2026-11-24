@@ -33,7 +33,9 @@ defmodule AshOnetime.MixDependencySecurityTest do
       # CVE-2026-124283 affects Ash >= 3.31.3 and < 3.38.0.
       refute Version.match?("3.37.2", requirement)
       refute Version.match?("3.37.7", requirement)
-      assert Version.match?("3.38.0", requirement)
+      # EEF-CVE-2026-120299 affects Ash >= 3.24.0 and < 3.38.1.
+      refute Version.match?("3.38.0", requirement)
+      assert Version.match?("3.38.1", requirement)
     end
   end
 

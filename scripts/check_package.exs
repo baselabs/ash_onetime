@@ -217,7 +217,7 @@ defmodule AshOnetime.PackageCheck do
   # An exported exact Ash pin must not freeze the development override into a release.
   # Validate the archive metadata that consumers receive.
   @published_requirements %{
-    ash: {">= 3.38.0 and < 4.0.0", false},
+    ash: {">= 3.38.1 and < 4.0.0", false},
     ash_postgres: {"~> 2.15 and >= 2.15.2", false},
     ash_sql: {"~> 0.8 and >= 0.8.6", false},
     igniter: {"~> 0.8 and >= 0.8.4", true},

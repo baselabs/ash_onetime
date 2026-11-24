@@ -159,7 +159,7 @@ Every protected action declares `:idempotency` or `:one_time_nonce` and a nonemp
 - Elixir `~> 1.20` (developed and tested on 1.20.5; this requirement admits later 1.x releases
   and excludes 2.0 or newer)
 - Erlang/OTP 28 or 29
-- Ash `>= 3.38.0` and `< 4.0.0`
+- Ash `>= 3.38.1` and `< 4.0.0`
 - AshPostgres `~> 2.15 and >= 2.15.2`, AshSql `~> 0.8 and >= 0.8.6`
 - Optional Mint `~> 1.10 and >= 1.10.2` when the host carries the installer HTTP closure
 - PostgreSQL 17 and 18. Work and qualification run the whole suite on the checked
@@ -168,7 +168,8 @@ Every protected action declares `:idempotency` or `:one_time_nonce` and a nonemp
 
 The security floors follow
 [ADR 0004](https://github.com/baselabs/ash_onetime/blob/main/docs/adr/0004-security-driven-ash-floor.md).
-Ash 3.38.0 includes the required authorization fixes and patches
+Ash 3.38.1 includes the required authorization fixes and patches
+[EEF-CVE-2026-120299](https://cna.erlef.org/osv/EEF-CVE-2026-120299.html) and
 [GHSA-m5v6-3qwf-6w9r (CVE-2026-124283)](https://github.com/ash-project/ash/security/advisories/GHSA-m5v6-3qwf-6w9r).
 AshPostgres 2.15.2 includes the required tenant-isolation fixes.
 AshSql 0.8.6 fixes query-cache security; the affected 0.8.4 and 0.8.5 releases are retired.

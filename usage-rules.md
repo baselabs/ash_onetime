@@ -1,6 +1,6 @@
 # ash_onetime usage rules
 
-- Use Ash `>= 3.38.0 and < 4.0.0`, AshPostgres `~> 2.15 and >= 2.15.2`, and AshSql
+- Use Ash `>= 3.38.1 and < 4.0.0`, AshPostgres `~> 2.15 and >= 2.15.2`, and AshSql
   `~> 0.8 and >= 0.8.6`. Consumers locked below those floors must update before adopting
   ash_onetime 2.0.0. See [Upgrading](documentation/upgrading.md).
 - Choose exactly one strategy for every protected action. Idempotency replays a classified
