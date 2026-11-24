@@ -3832,7 +3832,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       for error <- Enum.reverse(state.errors) do
         Diagnostics.emit(
           "CONNECTION_COLD_TLS_PREFIX_FAILURE",
-          Map.take(error, [:index, :rule, :path]) |> Map.put(:mfa, error.at.mfa)
+          Map.take(error, [:index, :rule, :path, :differences]) |> Map.put(:mfa, error.at.mfa)
         )
       end
 
