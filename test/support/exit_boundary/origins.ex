@@ -192,12 +192,12 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
      }}
   end
 
-  def pair(run, twin, permitted) do
+  def pair(run, twin, permitted, prior \\ nil) do
     initial = %{
-      forward: %{},
-      reverse: %{},
-      uuid_forward: %{},
-      uuid_reverse: %{},
+      forward: if(prior, do: prior.forward, else: %{}),
+      reverse: if(prior, do: prior.reverse, else: %{}),
+      uuid_forward: if(prior, do: prior.uuid_forward, else: %{}),
+      uuid_reverse: if(prior, do: prior.uuid_reverse, else: %{}),
       clocks: %{},
       errors: []
     }

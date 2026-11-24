@@ -221,7 +221,10 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       o3: claimed
     }
 
-    pairing = Origins.pair(ri, ti, sources) |> inherit_pairing(prior)
+    # Earlier invocations already assigned these physical identities. Every
+    # current role and origin must bind against that same bijection; a conflict
+    # remains an error and cannot replace the earlier image.
+    pairing = Origins.pair(ri, ti, sources, prior && prior.pairing)
 
     allocation =
       if reference?,
@@ -614,34 +617,6 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     |> Map.put(:prior_database, elem(prior.databases, index))
     |> Map.put(:prior_derivations, elem(prior.derivations, index))
     |> Map.put(:prior_clocks, elem(prior.clocks, index))
-  end
-
-  defp inherit_pairing(pairing, nil), do: pairing
-
-  defp inherit_pairing(pairing, prior) do
-    pairing =
-      Enum.reduce(prior.pairing.forward, pairing, fn {a, b}, p ->
-        Origins.bind(p, a, b, :prior_physical)
-      end)
-
-    Enum.reduce(prior.pairing.uuid_forward, pairing, fn {a, b}, p ->
-      p = Origins.bind(p, a, b, :prior_uuid)
-
-      case {Map.fetch(p.uuid_forward, a), Map.fetch(p.uuid_reverse, b)} do
-        {:error, :error} ->
-          %{
-            p
-            | uuid_forward: Map.put(p.uuid_forward, a, b),
-              uuid_reverse: Map.put(p.uuid_reverse, b, a)
-          }
-
-        {{:ok, ^b}, {:ok, ^a}} ->
-          p
-
-        _ ->
-          %{p | errors: [{:o2_uuid, :prior_not_bijective} | p.errors]}
-      end
-    end)
   end
 
   defp sequence([], [], state), do: state

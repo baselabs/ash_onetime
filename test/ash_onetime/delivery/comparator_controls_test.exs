@@ -5598,6 +5598,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       {Readback, :check, 3},
       {Refusals, :check, 2},
       {Origins, :pair, 3},
+      {Origins, :pair, 4},
       {Origins, :permitted_sources, 2},
       {HostCall, :addresses, 1},
       {Registry, :compute, 2},
@@ -5678,8 +5679,14 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
              prior.pairing.forward,
            "every prior physical identity must retain its image in the same whole map"
 
+    assert Map.take(current.pairing.reverse, Map.keys(prior.pairing.reverse)) ==
+             prior.pairing.reverse
+
     assert Map.take(current.pairing.uuid_forward, Map.keys(prior.pairing.uuid_forward)) ==
              prior.pairing.uuid_forward
+
+    assert Map.take(current.pairing.uuid_reverse, Map.keys(prior.pairing.uuid_reverse)) ==
+             prior.pairing.uuid_reverse
   end
 
   @tag connection_streams: :driver
