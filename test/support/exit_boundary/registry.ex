@@ -666,6 +666,8 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {:tls_gen_connection, :queue_handshake, 2},
         {:tls_gen_connection, :encode_handshake, 4},
         {:tls_gen_connection, :send_handshake_flight, 1},
+        {:tls_gen_connection, :send_alert, 2},
+        {:ssl_gen_statem, :handle_own_alert, 3},
         {:tls_gen_connection, :handle_protocol_record, 3},
         {:tls_gen_connection, :get_tls_handshakes, 3},
         {:tls_gen_connection, :tls_handshake_events, 2},

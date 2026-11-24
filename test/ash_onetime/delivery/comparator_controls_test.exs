@@ -9237,6 +9237,26 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag connection_streams: :tls
+  test "Connection streams: certificate refusal retains its complete receiver alert program" do
+    run =
+      ConnectionNative.observe_tls_startup(
+        server_name_indication: ~c"no-such-native-tls-host.invalid"
+      )
+
+    assert match?({:caught, :error, %MatchError{}}, run.result)
+    events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+
+    assert Enum.any?(events, fn source ->
+      source.mfa == {:tls_gen_connection, :send_alert, 2} and elem(source.event, 1) == :call
+    end), "the real server certificate mismatch must send the receiver's own alert"
+
+    births = ConnectionTls.births(%{events: events})
+    assert births.errors == []
+    assert births.bindings != []
+    assert ConnectionTls.build(%{events: events}, births.bindings).errors == []
+  end
+
+  @tag connection_streams: :tls
   test "Connection streams: cold proof never reexecutes handshake constructors or decoders" do
     run = ConnectionNative.observe_tls_startup()
     assert run.result == :ok
