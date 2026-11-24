@@ -131,6 +131,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           {__MODULE__, :configure_pool_owner, 1},
           {__MODULE__, :after_connect_pool_owner, 1},
           {__MODULE__, :after_connect_pool_failure, 1},
+          {__MODULE__, :after_connect_pool_timer, 3},
           {DBConnection.Backoff, :new, 1},
           {DBConnection.Backoff, :reset, 1},
           {DBConnection.Backoff, :backoff, 1}
@@ -170,6 +171,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     options
     |> Keyword.put(:after_connect, after_connect)
     |> pool_failure_options(type)
+  end
+
+  defp pool_startup_options(options, {:after_connect_timer_flush, callback, fixture, token}) do
+    after_connect =
+      case callback do
+        :function -> &__MODULE__.after_connect_pool_timer(&1, fixture, token)
+        :mfa -> {__MODULE__, :after_connect_pool_timer, [fixture, token]}
+      end
+
+    options
+    |> Keyword.put(:after_connect, after_connect)
+    |> Keyword.put(:after_connect_timeout, 2_000)
   end
 
   defp pool_failure_options(options, type) do
@@ -231,6 +244,198 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     Postgrex.query!(connection, "SELECT 1 / 0 AS connection_after_connect_failure", [])
   after
     Process.exit(self(), :kill)
+  end
+
+  # A native timer, its actual queued expiry and the Task's actual Holder return
+  # establish this branch. The timeout's magnitude never proves that it expired.
+  def after_connect_pool_timer(connection, fixture, token) do
+    after_connect_pool_owner(connection)
+    {:pool_ref, owner, _reference, _deadline, _holder, _lock} = connection.pool_ref
+    send(fixture, {:task_ready, token, owner, self()})
+
+    receive do
+      {:return_holder, ^token} -> :ok
+    after
+      10_000 -> raise "the native timer fixture did not release its Task"
+    end
+  end
+
+  def observe_pool_timer_flush(callback) when callback in [:function, :mfa] do
+    parent = self()
+    token = make_ref()
+    {fixture, monitor} = spawn_monitor(fn -> owner_timer_fixture(parent, token) end)
+
+    try do
+      receive do
+        {:timer_fixture_ready, ^token} -> :ok
+      after
+        5_000 -> raise "the native timer fixture did not arm"
+      end
+
+      run = observe_pool_startup({:after_connect_timer_flush, callback, fixture, token})
+
+      receive do
+        {:timer_fixture_done, ^token, :ok} -> run
+        {:timer_fixture_done, ^token, :wrong_order} ->
+          raise "the native timer expired before the Holder was queued"
+      after
+        5_000 -> raise "the native timer fixture did not finish"
+      end
+    after
+      stop_owner_timer_fixture(fixture, monitor, token)
+    end
+  end
+
+  defp stop_owner_timer_fixture(fixture, monitor, token) do
+    send(fixture, {:stop, token})
+
+    receive do
+      {:DOWN, ^monitor, :process, ^fixture, :normal} -> :ok
+      {:DOWN, ^monitor, :process, ^fixture, _reason} ->
+        raise "the native timer fixture exited abnormally"
+    after
+      5_000 ->
+        Process.exit(fixture, :kill)
+
+        receive do
+          {:DOWN, ^monitor, :process, ^fixture, _reason} -> :ok
+        end
+
+        raise "the native timer fixture did not stop"
+    end
+  after
+    receive do
+      {:timer_fixture_owner, ^token, owner} -> resume_timer_owner(owner)
+    after
+      0 -> :ok
+    end
+  end
+
+  defp owner_timer_fixture(parent, token) do
+    monitor = Process.monitor(parent)
+    session = :trace.session_create(:ash_onetime_owner_timer_fixture, self(), [])
+
+    try do
+      :trace.function(
+        session,
+        {:erlang, :start_timer, 3},
+        [{[:_, :_, {DBConnection.Connection, :_, :_}], [], [{:return_trace}]}],
+        [:local]
+      )
+
+      :trace.process(session, :new, true, [:call, :receive, :strict_monotonic_timestamp])
+      send(parent, {:timer_fixture_ready, token})
+
+      owner_timer_fixture_loop(%{
+        parent: parent,
+        monitor: monitor,
+        token: token,
+        pending: %{},
+        timers: %{},
+        task: nil,
+        holder_queued?: false,
+        expired?: false,
+        released?: false,
+        finished?: false
+      })
+    after
+      resume_timer_owner(Process.delete(:ash_onetime_timer_fixture_owner))
+      :trace.session_destroy(session)
+      Process.demonitor(monitor, [:flush])
+    end
+  end
+
+  defp owner_timer_fixture_loop(state) do
+    receive do
+      {:stop, token} when token == state.token ->
+        :ok
+
+      {:DOWN, monitor, :process, parent, _reason}
+      when monitor == state.monitor and parent == state.parent ->
+        :ok
+
+      message ->
+        state = owner_timer_fixture_event(message, state)
+        state = release_timer_task(state)
+        state = finish_timer_fixture(state)
+        owner_timer_fixture_loop(state)
+    end
+  end
+
+  defp owner_timer_fixture_event({:task_ready, token, owner, task}, state)
+       when token == state.token,
+       do: %{state | task: {owner, task}}
+
+  defp owner_timer_fixture_event(
+         {:trace_ts, owner, :call,
+          {:erlang, :start_timer, [timeout, owner, {DBConnection.Connection, task, timeout}]},
+          _stamp},
+         state
+       ),
+       do: put_in(state.pending[owner], task)
+
+  defp owner_timer_fixture_event(
+         {:trace_ts, owner, :return_from, {:erlang, :start_timer, 3}, timer, _stamp},
+         state
+       ) do
+    case Map.fetch(state.pending, owner) do
+      {:ok, task} -> put_in(state.timers[owner], {task, timer})
+      :error -> state
+    end
+  end
+
+  defp owner_timer_fixture_event(
+         {:trace_ts, owner, :receive, {:"ETS-TRANSFER", _holder, task, {:checkin, _ref, _time}},
+          _stamp},
+         %{task: {owner, task}, released?: true} = state
+       ),
+       do: %{state | holder_queued?: true}
+
+  defp owner_timer_fixture_event(
+         {:trace_ts, owner, :receive,
+          {:timeout, timer, {DBConnection.Connection, task, _timeout}}, _stamp},
+         %{task: {owner, task}} = state
+       ) do
+    case Map.fetch(state.timers, owner) do
+      {:ok, {^task, ^timer}} -> %{state | expired?: true}
+      _ -> state
+    end
+  end
+
+  defp owner_timer_fixture_event(_message, state), do: state
+
+  defp release_timer_task(%{task: {owner, task}, released?: false} = state) do
+    case Map.fetch(state.timers, owner) do
+      {:ok, {^task, _timer}} ->
+        true = :erlang.suspend_process(owner)
+        Process.put(:ash_onetime_timer_fixture_owner, owner)
+        send(state.parent, {:timer_fixture_owner, state.token, owner})
+        send(task, {:return_holder, state.token})
+        %{state | released?: true}
+
+      _ ->
+        state
+    end
+  end
+
+  defp release_timer_task(state), do: state
+
+  defp finish_timer_fixture(%{expired?: true, finished?: false} = state) do
+    resume_timer_owner(Process.delete(:ash_onetime_timer_fixture_owner))
+    result = if state.holder_queued?, do: :ok, else: :wrong_order
+    send(state.parent, {:timer_fixture_done, state.token, result})
+    %{state | finished?: true}
+  end
+
+  defp finish_timer_fixture(state), do: state
+
+  defp resume_timer_owner(nil), do: :ok
+
+  defp resume_timer_owner(owner) do
+    :erlang.resume_process(owner)
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   defp startup_observation(corruption, types, retirement) do

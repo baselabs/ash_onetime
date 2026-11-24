@@ -5223,6 +5223,58 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  for callback <- [:function, :mfa] do
+    @tag connection_streams: :pool
+    test "Connection streams: after-connect #{callback} flushes its actually expired native timer",
+         context do
+      Repo.put_dynamic_repo(context.repo)
+      historical = Historical.capture(context.prefix)
+      run = ConnectionNative.observe_pool_timer_flush(unquote(callback))
+      assert run.result == :ok
+      indexed = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+      pairs = NativeTransport.pairs(indexed)
+
+      cancellations =
+        for {_index, %{source: source, returned: returned}} <- pairs,
+            {owner, :call, {:erlang, :cancel_timer, [timer]}} <- [source.event],
+            returned.event == {owner, :return_from, {:erlang, :cancel_timer, 1}, false},
+            {DBConnection.Connection, :cancel_timer, 1} in source.stack,
+            do: %{owner: owner, timer: timer, source: source, returned: returned}
+
+      assert cancellations != [], "the real owner must execute the false cancellation branch"
+
+      for cancellation <- cancellations do
+        %{owner: owner, timer: timer} = cancellation
+
+        assert [expiry] =
+                 for %{
+                       event: {^owner, :receive, {:timeout, ^timer, {DBConnection.Connection, _, _}}}
+                     } = event <- indexed,
+                     do: event
+
+        assert expiry.index < cancellation.source.index
+
+        assert [flush] =
+                 for {_index, pair} <- pairs,
+                     pair.source.event ==
+                       {owner, :call, {DBConnection.Connection, :flush_timer, [timer]}},
+                     pair.returned.event ==
+                       {owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok},
+                     do: pair
+
+        assert cancellation.returned.index < flush.source.index
+      end
+
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      proof = ConnectionHistory.build(side)
+      assert proof.native.errors == [] and proof.reads.errors == [] and
+               proof.decoders.errors == []
+
+      assert proof.errors == [],
+             "false cancellation requires its actual expiry and successful native selective flush"
+    end
+  end
+
   defp task_factory_copy?(
          {_, :call, {DBConnection.Task, :run_child, [_, _, {:native_foreign_helper, _}, _]}},
          :input
