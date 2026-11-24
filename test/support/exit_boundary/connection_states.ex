@@ -4867,7 +4867,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp helper_input(state, _source, _function, _arguments, _version), do: state
 
-  # Postgrex 0.23.0 msg_send/3 folds a message list into binary-tailed
+  # Postgrex msg_send/3 folds a message list into binary-tailed
   # IOdata. Keep that construction exactly, starting with the message value
   # already derived from its caller; do_send's checked argument is no oracle.
   defp frontend_iodata(messages) when is_list(messages) do

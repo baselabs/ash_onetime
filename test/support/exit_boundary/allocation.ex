@@ -350,7 +350,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
     Map.get(clock, pid, -1) >= a
   end
 
-  # A closed caller program, grounded in DBConnection 2.10.2 Holder's protocol.
+  # A closed caller program, grounded in DBConnection Holder's protocol.
   # No stack/region selects an effect: each claimed event is consumed by one
   # instruction below, with its complete payload and exact native stack checked.
   def check(side, indexed) do
