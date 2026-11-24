@@ -509,6 +509,7 @@ defmodule AshOnetime.Test.ExitBoundary.Registry do
         {DBConnection.Backoff, :new, 1},
         {DBConnection.Backoff, :reset, 1},
         {DBConnection.Backoff, :backoff, 1},
+        {:rand, :uniform, 1},
         {DBConnection.Connection, :disconnect, 3},
         {DBConnection.Connection, :stop, 3},
         {DBConnection.Connection, :handle_event, 4},
