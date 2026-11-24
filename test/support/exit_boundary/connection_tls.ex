@@ -3618,7 +3618,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case {version, highest, role, name} do
       {{3, 3}, {3, 4}, :client, :hello} ->
         <<_type, length::24, _::binary>> = fragment
-        <<first::binary-size(length + 4), rest::binary>> = fragment
+        <<first::binary-size(^length + 4), rest::binary>> = fragment
 
         {packets, <<>> = buffer} =
           :tls_handshake.get_tls_handshakes(highest, first, buffer, options)
