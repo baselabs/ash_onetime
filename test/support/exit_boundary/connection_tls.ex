@@ -2995,13 +2995,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         worker_next_event_input(state, source, parent)
 
       {:tls_gen_connection, :next_event, 3} ->
-        passive_input(state, source, parent)
+        server_hello_next_input(state, source, arguments, parent)
 
       _ ->
         _ = arguments
         {state, parent.current}
     end
   end
+
+  defp server_hello_next_input(
+         state,
+         source,
+         arguments,
+         %{server_hello_program: program} = parent
+       ) do
+    state =
+      tls_exact(state, source, :tls_callback_input, Enum.take(arguments, 2), [
+        program.next_name,
+        :no_record
+      ])
+
+    {state, %{parent.current | name: program.next_name}}
+  end
+
+  defp server_hello_next_input(state, source, _arguments, parent),
+    do: passive_input(state, source, parent)
 
   defp worker_record_input(state, source, parent) do
     case Map.get(state.parsed, source.pid) do
@@ -3584,6 +3602,57 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
+  defp record_call(state, source, :tls_client_connection_1_3, :handle_server_hello, _arguments) do
+    frame = hd(state.frames[source.pid])
+
+    case server_hello_program(state, source, frame) do
+      {:ok, program} ->
+        state =
+          state
+          |> handshake_copy(source, [2, 2, 0], program.hello, frame.input.origin)
+          |> handshake_copy(source, [2, 2, 1], frame.current.data, frame.input.origin)
+
+        [frame | rest] = state.frames[source.pid]
+        frame = Map.put(frame, :server_hello_program, program)
+
+        state
+        |> put_in([:frames, source.pid], [frame | rest])
+        |> put_in([:records, source.index], %{
+          kind: :server_hello_state,
+          result: {program.active, :wait_ee},
+          data: program.active,
+          origin: {:tls_server_hello_state, source.index}
+        })
+
+      :error ->
+        tls_failure(state, source, :tls_server_hello_origin)
+    end
+  end
+
+  defp record_call(state, source, :tls_handshake_1_3, :update_start_state, _arguments),
+    do: server_hello_helper(state, source, :start)
+
+  defp record_call(state, source, :tls_handshake_1_3, :calculate_handshake_secrets, _arguments),
+    do: server_hello_helper(state, source, :secrets)
+
+  defp record_call(state, source, :ssl_record, :step_encryption_state_read, _arguments),
+    do: server_hello_helper(state, source, :active)
+
+  defp record_call(state, source, :ssl_record, :pending_connection_state, _arguments) do
+    case hd(state.frames[source.pid]) do
+      %{server_hello_program: program} ->
+        server_hello_record(
+          state,
+          source,
+          [elem(program.start, 10), :read],
+          Map.fetch!(elem(program.start, 10), :pending_read)
+        )
+
+      _ ->
+        state
+    end
+  end
+
   defp record_call(state, source, module, :callback_mode, _arguments) do
     case {get_in(state.machine_programs, [source.pid, :module_action]), tls_callback_mode(module)} do
       {%{modules: [^module | _], origin: origin}, {:ok, mode, _enter?}} ->
@@ -3916,6 +3985,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp record_result(state, source, %{kind: :server_hello} = record, _actual),
     do: handshake_copy(state, source, [3], record.result, record.origin)
 
+  defp record_result(state, source, %{kind: :server_hello_state} = record, _actual),
+    do: handshake_copy(state, source, [3], record.result, record.origin)
+
   defp record_result(state, source, %{kind: :callback_mode} = record, _actual),
     do: program_term(state, source, [3], record.result, record.change.origin)
 
@@ -3948,6 +4020,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         origin: {:tls_server_hello, source.index}
     }
 
+    put_in(state.frames[source.pid], [%{frame | current: version} | rest])
+  end
+
+  defp record_return(state, source, %{kind: :server_hello_state} = record) do
+    [frame | rest] = state.frames[source.pid]
+    version = %{frame.current | data: record.data, origin: record.origin}
     put_in(state.frames[source.pid], [%{frame | current: version} | rest])
   end
 
@@ -4379,6 +4457,272 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp server_hello_selection(_frame), do: :error
+
+  # The decoded peer packet and the modeled client entry determine the entire
+  # ServerHello transition. Crypto NIF returns are native origins only after
+  # their arguments have been matched to that program; no state helper result
+  # or checked callback is used to construct a subsequent expected state.
+  defp server_hello_program(state, source, frame) do
+    data = frame.current.data
+    options = elem(data, 4)
+    handshake = elem(data, 6)
+    scope = Map.fetch!(state.pairs, source.index)
+
+    with %{value: {:internal, hello}} <- frame.event,
+         {:server_hello, {3, 3}, random, session, cipher, extensions} <- hello,
+         {:server_hello_selected_version, {3, 4}} <-
+           Map.get(extensions, :server_hello_selected_version),
+         true <- cipher in Map.fetch!(options, :ciphers),
+         true <- session === elem(elem(data, 8), 1),
+         :undefined <- Map.get(extensions, :pre_shared_key, :undefined),
+         {:key_share_server_hello, {:key_share_entry, group, public}} <-
+           Map.get(extensions, :key_share),
+         {:supported_groups, groups} <- Map.fetch!(options, :supported_groups),
+         true <- group in groups,
+         {:key_share_client_hello, shares} = key_share <- elem(handshake, 30),
+         {:key_share_entry, ^group, {_, private}} <- List.keyfind(shares, group, 1),
+         {:ok, profile} <- handshake_cipher(cipher),
+         {:ok, shared} <- handshake_shared_secret(state, scope, group, public, private),
+         start = server_hello_start(data, hello, key_share, group, public, profile),
+         {:ok, secrets, psk} <- handshake_secrets(state, scope, start, shared, profile) do
+      states = elem(secrets, 10)
+      current = states |> Map.fetch!(:pending_read) |> Map.put(:sequence_number, 0)
+      states = Map.put(states, :current_read, Map.delete(current, :aead_handle))
+
+      {:ok,
+       %{
+         hello: hello,
+         updates: %{
+           cipher: cipher,
+           key_share: key_share,
+           session_id: session,
+           group: group,
+           peer_public_key: public,
+           random: random
+         },
+         start: start,
+         secrets: secrets,
+         active: put_elem(secrets, 10, states),
+         next_name: server_hello_next_name(options, elem(data, 7)),
+         public: public,
+         private: private,
+         group: group,
+         psk: psk
+       }}
+    else
+      _ -> :error
+    end
+  end
+
+  defp server_hello_next_name(options, specific) do
+    if Map.get(options, :middlebox_comp_mode) == false or
+         Map.get(specific, :hello_retry, false),
+      do: :wait_ee,
+      else: :hello_middlebox_assert
+  end
+
+  defp handshake_cipher(<<19, 1>>),
+    do: {:ok, %{bulk: 8, hash: :sha256, size: 32, key: 16, tag: 16}}
+  defp handshake_cipher(<<19, 2>>),
+    do: {:ok, %{bulk: 8, hash: :sha384, size: 48, key: 32, tag: 16}}
+  defp handshake_cipher(<<19, 3>>),
+    do: {:ok, %{bulk: 9, hash: :sha256, size: 32, key: 32, tag: 16}}
+  defp handshake_cipher(<<19, 4>>),
+    do: {:ok, %{bulk: 10, hash: :sha256, size: 32, key: 16, tag: 16}}
+  defp handshake_cipher(<<19, 5>>),
+    do: {:ok, %{bulk: 11, hash: :sha256, size: 32, key: 16, tag: 8}}
+  defp handshake_cipher(_cipher), do: :error
+
+  defp server_hello_start(data, hello, key_share, group, public, profile) do
+    {:server_hello, _, random, session_id, cipher, _} = hello
+
+    states =
+      Enum.reduce([:pending_read, :pending_write], elem(data, 10), fn direction, states ->
+        pending = Map.fetch!(states, direction)
+
+        parameters =
+          pending
+          |> Map.fetch!(:security_parameters)
+          |> put_elem(1, cipher)
+          |> put_elem(3, profile.bulk)
+          |> put_elem(4, 2)
+          |> put_elem(8, profile.hash)
+          |> put_elem(15, random)
+
+        Map.put(states, direction, Map.put(pending, :security_parameters, parameters))
+      end)
+
+    session =
+      elem(data, 8)
+      |> put_elem(1, session_id)
+      |> put_elem(6, cipher)
+      |> put_elem(12, group)
+      |> put_elem(13, :undefined)
+      |> put_elem(14, public)
+
+    handshake = elem(data, 6) |> put_elem(17, :undefined) |> put_elem(30, key_share)
+
+    data
+    |> put_elem(3, put_elem(elem(data, 3), 5, {3, 4}))
+    |> put_elem(6, handshake)
+    |> put_elem(8, session)
+    |> put_elem(10, states)
+  end
+
+  defp handshake_shared_secret(state, scope, group, public, private)
+       when group in [:x25519, :x448],
+       do:
+         handshake_primitive(state, scope, {:crypto, :compute_key, 4}, [
+           :ecdh,
+           public,
+           private,
+           group
+         ])
+
+  defp handshake_shared_secret(
+         state,
+         scope,
+         :x25519mlkem768,
+         {ciphertext, public},
+         {kem, private}
+       ) do
+    with {:ok, kem} <-
+           handshake_primitive(state, scope, {:crypto, :decapsulate_key, 3}, [
+             :mlkem768,
+             kem,
+             ciphertext
+           ]),
+         {:ok, shared} <- handshake_shared_secret(state, scope, :x25519, public, private) do
+      {:ok, kem <> shared}
+    end
+  end
+
+  defp handshake_shared_secret(state, scope, group, ciphertext, private)
+       when group in [:mlkem512, :mlkem768, :mlkem1024],
+       do:
+         handshake_primitive(state, scope, {:crypto, :decapsulate_key, 3}, [
+           group,
+           private,
+           ciphertext
+         ])
+
+  defp handshake_shared_secret(_state, _scope, _group, _public, _private), do: :error
+
+  defp handshake_secrets(state, scope, data, shared, profile) do
+    psk = :binary.copy(<<0>>, profile.size)
+    {messages, _} = elem(elem(data, 6), 3)
+    context = messages |> Enum.drop_while(&is_list/1) |> Enum.reverse()
+
+    with {:ok, early} <- handshake_mac(state, scope, profile.hash, psk, psk),
+         {:ok, empty} <-
+           handshake_primitive(state, scope, {:crypto, :hash, 2}, [profile.hash, <<>>]),
+         {:ok, derived} <-
+           handshake_expand(state, scope, profile, early, "derived", empty, profile.size),
+         {:ok, secret} <- handshake_mac(state, scope, profile.hash, derived, shared),
+         {:ok, transcript} <-
+           handshake_primitive(state, scope, {:crypto, :hash, 2}, [profile.hash, context]),
+         master = {:handshake_secret, secret},
+         {:ok, read} <-
+           handshake_pending(state, scope, data, :pending_read, master, transcript, profile),
+         {:ok, write} <-
+           handshake_pending(state, scope, data, :pending_write, master, transcript, profile) do
+      states = elem(data, 10) |> Map.put(:pending_read, read) |> Map.put(:pending_write, write)
+      {:ok, put_elem(data, 10, states), psk}
+    end
+  end
+
+  defp handshake_pending(state, scope, data, direction, master, transcript, profile) do
+    {label, type} =
+      if direction == :pending_read,
+        do: {"s hs traffic", :server_handshake_traffic_secret},
+        else: {"c hs traffic", :client_handshake_traffic_secret}
+
+    with {:ok, traffic} <-
+           handshake_expand(state, scope, profile, elem(master, 1), label, transcript, profile.size),
+         {:ok, key} <- handshake_expand(state, scope, profile, traffic, "key", <<>>, profile.key),
+         {:ok, iv} <- handshake_expand(state, scope, profile, traffic, "iv", <<>>, 12),
+         {:ok, finished} <-
+           handshake_expand(state, scope, profile, traffic, "finished", <<>>, profile.size) do
+      pending = Map.fetch!(elem(data, 10), direction)
+      parameters = pending |> Map.fetch!(:security_parameters) |> put_elem(10, master)
+
+      pending =
+        pending
+        |> Map.put(:security_parameters, parameters)
+        |> Map.put(
+          :cipher_state,
+          {:cipher_state, iv, key, finished, :undefined, :undefined, profile.tag}
+        )
+
+      keep = Map.get(elem(data, 4), :keep_secrets, false)
+      pending = if keep == false, do: pending, else: Map.put(pending, type, traffic)
+      pending = if match?({:keylog, _}, keep), do: Map.delete(pending, type), else: pending
+      {:ok, pending}
+    end
+  end
+
+  defp handshake_expand(state, scope, profile, secret, label, context, size) do
+    label = "tls13 " <> label
+    info = <<size::16, byte_size(label), label::binary, byte_size(context), context::binary, 1>>
+
+    with {:ok, bytes} <- handshake_mac(state, scope, profile.hash, secret, info),
+         true <- byte_size(bytes) >= size do
+      {:ok, binary_part(bytes, 0, size)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp handshake_mac(state, scope, hash, key, bytes),
+    do: handshake_primitive(state, scope, {:crypto, :mac, 4}, [:hmac, hash, key, bytes])
+
+  defp handshake_primitive(state, scope, {module, function, _} = mfa, arguments) do
+    values =
+      for pair <- Map.get(state.pair_index, {scope.source.pid, mfa}, []),
+          scope.source.index < pair.source.index and pair.returned.index < scope.returned.index,
+          pair.source.event === {scope.source.pid, :call, {module, function, arguments}},
+          {_, :return_from, ^mfa, value} when is_binary(value) <- [pair.returned.event],
+          do: value
+
+    case Enum.uniq(values) do
+      [value] -> {:ok, value}
+
+      _ ->
+        Diagnostics.emit("CONNECTION_TLS_SERVER_HELLO_PRIMITIVE", %{
+          index: scope.source.index,
+          mfa: mfa,
+          matches: length(values)
+        })
+
+        :error
+    end
+  end
+
+  defp server_hello_helper(state, source, kind) do
+    case hd(state.frames[source.pid]) do
+      %{server_hello_program: program, input: input} ->
+        arguments =
+          case kind do
+            :start -> [input.data, program.updates]
+            :secrets ->
+              [program.public, program.private, program.group, program.psk, program.start]
+            :active -> [program.secrets]
+          end
+
+        server_hello_record(state, source, arguments, Map.fetch!(program, kind))
+
+      _ ->
+        tls_failure(state, source, :tls_server_hello_helper_origin)
+    end
+  end
+
+  defp server_hello_record(state, source, arguments, result) do
+    origin = {:tls_server_hello_program, hd(state.frames[source.pid]).source.index}
+
+    state
+    |> handshake_copy(source, [2, 2], arguments, origin)
+    |> put_in([:records, source.index], %{kind: :handshake_value, result: result, origin: origin})
+  end
 
   defp tls_callback_mode(:tls_client_connection_1_3),
     do: {:ok, [:state_functions, :state_enter], true}

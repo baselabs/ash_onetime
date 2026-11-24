@@ -985,6 +985,11 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     with_owner_outputs(:tls_gen_connection, targets, callback)
   end
 
+  def with_tls_server_hello_state(callback) do
+    targets = %{{:handle_server_hello, 2} => %{kind: :element, size: 2, position: 0}}
+    with_owner_outputs(:tls_client_connection_1_3, targets, callback)
+  end
+
   def with_backoff_input(callback) do
     targets = %{{:backoff, 1} => [0]}
 

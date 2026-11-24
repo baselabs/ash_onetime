@@ -8804,6 +8804,56 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     end
   end
 
+  @tag connection_streams: :tls
+  test "Connection streams: ServerHello state has an independent native program" do
+    build = fn run ->
+      assert run.result == :ok
+      events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+      births = ConnectionTls.births(%{events: events})
+      assert births.errors == []
+      ConnectionTls.build(%{events: events}, births.bindings)
+    end
+
+    assert build.(ConnectionNative.observe_tls_startup()).errors == []
+
+    run = ComparatorMutants.with_tls_server_hello_state(&ConnectionNative.observe_tls_startup/0)
+    proof = build.(run)
+
+    coordinates =
+      run.events
+      |> Enum.with_index()
+      |> Enum.flat_map(fn
+        {%{
+           event:
+             {_, :return_from, {:tls_client_connection_1_3, :handle_server_hello, 2},
+              {{:native_foreign_return, _}, :wait_ee}}
+         }, index} ->
+          [{index, [3]}]
+
+        _ ->
+          []
+      end)
+
+    assert coordinates != []
+
+    assert Enum.map(proof.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) ==
+             Enum.map(coordinates, fn {index, path} -> {:tls_handshake_copy, index, path} end)
+
+    for mutant <- [
+          :stream_tls_handshake_copy,
+          :stream_tls_worker_state_copy,
+          :stream_tls_machine_copy,
+          :stream_tls_state_copy
+        ] do
+      checked = ComparatorMutants.with_mutant(mutant, fn -> build.(run) end)
+      expected = if mutant == :stream_tls_handshake_copy, do: [], else: proof.errors
+      assert checked.errors == expected
+    end
+
+    assert build.(run).errors == proof.errors
+    assert build.(ConnectionNative.observe_tls_startup()).errors == []
+  end
+
   for boundary <- [:input, :return, :record] do
     @tag connection_streams: :tls
     test "Connection streams: TLS record #{boundary} copy retains its native source" do
