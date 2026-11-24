@@ -9208,7 +9208,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           {:tls_record_1_3, :decode_cipher_text, 2}
         ],
         parser: [{:tls_record, :get_tls_records, 5}],
-        alert: [{:tls_record, :encode_alert_record, 3}, {:tls_record_1_3, :encode_alert_record, 2}]
+        alert: [
+          {:tls_record, :encode_alert_record, 3},
+          {:tls_record_1_3, :encode_alert_record, 2}
+        ]
       ] do
     @tag connection_streams: :tls
     test "Connection streams: record proof never reexecutes the native #{name}" do

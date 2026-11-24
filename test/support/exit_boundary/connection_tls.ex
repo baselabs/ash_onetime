@@ -3029,7 +3029,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          [%{handshake_program: %{packets: [_ | _], events: events}} | _],
          _version
        ),
-    do: events
+       do: events
 
   defp receiver_actions(frames, version) do
     finished = Enum.find(frames, &Map.has_key?(&1, :connection_ready))
@@ -5640,7 +5640,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     put_in(state.frames[source.pid], [parent | rest])
   end
 
-  defp forward_callback_form(state, _source, _result, expected, [_parent | _])
+  defp forward_callback_form(state, source, _result, expected, [_parent | _])
        when not is_nil(expected) do
     [parent | rest] = state.frames[source.pid]
     parent = Map.put(parent, :callback_expected, expected)
@@ -6050,6 +6050,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
           expected =
             {:next_state, version.name, version.data, [{:next_event, :internal, event} | actions]}
+
           callback_result_exact(state, source, actual, expected)
         end
     end
