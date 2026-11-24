@@ -162,6 +162,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       |> Keyword.put(:database, database)
       |> Keyword.put(:queue_target, 50)
       |> Keyword.put(:queue_interval, 1_000)
+
     options = if type == :default, do: options, else: Keyword.put(options, :backoff_type, type)
     if type == :stop, do: Keyword.put(options, :max_restarts, 0), else: options
   end

@@ -696,6 +696,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     {:tls_sender, :hibernate_after, 3} => 1,
     {:tls_sender, :send_tls_alert, 2} => 1,
     {:tls_sender, :handle_common, 4} => 3,
+    {:tls_client_connection, :initial_hello, 3} => 2,
+    {:tls_client_connection_1_3, :initial_hello, 3} => 2,
     {:tls_client_connection_1_3, :connection, 3} => 2,
     {:tls_gen_connection_1_3, :connection, 3} => 2,
     {:tls_gen_connection, :gen_info, 3} => 2,
@@ -2700,7 +2702,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {sender_forward_copies(state, source, arguments, parent), version}
 
       {:tls_gen_connection, :next_event, 4} ->
-        buffered_input(state, source, parent)
+        case parent.source.mfa do
+          {module, :initial_hello, 3}
+          when module in [:tls_client_connection, :tls_client_connection_1_3] ->
+            initial_hello_input(state, source, parent)
+
+          _ ->
+            buffered_input(state, source, parent)
+        end
 
       {:tls_gen_connection, :next_event, 3} ->
         passive_input(state, source, parent)
@@ -2708,6 +2717,207 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       _ ->
         _ = arguments
         {state, parent.current}
+    end
+  end
+
+  # The first callback changes the receiver before its next_event helper. Build
+  # that version forward from its entry and completed native helper returns;
+  # neither next_event's checked state nor a later system snapshot supplies it.
+  defp initial_hello_input(state, source, parent) do
+    data = parent.input.data
+    environment = elem(data, 2)
+    options = elem(data, 4)
+    handshake = elem(data, 6)
+    states = elem(data, 10)
+    versions = Map.fetch!(options, :versions)
+    hello_version = hd(versions)
+    use_ticket = Map.fetch!(options, :use_ticket)
+
+    with [{:call, from}, {:start, timeout}, _] <- parent.arguments,
+         true <- Map.fetch!(options, :session_tickets) != :auto,
+         {:ok, shares, _} <-
+           hello_fact(
+             state,
+             parent,
+             source,
+             {:tls_client_connection_1_3, :maybe_generate_client_shares, 1},
+             [options]
+           ),
+         {:ok, {^use_ticket, ^data}, _} <-
+           hello_fact(
+             state,
+             parent,
+             source,
+             {:tls_client_connection_1_3, :maybe_automatic_session_resumption, 1},
+             [data]
+           ),
+         {:ok, tickets, _} <-
+           hello_fact(
+             state,
+             parent,
+             source,
+             {:tls_handshake_1_3, :get_ticket_data, 3},
+             [source.pid, Map.fetch!(options, :session_tickets), use_ticket]
+           ),
+         {:ok, nonce, _} <-
+           hello_fact(state, parent, source, {:tls_handshake, :ocsp_nonce, 1}, [options]),
+         arguments = [
+           elem(environment, 9),
+           elem(environment, 10),
+           states,
+           options,
+           elem(elem(data, 8), 1),
+           elem(elem(handshake, 5), 0),
+           shares,
+           tickets,
+           nonce,
+           elem(environment, 12),
+           elem(environment, 17)
+         ],
+         {:ok, hello0, _} <-
+           hello_fact(state, parent, source, {:tls_handshake, :client_hello, 11}, arguments),
+         {:ok, hello1, _} <-
+           hello_fact(
+             state,
+             parent,
+             source,
+             {:tls_handshake_1_3, :maybe_add_early_data_indication, 3},
+             [hello0, Map.fetch!(options, :early_data), hello_version]
+           ),
+         {:ok, hello2, _} <-
+           hello_fact(
+             state,
+             parent,
+             source,
+             {:tls_handshake_1_3, :maybe_add_binders, 3},
+             [hello1, tickets, hello_version]
+           ),
+         maximum = Map.get(elem(hello1, 6), :max_frag_enum, :undefined),
+         expected_states = :ssl_record.maybe_set_max_fragment_length(maximum, states),
+         {:ok, ^expected_states, _} <-
+           hello_fact(
+             state,
+             parent,
+             source,
+             {:ssl_record, :maybe_set_max_fragment_length, 2},
+             [maximum, states]
+           ),
+         state2 =
+           data
+           |> put_elem(10, expected_states)
+           |> put_elem(3, put_elem(elem(data, 3), 5, hello_version)),
+         fragment = :tls_handshake.encode_handshake(hello2, hello_version),
+         history = :ssl_handshake.update_handshake_history(elem(handshake, 3), fragment),
+         {encoded, encoded_states} =
+           :tls_record.encode_handshake(fragment, hello_version, expected_states),
+         {:ok, {^encoded, ^encoded_states, ^history}, _} <-
+           hello_fact(
+             state,
+             parent,
+             source,
+             {:tls_gen_connection, :encode_handshake, 4},
+             [hello2, hello_version, expected_states, elem(handshake, 3)]
+           ),
+         queued_handshake =
+           handshake |> put_elem(3, history) |> put_elem(31, [elem(handshake, 31), encoded]),
+         queued = state2 |> put_elem(6, queued_handshake) |> put_elem(10, encoded_states),
+         {:ok, ^queued, _} <-
+           hello_fact(
+             state,
+             parent,
+             source,
+             {:tls_gen_connection, :queue_handshake, 2},
+             [hello2, state2]
+           ),
+         true <- use_ticket == [:undefined] or Map.fetch!(options, :early_data) == :undefined,
+         {:ok, {:ok, ^queued}, _} <-
+           hello_fact(
+             state,
+             parent,
+             source,
+             {:tls_client_connection_1_3, :maybe_send_early_data, 1},
+             [queued]
+           ),
+         [write] <-
+           Enum.filter(state.transport.writes, fn write ->
+             write.port == state.owners[source.pid].family.port and
+               write.source.pid == source.pid and parent.source.index < write.source.index and
+               write.returned.index < source.index
+           end),
+         true <- write.bytes === IO.iodata_to_binary(elem(queued_handshake, 31)),
+         sent = put_elem(queued, 6, put_elem(queued_handshake, 31, [])),
+         {:ok, {^sent, []}, sent_index} <-
+           hello_fact(
+             state,
+             parent,
+             source,
+             {:tls_gen_connection, :send_handshake_flight, 1},
+             [queued]
+           ) do
+      requested = :tls_record.hello_version(versions)
+
+      stapling =
+        Map.merge(elem(handshake, 32), %{
+          ocsp_nonce: nonce,
+          configured: Map.has_key?(options, :stapling)
+        })
+
+      handshake = elem(sent, 6) |> put_elem(30, shares) |> put_elem(32, stapling)
+
+      expected =
+        sent
+        |> put_elem(3, put_elem(elem(data, 3), 5, requested))
+        |> put_elem(6, handshake)
+        |> put_elem(8, elem(data, 8))
+        |> put_elem(9, put_elem(elem(sent, 9), 1, from))
+
+      name = if versions == [{3, 4}], do: :wait_sh, else: :hello
+      arguments = elem(elem(source.event, 2), 2)
+
+      state =
+        tls_exact(state, source, :tls_initial_hello_helper, Enum.take(arguments, 2), [
+          name,
+          :no_record
+        ])
+
+      actions = [{{:timeout, :handshake}, timeout, :close}]
+      state = tls_exact(state, source, :tls_initial_hello_actions, Enum.at(arguments, 3), actions)
+
+      {state,
+       %{
+         parent.input
+         | name: name,
+           data: expected,
+           origin: {:tls_initial_hello, parent.source.index, sent_index}
+       }}
+    else
+      reason ->
+        coordinates =
+          case reason do
+            {:error, mfa} -> %{index: source.index, mfa: mfa, rule: :native_fact}
+            {:ok, _value, index} -> %{index: index, rule: :native_fact_result}
+            _ -> %{index: source.index, rule: :branch}
+          end
+
+        Diagnostics.emit("CONNECTION_TLS_INITIAL_HELLO_FAILURE", coordinates)
+        {tls_failure(state, source, :tls_initial_hello_origin), parent.current}
+    end
+  end
+
+  defp hello_fact(state, parent, source, mfa, arguments) do
+    calls =
+      Map.get(state.pair_index, {source.pid, mfa}, [])
+      |> Enum.filter(fn pair ->
+        parent.source.index < pair.source.index and pair.returned.index < source.index and
+          pair.source.event === {source.pid, :call, {elem(mfa, 0), elem(mfa, 1), arguments}}
+      end)
+
+    case calls do
+      [%{returned: %{event: {_, :return_from, ^mfa, value}}} = pair] ->
+        {:ok, value, pair.returned.index}
+
+      _ ->
+        {:error, mfa}
     end
   end
 
@@ -2962,9 +3172,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         buffers = elem(data, 11)
         environment = elem(data, 3)
 
+        versions =
+          if version.name in [:hello, :start] do
+            [{3, 0}, {3, 4}, {3, 3}, {3, 2}, {3, 1}]
+          else
+            elem(environment, 5)
+          end
+
         expected_args = [
           bytes,
-          elem(environment, 5),
+          versions,
           elem(buffers, 1),
           Map.get(elem(data, 10), :max_fragment_length, :undefined),
           elem(environment, 2)
