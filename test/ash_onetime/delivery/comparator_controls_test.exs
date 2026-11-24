@@ -9114,9 +9114,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
 
         assert Enum.any?(events, fn source ->
-          source.mfa == {:tls_handshake_1_3, :replace_ch1_with_message_hash, 1} and
-            elem(source.event, 1) == :call
-        end), "an empty initial share list must execute the real retry transcript"
+                 source.mfa == {:tls_handshake_1_3, :replace_ch1_with_message_hash, 1} and
+                   elem(source.event, 1) == :call
+               end),
+               "an empty initial share list must execute the real retry transcript"
 
         births = ConnectionTls.births(%{events: events})
         assert births.errors == []
@@ -9247,8 +9248,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
 
     assert Enum.any?(events, fn source ->
-      source.mfa == {:tls_gen_connection, :send_alert, 2} and elem(source.event, 1) == :call
-    end), "the real server certificate mismatch must send the receiver's own alert"
+             source.mfa == {:tls_gen_connection, :send_alert, 2} and
+               elem(source.event, 1) == :call
+           end),
+           "the real server certificate mismatch must send the receiver's own alert"
 
     births = ConnectionTls.births(%{events: events})
     assert births.errors == []
@@ -9287,7 +9290,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             assert Enum.any?(proof.terms, fn term ->
                      origin = Map.get(term, :origin)
                      is_tuple(origin) and elem(origin, 0) == kind
-                   end), "the rebuilt proof must reach each native handshake program"
+                   end),
+                   "the rebuilt proof must reach each native handshake program"
           end
         end,
         functions
