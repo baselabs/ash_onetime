@@ -4,6 +4,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   alias AshOnetime.Test.ExitBoundary.Diagnostics
   alias AshOnetime.Test.ExitBoundary.NativeTransport
 
+  @hello_retry_random <<207, 33, 173, 116, 229, 154, 97, 17, 190, 29, 140, 2, 30, 101, 184,
+                        145, 194, 162, 17, 22, 122, 187, 140, 94, 7, 158, 9, 226, 200, 168,
+                        51, 156>>
+
   # Local formatter metadata must be frozen while a native owner mutant is
   # loaded. Its expected identity comes from that owner's independent BEAM.
   def freeze_debug(events, binding) do
@@ -3619,8 +3623,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         |> put_in([:frames, source.pid], [frame | rest])
         |> put_in([:records, source.index], %{
           kind: :server_hello_state,
-          result: {program.active, :wait_ee},
+          result: program.result,
           data: program.active,
+          name: program.next_name,
           origin: {:tls_server_hello_state, source.index}
         })
 
@@ -4025,7 +4030,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp record_return(state, source, %{kind: :server_hello_state} = record) do
     [frame | rest] = state.frames[source.pid]
-    version = %{frame.current | data: record.data, origin: record.origin}
+    version = %{frame.current | name: record.name, data: record.data, origin: record.origin}
     put_in(state.frames[source.pid], [%{frame | current: version} | rest])
   end
 
@@ -4252,6 +4257,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp callback_result(
          state,
+         %{mfa: {:tls_client_connection_1_3, :wait_sh, 3}} = source,
+         %{server_hello_program: %{retry?: true, hello: hello}},
+         version,
+         actual
+       ) do
+    expected = {:next_state, :start, version.data, [{:next_event, :internal, hello}]}
+    callback_result_exact(state, source, actual, expected)
+  end
+
+  defp callback_result(
+         state,
          %{mfa: {:tls_gen_connection, :handle_protocol_record, 3}} = source,
          %{handshake_program: %{packets: [_ | _], events: events}},
          version,
@@ -4381,10 +4397,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          state,
          source,
          %{
-           source: %{mfa: {:tls_client_connection_1_3, :wait_sh, 3}},
+           source: %{mfa: {:tls_client_connection_1_3, name, 3}},
            event: %{value: {:enter, _}}
          } = frame
-       ) do
+       )
+       when name in [:wait_sh, :start] do
     data = frame.input.data
     specific = Map.put(elem(data, 7), :change_cipher_spec, :ignore)
 
@@ -4462,6 +4479,36 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   # ServerHello transition. Crypto NIF returns are native origins only after
   # their arguments have been matched to that program; no state helper result
   # or checked callback is used to construct a subsequent expected state.
+  defp server_hello_program(
+         _state,
+         _source,
+         %{
+           event: %{
+             value: {:internal, {:server_hello, _, @hello_retry_random, _, _, extensions} = hello}
+           },
+           current: current
+         }
+       ) do
+    specific = elem(current.data, 7)
+
+    with {:server_hello_selected_version, {3, 4}} <-
+           Map.get(extensions, :server_hello_selected_version),
+         false <- Map.get(specific, :hello_retry, false) do
+      data = put_elem(current.data, 7, Map.put(specific, :hello_retry, true))
+
+      {:ok,
+       %{
+         hello: hello,
+         active: data,
+         next_name: :start,
+         result: {data, :start, hello},
+         retry?: true
+       }}
+    else
+      _ -> :error
+    end
+  end
+
   defp server_hello_program(state, source, frame) do
     data = frame.current.data
     options = elem(data, 4)
@@ -4504,6 +4551,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          secrets: secrets,
          active: put_elem(secrets, 10, states),
          next_name: server_hello_next_name(options, elem(data, 7)),
+         result: {put_elem(secrets, 10, states), :wait_ee},
+         retry?: false,
          public: public,
          private: private,
          group: group,
