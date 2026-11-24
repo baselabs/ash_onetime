@@ -822,6 +822,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       machine_states: Map.new(owners, fn {pid, owner} -> {pid, owner.family.machines[pid]} end),
       machine_callbacks: %{},
       callback_results: %{},
+      module_changes: %{},
       machine_zero: %{},
       machine_programs: %{},
       machine_debug: %{},
@@ -954,6 +955,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     state
     |> Map.update!(:handshake_rest, &Map.delete(&1, pid))
     |> Map.update!(:handshake_packets, &Map.delete(&1, pid))
+    |> Map.update!(:module_changes, &Map.delete(&1, pid))
   end
 
   defp worker_event(_source, state), do: state
@@ -1011,6 +1013,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp machine_program(state, source, :sys_debug, arguments),
     do: debug_call(state, source, :sys_debug, arguments)
+
+  defp machine_program(state, source, :get_callback_mode, _arguments) do
+    case state.machine_programs[source.pid] do
+      %{module_action: %{before: before, modules: modules, result: result} = change} ->
+        state
+        |> program_term(source, [2, 2, 0], before, change.origin)
+        |> program_term(source, [2, 2, 1], modules, change.origin)
+        |> put_in([:records, source.index], %{kind: :callback_mode, result: result, change: change})
+
+      _ ->
+        tls_failure(state, source, :tls_callback_module_origin)
+    end
+  end
 
   defp machine_program(state, source, :terminate_sys_debug, _arguments) do
     root = state.owners[source.pid].family.machines[source.pid]
@@ -1437,7 +1452,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       pending_timer: nil,
       cancels: [],
       stop: nil,
-      replies: []
+      replies: [],
+      module_action: nil
     }
   end
 
@@ -1664,7 +1680,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp program_after(state, source, :loop_state_enter, _arity, context) do
     previous = state.machine_states[source.pid].state |> elem(1) |> elem(0)
-    {state, %{context | state_call: false, callback_event: {:enter, previous}}}
+    event = {:enter, previous}
+    state = put_in(state.messages[source.pid], %{value: event, origin: context.origin})
+    {state, %{context | state_call: false, callback_event: event}}
   end
 
   defp program_after(state, _source, :loop_actions, 12, context),
@@ -1703,6 +1721,32 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
       {:next_event, _type, _content} ->
         {state, context}
+
+      {:change_callback_module, module} when is_atom(module) ->
+        before = state.machine_states[source.pid].params
+        modules = [module | tl(elem(before, 4))]
+
+        case tls_callback_mode(module) do
+          {:ok, _mode, enter?} when context.state_call ->
+            result =
+              before
+              |> put_elem(1, :state_functions)
+              |> put_elem(2, enter?)
+              |> put_elem(4, modules)
+
+            change = %{
+              before: before,
+              modules: modules,
+              result: result,
+              origin: context.origin,
+              action: action
+            }
+
+            {state, %{context | module_action: change}}
+
+          _ ->
+            {tls_failure(state, source, :tls_callback_module_origin), context}
+        end
 
       _ ->
         if timeout_action(action) == :error,
@@ -1972,7 +2016,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp machine_metadata(state, source, function, arguments, version) do
-    root = state.owners[source.pid].family.machines[source.pid]
+    root = state.machine_states[source.pid]
 
     state =
       cond do
@@ -2104,6 +2148,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case Map.get(state.machine_callbacks, source.pid) do
       %{fresh?: true} = callback ->
         state = put_in(state.machine_callbacks[source.pid], %{callback | fresh?: false})
+        callback = %{
+          callback
+          | source: Map.get(callback, :root_source, callback.source),
+            result: Map.get(callback, :root_result, callback.result)
+        }
+
         commit_callback(state, source, function, callback)
 
       _ ->
@@ -2175,6 +2225,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       postpone: false,
       next: [],
       timeouts: [],
+      modules: [],
       unknown: []
     }
 
@@ -2204,6 +2255,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp transition_action({:next_event, type, content}, state),
     do: %{state | next: state.next ++ [{type, content}]}
 
+  defp transition_action({:change_callback_module, module} = action, state) when is_atom(module),
+    do: %{state | modules: state.modules ++ [action]}
+
   defp transition_action({type, time, message}, state),
     do: %{state | timeouts: [{type, time, message, []} | state.timeouts]}
 
@@ -2224,6 +2278,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp commit_transition(state, source, callback, root, transition) do
     state = tls_exact(state, source, :tls_machine_action_origin, transition.unknown, [])
+    changes = Map.get(state.module_changes, source.pid, [])
+    own = Enum.filter(changes, &(&1.origin == callback.source.index))
+
+    state =
+      tls_exact(
+        state,
+        source,
+        :tls_callback_module_program,
+        Enum.map(own, & &1.action),
+        transition.modules
+      )
+
+    state =
+      put_in(
+        state.module_changes[source.pid],
+        Enum.reject(changes, &(&1.origin == callback.source.index))
+      )
+
     pairs = machine_timer_pairs(state, source, callback.source.index)
     timers = elem(root.state, 3)
 
@@ -2855,7 +2927,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp hibernate_input(state, _source, _arguments, _frames, _version), do: state
 
   defp worker_input(state, source, arguments, []) do
-    version = state.owners[source.pid].version
+    current = state.owners[source.pid].version
+
+    version =
+      case {List.first(source.stack), state.machine_programs[source.pid]} do
+        {{:gen_statem, :loop_state_callback, _},
+         %{state_call: false, data: {name, data}, origin: origin}} ->
+          %{current | name: name, data: data, origin: {:tls_state_enter, origin}}
+
+        _ ->
+          current
+      end
 
     state =
       case Map.get(state.messages, source.pid) do
@@ -3433,6 +3515,52 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
+  defp record_call(state, source, :tls_handshake, :hello, _arguments) do
+    frame = hd(state.frames[source.pid])
+
+    case server_hello_selection(frame) do
+      {:ok, hello, selected, stapling} ->
+        data = frame.current.data
+        environment = elem(data, 6)
+
+        arguments = [
+          hello,
+          elem(data, 4),
+          elem(data, 10),
+          elem(elem(environment, 5), 0),
+          elem(elem(data, 8), 1)
+        ]
+
+        state =
+          arguments
+          |> Enum.with_index()
+          |> Enum.reduce(state, fn {expected, position}, state ->
+            handshake_copy(state, source, [2, 2, position], expected, frame.input.origin)
+          end)
+
+        put_in(state.records[source.index], %{
+          kind: :server_hello,
+          result: {:next_state, :wait_sh, selected, stapling},
+          selected: selected,
+          stapling: stapling,
+          origin: frame.input.origin
+        })
+
+      :error ->
+        tls_failure(state, source, :tls_hello_negotiation_origin)
+    end
+  end
+
+  defp record_call(state, source, module, :callback_mode, _arguments) do
+    case {get_in(state.machine_programs, [source.pid, :module_action]), tls_callback_mode(module)} do
+      {%{modules: [^module | _], origin: origin}, {:ok, mode, _enter?}} ->
+        put_in(state.records[source.index], %{kind: :handshake_value, result: mode, origin: origin})
+
+      _ ->
+        state
+    end
+  end
+
   defp record_call(state, source, module, :encode_data, arguments)
        when module in [:tls_record, :tls_record_1_3] do
     case sender_plaintext(state, source) do
@@ -3747,6 +3875,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp record_result(state, source, %{kind: :handshake_value} = record, _actual),
     do: handshake_copy(state, source, [3], record.result, record.origin)
 
+  defp record_result(state, source, %{kind: :server_hello} = record, _actual),
+    do: handshake_copy(state, source, [3], record.result, record.origin)
+
+  defp record_result(state, source, %{kind: :callback_mode} = record, _actual),
+    do: program_term(state, source, [3], record.result, record.change.origin)
+
   defp record_result(state, source, record, actual),
     do: tls_exact(state, source, :tls_record_output, actual, record.result)
 
@@ -3756,6 +3890,36 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp record_return(state, source, %{kind: :records, parsed: parsed}) do
     parsed = %{parsed | origin: source.index}
     put_in(state.parsed[source.pid], parsed)
+  end
+
+  defp record_return(state, source, %{kind: :server_hello} = record) do
+    [frame | rest] = state.frames[source.pid]
+    data = frame.current.data
+    environment = elem(data, 6)
+    stapling = Map.merge(elem(environment, 32), record.stapling)
+
+    data =
+      data
+      |> put_elem(3, put_elem(elem(data, 3), 5, record.selected))
+      |> put_elem(6, put_elem(environment, 32, stapling))
+
+    version = %{
+      frame.current
+      | name: :wait_sh,
+        data: data,
+        origin: {:tls_server_hello, source.index}
+    }
+
+    put_in(state.frames[source.pid], [%{frame | current: version} | rest])
+  end
+
+  defp record_return(state, source, %{kind: :callback_mode} = record) do
+    root = state.machine_states[source.pid]
+
+    state
+    |> put_in([:machine_states, source.pid], %{root | params: record.result})
+    |> update_in([:module_changes, source.pid], &((&1 || []) ++ [record.change]))
+    |> put_in([:machine_programs, source.pid, :module_action], nil)
   end
 
   defp record_return(state, source, %{kind: :decode, result: {record, states}}) do
@@ -3867,11 +4031,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         state =
           if rest == [],
             do:
-              put_in(state.machine_callbacks[source.pid], %{
-                source: source,
-                result: expected,
-                fresh?: true
-              }),
+              put_in(
+                state.machine_callbacks[source.pid],
+                callback_program(state, source, frame, expected)
+              ),
             else: state
 
         advance_worker(state, source, version, rest)
@@ -3880,6 +4043,30 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         state
     end
   end
+
+  # State entry runs inside the original transition. Its own callback result
+  # drives the native callback-result helper, while the original action program
+  # still owns the pending events and timers at the final loop commit.
+  defp callback_program(state, source, %{event: %{value: {:enter, _}}} = frame, result) do
+    current = %{source: source, result: result, fresh?: true}
+
+    with %{fresh?: true} = previous <- state.machine_callbacks[source.pid],
+         earlier = Map.get(previous, :root_result, previous.result),
+         {:ok, _name, _data, actions} <-
+           transition_result(earlier, frame.input.name, frame.input.data),
+         {:ok, name, data, entered} <-
+           transition_result(result, frame.input.name, frame.input.data) do
+      Map.merge(current, %{
+        root_source: Map.get(previous, :root_source, previous.source),
+        root_result: {:next_state, name, data, actions ++ entered}
+      })
+    else
+      _ -> current
+    end
+  end
+
+  defp callback_program(_state, source, _frame, result),
+    do: %{source: source, result: result, fresh?: true}
 
   defp callback_result(
          state,
@@ -3915,6 +4102,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp callback_result(
          state,
+         %{mfa: {:tls_client_connection, :hello, 3}} = source,
+         %{event: %{value: {:internal, {:server_hello, _, _, _, _, _} = hello}}},
+         version,
+         actual
+       ) do
+    expected =
+      {:next_state, :wait_sh, version.data,
+       [{:change_callback_module, :tls_client_connection_1_3}, {:next_event, :internal, hello}]}
+
+    callback_result_exact(state, source, actual, expected)
+  end
+
+  defp callback_result(
+         state,
          %{mfa: {:tls_sender, :init, 3}} = source,
          %{initialization_from: from},
          version,
@@ -3923,6 +4124,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     expected = {:next_state, :handshake, version.data, [{:reply, from, :ok}]}
     callback_result_exact(state, source, actual, expected)
   end
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_client_connection_1_3, :wait_sh, 3}} = source,
+         %{event: %{value: {:enter, _}}},
+         version,
+         actual
+       ),
+       do: callback_result_exact(state, source, actual, {:next_state, :wait_sh, version.data, []})
 
   defp callback_result(
          state,
@@ -4054,6 +4264,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp worker_output(
          state,
          source,
+         %{
+           source: %{mfa: {:tls_client_connection_1_3, :wait_sh, 3}},
+           event: %{value: {:enter, _}}
+         } = frame
+       ) do
+    data = frame.input.data
+    specific = Map.put(elem(data, 7), :change_cipher_spec, :ignore)
+
+    version = %{
+      frame.input
+      | data: put_elem(data, 7, specific),
+        origin: {:tls_middlebox, source.index}
+    }
+
+    {state, version}
+  end
+
+  defp worker_output(
+         state,
+         source,
          %{expected_handshake: %{packet: {handshake, raw}}} = frame
        ) do
     if ignored_hello_request?(handshake, frame.input) do
@@ -4085,6 +4315,38 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     do: version.name != :connection and elem(elem(version.data, 2), 1) == :client
 
   defp ignored_hello_request?(_handshake, _version), do: false
+
+  # This is the TLS-1.3 ServerHello branch of the pinned negotiation program.
+  # The packet came from plaintext decoding and the options from the modeled
+  # client. No checked negotiation helper or state callback supplies this result.
+  defp server_hello_selection(%{
+         event: %{
+           value: {:internal, {:server_hello, {3, 3}, random, _, _, extensions} = hello}
+         },
+         input: input
+       }) do
+    options = elem(input.data, 4)
+
+    with {:server_hello_selected_version, {3, 4} = selected} <-
+           Map.get(extensions, :server_hello_selected_version),
+         true <- selected in Map.fetch!(options, :versions),
+         true <- is_binary(random) and byte_size(random) == 32,
+         true <- binary_part(random, 24, 8) != <<"DOWNGRD", 1>>,
+         true <- elem(elem(input.data, 6), 12) != :pause do
+      {:ok, hello, selected,
+       %{configured: Map.has_key?(options, :stapling), status: :not_negotiated}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp server_hello_selection(_frame), do: :error
+
+  defp tls_callback_mode(:tls_client_connection_1_3),
+    do: {:ok, [:state_functions, :state_enter], true}
+
+  defp tls_callback_mode(:tls_client_connection), do: {:ok, :state_functions, false}
+  defp tls_callback_mode(_module), do: :error
 
   defp sender_alert(%{value: {{:call, _from}, {:ack_alert, alert}}}), do: {:ok, alert}
   defp sender_alert(%{value: {:cast, alert}}), do: {:ok, alert}
