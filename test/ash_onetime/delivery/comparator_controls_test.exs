@@ -6698,6 +6698,49 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert remaining === untouched
   end
 
+  @tag connection_streams: :driver
+  test "Connection streams: a write without logical bytes remains an observed operation" do
+    run = ConnectionNative.observe(:pipeline, :empty_write)
+    assert run.result == :ok
+    indexed = %{events: Enum.with_index(run.events, &Map.put(&1, :index, &2))}
+    native = NativeTransport.build(indexed, run.native_history)
+    assert native.errors == []
+    reads = ConnectionReads.build(native)
+    assert reads.errors == []
+    decoders = ConnectionDecoders.build(indexed, native, reads, run.native_history)
+    assert decoders.errors == []
+
+    states =
+      ConnectionStates.build(
+        indexed,
+        native,
+        decoders,
+        run.native_history,
+        {:initial, run.initial_state}
+      )
+
+    assert states.errors == []
+    [empty] = Enum.filter(native.writes, &(&1.bytes == <<>>))
+    proof = %{
+      indexed: indexed,
+      native: native,
+      reads: reads,
+      decoders: decoders,
+      states: states,
+      errors: []
+    }
+
+    assert function_exported?(ConnectionHistory, :render, 2)
+    rendered = apply(ConnectionHistory, :render, [proof, indexed])
+    assert rendered.errors == []
+    refute Enum.any?(empty.indexes, &MapSet.member?(rendered.consumed, &1))
+
+    for index <- empty.indexes do
+      source = Enum.find(indexed.events, &(&1.index == index))
+      assert source in rendered.events
+    end
+  end
+
   @tag :comparator_control
   test "C-tick: the twin TTL read falls in the next second", context do
     context = Map.merge(context, %{run_first?: true, between_sides: &next_second/1})

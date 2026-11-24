@@ -1249,6 +1249,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       {:error, :timeout} = module.recv(socket, 0, 0)
     end
 
+    if corruption == :empty_write do
+      :ok = module.send(socket, <<>>)
+    end
+
     :ok
   after
     :ok = module.close(socket)
@@ -1315,6 +1319,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp values(:single, :byte), do: [18]
   defp values(:single, corruption) when corruption in [:length, :timeout, :extra_read], do: [17]
   defp values(:pipeline, nil), do: [17, 29]
+  defp values(:pipeline, :empty_write), do: [17, 29]
   defp values(:pipeline, :byte), do: [18, 29]
   defp values(:pipeline, :swap), do: [29, 17]
   defp values(:pipeline, :drop), do: [17]
