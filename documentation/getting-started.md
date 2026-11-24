@@ -2,9 +2,10 @@
 
 `ash_onetime` targets Elixir `~> 1.20` (tested on 1.20.5; the requirement admits later 1.x
 releases and excludes 2.0 or newer), Erlang/OTP 28 or 29, Ash `>= 3.38.1 and < 4.0.0`,
-AshPostgres `~> 2.15 and >= 2.15.2`, DBConnection `~> 2.10 and >= 2.10.3`, and PostgreSQL 17
-and 18. Work and qualification run the whole suite on both PostgreSQL majors. Maintenance uses
-`MAINTAIN`. This guide targets v2.0.0 (`{:ash_onetime, "~> 2.0.0"}`). See the
+AshPostgres `~> 2.15 and >= 2.15.2`, DBConnection `~> 2.10 and >= 2.10.3`, Postgrex
+`~> 0.22 and >= 0.22.4`, and PostgreSQL 17 and 18. Work and qualification run the whole suite
+on both PostgreSQL majors. Maintenance uses `MAINTAIN`. This guide targets v2.0.0
+(`{:ash_onetime, "~> 2.0.0"}`). See the
 [release notes](../CHANGELOG.md).
 
 This version is in development and is not yet on Hex; use the [published release documentation on HexDocs](https://hexdocs.pm/ash_onetime/).
@@ -25,7 +26,8 @@ mix igniter.install ash_onetime --repo MyApp.Repo
 ```
 
 This imports `ash_onetime` into your `.formatter.exs`, writes the deterministic installation
-migration, and offers optional Plug (`--with-plug`) and Oban (`--with-oban`) dependencies.
+migration, and offers optional Plug `~> 1.20 and >= 1.20.4` (`--with-plug`) and Oban
+(`--with-oban`) dependencies.
 Pass `--resource MyApp.MyResource` (repeatable) to wire `AshOnetime.Resource` into a resource
 and scaffold a starter `onetime` block there in the same step. See [Operations](operations.md)
 for `--claims hash` partitioning, `--fact-tables` for context boundaries, and other

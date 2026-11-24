@@ -3867,6 +3867,24 @@ defmodule AshOnetime.MutationCheck do
       test_name: "db_connection consumer requirement rejects advised versions",
       assertion: "refute Version.match?(\"2.10.2\", requirement)"
     },
+    "deps-postgrex-floor" => %{
+      path: "mix.exs",
+      original: "{:postgrex, \"~> 0.22 and >= 0.22.4\"}",
+      mutated: "{:postgrex, \"~> 0.22 and >= 0.22.3\"}",
+      test: "test/mix/dependency_security_test.exs",
+      tag: "deps_postgrex_floor_mutation",
+      test_name: "postgrex consumer requirement rejects advised versions",
+      assertion: "refute Version.match?(\"0.22.3\", requirement)"
+    },
+    "deps-plug-floor" => %{
+      path: "mix.exs",
+      original: "{:plug, \"~> 1.20 and >= 1.20.4\", optional: true, runtime: false}",
+      mutated: "{:plug, \"~> 1.20 and >= 1.20.3\", optional: true, runtime: false}",
+      test: "test/mix/dependency_security_test.exs",
+      tag: "deps_plug_floor_mutation",
+      test_name: "plug consumer requirement rejects advised versions",
+      assertion: "refute Version.match?(\"1.20.3\", requirement)"
+    },
     "deps-mint-floor" => %{
       path: "mix.exs",
       original: "{:mint, \"~> 1.10 and >= 1.10.2\", optional: true, runtime: false}",

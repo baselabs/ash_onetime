@@ -68,6 +68,23 @@ defmodule AshOnetime.MixDependencySecurityTest do
     assert Version.match?("2.10.3", requirement)
   end
 
+  @tag :deps_postgrex_floor_mutation
+  test "postgrex consumer requirement rejects advised versions" do
+    requirement = requirement!(:postgrex)
+    refute Version.match?("0.22.0", requirement)
+    refute Version.match?("0.22.1", requirement)
+    refute Version.match?("0.22.2", requirement)
+    refute Version.match?("0.22.3", requirement)
+    assert Version.match?("0.22.4", requirement)
+  end
+
+  @tag :deps_plug_floor_mutation
+  test "plug consumer requirement rejects advised versions" do
+    requirement = requirement!(:plug)
+    refute Version.match?("1.20.3", requirement)
+    assert Version.match?("1.20.4", requirement)
+  end
+
   @tag :deps_mint_floor_mutation
   test "mint consumer requirement rejects advised versions" do
     requirement = requirement!(:mint)

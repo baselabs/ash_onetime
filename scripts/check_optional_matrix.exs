@@ -6,7 +6,7 @@ defmodule AshOnetime.OptionalMatrix do
   # Exact vulnerable pins must fail resolution against this package (ADR 0004).
   @cases [
     {"none", [], %{plug: false, oban: false, igniter: false}},
-    {"plug", [{:plug, "~> 1.20"}], %{plug: true, oban: false, igniter: false}},
+    {"plug", [{:plug, "== 1.20.4"}], %{plug: true, oban: false, igniter: false}},
     {"oban", [{:oban, "~> 2.23"}], %{plug: false, oban: true, igniter: false}},
     {"igniter", [{:igniter, "~> 0.8"}], %{plug: false, oban: false, igniter: true}},
     {"all", [{:plug, "~> 1.20"}, {:oban, "~> 2.23"}, {:igniter, "~> 0.8"}],
@@ -18,7 +18,8 @@ defmodule AshOnetime.OptionalMatrix do
        ash: "== 3.38.1",
        ash_postgres: "== 2.15.2",
        ash_sql: "== 0.8.6",
-       db_connection: "== 2.10.3"
+       db_connection: "== 2.10.3",
+       postgrex: "== 0.22.4"
      ], %{plug: false, oban: false, igniter: false}}
   ]
 
@@ -31,7 +32,9 @@ defmodule AshOnetime.OptionalMatrix do
     {"mint-conflict", {:mint, "== 1.10.1"}},
     {"ash-sql-0.8.4-conflict", {:ash_sql, "== 0.8.4"}},
     {"ash-sql-0.8.5-conflict", {:ash_sql, "== 0.8.5"}},
-    {"db-connection-conflict", {:db_connection, "== 2.10.2"}}
+    {"db-connection-conflict", {:db_connection, "== 2.10.2"}},
+    {"plug-conflict", {:plug, "== 1.20.3"}},
+    {"postgrex-conflict", {:postgrex, "== 0.22.3"}}
   ]
 
   @owned_applications [
@@ -155,12 +158,26 @@ defmodule AshOnetime.OptionalMatrix do
     resolved = fn app -> app |> Application.spec(:vsn) |> List.to_string() end
 
     if #{inspect(name)} == "core-floors" do
-      floors = [ash: "3.38.1", ash_postgres: "2.15.2", ash_sql: "0.8.6", db_connection: "2.10.3"]
+      floors = [
+        ash: "3.38.1",
+        ash_postgres: "2.15.2",
+        ash_sql: "0.8.6",
+        db_connection: "2.10.3",
+        postgrex: "0.22.4"
+      ]
 
       for {app, expected_version} <- floors do
         unless resolved.(app) == expected_version,
           do: raise("core floor mismatch: \#{app}=\#{resolved.(app)}")
       end
+    end
+
+    if actual.plug and not Version.match?(resolved.(:plug), ">= 1.20.4") do
+      raise("plug resolved to \#{resolved.(:plug)} — the security floor did not bind")
+    end
+
+    if #{name == "plug"} and resolved.(:plug) != "1.20.4" do
+      raise("plug case must execute the exact patched minimum 1.20.4")
     end
 
     if actual.igniter do
@@ -187,7 +204,7 @@ defmodule AshOnetime.OptionalMatrix do
       end
     end
 
-    IO.puts("optional case #{name}: \#{inspect(actual)} mint resolution checked")
+    IO.puts("optional case #{name}: \#{inspect(actual)} security floors checked")
     """
 
     command!(name, project, environment, ["run", "--no-compile", "-e", expression])

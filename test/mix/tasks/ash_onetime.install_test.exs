@@ -43,7 +43,7 @@ defmodule Mix.Tasks.AshOnetime.InstallTest do
     migration = source!(igniter, migration_path)
 
     assert formatter =~ "import_deps: [:ash_onetime]"
-    assert mix =~ ~s({:plug, "~> 1.20"})
+    assert mix =~ ~s({:plug, "~> 1.20 and >= 1.20.4"})
     assert mix =~ ~s({:oban, "~> 2.23"})
 
     rendered =

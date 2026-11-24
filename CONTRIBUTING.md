@@ -140,9 +140,11 @@ Never commit secrets, provider-specific signature implementations, or reference-
 
 The consumer `mix.exs` bounds (`ash_postgres ~> 2.15 and >= 2.15.2`, `spark ~> 2.7`, and the
 Ash floor `>= 3.38.1`) allow forward drift within their major lines. AshSql additionally requires
-`~> 0.8 and >= 0.8.6` and DBConnection requires `~> 2.10 and >= 2.10.3`. Optional Igniter and
-Mint require `~> 0.8 and >= 0.8.4` and `~> 1.10 and >= 1.10.2`. These security floors follow
-ADR 0004.
+`~> 0.8 and >= 0.8.6`, DBConnection requires `~> 2.10 and >= 2.10.3`, and Postgrex requires
+`~> 0.22 and >= 0.22.4`. Optional Plug, Igniter and Mint require `~> 1.20 and >= 1.20.4`,
+`~> 0.8 and >= 0.8.4` and `~> 1.10 and >= 1.10.2`, respectively. These security floors follow
+ADR 0004. The dependency advisory test checks declared requirements against Hex releases and
+the live OSV Hex database. `mix deps.audit` also checks the concrete versions in each lock.
 
 After every dependency move, rerun `mix hex.audit` — Hex advisories lag public disclosures
 by hours, so after a fresh disclosure also check the advisory's affected range (OSV/GHSA)

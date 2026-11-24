@@ -4,8 +4,8 @@ Published consumer requirements enforce patched minimums, independently of the d
 
 - Ash `>= 3.38.1 and < 4.0.0`;
 - AshPostgres `~> 2.15 and >= 2.15.2`, AshSql `~> 0.8 and >= 0.8.6`;
-- DBConnection `~> 2.10 and >= 2.10.3`;
-- optional Igniter `~> 0.8 and >= 0.8.4`, Mint `~> 1.10 and >= 1.10.2`.
+- DBConnection `~> 2.10 and >= 2.10.3`, Postgrex `~> 0.22 and >= 0.22.4`;
+- optional Plug `~> 1.20 and >= 1.20.4`, Igniter `~> 0.8 and >= 0.8.4`, Mint `~> 1.10 and >= 1.10.2`.
 
 These floors cover authorization, pagination cursor security, keyword input validation, tenant
 isolation, query-cache security, stream logging, installer safety, and HTTP memory exhaustion
@@ -36,3 +36,12 @@ Declare a DBConnection floor of `~> 2.10 and >= 2.10.3` for
 which affects releases `>= 1.1.0 and < 2.10.3`. Postgrex and Ecto SQL already bring DBConnection
 into the dependency graph. The explicit requirement protects every consumer's resolution, and
 both committed locks must also resolve to patched releases.
+
+## November 24, 2026 amendment — Plug and Postgrex
+
+Raise the optional Plug floor to `~> 1.20 and >= 1.20.4` for the multipart length fix in
+[EEF-CVE-2026-120287](https://cna.erlef.org/osv/EEF-CVE-2026-120287.html). Raise the Postgrex floor
+to `~> 0.22 and >= 0.22.4` for the stream comment fix in
+[EEF-CVE-2026-66838](https://cna.erlef.org/osv/EEF-CVE-2026-66838.html) and the earlier notification
+channel fixes. The requirements test compares every declared Hex range, including optional
+dependencies and the floating Ash range, with the live OSV advisories and Hex release history.

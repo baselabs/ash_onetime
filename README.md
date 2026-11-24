@@ -162,6 +162,8 @@ Every protected action declares `:idempotency` or `:one_time_nonce` and a nonemp
 - Ash `>= 3.38.1` and `< 4.0.0`
 - AshPostgres `~> 2.15 and >= 2.15.2`, AshSql `~> 0.8 and >= 0.8.6`
 - DBConnection (`db_connection`) `~> 2.10 and >= 2.10.3`
+- Postgrex `~> 0.22 and >= 0.22.4`
+- Optional Plug `~> 1.20 and >= 1.20.4` for hosts using `AshOnetime.Plug`
 - Optional Mint `~> 1.10 and >= 1.10.2` when the host carries the installer HTTP closure
 - PostgreSQL 17 and 18. Work and qualification run the whole suite on the checked
   PostgreSQL 18 platform engine and the pinned upstream PostgreSQL 17 compatibility image.
@@ -176,6 +178,10 @@ AshPostgres 2.15.2 includes the required tenant-isolation fixes.
 AshSql 0.8.6 fixes query-cache security; the affected 0.8.4 and 0.8.5 releases are retired.
 DBConnection 2.10.3 hardens stream logging for
 [EEF-CVE-2026-133555](https://cna.erlef.org/osv/EEF-CVE-2026-133555.html).
+Postgrex 0.22.4 fixes stream comment escaping and includes the earlier notification channel fixes.
+[EEF-CVE-2026-66838](https://cna.erlef.org/osv/EEF-CVE-2026-66838.html)
+Plug 1.20.4 fixes multipart length accounting.
+[EEF-CVE-2026-120287](https://cna.erlef.org/osv/EEF-CVE-2026-120287.html)
 Mint 1.10.2 fixes HTTP/2 memory exhaustion and HTTP/1 response smuggling.
 Optional integrations remain excluded from this package's runtime applications.
 

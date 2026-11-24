@@ -12,6 +12,13 @@ All notable changes to this project are documented in this file.
 - Require DBConnection `~> 2.10 and >= 2.10.3` for
   [EEF-CVE-2026-133555](https://cna.erlef.org/osv/EEF-CVE-2026-133555.html), which affects
   logging on forged database streams.
+- Require optional Plug `~> 1.20 and >= 1.20.4` for the multipart length fix in
+  [EEF-CVE-2026-120287](https://cna.erlef.org/osv/EEF-CVE-2026-120287.html).
+- Require Postgrex `~> 0.22 and >= 0.22.4` for the stream comment fix in
+  [EEF-CVE-2026-66838](https://cna.erlef.org/osv/EEF-CVE-2026-66838.html) and the earlier
+  notification channel fixes in
+  [EEF-CVE-2026-32687](https://cna.erlef.org/osv/EEF-CVE-2026-32687.html) and
+  [EEF-CVE-2026-58225](https://cna.erlef.org/osv/EEF-CVE-2026-58225.html).
 
 - Declare the development version only in `mix.exs`; check documentation claims against it,
   distinguish unpublished guides from HexDocs, and refuse pre-release publication.
