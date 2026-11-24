@@ -8924,6 +8924,41 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag connection_streams: :tls
+  test "Connection streams: an equivalent native callback result retains its source form" do
+    run =
+      ComparatorMutants.with_tls_sender_mutant(:equivalent_callback_result, fn ->
+        ConnectionNative.observe_tls()
+      end)
+
+    assert run.result == []
+    events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
+
+    coordinates =
+      for %{event: {_, :return_from, {:tls_sender, :connection, 3}, result}, index: index} <-
+            events,
+          is_tuple(result) and elem(result, 0) == :keep_state,
+          do: index
+
+    assert coordinates != []
+    build = fn -> ConnectionTls.build(%{events: events}, run.tls_binding) end
+    proof = build.()
+
+    assert Enum.map(proof.errors, &{&1.rule, &1.index}) ==
+             Enum.map(coordinates, &{:tls_callback_result, &1})
+
+    for mutant <- [:stream_tls_callback_result, :stream_tls_worker_state_copy] do
+      checked = ComparatorMutants.with_mutant(mutant, build)
+      expected = if mutant == :stream_tls_callback_result, do: [], else: proof.errors
+      assert checked.errors == expected
+    end
+
+    assert build.().errors == proof.errors
+    positive = ConnectionNative.observe_tls()
+    indexed = %{events: Enum.with_index(positive.events, &Map.put(&1, :index, &2))}
+    assert ConnectionTls.build(indexed, positive.tls_binding).errors == []
+  end
+
+  @tag connection_streams: :tls
   test "Connection streams: record proof never reexecutes the native encoder" do
     run = ConnectionNative.observe_tls()
     assert native_encoder_calls(run) == []

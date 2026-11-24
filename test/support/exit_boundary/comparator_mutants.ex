@@ -954,6 +954,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     required =
       case rule do
         :helper_state -> 2
+        :equivalent_callback_result -> 1
         :initialization_input -> 2
         rule when rule in [:reply_copy, :reply_value] -> 7
         rule when rule in [:hibernate_name, :hibernate_actions] -> 5
@@ -2139,6 +2140,32 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     do: Enum.map_reduce(form, sites, &machine_call(&1, &2, rule))
 
   defp machine_call(form, sites, _rule), do: {form, sites}
+
+  defp tls_sender_form(
+         {:function, annotation, :connection, 3, [first | rest]},
+         sites,
+         :equivalent_callback_result
+       ) do
+    {:clause, location, arguments, guards, [call]} = first
+    {:call, _, {:atom, _, :send_application_data}, _} = call
+    data = {:var, location, :NativeTlsResultData}
+    actions = {:var, location, :NativeTlsResultActions}
+    other = {:var, location, :NativeTlsOtherResult}
+    next = {:atom, location, :next_state}
+    name = {:atom, location, :connection}
+    keep = {:atom, location, :keep_state}
+
+    alternatives = [
+      {:clause, location, [{:tuple, location, [next, name, data]}], [],
+       [{:tuple, location, [keep, data]}]},
+      {:clause, location, [{:tuple, location, [next, name, data, actions]}], [],
+       [{:tuple, location, [keep, data, actions]}]},
+      {:clause, location, [other], [], [other]}
+    ]
+
+    changed = {:clause, location, arguments, guards, [{:case, location, call, alternatives}]}
+    {{:function, annotation, :connection, 3, [changed | rest]}, sites + 1}
+  end
 
   defp tls_sender_form(
          {:function, _, :send_application_data, 4, _} = form,
