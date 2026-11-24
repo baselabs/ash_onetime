@@ -306,9 +306,22 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         started.returned.event === {owner, :return_from, {:erlang, :start_timer, 3}, timer} do
       expiry =
         Enum.filter(events, fn event ->
-          event.event ===
-            {owner, :receive, {:timeout, timer, {DBConnection.Connection, task, timeout}}}
+          match?({^owner, :receive, {:timeout, ^timer, _}}, event.event)
         end)
+
+      cancellations =
+        for {_index, pair} <- pairs,
+            {_, :call, {:erlang, :cancel_timer, [^timer | _]}} <- [pair.source.event] do
+          %{
+            index: pair.source.index,
+            mfa: pair.source.mfa,
+            stack: pair.source.stack,
+            same_owner?: pair.source.pid === owner,
+            returned: %{index: pair.returned.index},
+            integer?: is_integer(elem(pair.returned.event, 3)),
+            false?: elem(pair.returned.event, 3) === false
+          }
+        end
 
       holders =
         Enum.filter(events, fn event ->
@@ -323,7 +336,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TIMER_NATIVE_CAUSE", %{
         index: cancel.source.index,
         start: %{index: started.source.index},
-        expiry: Enum.map(expiry, &%{index: &1.index}),
+        expiry:
+          Enum.map(expiry, fn source ->
+            %{
+              index: source.index,
+              expected_payload?:
+                source.event ===
+                  {owner, :receive, {:timeout, timer, {DBConnection.Connection, task, timeout}}}
+            }
+          end),
+        cancellations: cancellations,
         holders: Enum.map(holders, &%{index: &1.index}),
         flushes:
           Enum.map(flushes, fn pair ->
