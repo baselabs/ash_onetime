@@ -441,9 +441,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         finished?: false
       })
     after
-      if timer = Process.delete(:ash_onetime_timer_fixture_resume),
-        do: Process.cancel_timer(timer)
-
       resume_timer_owner(Process.delete(:ash_onetime_timer_fixture_owner))
       :trace.session_destroy(session)
       Process.demonitor(monitor, [:flush])
@@ -533,12 +530,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  defp owner_timer_fixture_event({:resume_owner, token, owner}, %{token: token} = state) do
-    resume_timer_owner(owner)
-    Process.delete(:ash_onetime_timer_fixture_owner)
-    %{state | resumed?: true}
-  end
-
   defp owner_timer_fixture_event(
          {:trace_ts, owner, :call, {:erlang, :cancel_timer, [timer]}, _stamp},
          %{task: {owner, _task}} = state
@@ -579,18 +570,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
 
   defp release_timer_task(%{task: {owner, task}, released?: false} = state) do
     case Map.fetch(state.timers, owner) do
-      {:ok, {^task, _timer, timeout}} ->
-        true = :erlang.suspend_process(owner)
+      {:ok, {^task, _timer, _timeout}} ->
         Process.put(:ash_onetime_timer_fixture_owner, owner)
+        :ok = :sys.suspend(owner)
         send(state.parent, {:timer_fixture_owner, state.token, owner})
         send(task, {:return_holder, state.token})
 
-        # A suspended process cannot drain its signal queue to emit receive
-        # traces. Resume on a separate timer started after the native timer,
-        # using its observed duration. Only the subsequent native receipt and
-        # false cancellation prove expiry; this wakeup grants no proof itself.
-        timer = Process.send_after(self(), {:resume_owner, state.token, owner}, timeout)
-        Process.put(:ash_onetime_timer_fixture_resume, timer)
+        # OTP's system suspension keeps the process in a selective receive.
+        # It can enqueue and trace the real Holder and expiry signals without
+        # running Connection's callback. Only their exact native receipts
+        # release it; elapsed time and a second timer grant no evidence.
         %{state | released?: true}
 
       _ ->
@@ -604,7 +593,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     resume_timer_owner(Process.delete(:ash_onetime_timer_fixture_owner))
     result = if state.holder_queued?, do: :ok, else: :wrong_order
     send(state.parent, {:timer_fixture_done, state.token, result})
-    %{state | finished?: true}
+    %{state | finished?: true, resumed?: true}
   end
 
   defp finish_timer_fixture(state), do: state
@@ -612,10 +601,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp resume_timer_owner(nil), do: :ok
 
   defp resume_timer_owner(owner) do
-    :erlang.resume_process(owner)
+    :sys.resume(owner)
     :ok
-  rescue
-    ArgumentError -> :ok
+  catch
+    :exit, {:noproc, _call} -> :ok
+    :exit, {:normal, _call} -> :ok
   end
 
   defp startup_observation(corruption, types, retirement) do
