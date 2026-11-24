@@ -2052,9 +2052,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         # A zero-time timer can arrive before start_timer returns. Its own
         # call, returned reference and exact expiry still establish ownership.
         with [flush] <-
-               native_type_calls(state, cancel.returned, source, {DBConnection.Connection, :flush_timer, 1}),
-             {^owner, :call, {DBConnection.Connection, :flush_timer, [^timer]}} <- flush.source.event,
-             {^owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok} <- flush.returned.event do
+               native_type_calls(
+                 state,
+                 cancel.returned,
+                 source,
+                 {DBConnection.Connection, :flush_timer, 1}
+               ),
+             {^owner, :call, {DBConnection.Connection, :flush_timer, [^timer]}} <-
+               flush.source.event,
+             {^owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok} <-
+               flush.returned.event do
           Enum.count(state.events, fn event ->
             started < event.index and event.index < flush.returned.index and
               event.event === {owner, :receive, {:timeout, timer, message}}

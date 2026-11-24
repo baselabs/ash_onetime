@@ -3169,11 +3169,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         arguments = elem(elem(source.event, 2), 2)
 
         state =
-          tls_exact(state, source, :tls_callback_input, [
-            Enum.at(arguments, 0),
-            Enum.at(arguments, 1),
-            Enum.at(arguments, 3)
-          ], parent.connection_ready)
+          tls_exact(
+            state,
+            source,
+            :tls_callback_input,
+            [
+              Enum.at(arguments, 0),
+              Enum.at(arguments, 1),
+              Enum.at(arguments, 3)
+            ],
+            parent.connection_ready
+          )
 
         {state, %{parent.current | name: :connection}}
 
@@ -3361,7 +3367,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
              [hello1, tickets, hello_version]
            ),
          maximum = Map.get(elem(hello1, 6), :max_frag_enum, :undefined),
-         expected_states = :ssl_record.maybe_set_max_fragment_length(maximum, states),
+         expected_states = hello_fragment_limit(maximum, states),
          {:ok, ^expected_states, _} <-
            hello_fact(
              state,
@@ -3375,7 +3381,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
            |> put_elem(10, expected_states)
            |> put_elem(3, put_elem(elem(data, 3), 5, hello_version)),
          fragment = :tls_handshake.encode_handshake(hello2, hello_version),
-         history = :ssl_handshake.update_handshake_history(elem(handshake, 3), fragment),
+         {messages, _previous} = elem(handshake, 3),
+         history = {[fragment | messages], messages},
          {encoded, encoded_states} =
            :tls_record.encode_handshake(fragment, hello_version, expected_states),
          {:ok, {^encoded, ^encoded_states, ^history}, _} <-
@@ -3422,7 +3429,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
              {:tls_gen_connection, :send_handshake_flight, 1},
              [queued]
            ) do
-      requested = :tls_record.hello_version(versions)
+      requested = if hd(versions) >= {3, 3}, do: {3, 3}, else: Enum.min(versions)
 
       stapling =
         Map.merge(elem(handshake, 32), %{
@@ -3488,6 +3495,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {:error, mfa}
     end
   end
+
+  defp hello_fragment_limit({:max_frag_enum, enum}, states) when enum in 1..4,
+    do: Map.put(states, :max_fragment_length, Bitwise.bsl(1, 8 + enum))
+
+  defp hello_fragment_limit(_maximum, states), do: states
 
   defp passive_input(
          state,
@@ -3862,14 +3874,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     origin = {:tls_receiver_write_update, source.index}
 
     state =
-      handshake_copy(state, source, [2, 2], [sender, write, version, maximum], frame.current.origin)
+      handshake_copy(
+        state,
+        source,
+        [2, 2],
+        [sender, write, version, maximum],
+        frame.current.origin
+      )
 
     with {:ok, sent, receipt} <- write_update_receipt(state, source, sender),
          [cast] <-
-           Enum.filter(Map.get(state.pair_index, {source.pid, {:gen_statem, :cast, 2}}, []), fn pair ->
-             source.index < pair.source.index and
-               pair.returned.index < state.pairs[source.index].returned.index
-           end) do
+           Enum.filter(
+             Map.get(state.pair_index, {source.pid, {:gen_statem, :cast, 2}}, []),
+             fn pair ->
+               source.index < pair.source.index and
+                 pair.returned.index < state.pairs[source.index].returned.index
+             end
+           ) do
       state
       |> handshake_copy(cast.source, [2, 2], [sender, message], origin)
       |> handshake_copy(cast.returned, [3], :ok, origin)
@@ -3921,7 +3942,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     state =
       state
-      |> handshake_copy(source, [2, 2], [frame.current.data, :tls_gen_connection], frame.current.origin)
+      |> handshake_copy(
+        source,
+        [2, 2],
+        [frame.current.data, :tls_gen_connection],
+        frame.current.origin
+      )
       |> put_in([:records, source.index], %{
         kind: :prepared_connection,
         result: {:no_record, data},
@@ -4002,6 +4028,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
       :error ->
         tls_failure(state, source, :tls_plaintext_origin)
+    end
+  end
+
+  defp record_call(state, source, module, :encode_alert_record, arguments)
+       when module in [:tls_record, :tls_record_1_3] do
+    frame = hd(state.frames[source.pid])
+
+    with {:ok, {:alert, level, description, _, _, _} = alert} <- sender_alert(frame.event),
+         data = frame.input.data,
+         version = elem(elem(data, 1), 6),
+         states = elem(data, 2),
+         {:ok, encoded, next} <-
+           encode_record(state, source, <<level, description>>, version, states, 21) do
+      expected_args =
+        if module == :tls_record, do: [alert, version, states], else: [alert, states]
+
+      state
+      |> tls_exact(source, :tls_record_input, arguments, expected_args)
+      |> put_in([:records, source.index], %{
+        kind: :alert_encode,
+        result: {encoded, next},
+        origin: {:tls_alert_encoding, source.index}
+      })
+    else
+      _ -> tls_failure(state, source, :tls_alert_origin)
     end
   end
 
@@ -4739,7 +4790,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       end
 
     Enum.reduce_while(fragments, {:ok, {[], states}}, fn fragment, {:ok, {encoded, states}} ->
-      case encode_record(state, source, fragment, version, states) do
+      case encode_record(state, source, fragment, version, states, 23) do
         {:ok, record, states} -> {:cont, {:ok, {[record | encoded], states}}}
         :error -> {:halt, :error}
       end
@@ -4773,19 +4824,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp encode_record(state, source, fragment, {3, 4}, states) do
+  defp encode_record(state, source, fragment, {3, 4}, states, type) do
     write = states.current_write
     sequence = write.sequence_number
 
     if elem(write.security_parameters, 1) == <<0, 0>> do
-      record = record_packet(23, {3, 3}, fragment)
+      record = record_packet(type, {3, 3}, fragment)
       {:ok, record, Map.put(states, :current_write, %{write | sequence_number: sequence + 1})}
     else
       cipher = write.cipher_state
       iv = elem(cipher, 1)
       tag_length = elem(cipher, 6)
       nonce = record_nonce(sequence, iv)
-      plaintext = [fragment, 23]
+      plaintext = [fragment, type]
       aad = <<23, 3, 3, IO.iodata_length(plaintext) + tag_length::16>>
 
       with {:ok, handle} <- record_aead_handle(state, source, write, true),
@@ -4805,19 +4856,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp encode_record(state, source, fragment, version, states) do
+  defp encode_record(state, source, fragment, version, states, type) do
     write = states.current_write
     parameters = write.security_parameters
 
     result =
       if elem(parameters, 4) == 2,
-        do: record_aead(state, source, fragment, version, write),
-        else: record_cipher(state, source, fragment, version, write)
+        do: record_aead(state, source, fragment, version, write, type),
+        else: record_cipher(state, source, fragment, version, write, type)
 
     case result do
       {:ok, encrypted, cipher} ->
         write = %{write | cipher_state: cipher, sequence_number: write.sequence_number + 1}
-        {:ok, record_packet(23, version, encrypted), Map.put(states, :current_write, write)}
+        {:ok, record_packet(type, version, encrypted), Map.put(states, :current_write, write)}
 
       :error ->
         :error
@@ -4856,12 +4907,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp record_aead(state, source, fragment, {major, minor}, write) do
+  defp record_aead(state, source, fragment, {major, minor}, write, type) do
     cipher = write.cipher_state
     bulk = elem(write.security_parameters, 3)
     sequence = write.sequence_number
     length = IO.iodata_length(fragment)
-    aad = <<sequence::64, 23, major, minor, length::16>>
+    aad = <<sequence::64, type, major, minor, length::16>>
 
     with {:ok, algorithm} <- record_aead_algorithm(bulk, elem(cipher, 2)),
          {:ok, nonce, prefix, next_cipher} <-
@@ -4917,19 +4968,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp record_aead_algorithm(_bulk, _key), do: :error
 
-  defp record_cipher(state, source, fragment, version, write) do
-    with {:ok, mac} <- record_mac(state, source, fragment, version, write) do
-      record_cipher(state, source, fragment, version, write, mac)
+  defp record_cipher(state, source, fragment, version, write, type) do
+    with {:ok, mac} <- record_mac(state, source, fragment, version, write, type) do
+      record_ciphertext(state, source, fragment, version, write, mac)
     end
   end
 
-  defp record_mac(_state, _source, _fragment, _version, %{security_parameters: parameters})
+  defp record_mac(_state, _source, _fragment, _version, %{security_parameters: parameters}, _type)
        when elem(parameters, 7) == 0,
        do: {:ok, <<>>}
 
-  defp record_mac(state, source, fragment, {major, minor}, write) do
+  defp record_mac(state, source, fragment, {major, minor}, write, type) do
     with {:ok, algorithm} <- record_mac_algorithm(elem(write.security_parameters, 7)) do
-      header = <<write.sequence_number::64, 23, major, minor, IO.iodata_length(fragment)::16>>
+      header = <<write.sequence_number::64, type, major, minor, IO.iodata_length(fragment)::16>>
 
       record_primitive(state, source, {:crypto, :mac, 4}, [
         :hmac,
@@ -4952,7 +5003,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp record_mac_algorithm(_algorithm), do: :error
 
-  defp record_cipher(
+  defp record_ciphertext(
          _state,
          _source,
          fragment,
@@ -4963,7 +5014,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        when elem(parameters, 3) == 0,
        do: {:ok, IO.iodata_to_binary(fragment), write.cipher_state}
 
-  defp record_cipher(state, source, fragment, version, write, mac) do
+  defp record_ciphertext(state, source, fragment, version, write, mac) do
     cipher = write.cipher_state
     bulk = elem(write.security_parameters, 3)
 
@@ -5247,6 +5298,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp record_return(state, source, %{kind: :encode} = record),
     do: put_in(state.encoded[source.pid], Map.put(record, :origin, {:tls_record, source.index}))
 
+  defp record_return(state, source, %{kind: :alert_encode, result: {encoded, states}} = record) do
+    [frame | rest] = state.frames[source.pid]
+    version = %{frame.input | data: put_elem(frame.input.data, 2, states), origin: record.origin}
+    frame = frame |> Map.put(:current, version) |> Map.put(:alert_program, encoded)
+    put_in(state.frames[source.pid], [frame | rest])
+  end
+
   defp record_return(state, source, %{kind: :records, parsed: parsed}) do
     parsed = %{parsed | origin: source.index}
     put_in(state.parsed[source.pid], parsed)
@@ -5268,7 +5326,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     frame =
       if frame.source.mfa == {:tls_client_connection_1_3, :wait_finished, 3},
-        do: Map.put(frame, :connection_ready, [:connection, :no_record, [{{:timeout, :handshake}, :cancel}]]),
+        do:
+          Map.put(frame, :connection_ready, [
+            :connection,
+            :no_record,
+            [{{:timeout, :handshake}, :cancel}]
+          ]),
         else: frame
 
     put_in(state.frames[source.pid], [frame | rest])
@@ -5791,22 +5854,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp advance_worker(state, source, version, [parent | rest]),
     do: put_in(state.frames[source.pid], [%{parent | current: version} | rest])
 
-  defp worker_output(state, source, %{source: %{mfa: {:tls_sender, :send_tls_alert, 2}}} = frame) do
+  defp worker_output(
+         state,
+         _source,
+         %{
+           source: %{mfa: {:tls_sender, :send_tls_alert, 2}},
+           alert_program: _encoded
+         } = frame
+       ) do
     case sender_alert(frame.event) do
       {:ok, alert} ->
         state = tls_exact(state, frame.source, :tls_alert_copy, hd(frame.arguments), alert)
-        data = frame.input.data
-
-        {_bytes, states} =
-          :tls_record.encode_alert_record(alert, elem(elem(data, 1), 6), elem(data, 2))
-
-        {state,
-         %{frame.input | data: put_elem(data, 2, states), origin: {:tls_alert, source.index}}}
+        {state, frame.current}
 
       :error ->
-        {tls_failure(state, source, :tls_alert_origin), frame.current}
+        {tls_failure(state, frame.source, :tls_alert_origin), frame.current}
     end
   end
+
+  defp worker_output(state, source, %{source: %{mfa: {:tls_sender, :send_tls_alert, 2}}} = frame),
+    do: {tls_failure(state, source, :tls_alert_origin), frame.current}
 
   defp worker_output(
          state,
@@ -6186,7 +6253,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {put_elem(data, 6, put_elem(handshake, 5, :undefined)), {from, :ok}}
 
       {{false, :first}, from} when from != :undefined ->
-        data = data |> put_elem(6, put_elem(handshake, 5, :undefined)) |> put_elem(9, put_elem(recv, 1, :undefined))
+        data =
+          data
+          |> put_elem(6, put_elem(handshake, 5, :undefined))
+          |> put_elem(9, put_elem(recv, 1, :undefined))
+
         {data, {from, :connected}}
 
       _ ->

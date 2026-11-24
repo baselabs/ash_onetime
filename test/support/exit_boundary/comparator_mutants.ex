@@ -656,6 +656,18 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_tls_alert_replay) do
+    [
+      %{
+        path: "test/support/exit_boundary/connection_tls.ex",
+        original:
+          "        {state, frame.current}\n\n      :error ->\n        {tls_failure(state, frame.source, :tls_alert_origin), frame.current}",
+        mutated:
+          "        data = frame.input.data\n        _ = :tls_record.encode_alert_record(alert, elem(elem(data, 1), 6), elem(data, 2))\n        {state, frame.current}\n\n      :error ->\n        {tls_failure(state, frame.source, :tls_alert_origin), frame.current}"
+      }
+    ]
+  end
+
   def edits(:stream_tls_encode_replay) do
     [
       %{
@@ -1036,6 +1048,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       case kind do
         :parser -> {:tls_gen_connection, :tls_record, :get_tls_records, 5}
         :decoder -> {:tls_record, :tls_record_1_3, :decode_cipher_text, 2}
+        :alert -> {:tls_sender, :tls_record, :encode_alert_record, 3}
       end
 
     targets = %{{function, arity} => %{kind: :element, size: 2, position: 0}}

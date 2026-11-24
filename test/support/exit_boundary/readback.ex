@@ -76,6 +76,7 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
     historical = prepared.historical
     reference = prepared.run
     proof = prepared.connection_history
+
     reference_side =
       %{side | run: reference, delta: %{}, historical: historical}
       |> Map.put(:connection_history, proof)

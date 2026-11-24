@@ -295,7 +295,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
     # An upstream IOdata construction can name this span only when its complete
     # native program issued exactly this write. Its helpers are byte copies,
     # not additional writes or an allowance to erase their call occurrences.
-    helpers = if owners == 1, do: Enum.filter(proof.states.terms, &(&1.origin == origin)), else: []
+    helpers =
+      if owners == 1, do: Enum.filter(proof.states.terms, &(&1.origin == origin)), else: []
 
     Enum.uniq_by(write.copies ++ helpers, &{&1.index, &1.path})
   end

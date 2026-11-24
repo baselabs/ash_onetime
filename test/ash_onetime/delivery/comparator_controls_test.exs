@@ -5399,18 +5399,27 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert corrupted.result == :ok
       side = observation_side(context, corrupted, %{}, row!(:issue, :execute), historical)
       rejected = ConnectionHistory.build(side)
-      assert rejected.native.errors == [] and rejected.reads.errors == [] and rejected.decoders.errors == []
+
+      assert rejected.native.errors == [] and rejected.reads.errors == [] and
+               rejected.decoders.errors == []
+
       assert rejected.errors != [] and rejected.errors == rejected.states.errors
 
       assert [%{index: flushed, pid: owner}] =
-               for %{event: {_, :return_from, {DBConnection.Connection, :flush_timer, 1},
-                    {:native_foreign_return, :ok}}} = event <- rejected.indexed.events,
-                   do: event
+               for(
+                 %{
+                   event:
+                     {_, :return_from, {DBConnection.Connection, :flush_timer, 1},
+                      {:native_foreign_return, :ok}}
+                 } = event <- rejected.indexed.events,
+                 do: event
+               )
 
       update =
         Enum.find(rejected.indexed.events, fn event ->
           event.pid == owner and event.index > flushed and
-            event.mfa == {DBConnection.Connection, :pool_update, 2} and elem(event.event, 1) == :call
+            event.mfa == {DBConnection.Connection, :pool_update, 2} and
+            elem(event.event, 1) == :call
         end)
 
       assert hd(rejected.errors).rule == :state_owner_update_origin
@@ -5418,7 +5427,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       for mutant <- [:stream_owner_timer_flush, :stream_owner_copy, :stream_owner_task_return] do
         checked = ComparatorMutants.with_mutant(mutant, fn -> ConnectionHistory.build(side) end)
-        assert checked.errors == if(mutant == :stream_owner_timer_flush, do: [], else: rejected.errors)
+
+        assert checked.errors ==
+                 if(mutant == :stream_owner_timer_flush, do: [], else: rejected.errors)
       end
 
       assert ConnectionHistory.build(side).errors == rejected.errors
@@ -5912,6 +5923,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     events =
       comparator_call_order(fn -> Comparator.compare(pair) end, proofs ++ [renderer, origin])
+
     first_origin = Enum.find_index(events, &match?({:call, ^origin, _}, &1))
     assert is_integer(first_origin)
     before_origin = Enum.take(events, first_origin)
@@ -5964,7 +5976,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert proof.errors == [] and reference_proof.errors == []
     rendered = Registry.compute(:connection_stream, [proof, proof.indexed])
     assert rendered.errors == []
-    reference_rendered = Registry.compute(:connection_stream, [reference_proof, reference_proof.indexed])
+
+    reference_rendered =
+      Registry.compute(:connection_stream, [reference_proof, reference_proof.indexed])
+
     assert reference_rendered.errors == []
     reference = %{reference | run: %{reference.run | events: reference_rendered.events}}
 
@@ -7390,11 +7405,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     pair = observe(context, row, Values.set()[:va])
     events = pair.run.run.events
-    histories = %{run: ConnectionHistory.build(pair.run), twin: ConnectionHistory.build(pair.twin)}
+
+    histories = %{
+      run: ConnectionHistory.build(pair.run),
+      twin: ConnectionHistory.build(pair.twin)
+    }
+
     reference = pair.run.readback_reference
     reference_proof = ConnectionHistory.build(reference)
     assert Enum.all?([histories.run, histories.twin, reference_proof], &(&1.errors == []))
-    reference_view = Registry.compute(:connection_stream, [reference_proof, reference_proof.indexed])
+
+    reference_view =
+      Registry.compute(:connection_stream, [reference_proof, reference_proof.indexed])
+
     assert reference_view.errors == []
     reference = %{reference | run: %{reference.run | events: reference_view.events}}
     reference = Map.put(reference, :connection_history, reference_proof)
@@ -8757,7 +8780,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     IO.puts(
       "U2_CANONICAL_COMMAND_OWNERSHIP: " <>
-        Diagnostics.render(%{side: side.resource, commands: commands}, pretty: true, limit: :infinity)
+        Diagnostics.render(%{side: side.resource, commands: commands},
+          pretty: true,
+          limit: :infinity
+        )
     )
   end
 
@@ -9167,13 +9193,32 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           {:tls_record, :decode_cipher_text, 4},
           {:tls_record_1_3, :decode_cipher_text, 2}
         ],
-        parser: [{:tls_record, :get_tls_records, 5}]
+        parser: [{:tls_record, :get_tls_records, 5}],
+        alert: [{:tls_record, :encode_alert_record, 3}, {:tls_record_1_3, :encode_alert_record, 2}]
       ] do
     @tag connection_streams: :tls
     test "Connection streams: record proof never reexecutes the native #{name}" do
       functions = unquote(Macro.escape(functions))
       run = ConnectionNative.observe_tls()
+
+      assert Enum.any?(run.events, fn
+               %{event: {_, :call, {module, function, arguments}}} ->
+                 {module, function, length(arguments)} in functions
+
+               _ ->
+                 false
+             end)
+
       assert native_record_calls(run, functions) == []
+
+      if unquote(name) == :alert do
+        ComparatorMutants.with_mutant(:stream_tls_alert_replay, fn ->
+          assert native_record_calls(run, functions) != []
+        end)
+
+        assert native_record_calls(run, functions) == []
+        assert native_record_calls(ConnectionNative.observe_tls(), functions) == []
+      end
     end
   end
 
@@ -9193,7 +9238,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   for {kind, mfa} <- [
         parser: {:tls_record, :get_tls_records, 5},
-        decoder: {:tls_record_1_3, :decode_cipher_text, 2}
+        decoder: {:tls_record_1_3, :decode_cipher_text, 2},
+        alert: {:tls_record, :encode_alert_record, 3}
       ] do
     @tag connection_streams: :tls
     test "Connection streams: native #{kind} results have an independent sole catcher" do
