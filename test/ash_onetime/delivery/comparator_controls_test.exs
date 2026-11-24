@@ -6721,6 +6721,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert states.errors == []
     [empty] = Enum.filter(native.writes, &(&1.bytes == <<>>))
+
     proof = %{
       indexed: indexed,
       native: native,

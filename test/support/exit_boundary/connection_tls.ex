@@ -1020,7 +1020,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         state
         |> program_term(source, [2, 2, 0], before, change.origin)
         |> program_term(source, [2, 2, 1], modules, change.origin)
-        |> put_in([:records, source.index], %{kind: :callback_mode, result: result, change: change})
+        |> put_in([:records, source.index], %{
+          kind: :callback_mode,
+          result: result,
+          change: change
+        })
 
       _ ->
         tls_failure(state, source, :tls_callback_module_origin)
@@ -2148,6 +2152,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case Map.get(state.machine_callbacks, source.pid) do
       %{fresh?: true} = callback ->
         state = put_in(state.machine_callbacks[source.pid], %{callback | fresh?: false})
+
         callback = %{
           callback
           | source: Map.get(callback, :root_source, callback.source),
@@ -3554,7 +3559,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp record_call(state, source, module, :callback_mode, _arguments) do
     case {get_in(state.machine_programs, [source.pid, :module_action]), tls_callback_mode(module)} do
       {%{modules: [^module | _], origin: origin}, {:ok, mode, _enter?}} ->
-        put_in(state.records[source.index], %{kind: :handshake_value, result: mode, origin: origin})
+        put_in(state.records[source.index], %{
+          kind: :handshake_value,
+          result: mode,
+          origin: origin
+        })
 
       _ ->
         state

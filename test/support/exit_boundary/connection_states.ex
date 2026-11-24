@@ -2084,7 +2084,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          [started] <-
            native_type_calls(state, task.source, source, {Task.Supervisor, :start_child, 4}),
          [monitor] <- native_type_calls(state, started.returned, source, {:erlang, :monitor, 2}),
-         true <- monitor.source.event === {source.pid, :call, {:erlang, :monitor, [:process, child]}},
+         true <-
+           monitor.source.event === {source.pid, :call, {:erlang, :monitor, [:process, child]}},
          true <- elem(monitor.returned.event, 3) === reference,
          [update] <-
            native_type_calls(
