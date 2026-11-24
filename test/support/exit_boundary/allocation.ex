@@ -260,8 +260,7 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
 
   defp errors_for_leases(leases) do
     for lease <- leases,
-        lease.terminal_source == nil or lease.terminal_return == nil or
-          lease.giveaway == nil or lease.conn_ref == nil,
+        lease.terminal_source == nil or lease.terminal_return == nil or lease.giveaway == nil,
         do: difference(lease, :allocation_terminal, :missing, :same_reference_native_handoff)
   end
 

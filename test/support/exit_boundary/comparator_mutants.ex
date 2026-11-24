@@ -548,8 +548,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_states.ex",
-        original: "        state = exact(state, source, :state_owner_backoff_input, input, expected)\n",
-        mutated: "        _ = input\n        state = exact(state, source, :state_owner_backoff_input, expected, expected)\n"
+        original:
+          "        state = exact(state, source, :state_owner_backoff_input, input, expected)\n",
+        mutated:
+          "        _ = input\n        state = exact(state, source, :state_owner_backoff_input, expected, expected)\n"
       }
     ]
   end
@@ -558,8 +560,10 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     [
       %{
         path: "test/support/exit_boundary/connection_states.ex",
-        original: "        state = exact(state, source, :state_owner_backoff_result, actual, expected)\n",
-        mutated: "        _ = actual\n        state = exact(state, source, :state_owner_backoff_result, expected, expected)\n"
+        original:
+          "        state = exact(state, source, :state_owner_backoff_result, actual, expected)\n",
+        mutated:
+          "        _ = actual\n        state = exact(state, source, :state_owner_backoff_result, expected, expected)\n"
       }
     ]
   end

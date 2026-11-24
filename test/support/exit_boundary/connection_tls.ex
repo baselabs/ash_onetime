@@ -1717,6 +1717,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp program_after(state, source, :loop_state_transition, 9, context) do
+    if context.q == [] do
+      IO.puts(
+        "CONNECTION_COLD_TLS_EMPTY_QUEUE: " <>
+          inspect(%{
+            index: source.index,
+            mfa: source.mfa,
+            origin: context.origin,
+            state_name: elem(context.data, 0),
+            event_count: length(context.events),
+            next_count: length(context.next)
+          })
+      )
+
+      for error <- Enum.reverse(state.errors) do
+        IO.puts(
+          "CONNECTION_COLD_TLS_PREFIX_FAILURE: " <>
+            inspect(Map.take(error, [:index, :at, :rule, :path]))
+        )
+      end
+    end
+
     [event | events] = context.q
     root = state.machine_states[source.pid]
     postponed = if context.postpone, do: [event | elem(root.state, 2)], else: elem(root.state, 2)
@@ -3184,7 +3205,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
                 do: {callback, completed}
 
           transitions =
-            for %{event: {_, :call, {:tls_sender, function, [:cast, {:new_write, _, negotiated, _}, _]}}} = event <-
+            for %{
+                  event:
+                    {_, :call,
+                     {:tls_sender, function, [:cast, {:new_write, _, negotiated, _}, _]}}
+                } = event <-
                   state.events,
                 event.index < source.index,
                 do: %{index: event.index, mfa: event.mfa, callback: function, version: negotiated}
