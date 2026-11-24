@@ -1682,11 +1682,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp program_after(state, source, :loop_state_enter, _arity, context) do
-    previous = state.machine_states[source.pid].state |> elem(1) |> elem(0)
-    event = {:enter, previous}
-    state = put_in(state.messages[source.pid], %{value: event, origin: context.origin})
-    {state, %{context | state_call: false, callback_event: event}}
+  # OTP inlines loop_state_enter/9 into loop_actions/10. Its decision comes
+  # from the modeled CallEnter and current Params, before the callback inputs.
+  defp program_after(state, source, function, arity, context)
+       when {function, arity} in [{:loop_state_enter, 9}, {:loop_actions, 10}] do
+    root = state.machine_states[source.pid]
+
+    if function == :loop_state_enter or (context.call_enter and elem(root.params, 2)) do
+      previous = root.state |> elem(1) |> elem(0)
+      event = {:enter, previous}
+      state = put_in(state.messages[source.pid], %{value: event, origin: context.origin})
+      {state, %{context | state_call: false, callback_event: event}}
+    else
+      {state, context}
+    end
   end
 
   defp program_after(state, _source, :loop_actions, 12, context),
