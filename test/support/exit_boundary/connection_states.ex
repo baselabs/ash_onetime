@@ -976,7 +976,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
                  {pair.source.pid, :return_from, {DBConnection.Connection, :start_link, 4},
                   {:ok, pid}}
            end),
-         {parent, :call, {_, _, [Postgrex.Protocol, options, pool, tag]}} <- factory.source.event,
+         {parent, :call,
+          {_, _, [Postgrex.Protocol, %DBConnection.SensitiveData{data: options}, pool, tag]}} <-
+           factory.source.event,
          true <- Enum.any?(events, &match?(%{event: {^parent, :spawn, ^pid, _}}, &1)),
          arguments = {Postgrex.Protocol, %DBConnection.SensitiveData{data: options}, pool, tag},
          [native] <-

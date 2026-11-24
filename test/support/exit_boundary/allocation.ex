@@ -489,6 +489,10 @@ defmodule AshOnetime.Test.ExitBoundary.Allocation do
       {:conn, committed.owner, Postgrex.Protocol, protocol, lock, committed.clock, timer, :ok}
     ]
 
+    s = enter(s, {System, :monotonic_time, 1}, [1000])
+    {s, admitted_at} = origin(s, {:erlang, :monotonic_time, 1}, [1000], :integer)
+    s = leave(s, {System, :monotonic_time, 1}, admitted_at)
+    ensure(s, hd(s.events), :checkpoint_checkout_deadline, admitted_at < deadline, true)
     s = leaf(s, {:ets, :lookup, 2}, [holder, :conn], conn_row)
     pool_ref = {:pool_ref, pool, queue, timer, holder, lock}
     returned = {:ok, pool_ref, Postgrex.Protocol, checkin, protocol}
