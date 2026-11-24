@@ -636,11 +636,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   # The shared native supervisor must be armed before it creates the TLS tree.
   # Every constructor, handshake, worker and retirement is then in the same raw
   # observation. No post-birth system state supplies an expected machine root.
-  def observe_tls_startup do
+  def observe_tls_startup(ssl_options \\ []) do
     ExitBoundary.observe(
       fn -> :ok end,
       fn _ ->
-        protocol = connect_tls()
+        protocol = connect_tls(ssl_options)
         execute_tls(protocol, nil)
       end,
       %{
@@ -767,6 +767,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp execute_tls(protocol, corruption),
     do: execute(protocol, :single, if(corruption == :byte, do: :byte))
 
+  defp connect_tls(options_or_corruption \\ [])
+
   defp connect_tls(:fragmented) do
     previous = Application.fetch_env(:ssl, :internal_active_n)
     :ok = Application.put_env(:ssl, :internal_active_n, 2)
@@ -781,22 +783,28 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  defp connect_tls(_corruption), do: connect_tls()
+  defp connect_tls(ssl_options) when is_list(ssl_options) do
+    ssl_options =
+      Keyword.merge(
+        [
+          verify: :verify_peer,
+          cacertfile: System.fetch_env!("ASH_ONETIME_NATIVE_TLS_CA_FILE") |> String.to_charlist(),
+          server_name_indication: ~c"localhost"
+        ],
+        ssl_options
+      )
 
-  defp connect_tls do
     options =
       Repo.config()
       |> Keyword.put(:types, Postgrex.DefaultTypes)
-      |> Keyword.put(:ssl,
-        verify: :verify_peer,
-        cacertfile: System.fetch_env!("ASH_ONETIME_NATIVE_TLS_CA_FILE") |> String.to_charlist(),
-        server_name_indication: ~c"localhost"
-      )
+      |> Keyword.put(:ssl, ssl_options)
 
     {:ok, protocol} = Postgrex.Protocol.connect(options)
     {:ok, protocol} = Postgrex.Protocol.checkout(protocol)
     protocol
   end
+
+  defp connect_tls(_corruption), do: connect_tls()
 
   defp native_spec(:buffered) do
     %{

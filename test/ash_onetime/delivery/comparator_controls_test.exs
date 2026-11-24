@@ -4462,6 +4462,29 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag connection_streams: :tls
+  test "Connection streams: TLS 1.2 retains its complete cold native program", context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+    run = ConnectionNative.observe_tls_startup(versions: [:"tlsv1.2"])
+    assert run.result == :ok
+
+    negotiated? =
+      Enum.any?(run.events, fn
+        %{event: {_, :call, {:tls_gen_connection, :next_event, [_name, _record, data]}}}
+        when is_tuple(data) and tuple_size(data) == 13 ->
+          elem(elem(data, 3), 5) == {3, 3}
+
+        _ ->
+          false
+      end)
+
+    assert negotiated?, "the native peer must actually negotiate TLS 1.2"
+    side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+    proof = ConnectionHistory.build(side)
+    assert proof.errors == [], "TLS 1.2 requires its complete native startup and retirement proof"
+  end
+
+  @tag connection_streams: :tls
   test "Connection streams: every cold TLS callback has its actual dispatch and return" do
     run = ConnectionNative.observe_tls_startup()
     assert run.result == :ok
