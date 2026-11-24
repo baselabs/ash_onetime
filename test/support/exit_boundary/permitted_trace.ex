@@ -1,7 +1,7 @@
 defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
-  alias AshOnetime.Test.ExitBoundary.Capture
   alias AshOnetime.Delivery
   alias AshOnetime.Delivery.Envelope
+  alias AshOnetime.Test.ExitBoundary.Capture
   alias AshOnetime.Test.ExitBoundary.FrameBindings
   alias AshOnetime.Test.ExitBoundary.Hooks
   alias AshOnetime.Test.ExitBoundary.HostCall

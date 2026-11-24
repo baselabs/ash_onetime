@@ -1476,30 +1476,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       program_prefix(context, context.q, context.postpone) ++
         [{9, context.call_enter}, {10, context.state_call}, {11, context.actions}]
 
-    fields =
-      case {function, arity} do
-        {:loop_actions_list, 13} ->
-          base ++ [{12, context.action}]
-
-        {:loop_actions_reply, 14}
-        when is_tuple(context.reply) and tuple_size(context.reply) == 2 ->
-          {from, reply} = context.reply
-          base ++ [{12, from}, {13, reply}]
-
-        {:loop_actions_next_event, 14}
-        when is_tuple(context.action) and tuple_size(context.action) == 3 and
-               elem(context.action, 0) == :next_event ->
-          {:next_event, type, content} = context.action
-          base ++ [{12, type}, {13, content}]
-
-        {function, 12} when function in [:loop_actions, :loop_actions_list] ->
-          base
-
-        _ ->
-          []
-      end
-
-    if fields == [], do: :error, else: {:ok, fields}
+    case program_action_fields(function, arity, context) do
+      :error -> :error
+      fields -> {:ok, base ++ fields}
+    end
   end
 
   defp program_fields(function, arity, context, _state, _source)
@@ -1567,6 +1547,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp program_fields(_function, _arity, _context, _state, _source), do: :error
+
+  defp program_action_fields(:loop_actions_list, 13, context), do: [{12, context.action}]
+
+  defp program_action_fields(:loop_actions_reply, 14, %{reply: {from, reply}}),
+    do: [{12, from}, {13, reply}]
+
+  defp program_action_fields(:loop_actions_next_event, 14, %{action: {:next_event, type, content}}),
+    do: [{12, type}, {13, content}]
+
+  defp program_action_fields(function, 12, _context)
+       when function in [:loop_actions, :loop_actions_list],
+       do: []
+
+  defp program_action_fields(_function, _arity, _context), do: :error
 
   defp program_timeout_fields(:loop_timeouts, 12, _context), do: []
 
@@ -3191,38 +3185,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         expected_args =
           if module == :tls_record, do: [plaintext, version, states], else: [plaintext, states]
 
-        if Map.get(state.owners[source.pid].family, :born?, false) and arguments !== expected_args do
-          for error <- Enum.reverse(state.errors) do
-            Diagnostics.emit(
-              "CONNECTION_COLD_TLS_PREFIX_FAILURE",
-              Map.take(error, [:index, :at, :rule, :path])
-            )
-          end
-
-          hello_origins =
-            for %{origin: {:tls_initial_hello, callback, completed}} <- state.terms,
-                uniq: true,
-                do: {callback, completed}
-
-          transitions =
-            for %{
-                  event:
-                    {_, :call,
-                     {:tls_sender, function, [:cast, {:new_write, _, negotiated, _}, _]}}
-                } = event <-
-                  state.events,
-                event.index < source.index,
-                do: %{index: event.index, mfa: event.mfa, callback: function, version: negotiated}
-
-          Diagnostics.emit("CONNECTION_COLD_TLS_ENCODE_ORIGIN", %{
-            index: source.index,
-            mfa: source.mfa,
-            sender_state: frame.input.name,
-            version: version,
-            initial_hello_origins: hello_origins,
-            transitions: transitions
-          })
-        end
+        diagnose_encode_origin(state, source, arguments, expected_args, frame, version)
 
         expected = :tls_record.encode_data(plaintext, version, states)
 
@@ -3318,6 +3281,41 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp record_call(state, _source, _module, _function, _arguments), do: state
+
+  defp diagnose_encode_origin(state, source, arguments, expected_args, frame, version) do
+    if Map.get(state.owners[source.pid].family, :born?, false) and arguments !== expected_args do
+      for error <- Enum.reverse(state.errors) do
+        Diagnostics.emit(
+          "CONNECTION_COLD_TLS_PREFIX_FAILURE",
+          Map.take(error, [:index, :at, :rule, :path])
+        )
+      end
+
+      hello_origins =
+        for %{origin: {:tls_initial_hello, callback, completed}} <- state.terms,
+            uniq: true,
+            do: {callback, completed}
+
+      transitions =
+        for %{
+              event:
+                {_, :call,
+                 {:tls_sender, function, [:cast, {:new_write, _, negotiated, _}, _]}}
+            } = event <-
+              state.events,
+            event.index < source.index,
+            do: %{index: event.index, mfa: event.mfa, callback: function, version: negotiated}
+
+      Diagnostics.emit("CONNECTION_COLD_TLS_ENCODE_ORIGIN", %{
+        index: source.index,
+        mfa: source.mfa,
+        sender_state: frame.input.name,
+        version: version,
+        initial_hello_origins: hello_origins,
+        transitions: transitions
+      })
+    end
+  end
 
   defp sender_plaintext(state, source) do
     case Map.get(state.messages, source.pid) do

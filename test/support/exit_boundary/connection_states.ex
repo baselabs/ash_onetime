@@ -1696,27 +1696,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         :error
 
       machine ->
-        case owner_callback(state, source) do
-          %{source: %{event: {_, :call, {_, _, [:info, message, :no_state, _]}}}} = callback
-          when is_tuple(message) and tuple_size(message) == 4 and
-                 elem(message, 0) == :"ETS-TRANSFER" ->
-            with {:"ETS-TRANSFER", holder, _task, {:checkin, ref, _}} <- message,
-                 {^ref, :after_connect} <- machine.data.client,
-                 %{holder: ^holder} <- state.lookups[source.pid],
-                 true <-
-                   owner_task_timer_cancelled?(state, callback.source, source, machine.data.timer) do
-              backoff = machine.data.backoff && DBConnection.Backoff.reset(machine.data.backoff)
-              data = %{machine.data | timer: nil, client: nil, backoff: backoff}
-              {:ok, %{machine | data: data}}
-            else
-              _ -> :error
-            end
-
-          _ ->
-            {:ok, machine}
-        end
+        owner_pool_machine(state, source, machine, owner_callback(state, source))
     end
   end
+
+  defp owner_pool_machine(
+         state,
+         source,
+         machine,
+         %{source: %{event: {_, :call, {_, _, [:info, message, :no_state, _]}}}} = callback
+       )
+       when is_tuple(message) and tuple_size(message) == 4 and
+              elem(message, 0) == :"ETS-TRANSFER" do
+    with {:"ETS-TRANSFER", holder, _task, {:checkin, ref, _}} <- message,
+         {^ref, :after_connect} <- machine.data.client,
+         %{holder: ^holder} <- state.lookups[source.pid],
+         true <- owner_task_timer_cancelled?(state, callback.source, source, machine.data.timer) do
+      backoff = machine.data.backoff && DBConnection.Backoff.reset(machine.data.backoff)
+      data = %{machine.data | timer: nil, client: nil, backoff: backoff}
+      {:ok, %{machine | data: data}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp owner_pool_machine(_state, _source, machine, _callback), do: {:ok, machine}
 
   defp owner_callback(state, source) do
     state.pairs
@@ -1743,12 +1747,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       if {DBConnection.Task, :run_child, 4} in source.stack do
         owner_task_holder(state, source, machine, version)
       else
-        with {:ok, machine} <- owner_pool_machine(state, source) do
-          {:ok, machine, version, machine.data.pool, machine.data.tag, machine.data.connected_at}
-        end
+        owner_pool_holder(state, source, version)
       end
     else
       _ -> :error
+    end
+  end
+
+  defp owner_pool_holder(state, source, version) do
+    with {:ok, machine} <- owner_pool_machine(state, source) do
+      {:ok, machine, version, machine.data.pool, machine.data.tag, machine.data.connected_at}
     end
   end
 
@@ -1921,19 +1929,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           state
       end
 
-    state =
-      if function in @owner_loop_next do
-        expected =
-          if function in [:loop_state_callback, :loop_state_callback_result],
-            do: machine,
-            else: next
-
-        state
-        |> owner_data_copy(source, [2, 2, 4, 1], expected)
-        |> owner_protocol_copy(source, [2, 2, 4, 1, :state], expected.version)
-      else
-        state
-      end
+    state = owner_loop_next_copy(state, source, function, machine, next)
 
     state =
       if function == :loop_state_callback_result and state.owner_pending[source.pid] do
@@ -1966,6 +1962,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     |> owner_backoff_loop(source, function, machine, next)
     |> owner_loop_message(source, function)
   end
+
+  defp owner_loop_next_copy(state, source, function, machine, next)
+       when function in @owner_loop_next do
+    expected =
+      if function in [:loop_state_callback, :loop_state_callback_result],
+        do: machine,
+        else: next
+
+    state
+    |> owner_data_copy(source, [2, 2, 4, 1], expected)
+    |> owner_protocol_copy(source, [2, 2, 4, 1, :state], expected.version)
+  end
+
+  defp owner_loop_next_copy(state, _source, _function, _machine, _next), do: state
 
   defp owner_backoff_message(state, source, :loop_msg_event, machine) do
     case machine do
@@ -2066,15 +2076,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     registered =
       owner_program_calls(state, source, epoch, {:gen_statem, :loop_timeouts_register, 15}) != []
 
-    timers =
-      if registered do
-        case owner_backoff_timer(state, source, next) do
-          {:ok, reference} -> %{{:timeout, :backoff} => {reference, nil}}
-          :error -> :missing_native_backoff_timer
-        end
-      else
-        %{}
-      end
+    timers = owner_backoff_timer_map(state, source, next, registered)
 
     state =
       exact(
@@ -2099,27 +2101,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         ])
 
       {:loop_timeouts_register, arity} when arity in [15, 17] ->
-        case owner_backoff_timer(state, source, next) do
-          {:ok, reference} ->
-            if arity == 17,
-              do:
-                owner_backoff_fields(state, source, [12, 13, 14, 15, 16], [
-                  {:timeout, :backoff},
-                  timeout,
-                  nil,
-                  [],
-                  reference
-                ]),
-              else:
-                owner_backoff_fields(state, source, [12, 13, 14], [
-                  {:timeout, :backoff},
-                  reference,
-                  nil
-                ])
-
-          :error ->
-            failure(state, source, :state_owner_backoff_timer_origin)
-        end
+        owner_backoff_register_fields(state, source, next, arity, timeout)
 
       _ ->
         state
@@ -2127,6 +2109,32 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_action_copy(state, _source, _function, _action, _next), do: state
+
+  defp owner_backoff_timer_map(_state, _source, _next, false), do: %{}
+
+  defp owner_backoff_timer_map(state, source, next, true) do
+    case owner_backoff_timer(state, source, next) do
+      {:ok, reference} -> %{{:timeout, :backoff} => {reference, nil}}
+      :error -> :missing_native_backoff_timer
+    end
+  end
+
+  defp owner_backoff_register_fields(state, source, next, arity, timeout) do
+    case owner_backoff_timer(state, source, next) do
+      {:ok, reference} ->
+        {positions, values} = owner_backoff_register_values(arity, timeout, reference)
+        owner_backoff_fields(state, source, positions, values)
+
+      :error ->
+        failure(state, source, :state_owner_backoff_timer_origin)
+    end
+  end
+
+  defp owner_backoff_register_values(17, timeout, reference),
+    do: {[12, 13, 14, 15, 16], [{:timeout, :backoff}, timeout, nil, [], reference]}
+
+  defp owner_backoff_register_values(15, _timeout, reference),
+    do: {[12, 13, 14], [{:timeout, :backoff}, reference, nil]}
 
   defp owner_backoff_fields(state, source, positions, values) do
     Enum.zip(positions, values)
