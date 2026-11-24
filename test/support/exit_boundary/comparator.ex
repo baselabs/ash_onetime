@@ -36,6 +36,21 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     end
   end
 
+  # OPEN selects logical intervals from histories that passed the main raw
+  # barrier. These complete proofs remain authoritative; an interval never
+  # becomes a new raw capture or reconstructs its connection state.
+  def compare_reference(%{run: run, twin: twin, row: row}, connections) do
+    prepared = %{
+      run: Map.delete(run, :readback_reference),
+      twin: Map.delete(twin, :readback_reference),
+      row: row,
+      prior: nil,
+      connections: connections
+    }
+
+    raw_failure(prepared) || compare_prepared(prepared, true)
+  end
+
   # Prepare the complete invocation tree before any consumer can project a
   # prior. Inherited database, derivation and clock values are comparison
   # outputs; none is an input to an authoritative connection proof.

@@ -2,6 +2,7 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
   @moduledoc false
   alias AshOnetime.Test.ExitBoundary
   alias AshOnetime.Test.ExitBoundary.Capture
+  alias AshOnetime.Test.ExitBoundary.Registry
   alias AshOnetime.Test.ExitBoundary.{Comparator, Historical, Origins, Withheld}
   @root {AshOnetime.Store, :committed_completion, 2}
 
@@ -58,12 +59,12 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
   def check(%{allocation_checkpoint?: true} = side, indexed, bound) do
     side = Map.put(side, :bound, bound)
 
-    case interval(indexed.events) do
+    case interval(indexed.events, side.connection_history) do
       [] ->
         %{claimed: MapSet.new(), errors: []}
 
       observed ->
-        check_interval(side, bound, observed)
+        compare_interval(side, bound, observed)
     end
   end
 
@@ -71,24 +72,20 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
   # own reference computation or acquire any claimed events.
   def check(_side, _indexed, _bound), do: %{claimed: MapSet.new(), errors: []}
 
-  defp check_interval(side, bound, observed) do
-    start =
-      Enum.find(
-        observed,
-        &match?(%{event: {_, :call, {AshOnetime.Store, :committed_completion, _}}}, &1)
-      ).index
-
-    case Historical.cut(side.historical, side.connection_history, start) do
-      {:ok, checkpoint} -> compare_interval(side, bound, observed, checkpoint)
-      {:error, failure} -> cut_failure(observed, start, failure)
-    end
-  end
-
-  defp compare_interval(side, bound, observed, checkpoint) do
+  defp compare_interval(side, bound, observed) do
     prepared = Map.fetch!(side, :readback_reference)
     historical = prepared.historical
     reference = prepared.run
-    reference_events = reference.events |> origins_for_interval(side) |> interval()
+    proof = prepared.connection_history
+    rendered = Registry.compute(:connection_stream, [proof, proof.indexed])
+
+    reference_side =
+      %{side | run: %{reference | events: rendered.events}, delta: %{}, historical: historical}
+      |> Map.put(:connection_history, proof)
+      |> Map.put(:origin_phase_override, :open)
+      |> Map.put(:claim_origins, [bound.c_admit])
+
+    reference_events = Origins.build(reference_side).events |> interval(proof)
 
     reference = %{
       reference
@@ -103,23 +100,17 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
     }
 
     run_side =
-      %{
-        side
-        | run: run,
-          delta: %{},
-          historical: checkpoint
-      }
+      %{side | run: run, delta: %{}}
       |> Map.put(:origin_phase_override, :open)
       |> Map.put(:claim_origins, [bound.c_admit])
 
     twin_side =
-      %{side | run: reference, delta: %{}, historical: historical}
-      |> Map.put(:origin_phase_override, :open)
-      |> Map.put(:claim_origins, [bound.c_admit])
+      %{reference_side | run: reference}
 
     result =
-      Comparator.compare(%{run: run_side, twin: twin_side, row: side.row},
-        readback_reference?: true
+      Comparator.compare_reference(
+        %{run: run_side, twin: twin_side, row: side.row},
+        {side.connection_history, proof}
       )
 
     sources =
@@ -128,17 +119,6 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
       end
 
     %{claimed: MapSet.new(observed, &Capture.address/1), errors: result.errors, sources: sources}
-  end
-
-  defp cut_failure(observed, start, failure) do
-    at = Map.take(hd(observed), [:role, :mfa, :stack]) |> Map.put(:run_index, start)
-
-    %{
-      claimed: MapSet.new(),
-      errors: [
-        %{at: at, rule: failure.rule, path: [], run: failure, twin: :committed_history_cut}
-      ]
-    }
   end
 
   # The third execution is a read-only SQL/program witness. Its private origin
@@ -155,12 +135,7 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
         do: {index, Map.merge(source, %{twin: origin, pairing: pairing})}
   end
 
-  defp origins_for_interval(events, side) do
-    temporary = %{side | run: %{side.run | events: events}}
-    Origins.build(temporary).events
-  end
-
-  defp interval(events) do
+  defp interval(events, proof) do
     case Enum.find_index(
            events,
            &match?(%{event: {_, :call, {AshOnetime.Store, :committed_completion, _}}}, &1)
@@ -169,11 +144,11 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
         []
 
       start ->
-        interval_from(events, start)
+        interval_from(events, start, proof)
     end
   end
 
-  defp interval_from(events, start) do
+  defp interval_from(events, start, proof) do
     caller = Enum.at(events, start).pid
     tail = Enum.drop(events, start)
 
@@ -184,121 +159,53 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
 
     range = if stop == nil, do: tail, else: Enum.take(tail, stop + 1)
     caller_events = Enum.filter(range, &(&1.pid == caller))
-    native = Enum.sort_by(events, & &1.index)
-    requests = driver_requests(native)
-
-    owned_requests =
-      for e <- caller_events, Map.has_key?(requests, e.index), do: requests[e.index]
-
-    replies = control_replies(native)
-    messages = received_messages(native)
-
-    control_replies =
-      for index <- owned_requests, Map.has_key?(replies, index), do: replies[index]
-
-    received =
-      for e <- caller_events, Map.has_key?(messages, e.index), do: messages[e.index]
-
     roots = MapSet.new(caller_events, & &1.index)
-    selected = MapSet.new(owned_requests ++ control_replies ++ received)
 
-    Enum.filter(events, fn e ->
-      MapSet.member?(roots, e.index) or MapSet.member?(selected, e.index)
+    writes = Enum.filter(proof.native.writes, &MapSet.member?(roots, &1.source.index))
+    commands = MapSet.new(writes, & &1.command.index)
+
+    # The protocol ledger associates replies with their actual frontend
+    # instances. A native receive can carry unrelated messages in the same
+    # chunk; that coalescing grants no claim on those logical messages.
+    requests =
+      for %{message_address: {:connection_message, port, :frontend, ordinal}, wire_frame: frame} <-
+            events,
+          Enum.all?(frame.provenance, &MapSet.member?(commands, &1.index)),
+          into: MapSet.new(),
+          do: {port, ordinal}
+
+    logical =
+      Enum.filter(events, fn
+        %{message_address: {:connection_message, port, direction, ordinal}, wire_frame: frame} ->
+          request = if direction == :frontend, do: ordinal, else: frame.request
+          MapSet.member?(requests, {port, request})
+
+        _ ->
+          false
+      end)
+
+    receipts =
+      for %{wire_frame: %{provenance: provenance}} <- logical,
+          span <- provenance,
+          into: MapSet.new(),
+          do: span.index
+
+    native =
+      writes ++
+        Enum.filter(proof.native.reads ++ proof.native.active, fn read ->
+          MapSet.member?(roots, read.source.index) or
+            MapSet.member?(receipts, read.delivered.index)
+        end)
+
+    selected = native |> Enum.flat_map(& &1.indexes) |> MapSet.new()
+    addresses = MapSet.new(logical, &Capture.address/1)
+
+    Enum.filter(events, fn event ->
+      if Map.has_key?(event, :message_address),
+        do: MapSet.member?(addresses, Capture.address(event)),
+        else: MapSet.member?(roots, event.index) or MapSet.member?(selected, event.index)
     end)
   end
-
-  # Match occurrences in native timestamp order before scheduling moves. Equal
-  # payloads in other queries never become part of OPEN's reference execution.
-  defp received_messages(events) do
-    sent =
-      for %{event: {port, :send, message, caller}, index: index} <- events,
-          is_port(port),
-          do: {{caller, message}, index}
-
-    grouped = Enum.group_by(sent, &elem(&1, 0), &elem(&1, 1))
-
-    {bound, _} =
-      Enum.reduce(events, {%{}, %{}}, fn
-        %{event: {caller, :receive, message}, index: index}, {bound, counts} ->
-          request(index, {caller, message}, grouped, bound, counts)
-
-        _, state ->
-          state
-      end)
-
-    bound
-  end
-
-  defp control_replies(events) do
-    replies =
-      for %{event: {port, :send, {port, {:control, _}}, caller}, index: index} <- events,
-          is_port(port),
-          do: {{caller, port}, index}
-
-    grouped = Enum.group_by(replies, &elem(&1, 0), &elem(&1, 1))
-
-    {bound, _} =
-      Enum.reduce(events, {%{}, %{}}, fn
-        %{event: {port, :receive, {caller, {:control, _}}}, index: index}, {bound, counts}
-        when is_port(port) ->
-          request(index, {caller, port}, grouped, bound, counts)
-
-        _, state ->
-          state
-      end)
-
-    bound
-  end
-
-  defp driver_requests(events) do
-    requests =
-      for %{event: {port, :receive, {caller, {kind, payload}}}, index: index} <- events,
-          is_port(port),
-          kind in [:command, :control],
-          do: {{caller, port, kind, request_payload(kind, payload)}, index}
-
-    grouped = Enum.group_by(requests, &elem(&1, 0), &elem(&1, 1))
-
-    {bound, _} =
-      Enum.reduce(events, {%{}, %{}}, fn e, {bound, counts} ->
-        case e.event do
-          {caller, :call, {:erts_internal, :port_command, [port, data, _opts]}} ->
-            request(
-              e.index,
-              {caller, port, :command, request_payload(:command, data)},
-              grouped,
-              bound,
-              counts
-            )
-
-          {caller, :call, {:erts_internal, :port_control, [port, command, data]}} ->
-            request(
-              e.index,
-              {caller, port, :control, request_payload(:control, {command, data})},
-              grouped,
-              bound,
-              counts
-            )
-
-          _ ->
-            {bound, counts}
-        end
-      end)
-
-    bound
-  end
-
-  defp request(index, key, grouped, bound, counts) do
-    ordinal = Map.get(counts, key, 0)
-
-    case Enum.at(Map.get(grouped, key, []), ordinal) do
-      nil -> {bound, Map.put(counts, key, ordinal + 1)}
-      source -> {Map.put(bound, index, source), Map.put(counts, key, ordinal + 1)}
-    end
-  end
-
-  defp request_payload(:control, {command, data}), do: {command, IO.iodata_to_binary(data)}
-  defp request_payload(:command, data), do: IO.iodata_to_binary(data)
 
   defp result(events) do
     %{event: {_, :return_from, @root, value}} =

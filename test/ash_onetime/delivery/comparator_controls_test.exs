@@ -5887,6 +5887,61 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag connection_streams: :driver
+  test "Connection streams: OPEN claims its full frontend request and associated replies",
+       context do
+    pair = observe(context, row!(:issue, :execute), Values.set()[:va])
+    proof = ConnectionHistory.build(pair.run)
+    reference = pair.run.readback_reference
+    reference_proof = ConnectionHistory.build(reference)
+    assert proof.errors == [] and reference_proof.errors == []
+    rendered = Registry.compute(:connection_stream, [proof, proof.indexed])
+    assert rendered.errors == []
+
+    side =
+      pair.run
+      |> Map.put(:connection_history, proof)
+      |> Map.put(:readback_reference, Map.put(reference, :connection_history, reference_proof))
+      |> Map.put(:run, %{pair.run.run | events: rendered.events})
+
+    indexed = Origins.build(side)
+    permitted = PermittedTrace.match(side, indexed)
+    assert permitted.errors == []
+    readback = Readback.check(side, indexed, permitted.bound)
+
+    assert [request] =
+             for source <- indexed.events,
+                 MapSet.member?(readback.claimed, Capture.address(source)),
+                 %{wire_frame: %{direction: :frontend, decoded: {:bind, _, _, _, _, _}}} <-
+                   [source],
+                 do: source
+
+    {:bind, _, _, _, parameters, _} = request.wire_frame.decoded
+    claim = permitted.bound.c_admit
+
+    assert Enum.map(parameters, &elem(&1, 4)) == [
+             claim.logical_partition,
+             claim.operation_hash,
+             claim.scope_hash,
+             claim.key_hash,
+             {:uuid, claim.id},
+             claim.effect_attempt
+           ]
+
+    assert String.contains?(request.wire_sql, "AND effect_attempt = $6::bigint")
+    {:connection_message, port, :frontend, ordinal} = request.message_address
+
+    assert Enum.any?(indexed.events, fn source ->
+             match?(
+               %{
+                 message_address: {:connection_message, ^port, :backend, _},
+                 wire_frame: %{request: ^ordinal, decoded: {:data_row, _}}
+               },
+               source
+             ) and MapSet.member?(readback.claimed, Capture.address(source))
+           end)
+  end
+
+  @tag connection_streams: :driver
   test "Connection streams: every prior raw history finishes before origin collection", context do
     pair = observe(context, row!(:issue, :replay), Values.set()[:va])
     assert pair.run.prior != nil and pair.twin.prior != nil
