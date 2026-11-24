@@ -327,6 +327,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         [:local]
       )
 
+      for mfa <- [
+            {:erlang, :cancel_timer, 1},
+            {DBConnection.Connection, :flush_timer, 1},
+            {DBConnection.Connection, :pool_update, 2}
+          ] do
+        :trace.function(session, mfa, [{:_, [], [{:return_trace}]}], [:local])
+      end
+
       :trace.process(session, :new, true, [:call, :receive, :strict_monotonic_timestamp])
       send(parent, {:timer_fixture_ready, token})
 
@@ -337,10 +345,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         pending: %{},
         timers: %{},
         task: nil,
+        later_tasks: 0,
         holder_queued?: false,
         expired?: false,
         released?: false,
         resumed?: false,
+        cancel_target?: false,
+        cancelled_false?: false,
+        flush_target?: false,
+        flushed?: false,
+        pool_updated?: false,
         finished?: false
       })
     after
@@ -358,12 +372,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       {:stop, token} when token == state.token ->
         AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TIMER_FIXTURE", %{
           task?: not is_nil(state.task),
-          pending: map_size(state.pending),
-          timers: map_size(state.timers),
+          later_tasks: %{length: state.later_tasks},
+          pending: %{length: map_size(state.pending)},
+          timers: %{length: map_size(state.timers)},
           released?: state.released?,
           resumed?: state.resumed?,
           holder_queued?: state.holder_queued?,
           expired?: state.expired?,
+          cancelled_false?: state.cancelled_false?,
+          flushed?: state.flushed?,
+          pool_updated?: state.pool_updated?,
           finished?: state.finished?
         })
 
@@ -381,9 +399,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  defp owner_timer_fixture_event({:task_ready, token, owner, task}, state)
+  defp owner_timer_fixture_event({:task_ready, token, owner, task}, %{task: nil} = state)
        when token == state.token,
        do: %{state | task: {owner, task}}
+
+  defp owner_timer_fixture_event({:task_ready, token, _owner, task}, state)
+       when token == state.token do
+    # The first native Task owns the forced expiry. A reconnect's callback is
+    # ordinary fixture work and must not wait on that spent release handshake.
+    send(task, {:return_holder, token})
+    %{state | later_tasks: state.later_tasks + 1}
+  end
 
   defp owner_timer_fixture_event(
          {:trace_ts, owner, :call,
@@ -391,14 +417,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           _stamp},
          state
        ),
-       do: put_in(state.pending[owner], {task, timeout})
+       do: %{state | pending: Map.put_new(state.pending, owner, {task, timeout})}
 
   defp owner_timer_fixture_event(
          {:trace_ts, owner, :return_from, {:erlang, :start_timer, 3}, timer, _stamp},
          state
        ) do
     case Map.fetch(state.pending, owner) do
-      {:ok, {task, timeout}} -> put_in(state.timers[owner], {task, timer, timeout})
+      {:ok, {task, timeout}} ->
+        %{state | timers: Map.put_new(state.timers, owner, {task, timer, timeout})}
+
       :error -> state
     end
   end
@@ -426,6 +454,41 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     Process.delete(:ash_onetime_timer_fixture_owner)
     %{state | resumed?: true}
   end
+
+  defp owner_timer_fixture_event(
+         {:trace_ts, owner, :call, {:erlang, :cancel_timer, [timer]}, _stamp},
+         %{task: {owner, _task}} = state
+       ) do
+    target? = match?({:ok, {_, ^timer, _}}, Map.fetch(state.timers, owner))
+    %{state | cancel_target?: target?}
+  end
+
+  defp owner_timer_fixture_event(
+         {:trace_ts, owner, :return_from, {:erlang, :cancel_timer, 1}, result, _stamp},
+         %{task: {owner, _task}, cancel_target?: true} = state
+       ),
+       do: %{state | cancelled_false?: result === false, cancel_target?: false}
+
+  defp owner_timer_fixture_event(
+         {:trace_ts, owner, :call, {DBConnection.Connection, :flush_timer, [timer]}, _stamp},
+         %{task: {owner, _task}} = state
+       ) do
+    target? = match?({:ok, {_, ^timer, _}}, Map.fetch(state.timers, owner))
+    %{state | flush_target?: target?}
+  end
+
+  defp owner_timer_fixture_event(
+         {:trace_ts, owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok, _stamp},
+         %{task: {owner, _task}, flush_target?: true} = state
+       ),
+       do: %{state | flushed?: true, flush_target?: false}
+
+  defp owner_timer_fixture_event(
+         {:trace_ts, owner, :return_from, {DBConnection.Connection, :pool_update, 2}, _result,
+          _stamp},
+         %{task: {owner, _task}, flushed?: true} = state
+       ),
+       do: %{state | pool_updated?: true}
 
   defp owner_timer_fixture_event(_message, state), do: state
 
