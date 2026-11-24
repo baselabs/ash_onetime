@@ -5909,11 +5909,13 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     readback = Readback.check(side, indexed, permitted.bound)
 
     assert [request] =
-             for source <- indexed.events,
-                 MapSet.member?(readback.claimed, Capture.address(source)),
-                 %{wire_frame: %{direction: :frontend, decoded: {:bind, _, _, _, _, _}}} <-
-                   [source],
-                 do: source
+             for(
+               source <- indexed.events,
+               MapSet.member?(readback.claimed, Capture.address(source)),
+               %{wire_frame: %{direction: :frontend, decoded: {:bind, _, _, _, _, _}}} <-
+                 [source],
+               do: source
+             )
 
     {:bind, _, _, _, parameters, _} = request.wire_frame.decoded
     claim = permitted.bound.c_admit
@@ -7026,6 +7028,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Registry.compute(:connection_stream, [proof, indexed]) === rendered
     {fresh, fresh_indexed} = native_render_fixture(:empty_write)
     assert fresh.errors == []
+
     assert rendered_writes_retained?(
              fresh,
              Registry.compute(:connection_stream, [fresh, fresh_indexed])

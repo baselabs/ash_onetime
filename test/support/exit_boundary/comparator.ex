@@ -26,6 +26,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
     reference? = Keyword.get(options, :readback_reference?, false)
 
     prepared = prepare_raw(pair, reference?)
+
     case raw_failure(prepared) do
       nil ->
         rendered = render_prepared(prepared)
@@ -96,7 +97,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
       | run: %{prepared.run | run: %{prepared.run.run | events: rr.events}},
         twin: %{prepared.twin | run: %{prepared.twin.run | events: tr.events}},
         prior: prior,
-        connections: {%{rc | errors: rc.errors ++ rr.errors}, %{tc | errors: tc.errors ++ tr.errors}}
+        connections:
+          {%{rc | errors: rc.errors ++ rr.errors}, %{tc | errors: tc.errors ++ tr.errors}}
     }
   end
 

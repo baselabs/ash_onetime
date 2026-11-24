@@ -4286,7 +4286,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     cond do
       type == :undefined and size >= 1 ->
         {<<type>>, queue} = record_queue_take(1, queue)
-        parse_record_queue(versions, queue, maximum, downgrade, records, put_elem(header, 1, type))
+
+        parse_record_queue(
+          versions,
+          queue,
+          maximum,
+          downgrade,
+          records,
+          put_elem(header, 1, type)
+        )
 
       type == :undefined ->
         {:ok, {Enum.reverse(records), {:undefined, queue}}}
@@ -4354,7 +4362,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
         if is_tuple(downgrade) and tuple_size(downgrade) == 2,
           do: {:ok, {[record], {:undefined, queue}}},
-          else: parse_record_queue(versions, queue, maximum, downgrade, [record | records], :undefined)
+          else:
+            parse_record_queue(
+              versions,
+              queue,
+              maximum,
+              downgrade,
+              [record | records],
+              :undefined
+            )
     end
   end
 
