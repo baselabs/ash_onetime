@@ -5009,18 +5009,37 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       run = ConnectionNative.observe_pool_startup({:after_connect_failure, type, callback})
       assert run.result == :ok
 
+      failed_tasks =
+        for %{
+              event:
+                {task, :exception_from, {Postgrex, :query!, 4},
+                 {:error, %Postgrex.Error{postgres: %{pg_code: "22012"}}}},
+              stack: stack
+            } <- run.events,
+            {ConnectionNative, :after_connect_pool_failure, 1} in stack,
+            uniq: true,
+            do: task
+
+      assert failed_tasks != [], "the real Task must observe the server's division-by-zero error"
+
       assert Enum.any?(run.events, fn
                %{
                  event:
-                   {_, :exception_from, {ConnectionNative, :after_connect_pool_failure, 1},
-                    {:error, %Postgrex.Error{postgres: %{pg_code: "22012"}}}}
+                   {_, :call,
+                    {DBConnection.Connection, :handle_event,
+                     [
+                       :info,
+                       {:DOWN, ref, :process, task, :killed},
+                       :no_state,
+                       %{client: {ref, :after_connect}}
+                     ]}}
                } ->
-                 true
+                 task in failed_tasks
 
                _ ->
                  false
              end),
-             "the supported after-connect callback must fail on real PostgreSQL SQL"
+             "the owner must consume the failed Task's DOWN before returning it to the pool"
 
       retry? =
         Enum.any?(run.events, fn

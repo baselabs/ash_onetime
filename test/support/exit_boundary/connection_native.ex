@@ -224,8 +224,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     :ok
   end
 
-  def after_connect_pool_failure(connection),
-    do: Postgrex.query!(connection, "SELECT 1 / 0 AS connection_after_connect_failure", [])
+  def after_connect_pool_failure(connection) do
+    # A catchable callback exception returns its Holder through DBConnection.run.
+    # Keep the real server exception, then terminate the actual Task while it
+    # still owns its Holder so Connection must consume its native DOWN branch.
+    try do
+      Postgrex.query!(connection, "SELECT 1 / 0 AS connection_after_connect_failure", [])
+    after
+      Process.exit(self(), :kill)
+    end
+  end
 
   defp startup_observation(corruption, types, retirement) do
     ExitBoundary.observe(
