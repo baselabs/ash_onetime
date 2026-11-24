@@ -5575,6 +5575,55 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   @tag connection_streams: :driver
+  test "Connection streams: causal roles depend only on captured identity facts", context do
+    Repo.put_dynamic_repo(context.repo)
+    historical = Historical.capture(context.prefix)
+
+    loop = fn again ->
+      receive do
+        {:ping, caller, reference} ->
+          send(caller, {reference, :ok})
+          again.(again)
+
+        :stop ->
+          :ok
+      end
+    end
+
+    peer = spawn(fn -> loop.(loop) end)
+    monitor = Process.monitor(peer)
+
+    try do
+      run =
+        ExitBoundary.observe(
+          fn -> Repo.put_dynamic_repo(context.repo) end,
+          fn _ ->
+            reference = make_ref()
+            send(peer, {:ping, self(), reference})
+
+            receive do
+              {^reference, :ok} -> :ok
+            end
+          end,
+          %{host: [], callbacks: []}
+        )
+
+      assert run.result == :ok
+      side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
+      before = Origins.build(side)
+      assert Map.has_key?(before.roles, peer)
+      true = Process.register(peer, :ash_onetime_causal_role_peer)
+      after_registration = Origins.build(side)
+
+      assert after_registration.roles == before.roles,
+             "a later live registration cannot change the identity of an unchanged capture"
+    after
+      send(peer, :stop)
+      assert_receive {:DOWN, ^monitor, :process, ^peer, :normal}
+    end
+  end
+
+  @tag connection_streams: :driver
   test "Connection streams: raw ledgers finish before projected consumers", context do
     pair = observe(context, row!(:issue, :execute), Values.set()[:va])
 
