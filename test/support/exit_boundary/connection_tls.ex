@@ -3791,23 +3791,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           elem(environment, 2)
         ]
 
-        {records, buffer} = expected = apply(:tls_record, :get_tls_records, expected_args)
+        state = tls_exact(state, source, :tls_record_input, arguments, expected_args)
 
-        parsed = %{
-          input: version,
-          buffer: buffer,
-          buffers: buffers |> put_elem(1, buffer) |> put_elem(3, elem(buffers, 3) ++ records),
-          remaining: elem(buffers, 3) ++ records,
-          states: elem(data, 10),
-          fragments: [],
-          early_data: false,
-          record: :no_record,
-          origin: source.index
-        }
+        case parse_record_stream(expected_args) do
+          {:ok, {records, buffer} = expected} ->
+            parsed = %{
+              input: version,
+              buffer: buffer,
+              buffers: buffers |> put_elem(1, buffer) |> put_elem(3, elem(buffers, 3) ++ records),
+              remaining: elem(buffers, 3) ++ records,
+              states: elem(data, 10),
+              fragments: [],
+              early_data: false,
+              record: :no_record,
+              origin: source.index
+            }
 
-        state
-        |> tls_exact(source, :tls_record_input, arguments, expected_args)
-        |> put_in([:records, source.index], %{result: expected, kind: :records, parsed: parsed})
+            put_in(state.records[source.index], %{
+              result: expected,
+              kind: :records,
+              parsed: parsed
+            })
+
+          {:error, _reason} ->
+            tls_failure(state, source, :tls_record_parser_origin)
+        end
 
       _ ->
         tls_failure(state, source, :tls_record_origin)
@@ -3897,6 +3905,135 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp record_call(state, _source, _module, _function, _arguments), do: state
+
+  # OTP 29.1.2 tls_record's framing program, constructed from the qualified
+  # transport bytes and modeled buffer. Keep its front/rear queue exactly;
+  # flattening the remainder would lose native buffer-copy obligations.
+  defp parse_record_stream([bytes, versions, buffer, maximum, downgrade]) do
+    {header, queue} = record_queue(bytes, buffer)
+    parse_record_queue(versions, queue, maximum, downgrade, [], header)
+  end
+
+  defp record_queue([bytes], {header, {front, size, rear}}),
+    do: {header, {front, size + byte_size(bytes), [bytes | rear]}}
+
+  defp record_queue(bytes, {header, {front, size, rear}}) when is_list(bytes),
+    do: {header, {front, size + IO.iodata_length(bytes), bytes ++ rear}}
+
+  defp record_queue(bytes, {header, {front, size, rear}}),
+    do: {header, {front, size + byte_size(bytes), [bytes | rear]}}
+
+  defp record_queue(bytes, <<>>) when is_list(bytes),
+    do: {:undefined, {[], IO.iodata_length(bytes), bytes}}
+
+  defp record_queue(bytes, <<>>), do: {:undefined, {[bytes], byte_size(bytes), []}}
+
+  defp parse_record_queue(versions, queue, maximum, downgrade, records, :undefined),
+    do:
+      parse_record_queue(
+        versions,
+        queue,
+        maximum,
+        downgrade,
+        records,
+        {:ssl_tls, :undefined, :undefined, :undefined, false}
+      )
+
+  defp parse_record_queue(versions, {_, size, _} = queue, maximum, downgrade, records, header) do
+    {:ssl_tls, type, version, length, false} = header
+
+    cond do
+      type == :undefined and size >= 1 ->
+        {<<type>>, queue} = record_queue_take(1, queue)
+        parse_record_queue(versions, queue, maximum, downgrade, records, put_elem(header, 1, type))
+
+      type == :undefined ->
+        {:ok, {Enum.reverse(records), {:undefined, queue}}}
+
+      type not in 20..23 ->
+        {:error, {:unsupported_record_type, type}}
+
+      version == :undefined and size >= 2 ->
+        {<<major, minor>>, queue} = record_queue_take(2, queue)
+
+        parse_record_queue(
+          versions,
+          queue,
+          maximum,
+          downgrade,
+          records,
+          put_elem(header, 2, {major, minor})
+        )
+
+      version == :undefined ->
+        {:ok, {Enum.reverse(records), {header, queue}}}
+
+      not record_version?(version, versions) ->
+        {:error, {:unsupported_version, version}}
+
+      length == :undefined and size >= 2 ->
+        {<<length::16>>, queue} = record_queue_take(2, queue)
+
+        parse_record_queue(
+          versions,
+          queue,
+          maximum,
+          downgrade,
+          records,
+          put_elem(header, 3, length)
+        )
+
+      length == :undefined ->
+        {:ok, {Enum.reverse(records), {header, queue}}}
+
+      length > record_maximum(versions, maximum) ->
+        {:error, :record_overflow}
+
+      length > size ->
+        {:ok, {Enum.reverse(records), {header, queue}}}
+
+      true ->
+        {fragment, queue} = record_queue_take(length, queue)
+        record = {:ssl_tls, type, version, fragment, false}
+
+        if is_tuple(downgrade) and tuple_size(downgrade) == 2,
+          do: {:ok, {[record], {:undefined, queue}}},
+          else: parse_record_queue(versions, queue, maximum, downgrade, [record | records], :undefined)
+    end
+  end
+
+  defp record_version?({3, _} = version, versions) when is_list(versions),
+    do: version in versions
+
+  defp record_version?({3, 3}, {3, 4}), do: true
+  defp record_version?(version, version), do: true
+  defp record_version?(_version, _versions), do: false
+
+  defp record_maximum(_versions, maximum) when is_integer(maximum), do: maximum + 256 + 32
+  defp record_maximum([{3, 4} | _], _maximum), do: 16_384 + 256
+  defp record_maximum({3, 4}, _maximum), do: 16_384 + 256
+  defp record_maximum(_versions, _maximum), do: 16_384 + 2048
+
+  defp record_queue_take(0, queue), do: {<<>>, queue}
+
+  defp record_queue_take(count, {front, size, rear}) do
+    {bytes, front, rear} = record_queue_take(count, front, rear, [])
+    {bytes, {front, size - count, rear}}
+  end
+
+  defp record_queue_take(count, [], rear, parts),
+    do: record_queue_take(count, Enum.reverse(rear), [], parts)
+
+  defp record_queue_take(count, [bytes | front], rear, parts) when byte_size(bytes) < count,
+    do: record_queue_take(count - byte_size(bytes), front, rear, [bytes | parts])
+
+  defp record_queue_take(count, [bytes | front], rear, parts) when byte_size(bytes) == count,
+    do: {IO.iodata_to_binary(Enum.reverse([bytes | parts])), front, rear}
+
+  defp record_queue_take(count, [bytes | front], rear, parts) do
+    <<taken::binary-size(^count), rest::binary>> = bytes
+    {IO.iodata_to_binary(Enum.reverse([taken | parts])), [rest | front], rear}
+  end
 
   # Build the record program from the modeled sender, the qualified plaintext
   # boundary and argument-qualified crypto primitives. Replaying tls_record
