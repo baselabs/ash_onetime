@@ -8977,7 +8977,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   end
 
   for {name, functions} <- [
-        decoder: [{:tls_record, :decode_cipher_text, 4}, {:tls_record_1_3, :decode_cipher_text, 2}],
+        decoder: [
+          {:tls_record, :decode_cipher_text, 4},
+          {:tls_record_1_3, :decode_cipher_text, 2}
+        ],
         parser: [{:tls_record, :get_tls_records, 5}]
       ] do
     @tag connection_streams: :tls

@@ -179,7 +179,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   # Writes, including empty writes, and all other events keep their occurrences.
   def render(proof, indexed) do
     errors =
-      proof.errors ++ proof.native.errors ++ proof.reads.errors ++ proof.decoders.errors ++
+      proof.errors ++
+        proof.native.errors ++
+        proof.reads.errors ++
+        proof.decoders.errors ++
         proof.states.errors
 
     cond do
@@ -317,8 +320,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       )
 
   defp replace_connection_copy(value, [position | path], replacement) when is_list(value),
-    do:
-      List.update_at(value, position, &replace_connection_copy(&1, path, replacement))
+    do: List.update_at(value, position, &replace_connection_copy(&1, path, replacement))
 
   defp native_history(indexed, connections, bindings) do
     births = ConnectionTls.births(indexed)
