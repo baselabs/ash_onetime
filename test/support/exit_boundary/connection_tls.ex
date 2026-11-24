@@ -3700,6 +3700,58 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp record_call(state, source, :tls_handshake_1_3, :calculate_handshake_secrets, _arguments),
     do: server_hello_helper(state, source, :secrets)
 
+  defp record_call(state, source, :tls_handshake_1_3, function, _arguments)
+       when function in [
+              :validate_finished,
+              :finished,
+              :calculate_read_traffic_secrets,
+              :calculate_write_traffic_secrets,
+              :maybe_calculate_resumption_master_secret,
+              :prepare_connection
+            ] do
+    frame = hd(state.frames[source.pid])
+
+    case handshake_connection_result(state, source, function, frame) do
+      {:ok, arguments, kind, result} ->
+        origin = {:tls_connection_secrets, source.index}
+
+        state
+        |> handshake_copy(source, [2, 2], arguments, frame.current.origin)
+        |> put_in([:records, source.index], %{kind: kind, result: result, origin: origin})
+
+      :error ->
+        tls_failure(state, source, :tls_connection_secrets_origin)
+    end
+  end
+
+  defp record_call(state, source, :ssl_record, function, _arguments)
+       when function in [:step_encryption_state, :step_encryption_state_write] do
+    frame = hd(state.frames[source.pid])
+    data = frame.current.data
+    directions = if function == :step_encryption_state, do: [:read, :write], else: [:write]
+
+    states =
+      Enum.reduce(directions, elem(data, 10), fn direction, states ->
+        {pending, current} =
+          if direction == :read,
+            do: {:pending_read, :current_read},
+            else: {:pending_write, :current_write}
+
+        next = states |> Map.fetch!(pending) |> Map.put(:sequence_number, 0) |> Map.delete(:aead_handle)
+        Map.put(states, current, next)
+      end)
+
+    origin = {:tls_encryption_step, source.index}
+
+    state
+    |> handshake_copy(source, [2, 2, 0], data, frame.current.origin)
+    |> put_in([:records, source.index], %{
+      kind: :handshake_state,
+      result: put_elem(data, 10, states),
+      origin: origin
+    })
+  end
+
   defp record_call(state, source, :ssl_record, :step_encryption_state_read, _arguments),
     do: server_hello_helper(state, source, :active)
 
@@ -4915,6 +4967,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp record_result(state, source, %{kind: :handshake_value} = record, _actual),
     do: handshake_copy(state, source, [3], record.result, record.origin)
 
+  defp record_result(state, source, %{kind: :handshake_state} = record, _actual),
+    do: handshake_copy(state, source, [3], record.result, record.origin)
+
   defp record_result(state, source, %{kind: :server_hello} = record, _actual),
     do: handshake_copy(state, source, [3], record.result, record.origin)
 
@@ -4937,6 +4992,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp record_return(state, source, %{kind: :record_alert}),
     do: Map.update!(state, :parsed, &Map.delete(&1, source.pid))
+
+  defp record_return(state, source, %{kind: :handshake_state} = record) do
+    [frame | rest] = state.frames[source.pid]
+    version = %{frame.current | data: record.result, origin: record.origin}
+    put_in(state.frames[source.pid], [%{frame | current: version} | rest])
+  end
 
   defp record_return(state, source, %{kind: :server_hello} = record) do
     [frame | rest] = state.frames[source.pid]
@@ -5448,7 +5509,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     else
       data = frame.input.data
       environment = elem(data, 6)
-      history = :ssl_handshake.update_handshake_history(elem(environment, 3), raw)
+      {messages, _previous} = elem(environment, 3)
+      history = {[raw | messages], messages}
       data = put_elem(data, 6, put_elem(environment, 3, history))
       {state, %{frame.input | data: data, origin: {:tls_handshake_history, source.index}}}
     end
@@ -5685,6 +5747,152 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          ])
 
   defp handshake_shared_secret(_state, _scope, _group, _public, _private), do: :error
+
+  defp handshake_connection_result(state, source, :validate_finished, frame) do
+    data = frame.current.data
+
+    with %{value: {:internal, {:finished, verify}}} <- frame.event,
+         {:ok, expected} <- handshake_finished(state, source, data, :current_read, true),
+         {:ok, valid?} <-
+           record_primitive(state, source, {:crypto, :hash_equals, 2}, [expected, verify]),
+         true <- is_boolean(valid?) do
+      result =
+        if valid?,
+          do: :ok,
+          else:
+            {:error,
+             record_alert({:tls_handshake_1_3, :compare_verify_data, 2}, 0, 51, :decrypt_error)}
+
+      {:ok, [data, verify], :handshake_value, result}
+    else
+      _ -> :error
+    end
+  end
+
+  defp handshake_connection_result(state, source, :finished, frame) do
+    data = frame.current.data
+
+    with {:ok, verify} <- handshake_finished(state, source, data, :current_write, false) do
+      {:ok, [data], :handshake_value, {:finished, verify}}
+    end
+  end
+
+  defp handshake_connection_result(state, source, function, frame)
+       when function in [:calculate_read_traffic_secrets, :calculate_write_traffic_secrets] do
+    data = frame.current.data
+    direction = if function == :calculate_read_traffic_secrets, do: :pending_read, else: :pending_write
+
+    with {:ok, pending} <- handshake_application_secret(state, source, data, direction) do
+      states = Map.put(elem(data, 10), direction, pending)
+      {:ok, [data], :handshake_state, put_elem(data, 10, states)}
+    end
+  end
+
+  defp handshake_connection_result(state, source, :maybe_calculate_resumption_master_secret, frame) do
+    data = frame.current.data
+
+    if Map.fetch!(elem(data, 4), :session_tickets) == :disabled do
+      {:ok, [data], :handshake_state, data}
+    else
+      pending = Map.fetch!(elem(data, 10), :pending_read)
+      parameters = pending.security_parameters
+      {messages, _previous} = elem(elem(data, 6), 3)
+      scope = Map.fetch!(state.pairs, source.index)
+
+      with {:ok, profile} <- handshake_cipher(elem(parameters, 1)),
+           {:master_secret, master} <- elem(parameters, 10),
+           {:ok, transcript} <- handshake_primitive(state, scope, {:crypto, :hash, 2}, [profile.hash, Enum.reverse(messages)]),
+           {:ok, secret} <- handshake_expand(state, scope, profile, master, "res master", transcript, profile.size) do
+        states =
+          Enum.reduce([:pending_read, :pending_write], elem(data, 10), fn direction, states ->
+            pending = Map.fetch!(states, direction)
+            parameters = put_elem(pending.security_parameters, 11, secret)
+            Map.put(states, direction, %{pending | security_parameters: parameters})
+          end)
+
+        {:ok, [data], :handshake_state, put_elem(data, 10, states)}
+      else
+        _ -> :error
+      end
+    end
+  end
+
+  defp handshake_connection_result(state, source, :prepare_connection, frame) do
+    data = frame.current.data
+    pending = Map.fetch!(elem(data, 10), :pending_read)
+    parameters = pending.security_parameters
+    scope = Map.fetch!(state.pairs, source.index)
+
+    with {:ok, profile} <- handshake_cipher(elem(parameters, 1)),
+         {:master_secret, master} <- elem(parameters, 10),
+         {:ok, transcript} <- handshake_primitive(state, scope, {:crypto, :hash, 2}, [profile.hash, handshake_context(data)]),
+         {:ok, secret} <- handshake_expand(state, scope, profile, master, "exp master", transcript, profile.size) do
+      specific = Map.put(elem(data, 7), :exporter_master_secret, secret)
+      role = elem(elem(data, 2), 1)
+      keep = role == :client and match?({:keylog_hs, _}, Map.get(elem(data, 4), :keep_secrets))
+
+      states =
+        if keep do
+          elem(data, 10)
+        else
+          Map.new(elem(data, 10), fn
+            {direction, connection} when direction in [:pending_read, :pending_write, :current_read, :current_write] ->
+              parameters = put_elem(connection.security_parameters, 10, {:master_secret, <<0>>})
+              {direction, %{connection | security_parameters: parameters}}
+            entry -> entry
+          end)
+        end
+
+      {:ok, [data], :handshake_state, data |> put_elem(7, specific) |> put_elem(10, states)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp handshake_finished(state, source, data, direction, drop_peer?) do
+    connection = Map.fetch!(elem(data, 10), direction)
+    hash = elem(connection.security_parameters, 8)
+    key = elem(connection.cipher_state, 3)
+    {messages, _previous} = elem(elem(data, 6), 3)
+    messages = if drop_peer?, do: Enum.drop(messages, 1), else: messages
+    scope = Map.fetch!(state.pairs, source.index)
+
+    with {:ok, transcript} <- handshake_primitive(state, scope, {:crypto, :hash, 2}, [hash, Enum.reverse(messages)]) do
+      handshake_mac(state, scope, hash, key, transcript)
+    end
+  end
+
+  defp handshake_application_secret(state, source, data, direction) do
+    pending = Map.fetch!(elem(data, 10), direction)
+    parameters = pending.security_parameters
+    role = elem(elem(data, 2), 1)
+    scope = Map.fetch!(state.pairs, source.index)
+    label = if {role, direction} in [{:client, :pending_read}, {:server, :pending_write}], do: "s ap traffic", else: "c ap traffic"
+
+    with {:ok, profile} <- handshake_cipher(elem(parameters, 1)),
+         {:handshake_secret, handshake} <- elem(parameters, 10),
+         {:ok, empty} <- handshake_primitive(state, scope, {:crypto, :hash, 2}, [profile.hash, <<>>]),
+         {:ok, derived} <- handshake_expand(state, scope, profile, handshake, "derived", empty, profile.size),
+         {:ok, master} <- handshake_mac(state, scope, profile.hash, derived, :binary.copy(<<0>>, profile.size)),
+         {:ok, transcript} <- handshake_primitive(state, scope, {:crypto, :hash, 2}, [profile.hash, handshake_context(data)]),
+         {:ok, traffic} <- handshake_expand(state, scope, profile, master, label, transcript, profile.size),
+         {:ok, key} <- handshake_expand(state, scope, profile, traffic, "key", <<>>, profile.key),
+         {:ok, iv} <- handshake_expand(state, scope, profile, traffic, "iv", <<>>, 12) do
+      parameters = parameters |> put_elem(10, {:master_secret, master}) |> put_elem(12, traffic)
+      finished = elem(pending.cipher_state, 3)
+      cipher = {:cipher_state, iv, key, finished, :undefined, :undefined, profile.tag}
+      {:ok, %{pending | security_parameters: parameters, cipher_state: cipher}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp handshake_context(data) do
+    {messages, _previous} = elem(elem(data, 6), 3)
+    role = elem(elem(data, 2), 1)
+    skip = if role == :client, do: &is_list/1, else: &is_binary/1
+    messages |> Enum.drop_while(skip) |> Enum.reverse()
+  end
 
   defp handshake_secrets(state, scope, data, shared, profile) do
     psk = :binary.copy(<<0>>, profile.size)
