@@ -2704,6 +2704,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             frame.event.value,
             {:internal, {:handshake, packet}}
           )
+
         state = put_in(state.handshake_packets[frame.source.pid], rest)
         {state, Map.put(frame, :expected_handshake, expected)}
 
@@ -3545,7 +3546,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       program ->
         {arguments, result} =
           if function == :tls_handshake_events do
-            recursive? = List.first(source.stack) == {:tls_gen_connection, :tls_handshake_events, 2}
+            recursive? =
+              List.first(source.stack) == {:tls_gen_connection, :tls_handshake_events, 2}
+
             rest = if recursive?, do: <<>>, else: program.rest
             {[program.packets, rest], handshake_events(program.packets, rest)}
           else
@@ -3616,16 +3619,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       {{3, 3}, {3, 4}, :client, :hello} ->
         <<_type, length::24, _::binary>> = fragment
         <<first::binary-size(length + 4), rest::binary>> = fragment
+
         {packets, <<>> = buffer} =
           :tls_handshake.get_tls_handshakes(highest, first, buffer, options)
+
         {packets, buffer, rest}
 
       _ ->
         selected =
           if version == :undefined or
                (version == {3, 3} and highest == {3, 4} and role == :client and name == :wait_sh),
-            do: highest,
-            else: version
+             do: highest,
+             else: version
 
         {packets, buffer} = :tls_handshake.get_tls_handshakes(selected, fragment, buffer, options)
         {packets, buffer, <<>>}

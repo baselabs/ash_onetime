@@ -8534,8 +8534,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           {%{
              event:
                {_, :call,
-                {:tls_gen_connection, :get_tls_handshakes,
-                 [_, _, {:native_foreign_helper, _}]}}
+                {:tls_gen_connection, :get_tls_handshakes, [_, _, {:native_foreign_helper, _}]}}
            }, index} ->
             [{index, [2, 2, 2]}]
 

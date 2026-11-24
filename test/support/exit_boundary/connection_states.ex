@@ -2130,7 +2130,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
                     ) do
                 clocks =
                   for clock <-
-                        native_type_calls(state, pair.source, source, {:erlang, :monotonic_time, 0}),
+                        native_type_calls(
+                          state,
+                          pair.source,
+                          source,
+                          {:erlang, :monotonic_time, 0}
+                        ),
                       do: %{index: clock.source.index}
 
                 %{index: pair.source.index, clocks: clocks}
@@ -3627,7 +3632,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     if actual !== expected do
       fields =
         if is_map(actual),
-          do: Enum.filter(Map.keys(expected), &(Map.get(actual, &1) !== Map.fetch!(expected, &1))),
+          do:
+            Enum.filter(Map.keys(expected), &(Map.get(actual, &1) !== Map.fetch!(expected, &1))),
           else: [:shape]
 
       AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_RECONNECT_STATUS_PROGRAM", %{
