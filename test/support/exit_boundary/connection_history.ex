@@ -205,7 +205,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   end
 
   defp render_native(proof, indexed) do
-    writes = MapSet.new(proof.native.writes, & &1.command.index)
     spans = connection_spans(proof.reads)
 
     consumed =
@@ -224,7 +223,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
         Enum.reduce(Map.get(write, :indexes, []), indexes, &MapSet.delete(&2, &1))
       end)
 
-    copies = frontend_spans(proof, writes, spans)
+    copies = frontend_spans(proof, spans)
     messages = ConnectionReads.messages(proof.reads, indexed)
 
     retained =
@@ -252,7 +251,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   # The one reassembly already bound every byte to its native write. Copies
   # refer to that exact span, while the logical messages retain all its content.
   # No binary outside the native ledger is inspected or rewritten.
-  defp frontend_spans(proof, writes, spans) do
+  defp frontend_spans(proof, spans) do
     qualified =
       for %{origin: {:frontend_encoding, _, _}} = copy <- proof.states.terms,
           into: MapSet.new(),
@@ -260,7 +259,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
 
     for write <- proof.native.writes,
         write.bytes != <<>>,
-        MapSet.member?(writes, write.command.index),
         complete_span?(spans, write.command.index, byte_size(write.bytes)),
         Enum.all?(write.copies, fn copy ->
           copy.index == write.command.index or MapSet.member?(qualified, {copy.index, copy.path})
