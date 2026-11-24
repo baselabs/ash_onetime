@@ -1979,7 +1979,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp owner_task_timer_cancelled?(_state, _call, _source, nil), do: true
 
   defp owner_task_timer_cancelled?(state, call, source, timer) do
-    with [cancel] <- native_type_calls(state, call, source, {:erlang, :cancel_timer, 1}),
+    calls = native_type_calls(state, call, source, {:erlang, :cancel_timer, 1})
+
+    valid? = with [cancel] <- calls,
          {_, :call, {_, _, [^timer]}} <- cancel.source.event,
          {_, :return_from, _, result} <- cancel.returned.event do
       case result do
@@ -1990,6 +1992,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     else
       _ -> false
     end
+
+    unless valid? do
+      AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TIMER_PROGRAM", %{
+        index: source.index,
+        from: call.index,
+        calls: Enum.map(calls, fn pair ->
+          result = elem(pair.returned.event, 3)
+          %{index: pair.source.index, target?: elem(pair.source.event, 2) == {:erlang, :cancel_timer, [timer]}, integer?: is_integer(result), false?: result === false}
+        end)
+      })
+    end
+
+    valid?
   end
 
   defp owner_task_timer_flushed?(state, cancel, source, timer) do

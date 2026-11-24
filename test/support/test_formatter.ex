@@ -69,6 +69,7 @@ defmodule AshOnetime.Test.TestFormatter do
       record = failure(test, error, stacktrace)
       IO.puts("\n#{record.test_name} (#{record.file}:#{record.line})")
       IO.puts("  code: " <> record.assertion)
+      IO.puts("  " <> Diagnostics.render(%{kind: kind, failure: Diagnostics.exit_summary(error), stack: stack(stacktrace)}))
       IO.puts("  " <> Diagnostics.render(%{kind: kind, error: error, stack: stack(stacktrace)}))
     end
   end

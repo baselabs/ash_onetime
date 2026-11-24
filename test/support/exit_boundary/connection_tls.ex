@@ -2879,6 +2879,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     parsed = %{
       input: version,
       buffer: elem(buffers, 1),
+      buffers: buffers,
       remaining: elem(buffers, 3),
       states: elem(version.data, 10),
       fragments: [],
@@ -2900,7 +2901,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          position
        ) do
     parsed = Map.fetch!(state.parsed, source.pid)
-    buffers = elem(version.data, 11)
+    buffers = parsed.buffers
     check = Map.get(elem(version.data, 4), :padding_check, true)
 
     expected =
@@ -2934,7 +2935,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          position
        ) do
     parsed = Map.fetch!(state.parsed, source.pid)
-    buffers = elem(version.data, 11) |> put_elem(3, parsed.remaining)
+    buffers = parsed.buffers |> put_elem(3, parsed.remaining)
     expected = [version.data, buffers, parsed.states, selected_record(parsed)]
     record_arguments(state, source, arguments, expected, position)
   end
@@ -3448,9 +3449,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         parsed = %{
           input: version,
           buffer: buffer,
+          buffers: buffers |> put_elem(1, buffer) |> put_elem(3, elem(buffers, 3) ++ records),
           remaining: elem(buffers, 3) ++ records,
           states: elem(data, 10),
           fragments: [],
+          early_data: false,
+          record: :no_record,
           origin: source.index
         }
 
@@ -3575,8 +3579,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp record_return(state, source, %{kind: :records, parsed: parsed}) do
     parsed = %{parsed | origin: source.index}
-    state = put_in(state.parsed[source.pid], parsed)
-    record_buffer_state(state, source, parsed)
+    put_in(state.parsed[source.pid], parsed)
   end
 
   defp record_return(state, source, %{kind: :decode, result: {record, states}}) do
@@ -3637,20 +3640,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       {:ssl_tls, 23, _version, plaintext, _early_data} -> {:ok, version, plaintext}
       _ -> :error
     end
-  end
-
-  defp record_buffer_state(state, source, parsed) do
-    data = parsed.input.data
-    buffers = elem(data, 11) |> put_elem(1, parsed.buffer) |> put_elem(3, parsed.remaining)
-
-    version = %{
-      parsed.input
-      | data: put_elem(data, 11, buffers),
-        origin: {:tls_records, source.index}
-    }
-
-    [frame | rest] = state.frames[source.pid]
-    put_in(state.frames[source.pid], [%{frame | current: version} | rest])
   end
 
   defp worker_frame_return(state, source, result) do
@@ -3772,7 +3761,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          %{source: %{mfa: {:tls_gen_connection, :next_record_done, 4}}} = frame
        ) do
     parsed = Map.fetch!(state.parsed, source.pid)
-    buffers = elem(frame.input.data, 11) |> put_elem(3, parsed.remaining)
+    buffers = parsed.buffers |> put_elem(3, parsed.remaining)
     data = frame.input.data |> put_elem(10, parsed.states) |> put_elem(11, buffers)
     {state, %{frame.input | data: data, origin: {:tls_record_selection, source.index}}}
   end
@@ -3784,12 +3773,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        ) do
     handshake = elem(frame.input.data, 6)
     outstanding = elem(handshake, 2)
+    parsed = Map.fetch!(state.parsed, source.pid)
+    buffers = parsed.buffers |> put_elem(3, parsed.remaining)
+    data = put_elem(frame.current.data, 11, buffers)
 
     if outstanding > 0 do
-      data = put_elem(frame.input.data, 6, put_elem(handshake, 2, outstanding - 1))
+      data = put_elem(data, 6, put_elem(handshake, 2, outstanding - 1))
       {state, %{frame.input | data: data, origin: {:tls_handshake_count, source.index}}}
     else
-      {state, frame.current}
+      {state, %{frame.current | data: data}}
     end
   end
 
