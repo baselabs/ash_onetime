@@ -1633,8 +1633,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp program_callback_result(state, source, :loop_state_callback_result, context) do
     actual = native_term(source.event, [2, 2, 10])
+    callback = Map.fetch!(state.machine_callbacks, source.pid)
+    {_, :return_from, _, returned} = callback.source.event
 
-    case {actual, context.result, result_data_path(context.result)} do
+    # This argument is a copy of the preceding native return. Its constructor
+    # is checked at that return; context.result independently drives the
+    # expected transition, actions and subsequent machine state.
+    case {actual, returned, result_data_path(returned)} do
       {actual, expected, [data]}
       when is_tuple(actual) and is_tuple(expected) and
              tuple_size(actual) == tuple_size(expected) and elem(actual, 0) == elem(expected, 0) ->
@@ -1653,7 +1658,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         end)
 
       _ ->
-        program_term(state, source, [2, 2, 10], context.result, context.origin)
+        program_term(state, source, [2, 2, 10], returned, context.origin)
     end
   end
 
@@ -4752,24 +4757,38 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp callback_result(
          state,
+         %{mfa: {:tls_sender, :connection, 3}} = source,
+         %{event: %{value: {{:call, _from}, {:application_data, _data}}}},
+         version,
+         actual
+       ),
+       do: callback_result_exact(state, source, actual, sender_hibernate_result(version, []))
+
+  defp callback_result(
+         state,
          %{mfa: {:tls_sender, :hibernate_after, 3}} = source,
          _frame,
          version,
          actual
-       ) do
-    timeout = elem(elem(version.data, 1), 11)
-
-    expected =
-      if version.name == :connection and timeout != :infinity do
-        {:next_state, :connection, version.data, [{:timeout, timeout, :hibernate}]}
-      else
-        {:next_state, version.name, version.data}
-      end
-
-    callback_result_exact(state, source, actual, expected)
-  end
+       ),
+       do: callback_result_exact(state, source, actual, sender_hibernate_result(version, []))
 
   defp callback_result(state, _source, _frame, _version, _actual), do: state
+
+  defp sender_hibernate_result(version, actions) do
+    timeout = elem(elem(version.data, 1), 11)
+
+    cond do
+      version.name == :connection and timeout != :infinity ->
+        {:next_state, version.name, version.data, [{:timeout, timeout, :hibernate} | actions]}
+
+      actions == [] ->
+        {:next_state, version.name, version.data}
+
+      true ->
+        {:next_state, version.name, version.data, actions}
+    end
+  end
 
   defp receiver_hibernate_result(version, actions) do
     timeout = Map.fetch!(elem(version.data, 4), :hibernate_after)
