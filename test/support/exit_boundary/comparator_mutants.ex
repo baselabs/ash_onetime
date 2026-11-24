@@ -37,6 +37,16 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(:stream_scheduling_write_origin) do
+    [
+      %{
+        path: "test/support/exit_boundary/scheduling.ex",
+        original: "           Enum.find(events, &(&1.index == write.command.index)) do\n",
+        mutated: "           Enum.find(events, &(&1.index == hd(s.writes).command.index)) do\n"
+      }
+    ]
+  end
+
   # Disable K's expression at its source, while still binding that return and
   # checking every later copy. The captured events are passed through unchanged.
   def edits(:k) do

@@ -6,9 +6,10 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
   # Signal arrival is a scheduling choice; its source and payload are not. Each
   # alternative below consumes a complete protocol instance and keeps its source
   # event. Unmatched events stay in the ordinary per-role comparison.
-  def build(indexed) do
+  def build(indexed, native) do
     events = indexed.events
-    state = %{claimed: MapSet.new(), moves: %{}, rewrites: %{}, errors: []}
+    transport = if tls = Map.get(native, :tls), do: tls.transport, else: native
+    state = %{claimed: MapSet.new(), moves: %{}, rewrites: %{}, errors: [], writes: transport.writes}
 
     state = Enum.reduce(events, state, &schedule(&1, &2, events))
 
@@ -43,12 +44,12 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
     do: async(e, caller, port, id, result, events, s)
 
   defp schedule(
-         %{event: {caller, :call, {:prim_inet, :send, [port, data, _options, ref]}}} = e,
+         %{event: {caller, :call, {:prim_inet, :send, [port, _data, _options, ref]}}} = e,
          s,
          events
        )
        when is_port(port) and is_reference(ref),
-       do: inet(e, caller, port, data, ref, events, s)
+       do: inet(e, caller, port, ref, events, s)
 
   defp schedule(
          %{
@@ -125,9 +126,12 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
     end
   end
 
-  defp inet(source, caller, port, data, ref, events, s) do
+  defp inet(source, caller, port, ref, events, s) do
     [:reply_before_return, :reply_at_return] = Registry.scheduling(:inet_reply, :command_reply)
 
+    # The raw ledger already proved the exact send/4, monitor reference,
+    # driver command and every byte copy. Rendering may replace those bytes
+    # with stream spans; their native occurrence addresses remain unchanged.
     with [sent] <-
            select(events, fn
              %{event: {^port, :send, {:inet_reply, ^port, _, ^ref}, ^caller}} -> true
@@ -142,14 +146,14 @@ defmodule AshOnetime.Test.ExitBoundary.Scheduling do
              &match?(%{event: {^caller, :return_from, {:prim_inet, :send, 4}, _}}, &1)
            ),
          {:inet_reply, ^port, ^status, ^ref} <- message,
-         command when not is_nil(command) <-
-           Enum.find(events, fn
-             %{event: {^port, :receive, {^caller, {:command, bytes}}}} ->
-               IO.iodata_to_binary(bytes) == IO.iodata_to_binary(data)
-
-             _ ->
-               false
-           end) do
+         [write] <-
+           Enum.filter(s.writes, fn write ->
+             write.port === port and write.reference === ref and write.source.pid === caller and
+               Enum.any?(write.copies, &(&1.index == source.index and &1.path == [2, 2, 1]))
+           end),
+         true <- source.index in write.indexes and returned.index in write.indexes,
+         %{event: {^port, :receive, {^caller, {:command, _}}}} = command <-
+           Enum.find(events, &(&1.index == write.command.index)) do
       s
       |> move(received, {:before, Capture.address(returned)})
       |> move(sent, {:after, Capture.address(command)})

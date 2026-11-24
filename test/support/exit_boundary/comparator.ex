@@ -181,8 +181,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
     ri = Origins.build(run)
     ti = Origins.build(twin)
-    rs = Scheduling.build(ri)
-    ts = Scheduling.build(ti)
+    rs = Scheduling.build(ri, rc.native)
+    ts = Scheduling.build(ti, tc.native)
     ri = %{ri | events: rs.events}
     ti = %{ti | events: ts.events}
 

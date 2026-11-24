@@ -5805,7 +5805,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     consumers = [
       {Origins, :build, 1},
       {Declarations, :pair, 2},
-      {Scheduling, :build, 1},
+      {Scheduling, :build, 2},
       {PermittedTrace, :match, 2},
       {References, :operation_slots, 2},
       {References, :locator_copies, 1},
@@ -6018,6 +6018,26 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   @tag connection_streams: :driver
   test "Connection streams: MAIN consumes the validated logical observation", context do
     pair = observe(context, row!(:issue, :execute), Values.set()[:va])
+    proof = ConnectionHistory.build(pair.run)
+    assert proof.errors == []
+    rendered = Registry.compute(:connection_stream, [proof, proof.indexed])
+    assert rendered.errors == []
+
+    assert Enum.any?(rendered.events, fn
+             %{
+               event:
+                 {_, :call,
+                  {:prim_inet, :send,
+                   [_, {:connection_byte_span, _, :frontend, _, _, _}, _, _]}}
+             } ->
+               true
+
+             _ ->
+               false
+           end), "the MAIN witness must exercise a rendered native send copy"
+
+    scheduled = Scheduling.build(%{proof.indexed | events: rendered.events}, proof.native)
+    assert scheduled.errors == []
 
     proofs = [
       {NativeTransport, :build, 3},
@@ -7077,6 +7097,59 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert Registry.compute(:connection_stream, [proof, indexed]).errors == []
   end
 
+  @tag connection_streams: :driver
+  test "Connection streams: scheduling retains each rendered write's native command origin" do
+    {proof, indexed} = native_render_fixture(:empty_write)
+    assert proof.errors == []
+    assert length(proof.native.writes) > 1
+    assert Enum.any?(proof.native.writes, &(&1.bytes == <<>>))
+    rendered = Registry.compute(:connection_stream, [proof, indexed])
+    assert rendered.errors == []
+    view = %{indexed | events: rendered.events}
+    scheduled = Scheduling.build(view, proof.native)
+    assert scheduled.errors == []
+    assert scheduled_write_origins?(proof.native.writes, scheduled.events)
+
+    ComparatorMutants.with_mutant(:stream_scheduling_write_origin, fn ->
+      corrupted = Scheduling.build(view, proof.native)
+      assert corrupted.errors == []
+      refute scheduled_write_origins?(proof.native.writes, corrupted.events)
+      assert Enum.sort_by(corrupted.events, &Capture.address/1) ===
+               Enum.sort_by(scheduled.events, &Capture.address/1)
+    end)
+
+    assert Scheduling.build(view, proof.native) === scheduled
+    {fresh, fresh_indexed} = native_render_fixture(:empty_write)
+    assert fresh.errors == []
+    fresh_rendered = Registry.compute(:connection_stream, [fresh, fresh_indexed])
+    assert fresh_rendered.errors == []
+    fresh_scheduled =
+      Scheduling.build(%{fresh_indexed | events: fresh_rendered.events}, fresh.native)
+    assert fresh_scheduled.errors == []
+    assert scheduled_write_origins?(fresh.native.writes, fresh_scheduled.events)
+  end
+
+  defp scheduled_write_origins?(writes, events) do
+    positions =
+      events
+      |> Enum.with_index()
+      |> Map.new(fn {event, position} -> {Capture.address(event), position} end)
+
+    Enum.all?(writes, fn write ->
+      caller = write.source.pid
+      port = write.port
+      ref = write.reference
+
+      [sent] =
+        Enum.filter(events, fn
+          %{event: {^port, :send, {:inet_reply, ^port, :ok, ^ref}, ^caller}} -> true
+          _ -> false
+        end)
+
+      Map.fetch!(positions, sent.index) == Map.fetch!(positions, write.command.index) + 1
+    end)
+  end
+
   defp rendered_writes_retained?(proof, rendered) do
     retained =
       MapSet.new(Enum.reject(rendered.events, &Map.has_key?(&1, :message_address)), & &1.index)
@@ -7285,7 +7358,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert history.errors == []
     side = Map.put(pair.run, :connection_history, history)
     indexed = Origins.build(side)
-    scheduled = Scheduling.build(indexed)
+    scheduled = Scheduling.build(indexed, history.native)
     indexed = %{indexed | events: scheduled.events}
     permitted = PermittedTrace.match(side, indexed)
     readback = Readback.check(side, indexed, permitted.bound)
@@ -8580,8 +8653,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   # Read-only diagnosis over the same captured U2 pair. The comparator and its
   # whole-run physical identity rule remain unchanged while the design is ruled.
   defp u2_command_ownership(side, open_claimed) do
+    history = ConnectionHistory.build(side)
     indexed = Origins.build(side)
-    scheduled = Scheduling.build(indexed)
+    scheduled = Scheduling.build(indexed, history.native)
     indexed = %{indexed | events: scheduled.events}
     wire = indexed |> TransportReferences.build() |> Wire.build()
 
