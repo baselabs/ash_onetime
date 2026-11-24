@@ -44,7 +44,8 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
 
     %{
       run: if(reference?, do: Map.delete(run, :readback_reference), else: prepare_reference(run)),
-      twin: if(reference?, do: Map.delete(twin, :readback_reference), else: prepare_reference(twin)),
+      twin:
+        if(reference?, do: Map.delete(twin, :readback_reference), else: prepare_reference(twin)),
       row: row,
       prior: prior,
       connections: connections

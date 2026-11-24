@@ -5247,26 +5247,32 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         %{owner: owner, timer: timer} = cancellation
 
         assert [expiry] =
-                 for %{
-                       event: {^owner, :receive, {:timeout, ^timer, {DBConnection.Connection, _, _}}}
-                     } = event <- indexed,
-                     do: event
+                 for(
+                   %{
+                     event:
+                       {^owner, :receive, {:timeout, ^timer, {DBConnection.Connection, _, _}}}
+                   } = event <- indexed,
+                   do: event
+                 )
 
         assert expiry.index < cancellation.source.index
 
         assert [flush] =
-                 for {_index, pair} <- pairs,
-                     pair.source.event ==
-                       {owner, :call, {DBConnection.Connection, :flush_timer, [timer]}},
-                     pair.returned.event ==
-                       {owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok},
-                     do: pair
+                 for(
+                   {_index, pair} <- pairs,
+                   pair.source.event ==
+                     {owner, :call, {DBConnection.Connection, :flush_timer, [timer]}},
+                   pair.returned.event ==
+                     {owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok},
+                   do: pair
+                 )
 
         assert cancellation.returned.index < flush.source.index
       end
 
       side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
       proof = ConnectionHistory.build(side)
+
       assert proof.native.errors == [] and proof.reads.errors == [] and
                proof.decoders.errors == []
 

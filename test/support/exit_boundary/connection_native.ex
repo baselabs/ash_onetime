@@ -275,7 +275,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
       run = observe_pool_startup({:after_connect_timer_flush, callback, fixture, token})
 
       receive do
-        {:timer_fixture_done, ^token, :ok} -> run
+        {:timer_fixture_done, ^token, :ok} ->
+          run
+
         {:timer_fixture_done, ^token, :wrong_order} ->
           raise "the native timer expired before the Holder was queued"
       after
@@ -290,7 +292,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     send(fixture, {:stop, token})
 
     receive do
-      {:DOWN, ^monitor, :process, ^fixture, :normal} -> :ok
+      {:DOWN, ^monitor, :process, ^fixture, :normal} ->
+        :ok
+
       {:DOWN, ^monitor, :process, ^fixture, _reason} ->
         raise "the native timer fixture exited abnormally"
     after

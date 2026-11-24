@@ -1620,7 +1620,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         data = %{machine.data | client: {nil, :after_connect}}
 
         next =
-          Map.put(%{machine | data: data}, :task_failure, %{error: error, log: log, origin: origin})
+          Map.put(%{machine | data: data}, :task_failure, %{
+            error: error,
+            log: log,
+            origin: origin
+          })
 
         {:ok, next, {:keep_state, data, {:next_event, :internal, {:disconnect, {log, error}}}}}
 
@@ -2134,9 +2138,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
     updates =
       for pair <-
-            native_type_calls(state, task.source, task.returned, {DBConnection.Holder, :update, 4}) do
+            native_type_calls(
+              state,
+              task.source,
+              task.returned,
+              {DBConnection.Holder, :update, 4}
+            ) do
         clocks =
-          for clock <- native_type_calls(state, pair.source, source, {:erlang, :monotonic_time, 0}),
+          for clock <-
+                native_type_calls(state, pair.source, source, {:erlang, :monotonic_time, 0}),
               do: %{index: clock.source.index}
 
         %{index: pair.source.index, clocks: clocks}
