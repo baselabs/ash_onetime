@@ -834,6 +834,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       debug_observations: Map.get(binding, :debug_observations, %{}),
       debug_formatter: Map.get(binding, :debug_formatter, :missing_debug_formatter),
       direct_replies: %{},
+      write_updates: %{},
       machine_received: %{},
       messages: %{},
       encoded: %{},
@@ -2790,6 +2791,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     frame = %{source: source, input: version, current: version, arguments: arguments}
     frame = Map.put(frame, :event, Map.get(state.messages, source.pid))
     {state, frame} = worker_initialization(state, frame)
+    {state, frame} = worker_write_update(state, frame, frames)
     {state, frame} = worker_handshake_dispatch(state, frame, frames)
     put_in(state.frames[source.pid], [frame | frames])
   end
@@ -2871,6 +2873,58 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp worker_initialization(state, frame), do: {state, frame}
 
+  defp worker_write_update(
+         state,
+         %{
+           source: %{mfa: {:tls_sender, name, 3}} = source,
+           event: %{value: {:cast, {:new_write, _, _, _}}, origin: receipt}
+         } = frame,
+         []
+       )
+       when name in [:handshake, :connection] do
+    case Map.pop(state.write_updates, receipt) do
+      {nil, _updates} ->
+        {tls_failure(state, source, :tls_write_update_origin), frame}
+
+      {update, updates} ->
+        state = %{state | write_updates: updates}
+        {:new_write, write, version, maximum} = update.message
+        data = frame.input.data
+        states = sender_write_state(elem(data, 2), write, maximum)
+        environment = put_elem(elem(data, 1), 6, version)
+
+        environment =
+          if name == :handshake,
+            do: put_elem(environment, 8, sender_key_update(version, write, elem(environment, 8))),
+            else: environment
+
+        current = %{
+          frame.input
+          | name: :connection,
+            data: data |> put_elem(1, environment) |> put_elem(2, states),
+            origin: update.origin
+        }
+
+        {state, frame |> Map.put(:current, current) |> Map.put(:write_update, update)}
+    end
+  end
+
+  defp worker_write_update(state, frame, _frames), do: {state, frame}
+
+  defp sender_write_state(states, write, maximum) do
+    states = Map.put(states, :current_write, Map.delete(write, :aead_handle))
+
+    if maximum == :undefined,
+      do: Map.delete(states, :max_fragment_length),
+      else: Map.put(states, :max_fragment_length, maximum)
+  end
+
+  defp sender_key_update({3, 4}, %{security_parameters: parameters}, current) do
+    if elem(parameters, 3) == 9, do: :seq_num_wrap, else: current
+  end
+
+  defp sender_key_update(_version, _write, current), do: current
+
   defp initialization_active?(pair, source),
     do: pair.source.index < source.index and source.index < pair.returned.index
 
@@ -2941,6 +2995,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          %{mfa: {:tls_sender, :hibernate_after, 3}} = source,
          [name, _data, actions],
          [%{source: %{mfa: {:tls_sender, :send_application_data, 4}}} | _],
+         version
+       ) do
+    state
+    |> tls_exact(source, :tls_callback_input, name, version.name)
+    |> tls_exact(source, :tls_callback_input, actions, [])
+  end
+
+  defp hibernate_input(
+         state,
+         %{mfa: {:tls_sender, :hibernate_after, 3}} = source,
+         [name, _data, actions],
+         [%{write_update: _update} | _],
          version
        ) do
     state
@@ -3097,6 +3163,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       {module, :initial_hello, 3}
       when module in [:tls_client_connection, :tls_client_connection_1_3] ->
         initial_hello_input(state, source, parent)
+
+      {:tls_client_connection_1_3, :wait_finished, 3}
+      when is_map_key(parent, :connection_ready) ->
+        arguments = elem(elem(source.event, 2), 2)
+
+        state =
+          tls_exact(state, source, :tls_callback_input, [
+            Enum.at(arguments, 0),
+            Enum.at(arguments, 1),
+            Enum.at(arguments, 3)
+          ], parent.connection_ready)
+
+        {state, %{parent.current | name: :connection}}
 
       _ ->
         buffered_input(state, source, parent)
@@ -3759,6 +3838,110 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp record_call(state, source, :ssl_record, :step_encryption_state_read, _arguments),
     do: server_hello_helper(state, source, :active)
+
+  defp record_call(state, source, :tls_gen_connection, function, _arguments)
+       when function in [:reinit, :reinit_handshake_data] do
+    frame = hd(state.frames[source.pid])
+    data = reinitialized_receiver(frame.current.data)
+    origin = {:tls_receiver_reinitialized, source.index}
+
+    state
+    |> handshake_copy(source, [2, 2, 0], frame.current.data, frame.current.origin)
+    |> put_in([:records, source.index], %{kind: :handshake_state, result: data, origin: origin})
+  end
+
+  defp record_call(state, source, :tls_sender, :update_connection_state, _arguments) do
+    frame = hd(state.frames[source.pid])
+    data = frame.current.data
+    sender = Map.fetch!(elem(data, 7), :sender)
+    states = elem(data, 10)
+    write = Map.fetch!(states, :current_write)
+    version = elem(elem(data, 3), 5)
+    maximum = Map.get(states, :max_fragment_length, :undefined)
+    message = {:new_write, write, version, maximum}
+    origin = {:tls_receiver_write_update, source.index}
+
+    state =
+      handshake_copy(state, source, [2, 2], [sender, write, version, maximum], frame.current.origin)
+
+    with {:ok, sent, receipt} <- write_update_receipt(state, source, sender),
+         [cast] <-
+           Enum.filter(Map.get(state.pair_index, {source.pid, {:gen_statem, :cast, 2}}, []), fn pair ->
+             source.index < pair.source.index and
+               pair.returned.index < state.pairs[source.index].returned.index
+           end) do
+      state
+      |> handshake_copy(cast.source, [2, 2], [sender, message], origin)
+      |> handshake_copy(cast.returned, [3], :ok, origin)
+      |> handshake_copy(sent, [2], {:"$gen_cast", message}, origin)
+      |> handshake_copy(sent, [3], sender, origin)
+      |> handshake_copy(receipt, [2], {:"$gen_cast", message}, origin)
+      |> put_in([:write_updates, receipt.index], %{message: message, origin: origin})
+      |> put_in([:records, source.index], %{kind: :handshake_value, result: :ok, origin: origin})
+    else
+      _ -> tls_failure(state, source, :tls_write_update_origin)
+    end
+  end
+
+  defp record_call(state, source, :tls_sender, function, _arguments)
+       when function in [:handle_new_write_state, :key_update_at] do
+    case hd(state.frames[source.pid]) do
+      %{write_update: update} = frame ->
+        {:new_write, write, version, maximum} = update.message
+
+        {arguments, result} =
+          case function do
+            :handle_new_write_state ->
+              states = elem(frame.input.data, 2)
+              {[states, write, maximum], sender_write_state(states, write, maximum)}
+
+            :key_update_at ->
+              current = elem(elem(frame.input.data, 1), 8)
+              {[version, write, current], sender_key_update(version, write, current)}
+          end
+
+        state
+        |> handshake_copy(source, [2, 2], arguments, update.origin)
+        |> put_in([:records, source.index], %{
+          kind: :handshake_value,
+          result: result,
+          origin: update.origin
+        })
+
+      _ ->
+        tls_failure(state, source, :tls_write_update_origin)
+    end
+  end
+
+  defp record_call(state, source, :ssl_gen_statem, :prepare_connection, _arguments) do
+    frame = hd(state.frames[source.pid])
+    data = reinitialized_receiver(frame.current.data)
+    {data, reply} = acknowledged_receiver(data)
+    origin = {:tls_receiver_prepared, source.index}
+
+    state =
+      state
+      |> handshake_copy(source, [2, 2], [frame.current.data, :tls_gen_connection], frame.current.origin)
+      |> put_in([:records, source.index], %{
+        kind: :prepared_connection,
+        result: {:no_record, data},
+        data: data,
+        origin: origin
+      })
+
+    case reply do
+      {from, value} ->
+        put_in(state.direct_replies[source.pid], %{
+          from: from,
+          reply: value,
+          origin: origin,
+          last: state.pairs[source.index].returned.index
+        })
+
+      nil ->
+        state
+    end
+  end
 
   defp record_call(state, source, :ssl_record, :pending_connection_state, _arguments) do
     case hd(state.frames[source.pid]) do
@@ -5046,6 +5229,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp record_result(state, source, %{kind: :handshake_state} = record, _actual),
     do: handshake_copy(state, source, [3], record.result, record.origin)
 
+  defp record_result(state, source, %{kind: :prepared_connection} = record, _actual),
+    do: handshake_copy(state, source, [3], record.result, record.origin)
+
   defp record_result(state, source, %{kind: :server_hello} = record, _actual),
     do: handshake_copy(state, source, [3], record.result, record.origin)
 
@@ -5073,6 +5259,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     [frame | rest] = state.frames[source.pid]
     version = %{frame.current | data: record.result, origin: record.origin}
     put_in(state.frames[source.pid], [%{frame | current: version} | rest])
+  end
+
+  defp record_return(state, source, %{kind: :prepared_connection} = record) do
+    [frame | rest] = state.frames[source.pid]
+    version = %{frame.current | data: record.data, origin: record.origin}
+    frame = %{frame | current: version}
+
+    frame =
+      if frame.source.mfa == {:tls_client_connection_1_3, :wait_finished, 3},
+        do: Map.put(frame, :connection_ready, [:connection, :no_record, [{{:timeout, :handshake}, :cancel}]]),
+        else: frame
+
+    put_in(state.frames[source.pid], [frame | rest])
   end
 
   defp record_return(state, source, %{kind: :server_hello} = record) do
@@ -5419,6 +5618,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     callback_result_exact(state, source, actual, expected)
   end
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_sender, :handshake, 3}} = source,
+         %{write_update: _update},
+         version,
+         actual
+       ),
+       do: callback_result_exact(state, source, actual, {:next_state, :connection, version.data})
+
+  defp callback_result(
+         state,
+         %{mfa: {:tls_sender, :connection, 3}} = source,
+         %{write_update: _update},
+         version,
+         actual
+       ),
+       do: callback_result_exact(state, source, actual, sender_hibernate_result(version, []))
 
   defp callback_result(
          state,
@@ -5823,6 +6040,69 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          ])
 
   defp handshake_shared_secret(_state, _scope, _group, _public, _private), do: :error
+
+  defp reinitialized_receiver(data) do
+    handshake =
+      elem(data, 6)
+      |> put_elem(3, {[], []})
+      |> put_elem(4, false)
+      |> put_elem(25, :undefined)
+      |> put_elem(26, :undefined)
+
+    put_elem(data, 6, handshake)
+  end
+
+  # The receiver constructs each update from its modeled write state. Native
+  # sends and receives pair in FIFO order between this same receiver and sender;
+  # neither the checked cast nor the checked sender state supplies any field.
+  defp write_update_receipt(state, source, sender) do
+    receiver = source.pid
+    scope = Map.fetch!(state.pairs, source.index)
+
+    sends =
+      Enum.filter(state.events, fn
+        %{event: {^receiver, :send, {:"$gen_cast", {:new_write, _, _, _}}, ^sender}} -> true
+        _ -> false
+      end)
+
+    receipts =
+      Enum.filter(state.events, fn
+        %{event: {^sender, :receive, {:"$gen_cast", {:new_write, _, _, _}}}} -> true
+        _ -> false
+      end)
+
+    with [sent] <-
+           Enum.filter(sends, fn event ->
+             source.index < event.index and event.index < scope.returned.index
+           end),
+         ordinal when is_integer(ordinal) <- Enum.find_index(sends, &(&1.index == sent.index)),
+         %{} = receipt <- Enum.at(receipts, ordinal),
+         true <- sent.index < receipt.index do
+      {:ok, sent, receipt}
+    else
+      _ -> :error
+    end
+  end
+
+  defp acknowledged_receiver(data) do
+    handshake = elem(data, 6)
+    recv = elem(data, 9)
+
+    case {elem(handshake, 5), elem(recv, 1)} do
+      {{true, initiator}, _from} when initiator in [:peer, :internal] ->
+        {put_elem(data, 6, put_elem(handshake, 5, :undefined)), nil}
+
+      {{true, from}, _recv_from} ->
+        {put_elem(data, 6, put_elem(handshake, 5, :undefined)), {from, :ok}}
+
+      {{false, :first}, from} when from != :undefined ->
+        data = data |> put_elem(6, put_elem(handshake, 5, :undefined)) |> put_elem(9, put_elem(recv, 1, :undefined))
+        {data, {from, :connected}}
+
+      _ ->
+        {data, nil}
+    end
+  end
 
   defp handshake_connection_result(state, source, :validate_finished, frame) do
     data = frame.current.data
