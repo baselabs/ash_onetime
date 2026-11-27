@@ -5128,15 +5128,20 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       proof = ConnectionHistory.build(side)
 
       coordinates =
-        for source <- proof.indexed.events,
-            source.mfa == {DBConnection.Backoff, function, 1},
-            path <-
-              case {kind, source.event} do
-                {:input, {_, :call, {_, _, [{:native_foreign_helper, _}]}}} -> [[2, 2, 0]]
-                {:output, {_, :return_from, _, {:native_foreign_return, _}}} -> [[3]]
-                _ -> []
-              end,
-            do: {rule, source.index, path}
+        proof.indexed.events
+        |> Enum.filter(&(&1.mfa == {DBConnection.Backoff, function, 1}))
+        |> Enum.flat_map(fn source ->
+          case {kind, source.event} do
+            {:input, {_, :call, {_, _, [{:native_foreign_helper, _}]}}} ->
+              [{rule, source.index, [2, 2, 0]}]
+
+            {:output, {_, :return_from, _, {:native_foreign_return, _}}} ->
+              [{rule, source.index, [3]}]
+
+            _ ->
+              []
+          end
+        end)
 
       assert coordinates != []
       assert proof.native.errors == [] and proof.reads.errors == [] and proof.decoders.errors == []
