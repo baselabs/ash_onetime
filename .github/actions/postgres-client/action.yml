@@ -35,7 +35,16 @@ runs:
         echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
           | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
         sudo apt-get update -q
-        sudo apt-get install -y -q --no-install-recommends "postgresql-client-$major=$VERSION" "libpq5=${LIBPQ_VERSION:-$VERSION}"
+        libpq="${LIBPQ_VERSION:-$VERSION}"
+        # The pins are authoritative: the runner image may ship a newer libpq5 than the pin.
+        sudo apt-get install -y -q --no-install-recommends --allow-downgrades "postgresql-client-$major=$VERSION" "libpq5=$libpq"
+        for pinned in "postgresql-client-$major=$VERSION" "libpq5=$libpq"; do
+          installed=$(dpkg-query -W -f='${Version}' "${pinned%%=*}")
+          if [ "$installed" != "${pinned#*=}" ]; then
+            echo "${pinned%%=*} is $installed, not the pinned ${pinned#*=}" >&2
+            exit 1
+          fi
+        done
         bin="/usr/lib/postgresql/$major/bin"
         "$bin/pg_dump" --version
         echo "$bin" >> "$GITHUB_PATH"
