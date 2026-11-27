@@ -7233,6 +7233,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        ) do
     handshake = elem(frame.input.data, 6)
     outstanding = elem(handshake, 2)
+
     case Map.fetch(state.parsed, source.pid) do
       {:ok, parsed} ->
         buffers = parsed.buffers |> put_elem(3, parsed.remaining)
