@@ -320,92 +320,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
           raise "the native timer expired before the Holder was queued"
       after
         5_000 ->
-          diagnose_pool_timer(run)
           raise "the native timer fixture did not finish"
       end
     after
       stop_owner_timer_fixture(fixture, monitor, token)
-    end
-  end
-
-  # Temporary native cause probe. It reads only this completed real capture and
-  # emits code coordinates and event counts, never a state or exception payload.
-  defp diagnose_pool_timer(run) do
-    events = Enum.with_index(run.events, &Map.put(&1, :index, &2))
-    pairs = AshOnetime.Test.ExitBoundary.NativeTransport.pairs(events)
-
-    for {_index, cancel} <- pairs,
-        {owner, :call, {:erlang, :cancel_timer, [timer]}} <- [cancel.source.event],
-        {^owner, :return_from, _, false} <- [cancel.returned.event],
-        {_index, started} <- pairs,
-        {^owner, :call,
-         {:erlang, :start_timer, [timeout, ^owner, {DBConnection.Connection, task, timeout}]}} <-
-          [started.source.event],
-        started.returned.event === {owner, :return_from, {:erlang, :start_timer, 3}, timer} do
-      expiry =
-        Enum.filter(events, fn event ->
-          match?({^owner, :receive, {:timeout, ^timer, _}}, event.event)
-        end)
-
-      cancellations =
-        for {_index, pair} <- pairs,
-            {_, :call, {:erlang, :cancel_timer, [^timer | _]}} <- [pair.source.event] do
-          %{
-            index: pair.source.index,
-            mfa: pair.source.mfa,
-            stack: pair.source.stack,
-            same_owner?: pair.source.pid === owner,
-            returned: %{index: pair.returned.index},
-            integer?: is_integer(elem(pair.returned.event, 3)),
-            false?: elem(pair.returned.event, 3) === false
-          }
-        end
-
-      holders =
-        Enum.filter(events, fn event ->
-          match?({^owner, :receive, {:"ETS-TRANSFER", _, ^task, {:checkin, _, _}}}, event.event)
-        end)
-
-      flushes =
-        for {_index, pair} <- pairs,
-            pair.source.event === {owner, :call, {DBConnection.Connection, :flush_timer, [timer]}},
-            do: pair
-
-      AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TIMER_NATIVE_CAUSE", %{
-        index: cancel.source.index,
-        start: %{index: started.source.index},
-        expiry:
-          Enum.map(expiry, fn source ->
-            %{
-              index: source.index,
-              expected_payload?:
-                source.event ===
-                  {owner, :receive, {:timeout, timer, {DBConnection.Connection, task, timeout}}}
-            }
-          end),
-        cancellations: cancellations,
-        holders: Enum.map(holders, &%{index: &1.index}),
-        flushes:
-          Enum.map(flushes, fn pair ->
-            %{
-              index: pair.source.index,
-              returned: %{index: pair.returned.index},
-              ok?: elem(pair.returned.event, 3) === :ok
-            }
-          end)
-      })
-    end
-
-    for %{event: {_, :exception_from, {DBConnection.Connection, _, _} = mfa, {class, reason}}} =
-          source <- events do
-      exception = if is_struct(reason), do: reason.__struct__, else: :native_term
-
-      AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TIMER_NATIVE_EXCEPTION", %{
-        index: source.index,
-        mfa: mfa,
-        class: class,
-        exception: exception
-      })
     end
   end
 
@@ -448,14 +366,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         [:local]
       )
 
-      for mfa <- [
-            {:erlang, :cancel_timer, 1},
-            {DBConnection.Connection, :flush_timer, 1},
-            {DBConnection.Connection, :pool_update, 2}
-          ] do
-        :trace.function(session, mfa, [{:_, [], [{:return_trace}]}], [:local])
-      end
-
       :trace.process(session, :new, true, [:call, :receive, :strict_monotonic_timestamp])
       send(parent, {:timer_fixture_ready, token})
 
@@ -466,16 +376,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
         pending: %{},
         timers: %{},
         task: nil,
-        later_tasks: 0,
         holder_queued?: false,
         expired?: false,
         released?: false,
-        resumed?: false,
-        cancel_target?: false,
-        cancelled_false?: false,
-        flush_target?: false,
-        flushed?: false,
-        pool_updated?: false,
         finished?: false
       })
     after
@@ -488,21 +391,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
   defp owner_timer_fixture_loop(state) do
     receive do
       {:stop, token} when token == state.token ->
-        AshOnetime.Test.ExitBoundary.Diagnostics.emit("CONNECTION_OWNER_TIMER_FIXTURE", %{
-          task?: not is_nil(state.task),
-          later_tasks: %{length: state.later_tasks},
-          pending: %{length: map_size(state.pending)},
-          timers: %{length: map_size(state.timers)},
-          released?: state.released?,
-          resumed?: state.resumed?,
-          holder_queued?: state.holder_queued?,
-          expired?: state.expired?,
-          cancelled_false?: state.cancelled_false?,
-          flushed?: state.flushed?,
-          pool_updated?: state.pool_updated?,
-          finished?: state.finished?
-        })
-
         :ok
 
       {:DOWN, monitor, :process, parent, _reason}
@@ -526,7 +414,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     # The first native Task owns the forced expiry. A reconnect's callback is
     # ordinary fixture work and must not wait on that spent release handshake.
     send(task, {:return_holder, token})
-    %{state | later_tasks: state.later_tasks + 1}
+    state
   end
 
   defp owner_timer_fixture_event(
@@ -568,42 +456,6 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     end
   end
 
-  defp owner_timer_fixture_event(
-         {:trace_ts, owner, :call, {:erlang, :cancel_timer, [timer]}, _stamp},
-         %{task: {owner, _task}} = state
-       ) do
-    target? = match?({:ok, {_, ^timer, _}}, Map.fetch(state.timers, owner))
-    %{state | cancel_target?: target?}
-  end
-
-  defp owner_timer_fixture_event(
-         {:trace_ts, owner, :return_from, {:erlang, :cancel_timer, 1}, result, _stamp},
-         %{task: {owner, _task}, cancel_target?: true} = state
-       ),
-       do: %{state | cancelled_false?: result === false, cancel_target?: false}
-
-  defp owner_timer_fixture_event(
-         {:trace_ts, owner, :call, {DBConnection.Connection, :flush_timer, [timer]}, _stamp},
-         %{task: {owner, _task}} = state
-       ) do
-    target? = match?({:ok, {_, ^timer, _}}, Map.fetch(state.timers, owner))
-    %{state | flush_target?: target?}
-  end
-
-  defp owner_timer_fixture_event(
-         {:trace_ts, owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok,
-          _stamp},
-         %{task: {owner, _task}, flush_target?: true} = state
-       ),
-       do: %{state | flushed?: true, flush_target?: false}
-
-  defp owner_timer_fixture_event(
-         {:trace_ts, owner, :return_from, {DBConnection.Connection, :pool_update, 2}, _result,
-          _stamp},
-         %{task: {owner, _task}, flushed?: true} = state
-       ),
-       do: %{state | pool_updated?: true}
-
   defp owner_timer_fixture_event(_message, state), do: state
 
   defp release_timer_task(%{task: {owner, task}, released?: false} = state) do
@@ -631,7 +483,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionNative do
     resume_timer_owner(Process.delete(:ash_onetime_timer_fixture_owner))
     result = if state.holder_queued?, do: :ok, else: :wrong_order
     send(state.parent, {:timer_fixture_done, state.token, result})
-    %{state | finished?: true, resumed?: true}
+    %{state | finished?: true}
   end
 
   defp finish_timer_fixture(state), do: state

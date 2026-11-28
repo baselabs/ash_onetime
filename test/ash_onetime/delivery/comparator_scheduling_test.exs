@@ -20,59 +20,25 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
       # The first real path prepares Ecto/Postgrex's query cache. U11 measures
       # repeated execution on that prepared substrate; each observation still
       # captures its actual historical cache and compares every generated origin.
-      IO.puts("U9_OBSERVATION: warmup")
       warm = Scenarios.observe(row, values, context)
-      warm_result = Comparator.compare(warm)
-      log_divergences(warm_result.errors, row)
-
-      assert warm_result.errors == [], "U9 path preparation must compare green"
+      assert_comparison(Comparator.compare(warm), "U9 path preparation")
       started = System.monotonic_time(:millisecond)
 
       profiles =
         for repetition <- 1..20 do
-          IO.puts("U9_OBSERVATION: repetition #{repetition}")
           pair = Scenarios.observe(row, values, context)
-          result = Comparator.compare(pair)
-          log_divergences(result.errors, row)
-          locations = Enum.map(result.errors, &{&1.at, &1.rule, &1.path})
-          assert locations == [], "U9 repetition #{repetition}: #{Diagnostics.render(locations)}"
+          assert_comparison(Comparator.compare(pair), "U9 repetition #{repetition}")
 
           for side <- [:run, :twin],
               into: %{},
               do: {side, Origins.build(pair[side]).origins |> Map.keys() |> Enum.sort()}
         end
 
-      expected = hd(profiles)
+      [expected | observations] = profiles
+      divergence = Enum.find_index(observations, &(&1 != expected))
 
-      index = Enum.find_index(profiles, &(&1 != expected))
-
-      if index do
-        actual = Enum.at(profiles, index)
-
-        for side <- [:run, :twin] do
-          before = MapSet.new(expected[side])
-          after_keys = MapSet.new(actual[side])
-
-          IO.puts(
-            "U11_ORIGIN_KEY_DIFF" <>
-              ": " <>
-              Diagnostics.render(
-                %{
-                  path: unquote(name),
-                  repetition: index + 1,
-                  side: side,
-                  missing: MapSet.difference(before, after_keys) |> Enum.sort(),
-                  added: MapSet.difference(after_keys, before) |> Enum.sort()
-                },
-                pretty: true,
-                limit: :infinity
-              )
-          )
-        end
-      end
-
-      assert length(Enum.uniq(profiles)) == 1,
-             "U11: producer origin keys changed across repetitions"
+      assert is_nil(divergence),
+             "U11: producer origin keys changed on repetition #{(divergence || 0) + 2}"
 
       IO.puts(
         "U9_PATH_SECONDS" <>
@@ -89,16 +55,12 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
     end
   end
 
-  defp log_divergences(errors, row) do
-    locations = Diagnostics.locations(errors)
+  defp assert_comparison(result, label) do
+    locations =
+      result.errors
+      |> Enum.take(4)
+      |> Enum.map(&Map.take(&1, [:at, :rule, :path, :run_index, :twin_index]))
 
-    for difference <- errors do
-      Diagnostics.emit("U9_NATIVE_RESIDUAL_OCCURRENCE", %{
-        row: row,
-        tuple: :va,
-        source: Diagnostics.location(difference, locations),
-        difference: Diagnostics.safe(difference)
-      })
-    end
+    assert result.errors == [], "#{label}: #{Diagnostics.render(locations)}"
   end
 end

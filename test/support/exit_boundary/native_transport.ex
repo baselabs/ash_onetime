@@ -1,6 +1,5 @@
 defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   @moduledoc false
-  alias AshOnetime.Test.ExitBoundary.Diagnostics
   @control_magic 0x03F1A300
 
   def physical_port(_native, {:gen_tcp, port}) when is_port(port), do: port
@@ -23,8 +22,7 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   # ledger does not grant any event exemption: the stream consumer must also prove
   # that framing and the protocol state machine required that particular read.
   def build(indexed, historical \\ %{}, transports \\ []) do
-    profile = Map.get(indexed, :profile)
-    pairs = profile_component(profile, :native_pairs, fn -> pairs(indexed.events) end)
+    pairs = pairs(indexed.events)
 
     initial = %{
       pairs: pairs,
@@ -48,16 +46,11 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
     }
 
     state =
-      profile_component(profile, :native_calls, fn ->
-        Enum.reduce(indexed.events, initial, &native_event/2)
-      end)
-
-    state = profile_component(profile, :native_option_sources, fn -> option_sources(state) end)
-
-    state =
-      profile_component(profile, :native_active_deliveries, fn -> active_deliveries(state) end)
-
-    state = profile_component(profile, :native_passive_sources, fn -> passive_sources(state) end)
+      indexed.events
+      |> Enum.reduce(initial, &native_event/2)
+      |> option_sources()
+      |> active_deliveries()
+      |> passive_sources()
 
     %{
       pairs: pairs,
@@ -93,23 +86,6 @@ defmodule AshOnetime.Test.ExitBoundary.NativeTransport do
   end
 
   defp native_event(_source, state), do: state
-
-  # Temporary native subcomponent timing, enabled only by the owning TLS
-  # experiment. Event selection, arguments and validation remain identical.
-  defp profile_component(nil, _component, callback), do: callback.()
-
-  defp profile_component(profile, component, callback) do
-    started = System.monotonic_time(:microsecond)
-    value = callback.()
-    elapsed = System.monotonic_time(:microsecond) - started
-
-    IO.puts(
-      "NATIVE_TLS_COMPONENT: " <>
-        Diagnostics.render(Map.merge(profile, %{component: component, length: elapsed}))
-    )
-
-    value
-  end
 
   defp historical_modes(historical) do
     for {holder, %{protocol: %{sock: {:gen_tcp, port}, buffer: :active_once}}} <- historical,

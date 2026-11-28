@@ -20,6 +20,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
 
     initial = %{
       host_owned: HostCall.addresses(events),
+      roles: Map.new(events, &{&1.pid, &1.role}),
       query_contexts: sql_contexts(events),
       relations: side.historical.relations,
       statements: Registry.database_statements(),
@@ -93,7 +94,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     s = outcome_result(e, s)
     s = date_flow(e, s)
     s = put_in(s.date_checkpoints[Capture.address(e)], Map.get(s.dates, e.role))
-    s = if wire_event?(e.event), do: data_rows(e.event, [], e, s), else: s
+    s = wire_rows(e, s)
 
     s =
       case e.event do
@@ -108,6 +109,16 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     if MapSet.member?(s.host_owned, Capture.address(e)),
       do: s,
       else: typed_copies(e.event, [], e, s)
+  end
+
+  defp wire_rows(%{message_address: {:connection_message, port, _, _}} = e, s) do
+    owner = Map.get(s.roles, Map.get(e, :wire_owner), e.role)
+    s = put_in(s.wire_ports[owner], port)
+    data_rows(e.event, [], %{e | role: owner}, s)
+  end
+
+  defp wire_rows(e, s) do
+    if wire_event?(e.event), do: data_rows(e.event, [], e, s), else: s
   end
 
   # First bind the date flowing through the completion to its native SELECT.
@@ -557,7 +568,7 @@ defmodule AshOnetime.Test.ExitBoundary.DatabaseOrigins do
     do: put_in(s.wire_sql[e.role], sql)
 
   defp data_rows({:bind, _portal, _statement, _formats, binds, _result_formats}, _path, e, s) do
-    sql = Map.get(s.wire_sql, e.role)
+    sql = Map.get(e, :wire_sql) || Map.get(s.wire_sql, e.role)
     s = wire_date_bind(sql, binds, e, s)
     s = outcome_bind(sql, binds, e, s)
 

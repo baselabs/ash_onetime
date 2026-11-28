@@ -661,7 +661,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       }
 
       spans = if buffer == <<>>, do: [], else: [span]
-      {port, %{buffer: buffer, offset: 0, rows: [], types: protocol.types, spans: spans}}
+      {port,
+       %{buffer: buffer, offset: 0, rows: [], row_sources: [], types: protocol.types, spans: spans}}
     end
   end
 
@@ -1122,7 +1123,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
     case returned_pair(state, source) do
       %{source: %{stack: stack}} ->
         if {Postgrex.Protocol, :connect, 1} in stack do
-          cursor = %{buffer: <<>>, offset: 0, rows: [], types: nil, spans: []}
+          cursor = %{buffer: <<>>, offset: 0, rows: [], row_sources: [], types: nil, spans: []}
           version = %{index: source.index, port: port, cursor: cursor, kind: :connection_open}
 
           state
@@ -1389,7 +1390,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   defp reset_rows(state, source, port) do
     case Map.fetch(state.cursors, port) do
       {:ok, cursor} ->
-        cursor = %{cursor | rows: []}
+        cursor = %{cursor | rows: [], row_sources: []}
         version = %{index: source.index, port: port, cursor: cursor, kind: :execution_start}
 
         state
@@ -1437,11 +1438,32 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
     {rest, rows} = row_result(expected)
     consumed = byte_size(cursor.buffer) - byte_size(IO.iodata_to_binary(rest))
-    state = retain(state, pair, port, cursor, consumed, rows, expected)
+
+    added =
+      for %{direction: :backend, decoded: {:data_row, _}, start: first, stop: last} <- messages,
+          cursor.offset <= first and last <= cursor.offset + consumed,
+          do: first
+
+    fresh = length(added)
+
+    row_sources =
+      if length(rows) == fresh + length(cursor.rows) and Enum.drop(rows, fresh) === cursor.rows do
+        Enum.reverse(added, cursor.row_sources)
+      else
+        # Historical bytes may have no row occurrence in this invocation's
+        # wire catalog. Their native values remain ordinary compared terms.
+        List.duplicate(nil, length(rows))
+      end
+
+    state = retain(state, pair, port, cursor, consumed, rows, expected, row_sources)
 
     update_in(
       state.pending_cursors[pair.source.index].instance,
-      &Map.put(&1, :descriptor, Map.take(origin, [:index, :path]))
+      &Map.merge(&1, %{
+        descriptor: Map.take(origin, [:index, :path]),
+        input_rows: cursor.row_sources,
+        returned_rows: row_sources
+      })
     )
   end
 
@@ -1491,7 +1513,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
   defp row_result({:ok, rows, rest}), do: {rest, rows}
   defp row_result({:more, rest, rows, _required}), do: {rest, rows}
 
-  defp retain(state, pair, port, cursor, consumed, rows, expected) do
+  defp retain(state, pair, port, cursor, consumed, rows, expected, row_sources \\ nil) do
     remaining = byte_size(cursor.buffer) - consumed
     rest = binary_part(cursor.buffer, consumed, remaining)
     provenance = Wire.spans(cursor.spans, cursor.offset, cursor.offset + byte_size(cursor.buffer))
@@ -1509,7 +1531,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
     offset = cursor.offset + consumed
     spans = Enum.filter(cursor.spans, &(&1.offset + &1.length > offset))
-    cursor = %{cursor | offset: offset, buffer: rest, rows: rows, spans: spans}
+    cursor = %{
+      cursor
+      | offset: offset,
+        buffer: rest,
+        rows: rows,
+        row_sources: row_sources || cursor.row_sources,
+        spans: spans
+    }
     # The paired return proves the result, but its cursor becomes available only
     # at that actual return event. Copies observed inside the decoder still see
     # the preceding version, even when another role interleaves there.

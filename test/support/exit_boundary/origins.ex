@@ -31,7 +31,8 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
       pending: %{},
       identities: %{},
       relations: side.historical.relations,
-      query_cache: side.historical.query_cache
+      query_cache: side.historical.query_cache,
+      prepared_queries: prepared_queries(side)
     }
 
     Enum.reduce(side.run.events, initial, &event(&1, &2, side))
@@ -187,6 +188,49 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
      }}
   end
 
+  defp prepared_queries(side) do
+    cache = side.historical.query_cache
+    commits = get_in(side, [:connection_history, :states, :table_commits]) || []
+
+    cache_rows =
+      for %{table: table, rows: rows, present?: true} <- commits,
+          table == cache.table,
+          row <- rows,
+          do: row
+
+    (cache.rows ++ cache_rows)
+    |> Enum.filter(fn
+      {_, :cached, _, {id, %Postgrex.Query{ref: reference}}} ->
+        is_integer(id) and is_reference(reference)
+
+      _ ->
+        false
+    end)
+    |> Enum.group_by(
+      fn {key, _, _, {_id, query}} -> {key, IO.iodata_to_binary(query.statement)} end,
+      fn {_, _, _, {id, query}} -> {id, query.ref} end
+    )
+    |> Map.new(fn {key, versions} -> {key, Enum.uniq(versions)} end)
+  end
+
+  defp pair_prepared_queries(state, run, twin) do
+    Enum.reduce(run, state, fn {{key, sql}, versions}, state ->
+      case Map.fetch(twin, {rename_term(key), sql}) do
+        {:ok, other} when length(versions) == length(other) ->
+          versions
+          |> Enum.zip(other)
+          |> Enum.with_index()
+          |> Enum.reduce(state, fn {{{id, ref}, {twin_id, twin_ref}}, ordinal}, state ->
+            origin = {:prepared_query, key, ordinal}
+            state |> bind(id, twin_id, origin) |> bind(ref, twin_ref, origin)
+          end)
+
+        _ ->
+          state
+      end
+    end)
+  end
+
   def pair(run, twin, permitted, prior \\ nil) do
     initial = %{
       forward: if(prior, do: prior.forward, else: %{}),
@@ -223,6 +267,13 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
         _, acc ->
           acc
       end)
+
+    initial =
+      pair_prepared_queries(
+        initial,
+        Map.get(run, :prepared_queries, %{}),
+        Map.get(twin, :prepared_queries, %{})
+      )
 
     initial = pair_sources(run.origins, twin.origins, initial, permitted, :o1)
     pair_sources(run.reads, twin.reads, initial, permitted, :o3)

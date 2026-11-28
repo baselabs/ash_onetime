@@ -177,7 +177,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   # A rendering is a view of this exact whole proof. Its stream addresses use
   # the original physical port; they introduce no identity map. Only complete,
   # successful native receive programs can leave the ordinary event sequence.
-  # Writes, including empty writes, and all other events keep their occurrences.
+  # Writes and events outside those receive programs keep their occurrences.
   def render(proof, indexed) do
     errors =
       proof.errors ++
@@ -220,6 +220,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       |> Enum.flat_map(&Map.get(&1, :indexes, []))
       |> MapSet.new()
 
+    consumed = MapSet.union(consumed, decoder_transfers(proof, consumed))
+
     # A write program is never an incidental receive. Keep every one of its
     # instructions even if another validated native interval overlaps it.
     consumed =
@@ -228,10 +230,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       end)
 
     copies =
-      (frontend_spans(proof, spans) ++ backend_spans(proof, spans))
+      (frontend_spans(proof, spans) ++ backend_spans(proof, spans) ++ backend_rows(proof))
       |> Enum.group_by(& &1.index)
 
-    messages = ConnectionReads.messages(proof.reads, indexed)
+    messages =
+      ConnectionReads.messages(proof.reads, %{
+        events: Map.get(proof, :program_events, indexed.events)
+      })
 
     retained =
       indexed.events
@@ -253,6 +258,76 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
       end)
 
     %{events: events, consumed: consumed, errors: []}
+  end
+
+  # A delivery can make Postgrex repeat a receive instruction. The raw
+  # programs already established its exact branch, arguments and return.
+  # A successful copy of the same receive belongs to the enclosing receive
+  # only when every transport occurrence it used has a complete wire image.
+  defp decoder_transfers(proof, consumed) do
+    programs = Map.new(proof.decoders.programs, &{&1.source.index, &1})
+    leaves = Map.new(proof.decoders.instances, &{&1.source.index, &1})
+    transports = decoder_transport_sources(proof)
+
+    Enum.reduce(proof.decoders.programs, MapSet.new(), fn program, copies ->
+      promoted =
+        for %{index: index, event: {_, :call, _}} <- program.execution,
+            %{expected: {_, {:return_from, :ok, _}}} = child <- [Map.get(programs, index)],
+            same_receive?(program, child),
+            covered_delivery?(program, transports, consumed),
+            do: child
+
+      case promoted do
+        [child] ->
+          copies = MapSet.put(copies, child.source.index) |> MapSet.put(child.returned.index)
+          incorporate_partial_decoders(copies, program, child, leaves)
+
+        _ ->
+          copies
+      end
+    end)
+  end
+
+  defp decoder_transport_sources(proof) do
+    for delivery <- proof.native.reads ++ proof.native.active,
+        index <- [delivery.source.index, delivery.returned.index, delivery.delivered.index],
+        into: %{},
+        do: {index, delivery}
+  end
+
+  defp same_receive?(%{source: parent, expected: {_, {:return_from, :ok, _}}}, %{source: child}) do
+    {module, function, _} = parent.mfa
+    match?({^module, ^function, _}, child.mfa)
+  end
+
+  defp same_receive?(_program, _child), do: false
+
+  defp covered_delivery?(program, transports, consumed) do
+    records =
+      program.origins
+      |> Enum.map(&Map.get(transports, &1))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq_by(& &1.source.index)
+
+    records != [] and
+      Enum.all?(records, fn delivery ->
+        Enum.all?(delivery.indexes, &MapSet.member?(consumed, &1))
+      end)
+  end
+
+  defp incorporate_partial_decoders(copies, program, child, leaves) do
+    Enum.reduce(program.execution, copies, fn source, copies ->
+      case Map.get(leaves, source.index) do
+        %{expected: {:more, _}, returned: returned} when returned.index < child.source.index ->
+          copies |> MapSet.put(source.index) |> MapSet.put(returned.index)
+
+        %{expected: {:more, _, _, _}, returned: returned} when returned.index < child.source.index ->
+          copies |> MapSet.put(source.index) |> MapSet.put(returned.index)
+
+        _ ->
+          copies
+      end
+    end)
   end
 
   # The one reassembly already bound every byte to its native write. Copies
@@ -387,6 +462,49 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   end
 
   defp complete_backend_span?(_deliveries, _port, _first, _last, _provenance), do: false
+
+  defp backend_rows(proof) do
+    addresses = backend_row_addresses(proof.reads)
+
+    direct =
+      for %{input_rows: input, returned_rows: output} = instance <- proof.decoders.instances,
+          {index, path, sources} <- [
+            {instance.source.index, [2, 2, 2], input},
+            {instance.returned.index, backend_row_path(instance.expected), output}
+          ],
+          copy <- backend_row_copies(addresses, instance.port, index, path, sources),
+          do: copy
+
+    versions = Map.new(proof.decoders.timeline, &{{&1.port, &1.index}, &1.cursor})
+
+    helpers =
+      for %{origin: {:decoder_rows, port, origin}} = copy <- proof.states.terms,
+          %{row_sources: sources} <- [Map.get(versions, {port, origin})],
+          row <- backend_row_copies(addresses, port, copy.index, copy.path, sources),
+          do: row
+
+    direct ++ helpers
+  end
+
+  defp backend_row_addresses(reads) do
+    for {port, connection} <- reads.connections,
+        messages = Map.get(connection, :historical_messages, []) ++ connection.protocol.messages,
+        rows = Enum.filter(messages, &match?(%{direction: :backend, decoded: {:data_row, _}}, &1)),
+        {statement, rows} <- Enum.group_by(rows, & &1.statement),
+        statement != nil,
+        {row, occurrence} <- Enum.with_index(rows),
+        into: %{},
+        do: {{port, row.start}, {:connection_row, port, statement, occurrence}}
+  end
+
+  defp backend_row_copies(addresses, port, index, path, sources) do
+    for {offset, position} <- Enum.with_index(sources),
+        {:ok, address} <- [Map.fetch(addresses, {port, offset})],
+        do: %{index: index, path: path ++ [position], value: address}
+  end
+
+  defp backend_row_path({:ok, _rows, _buffer}), do: [3, 1]
+  defp backend_row_path({:more, _buffer, _rows, _required}), do: [3, 2]
 
   defp connection_spans(reads) do
     for {port, connection} <- reads.connections,

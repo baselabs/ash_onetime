@@ -67,6 +67,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
     native = Map.new(indexed.events, &{&1.index, &1})
 
     for {port, connection} <- streams.connections,
+        owners = frontend_owners(connection, port, native),
         message <- connection.protocol.messages do
       span = Enum.max_by(message.provenance, & &1.index)
       source = Map.fetch!(native, span.index)
@@ -94,9 +95,29 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
         {:connection_message, port, message.direction, message.message_ordinal}
       )
       |> Map.put(:wire_sql, message.sql)
+      |> Map.put(:wire_owner, Map.get(owners, message.request))
       |> Map.put(:wire_frame, message)
     end
     |> Enum.sort_by(&{&1.index, &1.wire_frame.start})
+  end
+
+  defp frontend_owners(connection, port, native) do
+    messages = Map.get(connection, :historical_messages, []) ++ connection.protocol.messages
+
+    for %{direction: :frontend, message_ordinal: ordinal, provenance: spans} <- messages,
+        [_ | _] <- [spans],
+        owners =
+          Enum.map(spans, fn span ->
+            case Map.get(native, span.index) do
+              %{event: {^port, :receive, {owner, {:command, _}}}} -> owner
+              %{event: {owner, :call, {:ssl, :send, [_socket, _bytes]}}} -> owner
+              _ -> nil
+            end
+          end),
+        [owner] <- [Enum.uniq(owners)],
+        is_pid(owner),
+        into: %{},
+        do: {ordinal, owner}
   end
 
   defp event({_index, :request, read}, state) do

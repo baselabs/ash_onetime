@@ -537,33 +537,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           IO.iodata_to_binary(origin.query.statement) == sql,
           do: origin
 
-    if descriptors == [] do
-      origins =
-        for origin <- historical.query_origins,
-            IO.iodata_to_binary(origin.query.statement) == sql,
-            do: %{mfa: origin.mfa, parameters?: origin.parameters === origin.query.param_oids}
-
-      cached =
-        for {_holder, connection} <- historical.connections,
-            {_name, _ref, %Postgrex.Query{} = query} <- connection.query_cache.rows,
-            IO.iodata_to_binary(query.statement) == sql do
-          %{
-            owner_traced?: connection.history_owner_traced?,
-            same_pool?: connection.pool === historical.repo_metadata.pid,
-            origin?: Enum.any?(historical.query_origins, &(&1.query.ref === query.ref))
-          }
-        end
-
-      IO.puts(
-        "CONNECTION_HISTORY_CATALOG_SOURCE: " <>
-          Diagnostics.render(%{
-            patterns: ConnectionHistory.function_coverage(),
-            origins: origins,
-            cached: cached
-          })
-      )
-    end
-
     assert descriptors != []
 
     for origin <- descriptors do
@@ -583,8 +556,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert historical.relations[oid] == "ash_onetime_boundary_records"
     end
 
-    tls? = SQL.query!(context.repo, "SHOW ssl", []).rows == [["on"]]
-    IO.puts("CONNECTION_NATIVE_TLS_AVAILABLE=#{tls?}")
   end
 
   @tag connection_streams: :tls
@@ -662,13 +633,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
     proof = ConnectionHistory.build(side)
 
-    for error <- proof.errors do
-      Diagnostics.emit(
-        "CONNECTION_TLS_MAIN_FAILURE",
-        Map.take(error, [:index, :at, :rule, :path, :context])
-      )
-    end
-
     assert proof.errors == [], "MAIN must prove the real TLS plaintext and worker programs"
   end
 
@@ -708,10 +672,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       unbound =
         Enum.reject(decoders.protocol_copies, &MapSet.member?(covered, {&1.index, &1.path}))
 
-      for copy <- unbound do
-        IO.puts("CONNECTION_STATE_UNBOUND: " <> Diagnostics.render(copy, limit: :infinity))
-      end
-
       assert unbound == [], "every native Protocol copy needs its own owner-version binding"
 
       bound_buffers = MapSet.new(states.buffers, &{&1.index, &1.path})
@@ -721,10 +681,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           MapSet.member?(bound_buffers, {copy.index, copy.path})
         end)
 
-      for copy <- unbound_buffers do
-        IO.puts("CONNECTION_HELPER_BUFFER_UNBOUND: " <> Diagnostics.render(copy))
-      end
-
       assert unbound_buffers == [], "every native helper buffer needs its own byte-copy origin"
 
       bound_terms = MapSet.new(Map.get(states, :terms, []), &{&1.index, &1.path})
@@ -733,10 +689,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         Enum.reject(native_helper_terms(events), fn copy ->
           MapSet.member?(bound_terms, {copy.index, copy.path})
         end)
-
-      for copy <- unbound_terms do
-        IO.puts("CONNECTION_HELPER_TERM_UNBOUND: " <> Diagnostics.render(copy))
-      end
 
       if unquote(shape == :large_rows) do
         assert Enum.any?(decoders.versions, &is_list(&1.returned_buffer))
@@ -1426,10 +1378,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         MapSet.member?(covered, {copy.index, copy.path})
       end)
 
-    for copy <- unbound do
-      IO.puts("CONNECTION_TRANSACTION_TERM_UNBOUND: " <> Diagnostics.render(copy))
-    end
-
     assert unbound == [], "transaction tags and results need their own native origins"
   end
 
@@ -1735,10 +1683,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     states = native_copy_states(captured)
 
-    for error <- states.errors do
-      IO.puts("CONNECTION_HELPER_INPUT_STATE: " <> Diagnostics.render(error))
-    end
-
     assert Enum.map(states.errors, & &1.rule) ==
              List.duplicate(:state_helper_copy, length(corrupted))
 
@@ -1918,16 +1862,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert captured.native.errors == []
       assert captured.streams.errors == []
 
-      for error <- captured.decoders.errors do
-        IO.puts("CONNECTION_PREPARATION_DECODER: " <> Diagnostics.render(error))
-      end
-
       assert captured.decoders.errors == []
       states = native_copy_states(captured)
-
-      for error <- states.errors do
-        IO.puts("CONNECTION_PREPARATION_STATE: " <> Diagnostics.render(error))
-      end
 
       assert states.errors == []
 
@@ -1937,10 +1873,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           ] do
         coordinates = MapSet.new(covered, &{&1.index, &1.path})
         unbound = Enum.reject(copies, &MapSet.member?(coordinates, {&1.index, &1.path}))
-
-        for copy <- unbound do
-          IO.puts("CONNECTION_PREPARATION_COORDINATE_UNBOUND: " <> Diagnostics.render(copy))
-        end
 
         assert unbound == [], "every fresh preparation helper coordinate needs its own origin"
       end
@@ -1958,28 +1890,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       captured = native_query_factory(unquote(shape), unquote(prepare), options)
       assert_query_factory_path(captured, unquote(shape))
 
-      for {stage, errors} <- [
-            native: captured.native.errors,
-            stream: captured.streams.errors,
-            decoder: captured.decoders.errors
-          ],
-          error <- errors do
-        row = {unquote(shape), unquote(prepare), unquote(postgrex_prepare), unquote(mode)}
-
-        IO.puts(
-          "CONNECTION_RELOAD_CAPTURE: " <>
-            Diagnostics.render(%{row: row, stage: stage, difference: error})
-        )
-      end
-
       assert captured.native.errors == []
       assert captured.streams.errors == []
       assert captured.decoders.errors == []
       states = native_copy_states(captured)
-
-      for error <- states.errors do
-        IO.puts("CONNECTION_RELOAD_STATE: " <> Diagnostics.render(error))
-      end
 
       assert states.errors == []
 
@@ -1989,10 +1903,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           ] do
         coordinates = MapSet.new(covered, &{&1.index, &1.path})
         unbound = Enum.reject(copies, &MapSet.member?(coordinates, {&1.index, &1.path}))
-
-        for copy <- unbound do
-          IO.puts("CONNECTION_RELOAD_COORDINATE_UNBOUND: " <> Diagnostics.render(copy))
-        end
 
         assert unbound == [], "every reload helper coordinate needs its own origin"
       end
@@ -2276,10 +2186,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert duplicated != [], "the loaded native program must repeat a no-progress decoder"
 
-      for error <- captured.decoders.errors do
-        IO.puts("CONNECTION_DECODER_PROGRAM: " <> Diagnostics.render(error))
-      end
-
       assert Enum.map(captured.decoders.errors, & &1.rule) ==
                List.duplicate(:decoder_program, length(duplicated))
 
@@ -2361,10 +2267,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     assert coordinates != []
     states = native_copy_states(captured)
-
-    for error <- states.errors do
-      IO.puts("CONNECTION_RELOAD_INPUT_STATE: " <> Diagnostics.render(error))
-    end
 
     assert Enum.map(states.errors, & &1.rule) ==
              List.duplicate(:state_helper_copy, length(coordinates))
@@ -2487,10 +2389,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert streams.errors == []
     decoders = ConnectionDecoders.build(%{events: events}, native, streams, run.native_history)
 
-    for error <- decoders.errors do
-      IO.puts("CONNECTION_CALLER_DECODER: " <> Diagnostics.render(error))
-    end
-
     assert decoders.errors == []
 
     states =
@@ -2502,10 +2400,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         {:initial, run.initial_state}
       )
 
-    for error <- states.errors do
-      IO.puts("CONNECTION_CALLER_STATE: " <> Diagnostics.render(error))
-    end
-
     assert states.errors == []
 
     for {copies, covered} <- [
@@ -2514,10 +2408,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         ] do
       coordinates = MapSet.new(covered, &{&1.index, &1.path})
       unbound = Enum.reject(copies, &MapSet.member?(coordinates, {&1.index, &1.path}))
-
-      for copy <- unbound do
-        IO.puts("CONNECTION_CALLER_COORDINATE_UNBOUND: " <> Diagnostics.render(copy))
-      end
 
       assert unbound == [], "every native caller helper coordinate needs its own origin"
     end
@@ -3364,91 +3254,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           for {_name, _ref, %Postgrex.Query{} = query} <- tables[table] do
             described? = Enum.any?(connection.descriptors, &(&1.query === query))
 
-            if not described? do
-              preparations =
-                for origin <- historical.query_preparations,
-                    origin.query.ref === query.ref do
-                  %{
-                    mfa: origin.mfa,
-                    same_socket?: origin.sock === connection.protocol.sock,
-                    same_types?: origin.query.types === connection.protocol.types,
-                    same_parameters?: origin.parameters === query.param_oids,
-                    same_query?: origin.query === query
-                  }
-                end
-
-              baseline? =
-                Enum.any?(historical.connections, fn {_holder, original} ->
-                  original.query_cache.table === table and
-                    Enum.any?(original.query_cache.rows, fn
-                      {_name, _ref, cached} -> cached === query
-                      _ -> false
-                    end)
-                end)
-
-              insertions =
-                for {_index, pair} <- native.pairs,
-                    {_, :call, {:ets, :insert, [^table, {_name, _ref, cached}]}} <-
-                      [pair.source.event],
-                    cached === query do
-                  %{
-                    index: pair.source.index,
-                    stack: Enum.take(pair.source.stack, 6),
-                    success?: elem(pair.returned.event, 3) === true
-                  }
-                end
-
-              factories =
-                for {index, output} <- decoders.query_outputs,
-                    output.query.ref === query.ref do
-                  input? =
-                    case output.origin do
-                      {factory, _} -> Map.has_key?(decoders.query_inputs, factory)
-                      _ -> false
-                    end
-
-                  %{
-                    index: index,
-                    input?: input?,
-                    fields:
-                      for(
-                        {field, value} <- Map.from_struct(query),
-                        Map.fetch!(output.query, field) !== value,
-                        do: field
-                      )
-                  }
-                end
-
-              origins =
-                for origin <- checkpoint.query_origins,
-                    origin.query.ref === query.ref do
-                  %{
-                    same_socket?: origin.sock === connection.protocol.sock,
-                    same_types?: origin.query.types === connection.protocol.types,
-                    fields:
-                      for(
-                        {field, value} <- Map.from_struct(query),
-                        Map.fetch!(origin.query, field) !== value,
-                        do: field
-                      )
-                  }
-                end
-
-              IO.puts(
-                "CONNECTION_CUT_DESCRIPTOR_ORIGINS: " <>
-                  Diagnostics.render(%{
-                    phase: phase,
-                    baseline?: baseline?,
-                    same_pool?: connection.pool === historical.repo_metadata.pid,
-                    owner_traced?: connection.history_owner_traced?,
-                    preparations: preparations,
-                    insertions: insertions,
-                    factories: factories,
-                    origins: origins
-                  })
-              )
-            end
-
             assert described?,
                    "the full cut must retain the committed cache row's native descriptor"
 
@@ -3611,13 +3416,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         continued_side = %{side | run: %{run | events: Enum.drop(run.events, before)}}
         resumed = ConnectionHistory.build(continued_side)
 
-        for error <- resumed.errors do
-          Diagnostics.emit(
-            "CONNECTION_PENDING_SUFFIX_FAILURE",
-            Map.take(error, [:index, :at, :rule, :path, :context])
-          )
-        end
-
         assert resumed.errors == [],
                "a cut inside the real decoder program must retain its pending native owners"
 
@@ -3750,13 +3548,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           suffix = Enum.drop(run.events, barrier.index)
           continued = %{side | run: %{run | events: suffix}, historical: checkpoint}
           resumed = ConnectionHistory.build(continued)
-
-          for error <- resumed.errors do
-            Diagnostics.emit(
-              "CONNECTION_SUFFIX_FAILURE",
-              Map.take(error, [:index, :at, :rule, :path, :context])
-            )
-          end
 
           assert resumed.errors == []
           assert map_size(resumed.reads.connections) > 0
@@ -3910,13 +3701,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         {:initial, restored.initial_state}
       )
 
-    for error <- states.errors do
-      Diagnostics.emit(
-        "CONNECTION_CANCEL_OWNER_FAILURE",
-        Map.take(error, [:index, :at, :rule, :path, :context])
-      )
-    end
-
     assert states.errors == [], "cancellation must preserve every original Protocol owner copy"
     assert decoders.protocol_copies != []
     covered = MapSet.new(states.copies, &{&1.index, &1.path})
@@ -4006,13 +3790,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert proof.native.errors == []
     assert proof.reads.errors == []
 
-    for error <- proof.decoders.errors ++ proof.states.errors do
-      Diagnostics.emit(
-        "CONNECTION_STARTUP_ORIGIN_FAILURE",
-        Map.take(error, [:index, :at, :rule, :path, :context])
-      )
-    end
-
     assert proof.decoders.errors == [],
            "a successful native connect must create its own initially empty decoder"
 
@@ -4073,13 +3850,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     proof = ConnectionHistory.build(side)
     assert proof.native.errors == []
     assert proof.reads.errors == []
-
-    for error <- proof.types.errors ++ proof.decoders.errors ++ proof.states.errors do
-      Diagnostics.emit(
-        "CONNECTION_FRESH_TYPE_ORIGIN_FAILURE",
-        Map.take(error, [:index, :at, :rule, :path, :context])
-      )
-    end
 
     assert proof.types.errors == []
     assert [birth] = proof.types.births
@@ -4499,14 +4269,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert response.direction == :backend and response.start == 0
     assert response.decoded == {:ssl_response, ?S}
 
-    for error <- proof.errors do
-      Diagnostics.emit(
-        "CONNECTION_COLD_TLS_ORIGIN_FAILURE",
-        Map.take(error, [:index, :at, :rule, :path, :context])
-      )
-    end
-
-    assert proof.errors == [],
+    assert Enum.map(proof.errors, &Map.take(&1, [:index, :rule, :path])) == [],
            "every TLS worker and plaintext socket needs its actual native birth origin"
 
     ComparatorMutants.with_mutant(:stream_service_gen_call_reply, fn ->
@@ -4527,7 +4290,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     negotiated? =
       Enum.any?(run.events, fn
-        %{event: {_, :call, {:tls_gen_connection, :next_event, [_name, _record, data]}}}
+        %{event: {_, :call, {:tls_gen_connection, :next_event, [:connection, :no_record, data, _]}}}
         when is_tuple(data) and tuple_size(data) == 13 ->
           elem(elem(data, 3), 5) == {3, 3}
 
@@ -4592,14 +4355,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             dispatch.index < pair.source.index,
             pair.returned.index < completed.index,
             do: pair
-
-      if length(callbacks) != 1 do
-        Diagnostics.emit("CONNECTION_TLS_CALLBACK_CAPTURE_FAILURE", %{
-          index: dispatch.index,
-          mfa: {module, name, 3},
-          length: length(callbacks)
-        })
-      end
 
       assert length(callbacks) == 1,
              "each native TLS state dispatch needs its own captured callback and return"
@@ -4931,13 +4686,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
     proof = ConnectionHistory.build(side)
 
-    for error <- proof.errors do
-      Diagnostics.emit(
-        "CONNECTION_POOL_BIRTH_FAILURE",
-        Map.take(error, [:index, :at, :rule, :path, :context])
-      )
-    end
-
     assert proof.errors == [],
            "every born pool owner needs its native factory and initial state before any copy"
 
@@ -5002,13 +4750,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
       proof = ConnectionHistory.build(side)
-
-      for error <- proof.errors do
-        Diagnostics.emit(
-          "CONNECTION_POOL_CONFIGURATION_FAILURE",
-          Map.take(error, [:index, :at, :rule, :path, :context])
-        )
-      end
 
       assert proof.errors == [],
              "configuration and after-connect Tasks need their own native state origins"
@@ -5308,13 +5049,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
       proof = ConnectionHistory.build(side)
 
-      for error <- proof.errors do
-        Diagnostics.emit(
-          "CONNECTION_POOL_BACKOFF_FAILURE",
-          Map.take(error, [:index, :at, :rule, :path, :context])
-        )
-      end
-
       assert proof.errors == [],
              "failed connections must retain their complete native owner state"
 
@@ -5385,13 +5119,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       if type == :stop, do: refute(retry?), else: assert(retry?)
       side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
       proof = ConnectionHistory.build(side)
-
-      for error <- proof.errors do
-        Diagnostics.emit(
-          "CONNECTION_POOL_BACKOFF_FAILURE",
-          Map.take(error, [:index, :rule, :path]) |> Map.put(:mfa, error.at.mfa)
-        )
-      end
 
       assert proof.errors == [],
              "failed after-connect Tasks must retain their native owner program"
@@ -5634,20 +5361,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert proof.native.errors == [] and proof.reads.errors == [] and
                proof.decoders.errors == []
 
-      if proof.errors != [] do
-        Diagnostics.emit("CONNECTION_OWNER_TIMER_PROGRAM", %{
-          errors:
-            Enum.map(proof.errors, fn error ->
-              %{
-                index: error.index,
-                rule: error.rule,
-                path: Map.get(error, :path),
-                mfa: error.at.mfa
-              }
-            end)
-        })
-      end
-
       assert proof.errors == [],
              "false cancellation requires its actual expiry and successful native selective flush"
 
@@ -5741,13 +5454,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert proof.native.errors == []
       assert proof.reads.errors == []
       assert proof.decoders.errors == []
-
-      for error <- proof.states.errors do
-        Diagnostics.emit(
-          "CONNECTION_RENEWAL_OWNER_FAILURE",
-          Map.take(error, [:index, :at, :rule, :path, :context])
-        )
-      end
 
       assert proof.states.errors == [],
              "a native holder renewal must retain its owner origin before cutting"
@@ -5855,13 +5561,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       }
 
       continued = ConnectionHistory.build(continued_side)
-
-      for error <- continued.errors do
-        Diagnostics.emit(
-          "CONNECTION_PENDING_OWNER_FAILURE",
-          Map.take(error, [:index, :at, :rule, :path, :context])
-        )
-      end
 
       assert continued.errors == [],
              "the unchanged native suffix must finish its owner without a borrowed holder root"
@@ -6968,15 +6667,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
               do: IO.iodata_to_binary(data)
 
         assert controls == [expected]
-        calls = for event <- own, event.pid == pid, do: {elem(event.event, 1), event.mfa}
-        %{mode: mode, calls: calls}
+        mode
       end
 
-    assert Enum.map(programs, & &1.mode) == [:once, false]
-
-    IO.puts(
-      "CONNECTION_STREAM_ACTIVE_PROGRAMS: " <> Diagnostics.render(programs, limit: :infinity)
-    )
+    assert programs == [:once, false]
 
     demand = ConnectionReads.build(native)
     assert demand.errors == []
@@ -7058,7 +6752,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           do: index
 
     assert deferred != [], "the real contended socket must execute deferred controls"
-    IO.puts("CONNECTION_STREAM_DEFERRED_CONTROLS: " <> Diagnostics.render(length(deferred)))
   end
 
   @tag connection_streams: :transport
@@ -7084,34 +6777,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     replays = List.flatten(replays)
 
-    IO.puts(
-      "CONNECTION_STREAM_BUFFER_PROGRAMS: " <> Diagnostics.render(replays, limit: :infinity)
-    )
-
     assert replays != [], "the native runs must actually execute Postgrex buffered replay"
-  end
-
-  defp buffer_failure_program(run) do
-    for {event, index} <- Enum.with_index(run.events),
-        {Postgrex.Protocol, _, _} = mfa <- [event.mfa] do
-      phase =
-        case event.event do
-          {_, :call, {_, _, [%{buffer: buffer} | _]}} when is_binary(buffer) ->
-            {:call, {:buffer_bytes, byte_size(buffer)}}
-
-          {_, :call, {_, _, [%{buffer: buffer} | _]}}
-          when buffer in [nil, :active_once] ->
-            {:call, buffer}
-
-          {_, :exception_from, _, {kind, reason}} ->
-            {:exception, kind, native_reason_tag(reason)}
-
-          _ ->
-            elem(event.event, 1)
-        end
-
-      {index, mfa, phase}
-    end
   end
 
   @tag connection_streams: :driver
@@ -7165,13 +6831,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
   defp buffered_decoders(corruption) do
     run = ConnectionNative.observe(:buffered, corruption)
-
-    if native_result(run) != :ok do
-      IO.puts(
-        "CONNECTION_STREAM_BUFFER_FAILURE: " <>
-          Diagnostics.render(%{result: native_result(run), program: buffer_failure_program(run)})
-      )
-    end
 
     assert native_result(run) == :ok
 
@@ -7359,7 +7018,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
   test "Connection streams: logical rendering consumes only proved native programs" do
     {proof, indexed} = native_render_fixture(nil)
     assert proof.errors == []
-    %{native: native, reads: reads} = proof
+    %{native: native, reads: reads, decoders: decoders} = proof
 
     messages = ConnectionReads.messages(reads, indexed)
     assert Enum.count(messages, &(&1.wire_frame.direction == :frontend)) == 2
@@ -7378,14 +7037,37 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       |> MapSet.new()
 
     assert MapSet.size(native_indexes) > 0
-    untouched = Enum.reject(indexed.events, &MapSet.member?(native_indexes, &1.index))
+    programs = Map.new(decoders.programs, &{&1.source.index, &1})
+
+    repeated_receives =
+      for parent <- decoders.programs,
+          {Postgrex.Protocol, function, _} = parent.source.mfa,
+          function in [:msg_recv, :rows_recv],
+          %{index: index} <- parent.execution,
+          %{source: %{mfa: {Postgrex.Protocol, ^function, _}}} = child <- [programs[index]],
+          {:return_from, :ok, _} = terminal <- [elem(child.expected, 1)],
+          elem(parent.expected, 1) == terminal,
+          do: {parent, child}
+
+    decoder_indexes =
+      for {parent, child} <- repeated_receives,
+          index <- [
+            child.source.index,
+            child.returned.index
+            | partial_decoder_indexes(parent, child, decoders.instances)
+          ],
+          into: MapSet.new(),
+          do: index
+
+    eligible = MapSet.union(native_indexes, decoder_indexes)
+    untouched = Enum.reject(indexed.events, &MapSet.member?(eligible, &1.index))
     assert untouched != []
     render? = function_exported?(ConnectionHistory, :render, 2)
     assert render?, "the main logical connection renderer is absent"
     render = Function.capture(ConnectionHistory, :render, 2)
     rendered = render.(proof, indexed)
     assert rendered.errors == []
-    assert MapSet.subset?(rendered.consumed, native_indexes)
+    assert MapSet.subset?(rendered.consumed, eligible)
     logical = Enum.filter(rendered.events, &Map.has_key?(&1, :message_address))
     assert logical === messages
     remaining = Enum.reject(rendered.events, &Map.has_key?(&1, :message_address))
@@ -7400,8 +7082,19 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       assert elem(retained.event, 1) == elem(source.event, 1)
     end
 
-    assert Enum.reject(remaining, &MapSet.member?(native_indexes, &1.index)) === untouched
+    assert Enum.reject(remaining, &MapSet.member?(eligible, &1.index)) === untouched
     assert length(remaining) == length(indexed.events) - MapSet.size(rendered.consumed)
+  end
+
+  defp partial_decoder_indexes(parent, child, instances) do
+    events = MapSet.new(parent.execution, & &1.index)
+
+    for instance <- instances,
+        MapSet.member?(events, instance.source.index),
+        elem(instance.expected, 0) == :more,
+        instance.returned.index < child.source.index,
+        index <- [instance.source.index, instance.returned.index],
+        do: index
   end
 
   @tag connection_streams: :driver
@@ -7481,6 +7174,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         for instance <- instances,
             copy <- instance.copies,
             copy.length > 0,
+            not MapSet.member?(rendered.consumed, copy.index),
             do: {instance, copy}
 
       assert copies != []
@@ -7525,6 +7219,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     copies =
       for copy <- proof.states.buffers,
+          not MapSet.member?(rendered.consumed, copy.index),
           original = Enum.find(proof.indexed.events, &(&1.index == copy.index)),
           bytes = native_copy_bytes(original.event, copy.path),
           is_binary(bytes) and byte_size(bytes) > 0,
@@ -9664,7 +9359,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     births = ConnectionTls.births(%{events: events})
     assert births.errors == []
     assert births.bindings != []
-    assert ConnectionTls.build(%{events: events}, births.bindings).errors == []
+    proof = ConnectionTls.build(%{events: events}, births.bindings)
+    assert Enum.map(proof.errors, &Map.take(&1, [:index, :rule, :path])) == []
+    assert Enum.any?(proof.terms, &match?({:tls_certificate_refusal, _}, &1.origin))
   end
 
   @tag connection_streams: :tls
@@ -10047,11 +9744,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert corrupted != []
     native = ConnectionTls.build(%{events: events}, run.tls_binding)
 
-    Diagnostics.emit("CONNECTION_TLS_CALLBACK_ACTION_PROOF", %{
-      constructors: Enum.map(corrupted, & &1.index),
-      errors: Enum.map(native.errors, &Map.take(&1, [:index, :rule, :path]))
-    })
-
     assert Enum.map(native.errors, & &1.rule) == [:tls_callback_result]
     assert hd(native.errors).index == hd(corrupted).index
 
@@ -10301,10 +9993,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       native = ConnectionTls.build(%{events: events}, run.tls_binding)
 
-      for error <- native.errors do
-        IO.puts("CONNECTION_MACHINE_STATE: " <> Diagnostics.render(error))
-      end
-
       assert native.errors == []
 
       if unquote(mode) == :debug do
@@ -10324,10 +10012,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
             path = [2, 2, position],
             not native_argument_bound?(covered, source.index, path, argument),
             do: %{index: source.index, mfa: source.mfa, path: path}
-
-      for copy <- unbound do
-        IO.puts("CONNECTION_MACHINE_ARGUMENT_UNBOUND: " <> Diagnostics.render(copy))
-      end
 
       assert unbound == [], "every native machine temporary argument needs its own program origin"
     end
@@ -10550,10 +10234,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     tls = ConnectionTls.build(%{events: events}, run.tls_binding)
 
-    for error <- tls.errors do
-      IO.puts("CONNECTION_TLS_FRAGMENTED: " <> Diagnostics.render(error))
-    end
-
     assert tls.errors == []
   end
 
@@ -10582,13 +10262,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       native = ConnectionTls.build(%{events: events}, run.tls_binding)
       expected = tls_option_corruptions(events, native, run.tls_binding, corruption)
       assert expected != []
-
-      for error <- native.errors do
-        Diagnostics.emit(
-          "CONNECTION_TLS_OPTION_CONTROL_FAILURE",
-          Map.take(error, [:index, :rule, :path, :differences])
-        )
-      end
 
       assert Enum.map(native.errors, & &1.rule) == List.duplicate(rule, length(expected))
       assert Enum.map(native.errors, & &1.index) == expected
@@ -10681,17 +10354,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
                    timer.terminal.returned
         end
 
-        for process <- run.tls_binding.processes do
-          IO.puts(
-            "CONNECTION_TLS_PROCESS_ORIGIN: " <>
-              Diagnostics.render(%{
-                mfa: process.mfa,
-                role:
-                  if(process.pid == run.tls_binding.owner, do: :transport_owner, else: :linked)
-              })
-          )
-        end
-
         events =
           run.events
           |> Enum.with_index()
@@ -10719,10 +10381,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           |> Enum.flat_map(&native_tls_states(&1, run.tls_binding))
           |> Enum.reject(&MapSet.member?(bound_states, {&1.index, &1.path}))
 
-        for copy <- unbound_states do
-          IO.puts("CONNECTION_TLS_STATE_UNBOUND: " <> Diagnostics.render(copy))
-        end
-
         assert unbound_states == [], "every native TLS worker state copy needs an earlier origin"
         assert length(native.writes) == 1
         assert native.reads != []
@@ -10740,28 +10398,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         assert length(logical) == length(messages)
         assert Enum.all?(logical, &is_integer(&1.index))
         assert Enum.all?(logical, &(elem(&1.message_address, 1) == run.tls_binding.port))
-
-        for event <- events do
-          owner =
-            cond do
-              event.pid == run.snapshot.root -> :caller
-              event.pid == run.tls_binding.owner -> :tls_transport_owner
-              event.pid == run.tls_binding.sender -> :tls_sender
-              event.pid == run.tls_binding.port -> :transport
-              Map.has_key?(run.snapshot.services, event.pid) -> :shared_service
-              true -> :other_native_process
-            end
-
-          IO.puts(
-            "CONNECTION_TLS_NATIVE_EVENT: " <>
-              Diagnostics.render(%{
-                index: event.index,
-                mfa: event.mfa,
-                tag: elem(event.event, 1),
-                owner: owner
-              })
-          )
-        end
 
         {corruption, messages}
       end)
