@@ -9677,7 +9677,9 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     for mfa <- [
           {:tls_gen_connection, :encode_handshake, 4},
-          {:tls_gen_connection, :get_tls_handshakes, 3}
+          {:tls_gen_connection, :get_tls_handshakes, 3},
+          {:tls_client_connection_1_3, :handle_certificate, 2},
+          {:public_key, :pkix_path_validation, 3}
         ] do
       assert Enum.any?(events, &(&1.mfa == mfa and elem(&1.event, 1) == :call))
     end
@@ -9686,7 +9688,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       {:tls_handshake, :encode_handshake, 2},
       {:tls_handshake, :get_tls_handshakes, 4},
       {:tls_record, :encode_handshake, 3},
-      {:tls_record_1_3, :encode_handshake, 2}
+      {:tls_record_1_3, :encode_handshake, 2},
+      {:tls_client_connection_1_3, :handle_certificate, 2},
+      {:tls_handshake_1_3, :process_certificate, 2},
+      {:public_key, :pkix_path_validation, 3}
     ]
 
     calls =
@@ -9694,7 +9699,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         fn ->
           proof = ConnectionTls.build(%{events: events}, births.bindings)
 
-          for kind <- [:tls_initial_hello, :tls_handshakes] do
+          for kind <- [:tls_initial_hello, :tls_handshakes, :tls_server_certificate] do
             assert Enum.any?(proof.terms, fn term ->
                      origin = Map.get(term, :origin)
                      is_tuple(origin) and elem(origin, 0) == kind

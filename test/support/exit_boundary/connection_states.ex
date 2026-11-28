@@ -2085,7 +2085,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
 
   defp owner_reset_backoff(nil), do: nil
   defp owner_reset_backoff(%DBConnection.Backoff{type: :rand} = backoff), do: backoff
-  defp owner_reset_backoff(%DBConnection.Backoff{type: :exp} = backoff), do: %{backoff | state: nil}
+
+  defp owner_reset_backoff(%DBConnection.Backoff{type: :exp} = backoff),
+    do: %{backoff | state: nil}
 
   defp owner_reset_backoff(%DBConnection.Backoff{type: :rand_exp, state: {_, lower}} = backoff),
     do: %{backoff | state: {backoff.min, lower}}

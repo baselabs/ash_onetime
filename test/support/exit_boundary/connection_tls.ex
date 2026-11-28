@@ -3327,8 +3327,385 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
+  defp server_hello_next_input(
+         state,
+         source,
+         arguments,
+         %{
+           source: %{mfa: {:tls_client_connection_1_3, :wait_cert_cr, 3}},
+           event: %{value: {:internal, {:certificate_1_3, <<>>, entries} = certificate}}
+         } = parent
+       ) do
+    mfa = {:tls_client_connection_1_3, :handle_certificate, 2}
+    data = parent.current.data
+
+    with [%{source: call, returned: returned}] <-
+           tls_scoped_calls(state, parent.source, source, mfa),
+         {:ok, peer, key} <- server_certificate(state, call, returned, entries, data) do
+      handshake = put_elem(elem(data, 6), 25, key)
+      session = put_elem(elem(data, 8), 3, peer)
+      next = data |> put_elem(6, handshake) |> put_elem(8, session)
+      origin = {:tls_server_certificate, call.index}
+
+      state =
+        state
+        |> handshake_copy(call, [2, 2], [certificate, data], parent.current.origin)
+        |> handshake_copy(returned, [3], {next, :wait_cv}, origin)
+        |> tls_exact(source, :tls_callback_input, Enum.take(arguments, 2), [:wait_cv, :no_record])
+
+      {state, %{parent.current | name: :wait_cv, data: next, origin: origin}}
+    else
+      _ -> {tls_failure(state, source, :tls_server_certificate_origin), parent.current}
+    end
+  end
+
+  defp server_hello_next_input(
+         state,
+         source,
+         arguments,
+         %{
+           source: %{mfa: {:tls_client_connection_1_3, :wait_cv, 3}},
+           event: %{value: {:internal, {:certificate_verify_1_3, scheme, signature}}}
+         } = parent
+       ) do
+    data = parent.current.data
+    options = elem(data, 4)
+    handshake = elem(data, 6)
+    parameters = Map.fetch!(elem(data, 10), :pending_write).security_parameters
+    scope = %{source: parent.source, returned: source}
+
+    with true <- scheme in tls13_signature_schemes(options.signature_algs),
+         {[<<15, _::binary>> | messages], _} <- elem(handshake, 3),
+         {:ok, digest} <-
+           handshake_primitive(state, scope, {:crypto, :hash, 2}, [
+             elem(parameters, 8),
+             Enum.reverse(messages)
+           ]),
+         true <- verify_server_transcript(scheme, signature, digest, elem(handshake, 25)) do
+      expected = [:wait_finished, :no_record]
+      state = tls_exact(state, source, :tls_callback_input, Enum.take(arguments, 2), expected)
+      origin = {:tls_server_certificate_verify, parent.source.index}
+      {state, %{parent.current | name: :wait_finished, origin: origin}}
+    else
+      _ -> {tls_failure(state, source, :tls_server_certificate_verify_origin), parent.current}
+    end
+  end
+
   defp server_hello_next_input(state, source, _arguments, parent),
     do: change_cipher_spec_next_input(state, source, parent)
+
+  defp tls_scoped_calls(state, first, last, mfa) do
+    Enum.filter(Map.get(state.pair_index, {first.pid, mfa}, []), fn pair ->
+      first.index < pair.source.index and pair.returned.index < last.index
+    end)
+  end
+
+  defp server_certificate(state, call, returned, entries, data) do
+    options = elem(data, 4)
+    stapling = elem(elem(data, 6), 32)
+    host = elem(elem(data, 2), 9)
+
+    with %{verify: :verify_peer, verify_fun: :undefined, crl_check: false} <- options,
+         %{configured: false} <- stapling,
+         [] <- Map.get(options, :cert_policy_opts, []),
+         [{:certificate_entry, peer, _} | _] <- entries,
+         chain =
+           for(
+             {:certificate_entry, der, extensions} <- entries,
+             is_binary(der) and map_size(extensions) == 0,
+             do: der
+           ),
+         true <- length(chain) == length(entries) and length(chain) - 1 <= options.depth,
+         {:ok, roots} <- certificate_roots(options),
+         [_ | _] = dates <- certificate_clock_reads(state, call, returned),
+         true <- certificate_hostname?(peer, host, options),
+         {:ok, key, root, path} <-
+           certificate_issuer_path(roots, Enum.reverse(chain), dates, options),
+         true <- certificate_trust_input?(state, call, returned, root, path) do
+      {:ok, peer, key}
+    else
+      _ -> :error
+    end
+  rescue
+    _invalid in [ArgumentError, FunctionClauseError, MatchError, KeyError] -> :error
+  end
+
+  defp certificate_roots(%{cacerts: certs}) when is_list(certs) and certs != [], do: {:ok, certs}
+
+  defp certificate_roots(%{cacertfile: file}) when is_list(file) or is_binary(file) do
+    with {:ok, pem} <- File.read(file) do
+      {:ok, for({:Certificate, der, :not_encrypted} <- :public_key.pem_decode(pem), do: der)}
+    end
+  end
+
+  defp certificate_roots(_options), do: :error
+
+  defp certificate_trust_input?(state, first, last, root, path) do
+    mfa = {:public_key, :pkix_path_validation, 3}
+    path = Enum.map(path, &{:cert, &1, :public_key.pkix_decode_cert(&1, :otp)})
+
+    case tls_scoped_calls(state, first, last, mfa) do
+      [%{source: %{event: {_, :call, {:public_key, :pkix_path_validation, [^root, ^path, _]}}}}] ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp certificate_clock_reads(state, first, last) do
+    mfa = {:calendar, :universal_time, 0}
+    reads = tls_scoped_calls(state, first, last, mfa)
+
+    dates =
+      for %{source: %{event: {pid, :call, {:calendar, :universal_time, []}}}, returned: clock} <-
+            reads,
+          {^pid, :return_from, ^mfa, {{y, m, d}, {h, minute, second}} = date} <- [clock.event],
+          :calendar.valid_date({y, m, d}) and h in 0..23 and minute in 0..59 and second in 0..59,
+          do: date
+
+    if length(dates) == length(reads), do: dates, else: []
+  end
+
+  defp certificate_hostname?(peer, host, options) do
+    case Map.get(options, :server_name_indication, :undefined) do
+      :disable ->
+        true
+
+      name ->
+        name = if name == :undefined, do: host, else: name
+        name = if is_atom(name), do: Atom.to_charlist(name), else: name
+        reference = certificate_reference_name(name)
+        :public_key.pkix_verify_hostname(peer, [reference], options.customize_hostname_check)
+    end
+  end
+
+  defp certificate_reference_name(ip) when is_tuple(ip), do: {:ip, ip}
+
+  defp certificate_reference_name(name) do
+    case :inet.parse_strict_address(name) do
+      {:ok, ip} -> {:ip, ip}
+      _ -> {:dns_id, name}
+    end
+  end
+
+  # The modeled path starts at a configured trust anchor. Its public keys,
+  # policy inputs, and validity times come from the certificates and clock reads.
+  defp certificate_issuer_path(roots, chain, dates, options) do
+    Enum.find_value(roots, :error, fn root ->
+      path = if hd(chain) === root, do: tl(chain), else: chain
+      issuer = certificate_record(root, nil)
+
+      with [_ | _] <- path,
+           true <- certificate_valid_at?(issuer, dates),
+           true <- certificate_policy?(issuer, length(path) - 1, options),
+           {:ok, peer} <- checked_certificate_links(path, dates, options, issuer) do
+        {:ok, peer.key, issuer.otp, path}
+      else
+        _ -> nil
+      end
+    end)
+  end
+
+  defp checked_certificate_links(path, dates, options, issuer) do
+    peer_position = length(path) - 1
+
+    path
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, issuer}, fn {der, index}, {:ok, issuer} ->
+      cert = certificate_record(der, issuer.key)
+      remaining = peer_position - index
+      ca_depth = if remaining == 0, do: :peer, else: remaining - 1
+
+      if certificate_valid_at?(cert, dates) and certificate_policy?(cert, ca_depth, options) and
+           certificate_signature_allowed?(cert, options) and
+           :public_key.pkix_is_issuer(cert.otp, issuer.otp) and
+           :public_key.pkix_verify(der, certificate_verify_key(issuer.key)) do
+        {:cont, {:ok, cert}}
+      else
+        {:halt, :error}
+      end
+    end)
+  end
+
+  defp certificate_record(der, previous) do
+    {:OTPCertificate, tbs, signature, _} = otp = :public_key.pkix_decode_cert(der, :otp)
+    {:OTPSubjectPublicKeyInfo, {:PublicKeyAlgorithm, algorithm, parameters}, key} = elem(tbs, 7)
+
+    parameters =
+      case {parameters, previous} do
+        {nil_value, {^algorithm, _, previous}}
+        when nil_value in [:NULL, :asn1_NOVALUE, {:null, :NULL}] ->
+          previous
+
+        {:asn1_NOVALUE, _} when algorithm in [{1, 3, 101, 112}, {1, 3, 101, 113}] ->
+          {:namedCurve, algorithm}
+
+        {{:params, parameters}, _} ->
+          parameters
+
+        _ ->
+          parameters
+      end
+
+    extensions =
+      case elem(tbs, 10) do
+        :asn1_NOVALUE -> %{}
+        list -> Map.new(list, fn {:Extension, oid, _, value} -> {oid, value} end)
+      end
+
+    %{
+      otp: otp,
+      key: {algorithm, key, parameters},
+      signature: signature,
+      validity: elem(tbs, 5),
+      extensions: extensions
+    }
+  end
+
+  defp certificate_verify_key(
+         {_algorithm, {:RSAPublicKey, _, _} = key, {:"RSASSA-PSS-params", _, _, _, _} = parameters}
+       ),
+       do: {key, parameters}
+
+  defp certificate_verify_key({_algorithm, {:RSAPublicKey, _, _} = key, _parameters}), do: key
+  defp certificate_verify_key({_algorithm, {:ECPoint, _} = key, parameters}), do: {key, parameters}
+  defp certificate_verify_key({_algorithm, key, {:"Dss-Parms", _, _, _} = parameters}),
+    do: {key, parameters}
+
+  defp certificate_verify_key({_algorithm, key, _parameters}), do: key
+
+  defp certificate_signature_allowed?(cert, options) do
+    configured = Map.get(options, :signature_algs_cert, :undefined)
+    allowed = if configured == :undefined, do: options.signature_algs, else: configured
+    signature = :ssl_cipher.signature_algorithm_to_scheme(cert.signature)
+    :ssl_cipher.is_supported_sign(signature, tls13_signature_schemes(allowed))
+  end
+
+  defp tls13_signature_schemes(allowed) when is_list(allowed) do
+    Enum.flat_map(allowed, fn
+      :default -> []
+      algorithm when is_atom(algorithm) -> [algorithm]
+      {:sha512, :rsa} -> [:rsa_pkcs1_sha512]
+      {:sha384, :rsa} -> [:rsa_pkcs1_sha384]
+      {:sha256, :rsa} -> [:rsa_pkcs1_sha256]
+      {:sha, :rsa} -> [:rsa_pkcs1_sha1]
+      {:sha, :ecdsa} -> [:ecdsa_sha1]
+      _ -> []
+    end)
+  end
+
+  defp tls13_signature_schemes(_allowed), do: []
+
+  defp verify_server_transcript(scheme, signature, digest, {_algorithm, key, _} = public_key) do
+    {hash, sign, _} = :ssl_cipher.scheme_to_components(scheme)
+    prefix = :binary.copy(<<32>>, 64)
+    content = <<prefix::binary, "TLS 1.3, server CertificateVerify", 0, digest::binary>>
+
+    case sign do
+      kind when kind in [:rsa_pss_rsae, :rsa_pss_pss] ->
+        options = [
+          rsa_padding: :rsa_pkcs1_pss_padding,
+          rsa_pss_saltlen: Map.fetch!(%{sha256: 32, sha384: 48, sha512: 64}, hash),
+          rsa_mgf1_md: hash
+        ]
+
+        :public_key.verify(content, hash, signature, key, options)
+
+      kind when kind in [:mldsa44, :mldsa65, :mldsa87, :slhdsa, :eddsa] ->
+        :public_key.verify(content, :none, signature, certificate_verify_key(public_key))
+
+      _ ->
+        :public_key.verify(content, hash, signature, certificate_verify_key(public_key))
+    end
+  rescue
+    _invalid in [ArgumentError, FunctionClauseError, KeyError] -> false
+  end
+
+  defp verify_server_transcript(_scheme, _signature, _digest, _key), do: false
+
+  defp certificate_policy?(cert, depth, options) do
+    extensions = cert.extensions
+    supported = [
+      {2, 5, 29, 14},
+      {2, 5, 29, 15},
+      {2, 5, 29, 17},
+      {2, 5, 29, 19},
+      {2, 5, 29, 35},
+      {2, 5, 29, 37}
+    ]
+
+    usages = Map.get(extensions, {2, 5, 29, 15}, [:digitalSignature, :keyCertSign])
+    purposes = Map.get(extensions, {2, 5, 29, 37}, [{1, 3, 6, 1, 5, 5, 7, 3, 1}])
+    server? = {1, 3, 6, 1, 5, 5, 7, 3, 1} in purposes
+    any_ca? = Map.get(options, :allow_any_ca_purpose) == true and {2, 5, 29, 37, 0} in purposes
+
+    Enum.all?(Map.keys(extensions), &(&1 in supported)) and
+      case depth do
+        :peer ->
+          server? and :digitalSignature in usages
+
+        depth ->
+          (server? or any_ca?) and :keyCertSign in usages and
+            certificate_ca_depth?(Map.get(extensions, {2, 5, 29, 19}), depth)
+      end
+  end
+
+  defp certificate_ca_depth?({:BasicConstraints, true, :asn1_NOVALUE}, _depth), do: true
+
+  defp certificate_ca_depth?({:BasicConstraints, true, maximum}, depth) when is_integer(maximum),
+    do: depth <= maximum
+
+  defp certificate_ca_depth?(_constraints, _depth), do: false
+
+  defp certificate_valid_at?(%{validity: {:Validity, first, last}}, dates) do
+    Enum.all?(dates, fn {{year, _, _}, _} = date ->
+      now = :calendar.datetime_to_gregorian_seconds(date)
+
+      with {:ok, first} <- certificate_time(first, year, :start),
+           {:ok, last} <- certificate_time(last, year, :finish) do
+        first <= now and now <= last
+      else
+        _ -> false
+      end
+    end)
+  end
+
+  defp certificate_time({:utcTime, value}, year, boundary) do
+    with <<digits::binary-size(2), _::binary>> = value <- List.to_string(value),
+         {short_year, ""} <- Integer.parse(digits) do
+      minimum_year = Integer.mod(year - 50, 100)
+
+      century =
+        case boundary do
+          :start when short_year >= 50 -> 19
+          :start -> div(year, 100)
+          :finish when short_year < minimum_year -> div(year + 50, 100)
+          :finish -> div(year - 49, 100)
+        end
+
+      certificate_time({:generalTime, Integer.to_string(century) <> value}, year, boundary)
+    else
+      _ -> :error
+    end
+  end
+
+  defp certificate_time({:generalTime, value}, _year, _boundary) do
+    case Regex.run(~r/\A(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z\z/, to_string(value)) do
+      [_, y, m, d, h, minute, second] ->
+        [y, m, d, h, minute, second] = Enum.map([y, m, d, h, minute, second], &String.to_integer/1)
+        if :calendar.valid_date({y, m, d}) and h in 0..23 and minute in 0..59 and second in 0..59 do
+          {:ok, :calendar.datetime_to_gregorian_seconds({{y, m, d}, {h, minute, second}})}
+        else
+          :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp certificate_time(_time, _year, _boundary), do: :error
 
   defp encrypted_extensions_alpn(:undefined), do: {:ok, :undefined}
 
@@ -3636,11 +4013,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
            data
            |> put_elem(10, expected_states)
            |> put_elem(3, put_elem(elem(data, 3), 5, hello_version)),
-         fragment = :tls_handshake.encode_handshake(hello2, hello_version),
+         {:ok, fragment} <- client_hello_fragment(hello2),
          {messages, _previous} = elem(handshake, 3),
          history = {[fragment | messages], messages},
-         {encoded, encoded_states} =
-           :tls_record.encode_handshake(fragment, hello_version, expected_states),
+         {:ok, encoded, encoded_states} <-
+           encode_handshake_records(state, source, fragment, hello_version, expected_states),
          {:ok, {^encoded, ^encoded_states, ^history}, _} <-
            hello_fact(
              state,
@@ -3756,6 +4133,169 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     do: Map.put(states, :max_fragment_length, Bitwise.bsl(1, 8 + enum))
 
   defp hello_fragment_limit(_maximum, states), do: states
+
+  defp client_hello_fragment(
+         {:client_hello, {major, minor}, <<random::binary-size(32)>>, session, _cookie, suites,
+          extensions}
+       )
+       when is_map(extensions) do
+    encoded = client_hello_extensions(extensions)
+
+    body =
+      IO.iodata_to_binary([
+        <<major, minor>>,
+        random,
+        hello_vector(session, 8),
+        hello_vector(suites, 16),
+        <<1, 0>>,
+        hello_vector(encoded, 16)
+      ])
+
+    {:ok, [1, <<byte_size(body)::24>>, body]}
+  rescue
+    _malformed in [ArgumentError, FunctionClauseError, KeyError] -> :error
+  catch
+    :unsupported_client_hello_extension -> :error
+  end
+
+  defp client_hello_fragment(_hello), do: :error
+
+  defp client_hello_extensions(extensions) do
+    {psk, extensions} = Map.pop(extensions, :pre_shared_key, :undefined)
+
+    encoded =
+      Enum.reduce(Map.to_list(extensions), [], fn {_key, extension}, encoded ->
+        [client_hello_extension(extension) | encoded]
+      end)
+
+    [encoded, client_hello_extension(psk)]
+  end
+
+  defp client_hello_extension(:undefined), do: []
+  defp client_hello_extension({:renegotiation_info, :undefined}), do: []
+
+  defp client_hello_extension({:renegotiation_info, <<0>>}),
+    do: hello_extension(65_281, <<0>>)
+
+  defp client_hello_extension({:renegotiation_info, bytes}),
+    do: hello_extension(65_281, hello_vector(bytes, 8))
+
+  defp client_hello_extension({:alpn, protocols}),
+    do: hello_extension(16, hello_vector(protocols, 16))
+
+  defp client_hello_extension({:next_protocol_negotiation, protocols}),
+    do: hello_extension(13_172, protocols)
+
+  defp client_hello_extension({:elliptic_curves, curves}) do
+    groups = for curve <- curves, do: <<hello_enum(@handshake_curve_oids, curve)::16>>
+    hello_extension(10, hello_vector(groups, 16))
+  end
+
+  defp client_hello_extension({:supported_groups, groups}) do
+    ids = for group <- groups, do: <<hello_enum(@handshake_groups, group)::16>>
+    hello_extension(10, hello_vector(ids, 16))
+  end
+
+  defp client_hello_extension({:ec_point_formats, formats}),
+    do: hello_extension(11, hello_vector(formats, 8))
+
+  defp client_hello_extension({:srp, user}),
+    do: hello_extension(12, hello_vector(user, 8))
+
+  defp client_hello_extension({kind, schemes})
+       when kind in [:hash_sign_algos, :signature_algorithms, :signature_algorithms_cert] do
+    code = if kind == :signature_algorithms_cert, do: 50, else: 13
+    values = for scheme <- schemes, do: <<hello_signature_code(scheme)::16>>
+    hello_extension(code, hello_vector(values, 16))
+  end
+
+  defp client_hello_extension({:sni, []}), do: hello_extension(0, <<>>)
+
+  defp client_hello_extension({:sni, name}),
+    do: hello_extension(0, hello_vector([0, hello_vector(name, 16)], 16))
+
+  defp client_hello_extension({:use_srtp, profiles, mki}),
+    do: hello_extension(14, [hello_vector(profiles, 16), hello_vector(mki, 8)])
+
+  defp client_hello_extension({:max_frag_enum, size}), do: hello_extension(1, <<size>>)
+
+  defp client_hello_extension({:client_hello_versions, versions}) do
+    values = for {major, minor} <- versions, do: <<major, minor>>
+    hello_extension(43, hello_vector(values, 8))
+  end
+
+  defp client_hello_extension({:key_share_client_hello, shares}) do
+    values =
+      Enum.map(shares, fn {:key_share_entry, group, key} ->
+        [<<hello_enum(@handshake_groups, group)::16>>, hello_vector(key, 16)]
+      end)
+
+    hello_extension(51, hello_vector(values, 16))
+  end
+
+  defp client_hello_extension({:psk_key_exchange_modes, modes}) do
+    values = Enum.map(modes, &Map.fetch!(%{psk_ke: 0, psk_dhe_ke: 1}, &1))
+    hello_extension(45, hello_vector(values, 8))
+  end
+
+  defp client_hello_extension(
+         {:pre_shared_key_client_hello, {:offered_psks, identities, binders}}
+       ) do
+    identities =
+      Enum.map(identities, fn {:psk_identity, identity, age} ->
+        [hello_vector(identity, 16), <<age::32>>]
+      end)
+
+    binders = Enum.map(binders, &hello_vector(&1, 8))
+    hello_extension(41, [hello_vector(identities, 16), hello_vector(binders, 16)])
+  end
+
+  defp client_hello_extension({:cookie, cookie}),
+    do: hello_extension(44, hello_vector(cookie, 16))
+
+  defp client_hello_extension({:early_data_indication}), do: hello_extension(42, <<>>)
+
+  defp client_hello_extension({:certificate_authorities, authorities}) do
+    names = Enum.map(authorities, &hello_vector(:public_key.pkix_encode(:Name, &1, :otp), 16))
+    hello_extension(47, hello_vector(names, 16))
+  end
+
+  defp client_hello_extension(
+         {:certificate_status_request, type, {:ocsp_status_request, identifiers, extensions}}
+       ) do
+    ids = Enum.map(identifiers, &hello_vector(&1, 16))
+    encoded = if extensions == [], do: <<>>, else: :public_key.der_encode(:Extensions, extensions)
+    hello_extension(5, [type, hello_vector(ids, 16), hello_vector(encoded, 16)])
+  end
+
+  defp client_hello_extension(_extension), do: throw(:unsupported_client_hello_extension)
+
+  defp hello_extension(code, payload), do: [<<code::16>>, hello_vector(payload, 16)]
+
+  defp hello_vector(value, width) do
+    length = IO.iodata_length(value)
+    if length >= Bitwise.bsl(1, width), do: throw(:unsupported_client_hello_extension)
+    [<<length::size(width)>>, value]
+  end
+
+  defp hello_enum(table, value) do
+    Enum.find_value(table, fn {id, entry} -> if entry == value, do: id end) ||
+      throw(:unsupported_client_hello_extension)
+  end
+
+  defp hello_signature_code({hash, :rsa_pss_rsae}),
+    do: 0x0800 + hello_enum(Enum.map(4..6, &{&1, handshake_hash(&1)}), hash)
+
+  defp hello_signature_code({hash, :rsa_pss_pss}),
+    do: 0x0805 + hello_enum(Enum.map(4..6, &{&1, handshake_hash(&1)}), hash)
+
+  defp hello_signature_code({hash, sign}) do
+    hash = hello_enum(Enum.map(0..6, &{&1, handshake_hash(&1)}), hash)
+    sign = hello_enum(Enum.map(0..3, &{&1, handshake_sign(&1)}), sign)
+    Bitwise.bsl(hash, 8) + sign
+  end
+
+  defp hello_signature_code(scheme), do: hello_enum(@handshake_signatures, scheme)
 
   defp hello_shares(state, scope, %{versions: [{3, 4} | _], psk_groups: groups}) do
     Enum.reduce_while(groups, {:ok, []}, fn group, {:ok, shares} ->
@@ -5119,8 +5659,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           fragments
       end
 
+    encode_record_fragments(state, source, fragments, version, states, 23)
+  end
+
+  defp encode_handshake_records(state, source, fragment, version, states) do
+    maximum = Map.get(states, :max_fragment_length, 16_384)
+
+    if IO.iodata_length(fragment) > maximum do
+      fragments = fragment |> :erlang.iolist_to_iovec() |> record_fragments(maximum)
+
+      case encode_record_fragments(state, source, fragments, version, states, 22) do
+        {:ok, {encoded, states}} -> {:ok, encoded, states}
+        :error -> :error
+      end
+    else
+      encode_record(state, source, fragment, version, states, 22)
+    end
+  end
+
+  defp encode_record_fragments(state, source, fragments, version, states, type) do
     Enum.reduce_while(fragments, {:ok, {[], states}}, fn fragment, {:ok, {encoded, states}} ->
-      case encode_record(state, source, fragment, version, states, 23) do
+      case encode_record(state, source, fragment, version, states, type) do
         {:ok, record, states} -> {:cont, {:ok, {[record | encoded], states}}}
         :error -> {:halt, :error}
       end
@@ -6976,6 +7535,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp callback_result(
          state,
+         %{mfa: {:tls_client_connection_1_3, :start, 3}} = source,
+         _frame,
+         %{origin: {:tls_retry_hello, _}} = version,
+         actual
+       ) do
+    callback_result_exact(state, source, actual, {:next_state, version.name, version.data, []})
+  end
+
+  defp callback_result(
+         state,
          %{mfa: {:tls_client_connection_1_3, name, 3}} = source,
          %{event: %{value: {:internal, {:change_cipher_spec, _type}}}},
          version,
@@ -7270,6 +7839,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          state,
          source,
          %{
+           source: %{mfa: {:tls_client_connection_1_3, :start, 3}},
+           event: %{value: {:internal, {:server_hello, _, @hello_retry_random, _, _, extensions}}}
+         } = frame
+       ) do
+    case retry_client_hello_output(state, source, frame, extensions) do
+      {:ok, state, version} -> {state, version}
+      :error -> {tls_failure(state, source, :tls_retry_hello_origin), frame.current}
+    end
+  end
+
+  defp worker_output(
+         state,
+         source,
+         %{
            source: %{mfa: {:tls_client_connection_1_3, name, 3}},
            event: %{value: {:enter, _}}
          } = frame
@@ -7404,6 +7987,166 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp retry_start_record(state, source, _frame),
     do: tls_failure(state, source, :tls_server_hello_helper_origin)
+
+  defp retry_client_hello_output(state, source, frame, extensions) do
+    original = frame.input.data
+    current = frame.current.data
+    handshake = elem(current, 6)
+    session = elem(original, 8)
+    options = elem(original, 4)
+    specific = elem(original, 7)
+    previous_states = elem(original, 10)
+
+    with {3, 4} = version <- elem(elem(original, 3), 5),
+         {[retry, first | _], _} <- elem(elem(original, 6), 3),
+         {[^retry, [254, 0, 0, _, _] | _] = messages, _} = previous_history <- elem(handshake, 3),
+         {:key_share_client_hello, [{:key_share_entry, group, private}]} <- elem(handshake, 30),
+         {:key_share_hello_retry_request, ^group} <- Map.get(extensions, :key_share),
+         {:ok, public} <- retry_public_key(private),
+         {:ok, fragment} <-
+           retry_client_hello_fragment(first, group, public, Map.get(extensions, :cookie)),
+         {:ok, encoded, states} <-
+           encode_handshake_records(state, source, fragment, version, previous_states),
+         history = {[fragment | messages], messages},
+         {:ok, state} <-
+           retry_encoding_copy(
+             state,
+             frame,
+             source,
+             fragment,
+             [version, previous_states, previous_history],
+             {encoded, states, history}
+           ),
+         {handshake, flight} = retry_change_cipher_spec(handshake, elem(session, 1), encoded),
+         [write] <-
+           Enum.filter(state.transport.writes, fn write ->
+             write.port == state.owners[source.pid].family.port and
+               write.source.pid == source.pid and frame.source.index < write.source.index and
+               write.returned.index < source.index
+           end),
+         true <- write.bytes === IO.iodata_to_binary(flight) do
+      handshake = put_elem(handshake, 3, history)
+      data = current |> put_elem(6, handshake) |> put_elem(8, session) |> put_elem(10, states)
+
+      name =
+        if Map.get(specific, :hello_retry, false) and Map.get(options, :middlebox_comp_mode, true),
+          do: :hello_retry_middlebox_assert,
+          else: :wait_sh
+
+      version = %{frame.current | name: name, data: data, origin: {:tls_retry_hello, source.index}}
+      {:ok, state, version}
+    else
+      _ -> :error
+    end
+  end
+
+  defp retry_encoding_copy(state, frame, source, fragment, arguments, result) do
+    mfa = {:tls_gen_connection, :encode_handshake, 4}
+    calls = tls_scoped_calls(state, frame.source, source, mfa)
+
+    with [%{source: call, returned: returned}] <- calls,
+         {_, :call, {_, _, [hello | _]}} <- call.event do
+      state =
+        tls_exact(state, call, :tls_retry_hello_copy, client_hello_fragment(hello), {:ok, fragment})
+
+      state = tls_error_path(state, call, [2, 2, 0], :tls_retry_hello_copy)
+
+      state =
+        arguments
+        |> Enum.with_index(1)
+        |> Enum.reduce(state, fn {expected, position}, state ->
+          handshake_copy(state, call, [2, 2, position], expected, frame.input.origin)
+        end)
+
+      {:ok, handshake_copy(state, returned, [3], result, frame.current.origin)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp retry_change_cipher_spec(handshake, session, encoded)
+       when session != <<>> and elem(handshake, 8) == false do
+    ccs = [record_packet(20, {3, 3}, <<1>>)]
+    {put_elem(handshake, 8, true), [ccs | encoded]}
+  end
+
+  defp retry_change_cipher_spec(handshake, _session, encoded), do: {handshake, encoded}
+
+  defp retry_public_key({:ECPrivateKey, _, _, _, public, _}) when is_binary(public),
+    do: {:ok, public}
+
+  defp retry_public_key({{:ECPrivateKey, _, _, _, curve, _}, {kem, _}})
+       when is_binary(curve) and is_binary(kem),
+       do: {:ok, curve <> kem}
+
+  defp retry_public_key({{first, _}, {second, _}}) when is_binary(first) and is_binary(second),
+    do: {:ok, first <> second}
+
+  defp retry_public_key({public, _}) when is_binary(public), do: {:ok, public}
+  defp retry_public_key(_private), do: :error
+
+  # The second flight retains the first flight's encoded fields. Its fresh
+  # public key and any cookie come from the modeled retry before the send.
+  defp retry_client_hello_fragment(first, group, public, cookie) do
+    with <<1, size::24, body::binary-size(size)>> <- IO.iodata_to_binary(first),
+         <<header::binary-size(34), sid_size, session::binary-size(sid_size), suites_size::16,
+           suites::binary-size(suites_size), methods_size, methods::binary-size(methods_size),
+           size::16, extensions::binary-size(size)>> <- body,
+         {:ok, extensions} <- retry_extensions(extensions, group, public, cookie) do
+      body =
+        IO.iodata_to_binary([
+          header,
+          <<sid_size>>,
+          session,
+          <<suites_size::16>>,
+          suites,
+          <<methods_size>>,
+          methods,
+          hello_vector(extensions, 16)
+        ])
+
+      {:ok, [1, <<byte_size(body)::24>>, body]}
+    else
+      _ -> :error
+    end
+  catch
+    :unsupported_client_hello_extension -> :error
+  end
+
+  defp retry_extensions(extensions, group, public, cookie) do
+    with {:ok, entries} <- retry_extension_entries(extensions, []),
+         [{51, _}] <- Enum.filter(entries, &(elem(&1, 0) == 51)),
+         false <- List.keymember?(entries, 41, 0),
+         false <- List.keymember?(entries, 44, 0),
+         key = [<<hello_enum(@handshake_groups, group)::16>>, hello_vector(public, 16)],
+         entries = List.keyreplace(entries, 51, 0, {51, hello_vector(key, 16)}),
+         {:ok, entries} <- retry_cookie(List.keydelete(entries, 42, 0), cookie) do
+      {:ok, Enum.map(entries, fn {code, payload} -> hello_extension(code, payload) end)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp retry_extension_entries(<<>>, entries), do: {:ok, Enum.reverse(entries)}
+
+  defp retry_extension_entries(
+         <<code::16, size::16, value::binary-size(size), rest::binary>>,
+         entries
+       ),
+       do: retry_extension_entries(rest, [{code, value} | entries])
+
+  defp retry_extension_entries(_bytes, _entries), do: :error
+
+  defp retry_cookie(entries, none) when none in [nil, :undefined], do: {:ok, entries}
+
+  defp retry_cookie(entries, {:cookie, cookie}) when is_binary(cookie) do
+    # The encoded ClientHello orders these extension keys after cookie.
+    earlier = [0, 1, 5, 10, 11, 12, 13, 14, 42, 45, 50, 51, 13_172, 65_281]
+    {before, remaining} = Enum.split_while(entries, &(elem(&1, 0) in earlier))
+    {:ok, before ++ [{44, hello_vector(cookie, 16)} | remaining]}
+  end
+
+  defp retry_cookie(_entries, _cookie), do: :error
 
   defp retry_group({:key_share_hello_retry_request, group}, groups, options) do
     offered = Map.get(options, :psk_groups, [hd(groups)])
