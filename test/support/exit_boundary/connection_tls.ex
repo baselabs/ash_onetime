@@ -3364,8 +3364,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
         {state, %{parent.current | name: :wait_cv, data: next, origin: origin}}
 
-      {:error, rule} -> {tls_failure(state, source, rule), parent.current}
-      _ -> {tls_failure(state, source, :tls_server_certificate_origin), parent.current}
+      {:error, rule} ->
+        {tls_failure(state, source, rule), parent.current}
+
+      _ ->
+        {tls_failure(state, source, :tls_server_certificate_origin), parent.current}
     end
   end
 
@@ -5888,7 +5891,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          records,
          {:ssl_tls, _, :undefined, _, false} = header
        ),
-    do: {:ok, {Enum.reverse(records), {header, queue}}}
+       do: {:ok, {Enum.reverse(records), {header, queue}}}
 
   defp record_header(versions, queue, maximum, downgrade, records, header) do
     version = elem(header, 2)
@@ -5929,7 +5932,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          records,
          {:ssl_tls, _, _, :undefined, false} = header
        ),
-    do: {:ok, {Enum.reverse(records), {header, queue}}}
+       do: {:ok, {Enum.reverse(records), {header, queue}}}
 
   defp record_body(versions, {_, size, _} = queue, maximum, downgrade, records, header) do
     {:ssl_tls, type, version, length, false} = header
@@ -8922,7 +8925,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
         {:ok, state, next}
 
-      _ -> :error
+      _ ->
+        :error
     end
   end
 

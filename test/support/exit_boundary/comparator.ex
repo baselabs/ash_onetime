@@ -2729,8 +2729,7 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
          stack: stack,
          event:
            {_, :call,
-            {:gen, :call,
-             [recipient, :"$gen_call", {:put, _, %AshOnetime.Cache.Entry{}, _}, _]}}
+            {:gen, :call, [recipient, :"$gen_call", {:put, _, %AshOnetime.Cache.Entry{}, _}, _]}}
        })
        when is_pid(recipient),
        do: {AshOnetime.Cache.Ets, :put, 3} in stack

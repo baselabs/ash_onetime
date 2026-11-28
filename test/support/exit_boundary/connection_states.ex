@@ -1077,7 +1077,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp owner_initial_backoff(options) do
     type = Keyword.get(options, :backoff_type, :rand_exp)
     {minimum, maximum} = owner_backoff_bounds(options[:backoff_min], options[:backoff_max])
-    owner_backoff(type, minimum, maximum)
+    owner_initial_backoff(type, minimum, maximum)
   end
 
   defp owner_backoff_bounds(nil, nil), do: {1_000, 30_000}
@@ -1085,16 +1085,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   defp owner_backoff_bounds(minimum, nil), do: {minimum, max(minimum, 30_000)}
   defp owner_backoff_bounds(minimum, maximum), do: {minimum, maximum}
 
-  defp owner_backoff(:stop, _minimum, _maximum), do: {:ok, nil}
+  defp owner_initial_backoff(:stop, _minimum, _maximum), do: {:ok, nil}
 
-  defp owner_backoff(type, minimum, maximum)
+  defp owner_initial_backoff(type, minimum, maximum)
        when type in [:rand, :exp, :rand_exp] and is_integer(minimum) and is_integer(maximum) and
               minimum >= 0 and minimum <= maximum do
     initial = if type == :rand_exp, do: {minimum, max(minimum, div(maximum, 3))}, else: nil
     {:ok, %DBConnection.Backoff{type: type, min: minimum, max: maximum, state: initial}}
   end
 
-  defp owner_backoff(_type, _minimum, _maximum), do: :error
+  defp owner_initial_backoff(_type, _minimum, _maximum), do: :error
 
   defp owner_birth_event(source, state) do
     case Map.fetch(state.owner_births, source.index) do

@@ -38,8 +38,7 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
         stack: stack,
         event:
           {_, :call,
-           {:erlang, :put,
-            [{Delivery, _}, {:done, _, :executed, _, {^target, %Claim{} = claim}}]}}
+           {:erlang, :put, [{Delivery, _}, {:done, _, :executed, _, {^target, %Claim{} = claim}}]}}
       } ->
         if {Delivery, :complete_entry, 3} in stack, do: claim
 
