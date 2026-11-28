@@ -862,8 +862,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     :loop_timeouts_update
   ]
 
-  defp pair_occurrences(pairs),
-    do: pairs |> Map.values() |> Enum.group_by(&{&1.source.pid, &1.source.mfa})
+  defp pair_occurrences(pairs) do
+    pairs
+    |> Map.values()
+    |> Enum.sort_by(& &1.source.index)
+    |> Enum.group_by(&{&1.source.pid, &1.source.mfa})
+  end
 
   # Native sys:get_state roots precede observation. Gen_statem retains its old
   # StateData while a callback's next StateData is carried separately; only
@@ -3174,9 +3178,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
            legacy_hello: %{next: next}
          } = parent
        ) do
-    state =
-      tls_exact(state, source, :tls_callback_input, Enum.take(arguments, 2), [:certify, :no_record])
-
+    expected = [:certify, :no_record]
+    state = tls_exact(state, source, :tls_callback_input, Enum.take(arguments, 2), expected)
     {state, %{parent.current | name: :certify, data: next}}
   end
 
@@ -3325,8 +3328,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     exchange = elem(elem(data, 6), 21)
 
     with true <- exchange in [:ecdhe_rsa, :ecdhe_ecdsa, :dhe_rsa, :dhe_dss, :rsa],
-         [%{source: call, returned: returned}] <- tls_scoped_calls(state, parent.source, source, mfa),
-         {:ok, peer, key, :verified} <- server_certificate(state, call, returned, entries, data) do
+         [%{source: call, returned: returned}] <-
+           tls_scoped_calls(state, parent.source, source, mfa),
+         {:ok, peer, key, :verified} <-
+           server_certificate(state, call, returned, entries, data) do
       handshake = put_elem(elem(data, 6), 25, key)
       session = put_elem(elem(data, 8), 3, peer)
       next = data |> put_elem(6, handshake) |> put_elem(8, session)
@@ -3334,7 +3339,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
       state =
         state
-        |> handshake_copy(returned, [3], {{:cert, peer, :public_key.pkix_decode_cert(peer, :otp)}, key}, origin)
+        |> handshake_copy(
+          returned,
+          [3],
+          {{:cert, peer, :public_key.pkix_decode_cert(peer, :otp)}, key},
+          origin
+        )
         |> tls_exact(source, :tls_callback_input, Enum.take(arguments, 2), [:certify, :no_record])
 
       {state, %{parent.current | name: :certify, data: next, origin: origin}}
@@ -3356,7 +3366,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case legacy_server_key_exchange(state, parent.source, source, parent.current.data, wire) do
       {:ok, data} ->
         state =
-          tls_exact(state, source, :tls_callback_input, Enum.take(arguments, 2), [:certify, :no_record])
+          tls_exact(state, source, :tls_callback_input, Enum.take(arguments, 2), [
+            :certify,
+            :no_record
+          ])
 
         origin = {:tls_legacy_server_key, parent.source.index}
         {state, %{parent.current | name: :certify, data: data, origin: origin}}
@@ -3378,7 +3391,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     case legacy_client_flight(state, parent, source) do
       {:ok, state, data} ->
         state =
-          tls_exact(state, source, :tls_callback_input, Enum.take(arguments, 2), [:cipher, :no_record])
+          tls_exact(state, source, :tls_callback_input, Enum.take(arguments, 2), [
+            :cipher,
+            :no_record
+          ])
 
         origin = {:tls_legacy_client_flight, parent.source.index}
         {state, %{parent.current | name: :cipher, data: data, origin: origin}}
@@ -3404,8 +3420,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          {:ok, states} <-
            legacy_activate(state, parent.source, source, elem(data, 10), :read) do
       data = data |> put_elem(6, put_elem(handshake, 4, true)) |> put_elem(10, states)
+
       state =
-        tls_exact(state, source, :tls_callback_input, Enum.take(arguments, 2), [:cipher, :no_record])
+        tls_exact(state, source, :tls_callback_input, Enum.take(arguments, 2), [
+          :cipher,
+          :no_record
+        ])
 
       {state, %{parent.current | data: data, origin: {:tls_legacy_read_cipher, source.index}}}
     else
@@ -3441,19 +3461,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     stapling = elem(elem(data, 6), 32)
     host = elem(elem(data, 2), 9)
 
-    with {:ok, chain} <- certificate_chain(entries, options, stapling),
-         [peer | _] = chain,
-         {:tls_certificate_anchor, {:ok, roots}} <- {:tls_certificate_anchor, certificate_roots(options)},
-         {:tls_certificate_clock, [_ | _] = dates} <-
-           {:tls_certificate_clock, certificate_clock_reads(state, call, returned)},
-         {:tls_certificate_path, {:ok, key, root, path}} <-
-           {:tls_certificate_path, certificate_issuer_path(roots, Enum.reverse(chain), dates, options)},
-         {:tls_certificate_path_call, true} <-
-           {:tls_certificate_path_call, certificate_trust_input?(state, call, returned, root, path)} do
+    with {:ok, [peer | _] = chain} <- certificate_chain(entries, options, stapling),
+         {:ok, roots} <- certificate_roots(options),
+         {:ok, dates} <- certificate_dates(state, call, returned),
+         {:ok, key, root, path} <- certificate_path(roots, chain, dates, options),
+         :ok <- certificate_trust_input(state, call, returned, root, path, options) do
       {:ok, peer, key, certificate_hostname(peer, host, options)}
     else
       {:error, rule} -> {:error, rule}
-      {rule, _} -> {:error, rule}
     end
   rescue
     _invalid in [ArgumentError, FunctionClauseError, MatchError, KeyError] ->
@@ -3480,35 +3495,58 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp certificate_roots(%{cacerts: certs}) when is_list(certs) and certs != [], do: {:ok, certs}
 
   defp certificate_roots(%{cacertfile: file}) when is_list(file) or is_binary(file) do
-    with {:ok, pem} <- File.read(file) do
-      {:ok, for({:Certificate, der, :not_encrypted} <- :public_key.pem_decode(pem), do: der)}
+    with {:ok, pem} <- File.read(file),
+         [_ | _] = roots <-
+           for({:Certificate, der, :not_encrypted} <- :public_key.pem_decode(pem), do: der) do
+      {:ok, roots}
+    else
+      _ -> {:error, :tls_certificate_anchor}
     end
   end
 
-  defp certificate_roots(_options), do: :error
+  defp certificate_roots(_options), do: {:error, :tls_certificate_anchor}
 
-  defp certificate_trust_input?(state, first, last, root, path) do
+  defp certificate_dates(state, first, last) do
+    case certificate_clock_reads(state, first, last) do
+      [_ | _] = dates -> {:ok, dates}
+      [] -> {:error, :tls_certificate_clock}
+    end
+  end
+
+  defp certificate_path(roots, chain, dates, options) do
+    case certificate_issuer_path(roots, Enum.reverse(chain), dates, options) do
+      {:ok, _, _, _} = path -> path
+      :error -> {:error, :tls_certificate_path}
+    end
+  end
+
+  defp certificate_trust_input(state, first, last, root, path, options) do
     mfa = {:public_key, :pkix_path_validation, 3}
-    expected_root = :public_key.pkix_decode_cert(root, :otp)
-    expected_path = Enum.map(path, &:public_key.pkix_decode_cert(&1, :otp))
+    depth = options.depth
+    root_otp = :public_key.pkix_decode_cert(root, :otp)
 
-    case tls_scoped_calls(state, first, last, mfa) do
-      [%{source: %{event: {_, :call, {:public_key, :pkix_path_validation, [anchor, chain, _]}}}}] ->
-        certificate_identity(anchor) === expected_root and
-          Enum.map(chain, &certificate_identity/1) === expected_path
-
-      _ ->
-        false
+    with [%{source: %{event: {_, :call, {_, _, [anchor, chain, path_options]}}}}] <-
+           tls_scoped_calls(state, first, last, mfa),
+         true <- certificate_input?(anchor, root, root_otp),
+         true <- length(chain) == length(path),
+         true <- Enum.all?(Enum.zip(chain, path), &certificate_copy?/1),
+         [max_path_length: ^depth, verify_fun: {verify, context}] <- path_options,
+         true <- is_function(verify, 4),
+         %{issuer: ^root_otp, role: :client, crl_check: false, path_len: path_length} <- context,
+         true <- path_length == length(path) do
+      :ok
+    else
+      _ -> {:error, :tls_certificate_path_call}
     end
   end
 
-  defp certificate_identity({:cert, der, otp}) when is_binary(der) do
-    if :public_key.pkix_decode_cert(der, :otp) === otp, do: otp
-  end
+  defp certificate_copy?({actual, der}),
+    do: certificate_input?(actual, der, :public_key.pkix_decode_cert(der, :otp))
 
-  defp certificate_identity(der) when is_binary(der), do: :public_key.pkix_decode_cert(der, :otp)
-  defp certificate_identity({:OTPCertificate, _, _, _} = otp), do: otp
-  defp certificate_identity(_certificate), do: nil
+  defp certificate_input?({:cert, der, otp}, der, otp), do: true
+  defp certificate_input?(der, der, _otp), do: true
+  defp certificate_input?(otp, _der, otp), do: true
+  defp certificate_input?(_value, _der, _otp), do: false
 
   defp certificate_clock_reads(state, first, last) do
     mfa = {:calendar, :universal_time, 0}
@@ -3534,7 +3572,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         name = if is_atom(name), do: Atom.to_charlist(name), else: name
         reference = certificate_reference_name(name)
 
-        if :public_key.pkix_verify_hostname(peer, [reference], options.customize_hostname_check) do
+        hostname_options = options.customize_hostname_check
+
+        if :public_key.pkix_verify_hostname(peer, [reference], hostname_options) do
           :verified
         else
           %{extensions: extensions} = certificate_record(peer, nil)
@@ -3864,9 +3904,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       when module in [:tls_client_connection, :tls_client_connection_1_3] ->
         initial_hello_input(state, source, parent)
 
+      {:tls_client_connection, :certify, 3} ->
+        arguments = elem(elem(source.event, 2), 2)
+
+        case parent.event do
+          %{value: {:internal, packet}}
+          when is_tuple(packet) and elem(packet, 0) in [:certificate, :server_hello_done] ->
+            state = tls_exact(state, source, :tls_callback_input, Enum.at(arguments, 3), [])
+            server_hello_next_input(state, source, arguments, parent)
+
+          _ ->
+            buffered_input(state, source, parent)
+        end
+
       {module, name, 3}
-      when {module, name} in [{:tls_client_connection_1_3, :wait_finished}, {:tls_client_connection, :cipher}] and
-             is_map_key(parent, :connection_ready) ->
+      when {module, name} in [
+             {:tls_client_connection_1_3, :wait_finished},
+             {:tls_client_connection, :cipher}
+           ] and is_map_key(parent, :connection_ready) ->
         arguments = elem(elem(source.event, 2), 2)
 
         state =
@@ -4662,11 +4717,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             state,
             source,
             [2, 2],
-            [program.hello, elem(data, 4), elem(data, 10), elem(elem(environment, 5), 0), elem(session, 1)],
+            [
+              program.hello,
+              elem(data, 4),
+              elem(data, 10),
+              elem(elem(environment, 5), 0),
+              elem(session, 1)
+            ],
             frame.input.origin
           )
 
-        put_in(state.records[source.index], %{kind: :legacy_hello, result: program.result, program: program})
+        put_in(state.records[source.index], %{
+          kind: :legacy_hello,
+          result: program.result,
+          program: program
+        })
 
       :error ->
         tls_failure(state, source, :tls_hello_negotiation_origin)
@@ -7080,7 +7145,20 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp record_return(state, source, %{kind: :alert_encode} = record) do
     [frame | rest] = state.frames[source.pid]
-    put_in(state.frames[source.pid], [Map.put(frame, :receiver_alert, record) | rest])
+    state = put_in(state.frames[source.pid], [Map.put(frame, :receiver_alert, record) | rest])
+    from = elem(elem(frame.input.data, 9), 1)
+    last = state.pairs[frame.source.index].returned.index
+
+    if from == :undefined do
+      tls_failure(state, source, :tls_certificate_alert_reply_origin)
+    else
+      put_in(state.direct_replies[source.pid], %{
+        from: from,
+        reply: certificate_alert_reply(record.program.send_alert),
+        origin: record.origin,
+        last: last
+      })
+    end
   end
 
   defp record_return(state, source, %{kind: :records, parsed: parsed}) do
@@ -7105,10 +7183,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     frame =
       case frame.source.mfa do
         {:tls_client_connection_1_3, :wait_finished, 3} ->
-          Map.put(frame, :connection_ready, [:connection, :no_record, [{{:timeout, :handshake}, :cancel}]])
+          Map.put(frame, :connection_ready, [
+            :connection,
+            :no_record,
+            [{{:timeout, :handshake}, :cancel}]
+          ])
 
         {:tls_client_connection, :cipher, 3} ->
-          Map.put(frame, :connection_ready, [:connection, :no_record, [{{:timeout, :handshake}, :infinity, :close}]])
+          Map.put(frame, :connection_ready, [
+            :connection,
+            :no_record,
+            [{{:timeout, :handshake}, :infinity, :close}]
+          ])
 
         _ ->
           frame
@@ -8057,16 +8143,31 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp receiver_certificate_refusal(state, source, frame, %{result: {encoded, states}} = record) do
-    %{program: program} = record
+  defp certificate_alert_reply({:alert, 2, 42, %{file: file, line: line}, :client, reason}) do
+    format =
+      ~c"TLS client: In state wait_cert_cr at ~s:~B" ++
+        ~c" generated CLIENT ALERT: Fatal - Bad Certificate~n ~P"
+
+    message =
+      format
+      |> :io_lib.format([file, line, reason, 20])
+      |> List.flatten()
+
+    {:error, {:tls_alert, {:bad_certificate, message}}}
+  end
+
+  defp receiver_certificate_refusal(state, source, frame, record) do
+    %{result: {encoded, states}, program: program} = record
     data = frame.input.data
     origin = {:tls_certificate_refusal, source.index}
     own_mfa = {:ssl_gen_statem, :handle_own_alert, 3}
     send_mfa = {:tls_gen_connection, :send_alert, 2}
+    reply_mfa = {:gen_statem, :reply, 2}
     port = state.owners[source.pid].family.port
 
     with [own] <- tls_scoped_calls(state, program.pair.returned, source, own_mfa),
          [send] <- tls_scoped_calls(state, own.source, own.returned, send_mfa),
+         [reply] <- tls_scoped_calls(state, send.returned, own.returned, reply_mfa),
          [write] <-
            Enum.filter(state.transport.writes, fn write ->
              write.port == port and write.source.pid == source.pid and
@@ -8085,8 +8186,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         |> handshake_copy(own.source, [2, 2], [program.alert, :wait_cert_cr, data], origin)
         |> handshake_copy(send.source, [2, 2], [program.send_alert, data], origin)
         |> handshake_copy(send.returned, [3], put_elem(data, 10, states), record.origin)
+        |> handshake_copy(reply.returned, [3], :ok, origin)
         |> handshake_copy(own.returned, [3], {:stop, {:shutdown, :own_alert}, data}, origin)
-        |> tls_exact(write.source, :tls_certificate_alert_write, write.bytes, IO.iodata_to_binary(encoded))
+        |> tls_exact(
+          write.source,
+          :tls_certificate_alert_write,
+          write.bytes,
+          IO.iodata_to_binary(encoded)
+        )
 
       {:ok, state, origin}
     else
@@ -8135,7 +8242,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     with true <- version in options.versions and cipher in options.ciphers,
          {false, _} <- elem(handshake, 5),
-         true <- elem(handshake, 12) != :pause and id != elem(session, 1),
+         true <- elem(handshake, 12) != :pause,
+         false <- id != <<>> and id == elem(session, 1) and elem(session, 10) == true,
          true <- not legacy_downgrade?(options.versions, random),
          {:ok, parameters} <- legacy_cipher_parameters(cipher),
          {:ok, secure?} <- legacy_secure_renegotiation(Map.get(extensions, :renegotiation_info)),
@@ -8198,8 +8306,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp legacy_cipher_parameters(cipher) do
-    hashes = %{null: {0, 0}, aead: {:aead, 0}, md5: {1, 16}, sha: {2, 20}, sha256: {4, 32},
-      sha384: {5, 48}, sha512: {6, 64}}
+    hashes = %{
+      null: {0, 0},
+      aead: {:aead, 0},
+      md5: {1, 16},
+      sha: {2, 20},
+      sha256: {4, 32},
+      sha384: {5, 48},
+      sha512: {6, 64}
+    }
 
     with %{key_exchange: exchange, cipher: algorithm, mac: mac, prf: prf} <-
            :ssl_cipher_format.suite_bin_to_map(cipher),
@@ -8238,7 +8353,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         parameters =
           fields
           |> Enum.with_index(3)
-          |> Enum.reduce(parameters, fn {value, index}, record -> put_elem(record, index, value) end)
+          |> Enum.reduce(parameters, fn {value, index}, record ->
+            put_elem(record, index, value)
+          end)
 
         states
         |> put_in([direction, :reneg, :secure_renegotiation], secure?)
@@ -8246,7 +8363,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end)
   end
 
-  defp legacy_new_session(data, {version, id, states, kind, protocol, stapling}, cipher, exchange) do
+  defp legacy_new_session(
+         data,
+         {version, id, states, kind, protocol, stapling},
+         cipher,
+         exchange
+       ) do
     handshake = elem(data, 6)
     name = if protocol == :undefined, do: elem(handshake, 18), else: protocol
 
@@ -8277,14 +8399,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     scope = %{source: first, returned: last}
 
     with {:ok, agreement, body, signature_scheme, signature} <- legacy_peer_key(exchange, wire),
-         hash_sign <- handshake_signature_version(handshake_signature(signature_scheme), signature_scheme, {3, 3}),
-         true <- legacy_verify_signature(hash_sign, signature, [client_random, server_random, body], elem(handshake, 25)),
+         hash_sign = legacy_hash_sign(signature_scheme),
+         true <-
+           legacy_verify_signature(
+             hash_sign,
+             signature,
+             [client_random, server_random, body],
+             elem(handshake, 25)
+           ),
          {:ok, keys, shared} <- legacy_shared_secret(state, scope, agreement),
          {:ok, hash} <- record_mac_algorithm(elem(parameters, 8)),
          master = legacy_prf(hash, shared, "master secret", [client_random, server_random], 48),
          {:ok, states} <- legacy_session_keys(state, first, last, states, master) do
       session = put_elem(session, 7, master)
-      session = if elem(keys, 0) == :ECPrivateKey, do: put_elem(session, 12, elem(keys, 3)), else: session
+      session =
+        if elem(keys, 0) == :ECPrivateKey, do: put_elem(session, 12, elem(keys, 3)), else: session
       handshake = handshake |> put_elem(19, hash_sign) |> put_elem(22, keys)
       {:ok, data |> put_elem(6, handshake) |> put_elem(8, session) |> put_elem(10, states)}
     else
@@ -8292,25 +8421,36 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
-  defp legacy_peer_key(exchange, <<3, group::16, size, point::binary-size(size), scheme::16,
-                                  length::16, signature::binary-size(length)>>)
+  defp legacy_peer_key(
+         exchange,
+         <<3, group::16, size, point::binary-size(size), scheme::16, length::16,
+           signature::binary-size(length)>>
+       )
        when exchange in [:ecdhe_rsa, :ecdhe_ecdsa] do
     case Map.fetch(@handshake_curve_oids, group) do
-      {:ok, oid} -> {:ok, {:ecdh, oid, point}, <<3, group::16, size, point::binary>>, scheme, signature}
-      :error -> :error
+      {:ok, oid} ->
+        {:ok, {:ecdh, oid, point}, <<3, group::16, size, point::binary>>, scheme, signature}
+
+      :error ->
+        :error
     end
   end
 
-  defp legacy_peer_key(exchange, <<p_len::16, p::binary-size(p_len), g_len::16, g::binary-size(g_len),
-                                  y_len::16, peer::binary-size(y_len), scheme::16, size::16,
-                                  signature::binary-size(size)>>)
+  defp legacy_peer_key(
+         exchange,
+         <<p_len::16, p::binary-size(p_len), g_len::16, g::binary-size(g_len), y_len::16,
+           peer::binary-size(y_len), scheme::16, size::16, signature::binary-size(size)>>
+       )
        when exchange in [:dhe_rsa, :dhe_dss] and p_len >= 128 do
     body = <<p_len::16, p::binary, g_len::16, g::binary, y_len::16, peer::binary>>
-    {:ok, {:dh, [:binary.decode_unsigned(p), :binary.decode_unsigned(g)], peer}, body, scheme,
-     signature}
+    parameters = [:binary.decode_unsigned(p), :binary.decode_unsigned(g)]
+    {:ok, {:dh, parameters, peer}, body, scheme, signature}
   end
 
   defp legacy_peer_key(_exchange, _wire), do: :error
+
+  defp legacy_hash_sign(scheme),
+    do: handshake_signature_version(handshake_signature(scheme), scheme, {3, 3})
 
   defp legacy_verify_signature({hash, sign}, signature, body, key)
        when hash in [:sha, :sha224, :sha256, :sha384, :sha512] do
@@ -8319,7 +8459,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         do: [rsa_padding: :rsa_pkcs1_pss_padding, rsa_pss_saltlen: -1, rsa_mgf1_md: hash],
         else: []
 
-    :public_key.verify(IO.iodata_to_binary(body), hash, signature, certificate_verify_key(key), options)
+    :public_key.verify(
+      IO.iodata_to_binary(body),
+      hash,
+      signature,
+      certificate_verify_key(key),
+      options
+    )
   rescue
     _invalid in [ArgumentError, FunctionClauseError] -> false
   end
@@ -8332,7 +8478,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     with {:ok, {public, private}} <-
            handshake_crypto_origin(state, scope, {:crypto, :generate_key, 2}, [:ecdh, curve]),
          {:ok, shared} <-
-           handshake_primitive(state, scope, {:crypto, :compute_key, 4}, [:ecdh, peer, private, curve]) do
+           handshake_primitive(state, scope, {:crypto, :compute_key, 4}, [
+             :ecdh,
+             peer,
+             private,
+             curve
+           ]) do
       keys = {:ECPrivateKey, :ecPrivkeyVer1, private, {:namedCurve, oid}, public, :asn1_NOVALUE}
       {:ok, keys, shared}
     else
@@ -8344,7 +8495,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     with {:ok, {_public, private} = keys} <-
            handshake_crypto_origin(state, scope, {:crypto, :generate_key, 2}, [:dh, parameters]),
          {:ok, shared} <-
-           handshake_primitive(state, scope, {:crypto, :compute_key, 4}, [:dh, peer, private, parameters]) do
+           handshake_primitive(state, scope, {:crypto, :compute_key, 4}, [
+             :dh,
+             peer,
+             private,
+             parameters
+           ]) do
       {:ok, keys, shared}
     else
       _ -> :error
@@ -8361,7 +8517,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     with {:ok, hash} <- record_mac_algorithm(elem(parameters, 8)),
          {:ok, client_nonce, server_nonce} <- legacy_cipher_nonces(state, first, last, bulk) do
-      material = legacy_prf(hash, master, "key expansion", randoms, 2 * (iv_size + key_size + mac_size))
+      size = 2 * (iv_size + key_size + mac_size)
+      material = legacy_prf(hash, master, "key expansion", randoms, size)
 
       <<client_mac::binary-size(mac_size), server_mac::binary-size(mac_size),
         client_key::binary-size(key_size), server_key::binary-size(key_size),
@@ -8395,8 +8552,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp legacy_install_key(direction, master, cipher, mac) do
-    %{direction | security_parameters: put_elem(direction.security_parameters, 10, master),
-      cipher_state: cipher, mac_secret: mac}
+    %{
+      direction
+      | security_parameters: put_elem(direction.security_parameters, 10, master),
+        cipher_state: cipher,
+        mac_secret: mac
+    }
   end
 
   defp legacy_prf(hash, key, label, seed, size) do
@@ -8420,13 +8581,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp legacy_entropy(state, first, last, length) do
     mfa = {:crypto, :strong_rand_bytes, 1}
 
-    calls =
-      state
-      |> tls_scoped_calls(first, last, mfa)
-      |> Enum.sort_by(& &1.source.index)
+    calls = tls_scoped_calls(state, first, last, mfa)
 
-    for %{source: %{event: {_, :call, {:crypto, :strong_rand_bytes, [^length]}}}, returned: result} <-
-          calls,
+    for %{source: %{event: {_, :call, {_, _, [^length]}}}, returned: result} <- calls,
         {_, :return_from, ^mfa, bytes} <- [result.event],
         is_binary(bytes) and byte_size(bytes) == length,
         do: bytes
@@ -8434,7 +8591,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
   defp legacy_activate(state, first, last, states, direction) do
     {active, pending} =
-      if direction == :read, do: {:current_read, :pending_read}, else: {:current_write, :pending_write}
+      if direction == :read,
+        do: {:current_read, :pending_read},
+        else: {:current_write, :pending_write}
 
     connection_end = elem(states[pending].security_parameters, 2)
     secure? = get_in(states, [active, :reneg, :secure_renegotiation])
@@ -8442,6 +8601,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     with [clock] <- certificate_clock_reads(state, first, last),
          [random] <- legacy_entropy(state, first, last, 28) do
       seconds = :calendar.datetime_to_gregorian_seconds(clock) - 62_167_219_200
+
       replacement =
         Tuple.duplicate(:undefined, 16)
         |> put_elem(0, :security_parameters)
@@ -8452,8 +8612,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         security_parameters: replacement,
         cipher_state: :undefined,
         mac_secret: :undefined,
-        early_data: %{pending_early_data_size: 0, trial_decryption: false, early_data_accepted: false},
-        reneg: %{secure_renegotiation: secure?, client_verify_data: :undefined, server_verify_data: :undefined}
+        early_data: %{
+          pending_early_data_size: 0,
+          trial_decryption: false,
+          early_data_accepted: false
+        },
+        reneg: %{
+          secure_renegotiation: secure?,
+          client_verify_data: :undefined,
+          server_verify_data: :undefined
+        }
       }
 
       current = Map.put(states[pending], :sequence_number, 0)
@@ -8479,15 +8647,28 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          [change] <- tls_scoped_calls(state, exchange.returned, finished.source, ccs_mfa),
          [send] <- tls_scoped_calls(state, finished.returned, last, send_mfa),
          {:ok, state, exchanged} <-
-           legacy_queue_handshake(state, exchange, key, handshake_fragment(16, body), put_elem(data, 10, states)),
+           legacy_queue_handshake(
+             state,
+             exchange,
+             key,
+             handshake_fragment(16, body),
+             put_elem(data, 10, states)
+           ),
          {:ok, state, queued} <- legacy_change_cipher(state, change, exchanged),
-         {:ok, states} <- legacy_activate(state, change.returned, finished.source, elem(queued, 10), :write),
+         {:ok, states} <-
+           legacy_activate(state, change.returned, finished.source, elem(queued, 10), :write),
          {history, _} <- elem(elem(queued, 6), 3),
-         {:ok, verify} <- legacy_finished(states.current_write, master, "client finished", history),
-         states = legacy_verify_data(states, [:current_write, :pending_read], :client_verify_data, verify),
+         {:ok, verify} <-
+           legacy_finished(states.current_write, master, "client finished", history),
+         updated = [:current_write, :pending_read],
+         states = legacy_verify_data(states, updated, :client_verify_data, verify),
          {:ok, state, sent} <-
            legacy_queue_handshake(
-             state, finished, {:finished, verify}, handshake_fragment(20, verify), put_elem(queued, 10, states)
+             state,
+             finished,
+             {:finished, verify},
+             handshake_fragment(20, verify),
+             put_elem(queued, 10, states)
            ),
          {:ok, state, next} <- legacy_send_flight(state, send, sent) do
       {:ok, state, next}
@@ -8517,7 +8698,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     version = {3, 3}
 
     with [encoder] <- tls_scoped_calls(state, pair.source, pair.returned, mfa),
-         {:ok, encoded, next_states} <- encode_handshake_records(state, encoder.source, fragment, version, states) do
+         {:ok, encoded, next_states} <-
+           encode_handshake_records(state, encoder.source, fragment, version, states) do
       handshake =
         handshake |> put_elem(3, next_history) |> put_elem(31, [elem(handshake, 31), encoded])
 
@@ -8540,7 +8722,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp legacy_change_cipher(state, pair, data) do
     handshake = elem(data, 6)
 
-    with {:ok, encoded, states} <- encode_record(state, pair.source, <<1>>, {3, 3}, elem(data, 10), 20) do
+    with {:ok, encoded, states} <-
+           encode_record(state, pair.source, <<1>>, {3, 3}, elem(data, 10), 20) do
       handshake = put_elem(handshake, 31, [elem(handshake, 31), encoded])
       next = data |> put_elem(6, handshake) |> put_elem(10, states)
       origin = {:tls_legacy_change_cipher, pair.source.index}
@@ -8606,11 +8789,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     with true <- elem(handshake, 4),
          {_, history} <- elem(handshake, 3),
-         {:ok, ^verify} <- legacy_finished(states.current_read, elem(session, 7), "server finished", history) do
-      states = legacy_verify_data(states, [:current_write, :current_read], :server_verify_data, verify)
+         {:ok, ^verify} <-
+           legacy_finished(states.current_read, elem(session, 7), "server finished", history) do
+      states =
+        legacy_verify_data(states, [:current_write, :current_read], :server_verify_data, verify)
 
       session =
-        if options.verify == :verify_peer and options.reuse_sessions != false and elem(session, 10) == false,
+        if options.verify == :verify_peer and options.reuse_sessions != false and
+             elem(session, 10) == false,
           do: put_elem(session, 10, true),
           else: session
 
@@ -8955,7 +9141,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          true <- cipher in Map.fetch!(options, :ciphers),
          true <- session === elem(elem(data, 8), 1),
          :undefined <- Map.get(extensions, :pre_shared_key, :undefined),
-         {:key_share_server_hello, {:key_share_entry, group, public}} <- Map.get(extensions, :key_share),
+         {:key_share_server_hello, {:key_share_entry, group, public}} <-
+           Map.get(extensions, :key_share),
          {:supported_groups, groups} <- Map.fetch!(options, :supported_groups),
          true <- group in groups,
          {:key_share_client_hello, shares} = key_share <- elem(handshake, 30),

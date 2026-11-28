@@ -7047,6 +7047,7 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
           %{source: %{mfa: {Postgrex.Protocol, ^function, _}}} = child <- [programs[index]],
           {:return_from, :ok, _} = terminal <- [elem(child.expected, 1)],
           elem(parent.expected, 1) == terminal,
+          elem(parent.returned.event, 3) === elem(child.returned.event, 3),
           do: {parent, child}
 
     decoder_indexes =

@@ -661,8 +661,16 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       }
 
       spans = if buffer == <<>>, do: [], else: [span]
-      {port,
-       %{buffer: buffer, offset: 0, rows: [], row_sources: [], types: protocol.types, spans: spans}}
+      cursor = %{
+        buffer: buffer,
+        offset: 0,
+        rows: [],
+        row_sources: [],
+        types: protocol.types,
+        spans: spans
+      }
+
+      {port, cursor}
     end
   end
 

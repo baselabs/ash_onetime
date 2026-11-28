@@ -1922,24 +1922,25 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   end
 
   defp cache_fingerprint_side?(state, side) do
-    index = at_index(state.at, if(side == :run, do: :run_index, else: :twin_index))
+    source = state.current[side]
+    events = state[side].connection_history.indexed.events
+    validation = {AshOnetime.Cache, :valid_entry?, 2}
+    equality = {AshOnetime.Cache, :fixed_equal?, 2}
 
-    if is_integer(index) do
-      events = Enum.take(state[side].run.events, index + 1)
-
-      start =
-        Enum.find_index(Enum.reverse(events), fn
-          %{event: {_, :call, {AshOnetime.Cache, :valid_entry?, _}}} -> true
-          _ -> false
-        end)
-
-      if start do
+    if source do
+      calls =
         events
-        |> Enum.take(-start - 1)
-        |> Enum.count(&match?(%{event: {_, :call, {AshOnetime.Cache, :fixed_equal?, _}}}, &1))
-        |> Kernel.==(1)
-      else
-        false
+        |> Enum.filter(&(&1.pid == source.pid and &1.index <= source.index))
+        |> Enum.reverse()
+
+      {scope, boundary} = Enum.split_while(calls, &(&1.mfa != validation))
+
+      case boundary do
+        [%{event: {_, :call, _}} | _] ->
+          Enum.count(scope, &(&1.mfa == equality and elem(&1.event, 1) == :call)) == 1
+
+        _ ->
+          false
       end
     else
       false

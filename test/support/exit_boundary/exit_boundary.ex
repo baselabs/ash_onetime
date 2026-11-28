@@ -146,10 +146,6 @@ defmodule AshOnetime.Test.ExitBoundary do
   end
 
   defp collector_failure(reason) do
-    for {kind, value} <- reason do
-      IO.puts("NATIVE_COLLECTOR_FAILURE: " <> Diagnostics.render(%{kind: kind, length: value}))
-    end
-
     raise ExUnit.AssertionError,
       message: "the run did not reach the terminal boundary: #{Diagnostics.render(reason)}"
   end
@@ -160,7 +156,6 @@ defmodule AshOnetime.Test.ExitBoundary do
         {state, preexisting}
 
       {:DOWN, ^monitor, :process, ^root, reason} ->
-        IO.puts("ROOT_SETUP_EXIT: " <> Diagnostics.render(Diagnostics.exit_summary(reason)))
         raise "the root stopped in setup: #{class(reason)}"
     after
       @deadline -> raise "the root did not finish its setup"

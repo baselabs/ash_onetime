@@ -274,6 +274,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
         for %{index: index, event: {_, :call, _}} <- program.execution,
             %{expected: {_, {:return_from, :ok, _}}} = child <- [Map.get(programs, index)],
             same_receive?(program, child),
+            elem(program.returned.event, 3) === elem(child.returned.event, 3),
             covered_delivery?(program, transports, consumed),
             do: child
 
@@ -295,7 +296,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
         do: {index, delivery}
   end
 
-  defp same_receive?(%{source: parent, expected: {_, {:return_from, :ok, _}}}, %{source: child}) do
+  defp same_receive?(
+         %{source: parent, expected: {_, {:return_from, :ok, _}}},
+         %{source: child}
+       ) do
     {module, function, _} = parent.mfa
     match?({^module, ^function, _}, child.mfa)
   end
@@ -318,10 +322,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   defp incorporate_partial_decoders(copies, program, child, leaves) do
     Enum.reduce(program.execution, copies, fn source, copies ->
       case Map.get(leaves, source.index) do
-        %{expected: {:more, _}, returned: returned} when returned.index < child.source.index ->
-          copies |> MapSet.put(source.index) |> MapSet.put(returned.index)
-
-        %{expected: {:more, _, _, _}, returned: returned} when returned.index < child.source.index ->
+        %{expected: expected, returned: returned}
+        when elem(expected, 0) == :more and returned.index < child.source.index ->
           copies |> MapSet.put(source.index) |> MapSet.put(returned.index)
 
         _ ->
@@ -489,8 +491,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   defp backend_row_addresses(reads) do
     for {port, connection} <- reads.connections,
         messages = Map.get(connection, :historical_messages, []) ++ connection.protocol.messages,
-        rows = Enum.filter(messages, &match?(%{direction: :backend, decoded: {:data_row, _}}, &1)),
-        {statement, rows} <- Enum.group_by(rows, & &1.statement),
+        {statement, rows} <- Enum.group_by(messages, & &1.statement),
+        rows = Enum.filter(rows, &match?(%{direction: :backend, decoded: {:data_row, _}}, &1)),
         statement != nil,
         {row, occurrence} <- Enum.with_index(rows),
         into: %{},
