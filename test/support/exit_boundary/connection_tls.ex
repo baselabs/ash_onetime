@@ -7,18 +7,114 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
                         194, 162, 17, 22, 122, 187, 140, 94, 7, 158, 9, 226, 200, 168, 51, 156>>
 
   # RFC 7919 constants from pinned OTP 29.1.2 ssl_dh_groups.
-  @ffdhe_primes %{
-    ffdhe2048:
-      0xFFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617AD3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797ABC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F619172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005C58EF1837D1683B2C6F34A26C1B2EFFA886B423861285C97FFFFFFFFFFFFFFFF,
-    ffdhe3072:
-      0xFFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617AD3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797ABC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F619172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035BBC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91CAEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B66C62E37FFFFFFFFFFFFFFFF,
-    ffdhe4096:
-      0xFFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617AD3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797ABC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F619172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035BBC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91CAEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B669E1EF16E6F52C3164DF4FB7930E9E4E58857B6AC7D5F42D69F6D187763CF1D5503400487F55BA57E31CC7A7135C886EFB4318AED6A1E012D9E6832A907600A918130C46DC778F971AD0038092999A333CB8B7A1A1DB93D7140003C2A4ECEA9F98D0ACC0A8291CDCEC97DCF8EC9B55A7F88A46B4DB5A851F44182E1C68A007E5E655F6AFFFFFFFFFFFFFFFF,
-    ffdhe6144:
-      0xFFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617AD3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797ABC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F619172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035BBC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91CAEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B669E1EF16E6F52C3164DF4FB7930E9E4E58857B6AC7D5F42D69F6D187763CF1D5503400487F55BA57E31CC7A7135C886EFB4318AED6A1E012D9E6832A907600A918130C46DC778F971AD0038092999A333CB8B7A1A1DB93D7140003C2A4ECEA9F98D0ACC0A8291CDCEC97DCF8EC9B55A7F88A46B4DB5A851F44182E1C68A007E5E0DD9020BFD64B645036C7A4E677D2C38532A3A23BA4442CAF53EA63BB454329B7624C8917BDD64B1C0FD4CB38E8C334C701C3ACDAD0657FCCFEC719B1F5C3E4E46041F388147FB4CFDB477A52471F7A9A96910B855322EDB6340D8A00EF092350511E30ABEC1FFF9E3A26E7FB29F8C183023C3587E38DA0077D9B4763E4E4B94B2BBC194C6651E77CAF992EEAAC0232A281BF6B3A739C1226116820AE8DB5847A67CBEF9C9091B462D538CD72B03746AE77F5E62292C311562A846505DC82DB854338AE49F5235C95B91178CCF2DD5CACEF403EC9D1810C6272B045B3B71F9DC6B80D63FDD4A8E9ADB1E6962A69526D43161C1A41D570D7938DAD4A40E329CD0E40E65FFFFFFFFFFFFFFFF,
-    ffdhe8192:
-      0xFFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617AD3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797ABC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F619172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035BBC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91CAEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B669E1EF16E6F52C3164DF4FB7930E9E4E58857B6AC7D5F42D69F6D187763CF1D5503400487F55BA57E31CC7A7135C886EFB4318AED6A1E012D9E6832A907600A918130C46DC778F971AD0038092999A333CB8B7A1A1DB93D7140003C2A4ECEA9F98D0ACC0A8291CDCEC97DCF8EC9B55A7F88A46B4DB5A851F44182E1C68A007E5E0DD9020BFD64B645036C7A4E677D2C38532A3A23BA4442CAF53EA63BB454329B7624C8917BDD64B1C0FD4CB38E8C334C701C3ACDAD0657FCCFEC719B1F5C3E4E46041F388147FB4CFDB477A52471F7A9A96910B855322EDB6340D8A00EF092350511E30ABEC1FFF9E3A26E7FB29F8C183023C3587E38DA0077D9B4763E4E4B94B2BBC194C6651E77CAF992EEAAC0232A281BF6B3A739C1226116820AE8DB5847A67CBEF9C9091B462D538CD72B03746AE77F5E62292C311562A846505DC82DB854338AE49F5235C95B91178CCF2DD5CACEF403EC9D1810C6272B045B3B71F9DC6B80D63FDD4A8E9ADB1E6962A69526D43161C1A41D570D7938DAD4A40E329CCFF46AAA36AD004CF600C8381E425A31D951AE64FDB23FCEC9509D43687FEB69EDD1CC5E0B8CC3BDF64B10EF86B63142A3AB8829555B2F747C932665CB2C0F1CC01BD70229388839D2AF05E454504AC78B7582822846C0BA35C35F5C59160CC046FD8251541FC68C9C86B022BB7099876A460E7451A8A93109703FEE1C217E6C3826E52C51AA691E0E423CFC99E9E31650C1217B624816CDAD9A95F9D5B8019488D9C0A0A1FE3075A577E23183F81D4A3F2FA4571EFC8CE0BA8A4FE8B6855DFE72B0A66EDED2FBABFBE58A30FAFABE1C5D71A87E2F741EF8C1FE86FEA6BBFDE530677F0D97D11D49F7A8443D0822E506A9F4614E011E2A94838FF88CD68C8BB7C5C6424CFFFFFFFFFFFFFFFF
-  }
+  @ffdhe_primes [
+                  ffdhe2048: """
+                  FFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695
+                  A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617A
+                  D3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935
+                  984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797A
+                  BC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4
+                  AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F61
+                  9172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005
+                  C58EF1837D1683B2C6F34A26C1B2EFFA886B423861285C97FFFFFFFFFFFFFFFF
+                  """,
+                  ffdhe3072: """
+                  FFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695
+                  A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617A
+                  D3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935
+                  984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797A
+                  BC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4
+                  AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F61
+                  9172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005
+                  C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035B
+                  BC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91C
+                  AEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF
+                  5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E
+                  0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B66C62E37FFFFFFFFFFFFFFFF
+                  """,
+                  ffdhe4096: """
+                  FFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695
+                  A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617A
+                  D3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935
+                  984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797A
+                  BC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4
+                  AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F61
+                  9172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005
+                  C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035B
+                  BC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91C
+                  AEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF
+                  5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E
+                  0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B669E1EF16E6F52C3164DF4FB
+                  7930E9E4E58857B6AC7D5F42D69F6D187763CF1D5503400487F55BA57E31CC7A
+                  7135C886EFB4318AED6A1E012D9E6832A907600A918130C46DC778F971AD0038
+                  092999A333CB8B7A1A1DB93D7140003C2A4ECEA9F98D0ACC0A8291CDCEC97DCF
+                  8EC9B55A7F88A46B4DB5A851F44182E1C68A007E5E655F6AFFFFFFFFFFFFFFFF
+                  """,
+                  ffdhe6144: """
+                  FFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695
+                  A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617A
+                  D3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935
+                  984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797A
+                  BC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4
+                  AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F61
+                  9172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005
+                  C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035B
+                  BC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91C
+                  AEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF
+                  5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E
+                  0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B669E1EF16E6F52C3164DF4FB
+                  7930E9E4E58857B6AC7D5F42D69F6D187763CF1D5503400487F55BA57E31CC7A
+                  7135C886EFB4318AED6A1E012D9E6832A907600A918130C46DC778F971AD0038
+                  092999A333CB8B7A1A1DB93D7140003C2A4ECEA9F98D0ACC0A8291CDCEC97DCF
+                  8EC9B55A7F88A46B4DB5A851F44182E1C68A007E5E0DD9020BFD64B645036C7A
+                  4E677D2C38532A3A23BA4442CAF53EA63BB454329B7624C8917BDD64B1C0FD4C
+                  B38E8C334C701C3ACDAD0657FCCFEC719B1F5C3E4E46041F388147FB4CFDB477
+                  A52471F7A9A96910B855322EDB6340D8A00EF092350511E30ABEC1FFF9E3A26E
+                  7FB29F8C183023C3587E38DA0077D9B4763E4E4B94B2BBC194C6651E77CAF992
+                  EEAAC0232A281BF6B3A739C1226116820AE8DB5847A67CBEF9C9091B462D538C
+                  D72B03746AE77F5E62292C311562A846505DC82DB854338AE49F5235C95B9117
+                  8CCF2DD5CACEF403EC9D1810C6272B045B3B71F9DC6B80D63FDD4A8E9ADB1E69
+                  62A69526D43161C1A41D570D7938DAD4A40E329CD0E40E65FFFFFFFFFFFFFFFF
+                  """,
+                  ffdhe8192: """
+                  FFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695
+                  A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617A
+                  D3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935
+                  984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797A
+                  BC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4
+                  AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F61
+                  9172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005
+                  C58EF1837D1683B2C6F34A26C1B2EFFA886B4238611FCFDCDE355B3B6519035B
+                  BC34F4DEF99C023861B46FC9D6E6C9077AD91D2691F7F7EE598CB0FAC186D91C
+                  AEFE130985139270B4130C93BC437944F4FD4452E2D74DD364F2E21E71F54BFF
+                  5CAE82AB9C9DF69EE86D2BC522363A0DABC521979B0DEADA1DBF9A42D5C4484E
+                  0ABCD06BFA53DDEF3C1B20EE3FD59D7C25E41D2B669E1EF16E6F52C3164DF4FB
+                  7930E9E4E58857B6AC7D5F42D69F6D187763CF1D5503400487F55BA57E31CC7A
+                  7135C886EFB4318AED6A1E012D9E6832A907600A918130C46DC778F971AD0038
+                  092999A333CB8B7A1A1DB93D7140003C2A4ECEA9F98D0ACC0A8291CDCEC97DCF
+                  8EC9B55A7F88A46B4DB5A851F44182E1C68A007E5E0DD9020BFD64B645036C7A
+                  4E677D2C38532A3A23BA4442CAF53EA63BB454329B7624C8917BDD64B1C0FD4C
+                  B38E8C334C701C3ACDAD0657FCCFEC719B1F5C3E4E46041F388147FB4CFDB477
+                  A52471F7A9A96910B855322EDB6340D8A00EF092350511E30ABEC1FFF9E3A26E
+                  7FB29F8C183023C3587E38DA0077D9B4763E4E4B94B2BBC194C6651E77CAF992
+                  EEAAC0232A281BF6B3A739C1226116820AE8DB5847A67CBEF9C9091B462D538C
+                  D72B03746AE77F5E62292C311562A846505DC82DB854338AE49F5235C95B9117
+                  8CCF2DD5CACEF403EC9D1810C6272B045B3B71F9DC6B80D63FDD4A8E9ADB1E69
+                  62A69526D43161C1A41D570D7938DAD4A40E329CCFF46AAA36AD004CF600C838
+                  1E425A31D951AE64FDB23FCEC9509D43687FEB69EDD1CC5E0B8CC3BDF64B10EF
+                  86B63142A3AB8829555B2F747C932665CB2C0F1CC01BD70229388839D2AF05E4
+                  54504AC78B7582822846C0BA35C35F5C59160CC046FD8251541FC68C9C86B022
+                  BB7099876A460E7451A8A93109703FEE1C217E6C3826E52C51AA691E0E423CFC
+                  99E9E31650C1217B624816CDAD9A95F9D5B8019488D9C0A0A1FE3075A577E231
+                  83F81D4A3F2FA4571EFC8CE0BA8A4FE8B6855DFE72B0A66EDED2FBABFBE58A30
+                  FAFABE1C5D71A87E2F741EF8C1FE86FEA6BBFDE530677F0D97D11D49F7A8443D
+                  0822E506A9F4614E011E2A94838FF88CD68C8BB7C5C6424CFFFFFFFFFFFFFFFF
+                  """
+                ]
+                |> Map.new(fn {group, hex} ->
+                  bytes = hex |> String.replace("\n", "") |> Base.decode16!()
+                  {group, :binary.decode_unsigned(bytes)}
+                end)
 
   # Wire enumerations from RFC 8446 and the pinned OTP 29.1.2 headers.
   @handshake_groups %{
@@ -99,11 +195,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     16 => {1, 3, 132, 0, 8},
     17 => {1, 3, 132, 0, 30},
     18 => {1, 3, 132, 0, 31},
-    19 => {1, 2, 840, 10045, 3, 1, 1},
+    19 => {1, 2, 840, 10_045, 3, 1, 1},
     20 => {1, 3, 132, 0, 32},
     21 => {1, 3, 132, 0, 33},
     22 => {1, 3, 132, 0, 10},
-    23 => {1, 2, 840, 10045, 3, 1, 7},
+    23 => {1, 2, 840, 10_045, 3, 1, 7},
     24 => {1, 3, 132, 0, 34},
     25 => {1, 3, 132, 0, 35},
     26 => {1, 3, 36, 3, 3, 2, 8, 1, 1, 7},
@@ -3067,55 +3163,55 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        do: events
 
   defp receiver_actions(frames, version) do
-    finished = Enum.find(frames, &Map.has_key?(&1, :connection_ready))
-
-    hello =
-      Enum.find(frames, fn
-        %{source: %{mfa: {module, :initial_hello, 3}}}
-        when module in [:tls_client_connection, :tls_client_connection_1_3] ->
-          true
-
-        _ ->
-          false
-      end)
-
-    recv =
-      Enum.find_value(frames, fn frame ->
-        case frame.event do
-          %{value: {{:call, _from}, {:recv, _length, timeout}}} -> {:recv, timeout}
-          _ -> nil
-        end
-      end)
-
-    delivered? =
-      Enum.any?(frames, fn frame ->
-        frame.source.mfa == {:tls_gen_connection, :handle_protocol_record, 3} and
-          elem(elem(frame.input.data, 9), 1) != :undefined and
-          elem(elem(version.data, 9), 1) == :undefined
-      end)
+    ready =
+      Enum.find_value(frames, &finished_receiver_actions/1) ||
+        Enum.find_value(frames, &hello_receiver_actions/1)
 
     cond do
-      finished ->
-        Enum.at(finished.connection_ready, 2)
+      ready != nil -> ready
+      Enum.any?(frames, &delivery_cleared_receive?(&1, version)) -> receive_timeout(:infinity)
+      true -> waiting_receiver_actions(frames, version)
+    end
+  end
 
-      hello ->
-        [{:call, _from}, {:start, timeout}, _data] = hello.arguments
-        [{{:timeout, :handshake}, timeout, :close}]
+  defp finished_receiver_actions(%{connection_ready: [_, _, actions]}), do: actions
+  defp finished_receiver_actions(_frame), do: nil
 
-      delivered? ->
-        [{{:timeout, :recv}, :infinity, :timeout}]
+  defp hello_receiver_actions(%{
+         source: %{mfa: {module, :initial_hello, 3}},
+         arguments: [{:call, _from}, {:start, timeout}, _data]
+       })
+       when module in [:tls_client_connection, :tls_client_connection_1_3],
+       do: [{{:timeout, :handshake}, timeout, :close}]
 
-      recv ->
-        {:recv, timeout} = recv
+  defp hello_receiver_actions(_frame), do: nil
+
+  defp delivery_cleared_receive?(frame, version),
+    do:
+      frame.source.mfa == {:tls_gen_connection, :handle_protocol_record, 3} and
+        elem(elem(frame.input.data, 9), 1) != :undefined and
+        elem(elem(version.data, 9), 1) == :undefined
+
+  defp waiting_receiver_actions(frames, version) do
+    recv =
+      Enum.find_value(frames, fn
+        %{event: %{value: {{:call, _from}, {:recv, _length, timeout}}}} -> {:recv, timeout}
+        _ -> nil
+      end)
+
+    case recv do
+      {:recv, timeout} ->
         timeout = if elem(elem(version.data, 9), 1) == :undefined, do: :infinity, else: timeout
-        [{{:timeout, :recv}, timeout, :timeout}]
+        receive_timeout(timeout)
 
-      true ->
+      nil ->
         if Enum.any?(frames, &(&1.source.mfa == {:tls_gen_connection, :next_event, 3})),
           do: [],
           else: :missing_receiver_actions
     end
   end
+
+  defp receive_timeout(timeout), do: [{{:timeout, :recv}, timeout, :timeout}]
 
   defp worker_input(state, source, arguments, []) do
     current = state.owners[source.pid].version
@@ -3211,22 +3307,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     options = elem(data, 4)
     handshake = elem(data, 6)
 
-    maximum =
-      case Map.get(options, :max_fragment_length, :undefined) do
-        :undefined -> :undefined
-        512 -> {:max_frag_enum, 1}
-        1024 -> {:max_frag_enum, 2}
-        2048 -> {:max_frag_enum, 3}
-        4096 -> {:max_frag_enum, 4}
-      end
+    maximum = encrypted_fragment_limit(Map.get(options, :max_fragment_length, :undefined))
 
     with true <- Map.get(extensions, :max_frag_enum, :undefined) === maximum,
          {:ok, alpn} <- encrypted_extensions_alpn(Map.get(extensions, :alpn, :undefined)) do
-      accepted? =
-        hd(Map.fetch!(options, :versions)) == {3, 4} and
-          Map.fetch!(options, :use_ticket) != [:undefined] and
-          Map.fetch!(options, :early_data) != :undefined and
-          Map.get(extensions, :early_data, :undefined) != :undefined
+      accepted? = encrypted_early_data?(options, extensions)
 
       handshake = if accepted?, do: put_elem(handshake, 10, true), else: handshake
       resumed? = elem(handshake, 6) == true
@@ -3261,21 +3346,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        ) do
     data = parent.current.data
 
-    with {:ok, %{source: call, returned: returned}, peer, key, :verified} <-
-           server_certificate_program(state, parent, source, entries) do
-      handshake = put_elem(elem(data, 6), 25, key)
-      session = put_elem(elem(data, 8), 3, peer)
-      next = data |> put_elem(6, handshake) |> put_elem(8, session)
-      origin = {:tls_server_certificate, call.index}
+    case server_certificate_program(state, parent, source, entries) do
+      {:ok, %{source: call, returned: returned}, peer, key, :verified} ->
+        handshake = put_elem(elem(data, 6), 25, key)
+        session = put_elem(elem(data, 8), 3, peer)
+        next = data |> put_elem(6, handshake) |> put_elem(8, session)
+        origin = {:tls_server_certificate, call.index}
 
-      state =
-        state
-        |> handshake_copy(call, [2, 2], [certificate, data], parent.current.origin)
-        |> handshake_copy(returned, [3], {next, :wait_cv}, origin)
-        |> tls_exact(source, :tls_callback_input, Enum.take(arguments, 2), [:wait_cv, :no_record])
+        state =
+          state
+          |> handshake_copy(call, [2, 2], [certificate, data], parent.current.origin)
+          |> handshake_copy(returned, [3], {next, :wait_cv}, origin)
+          |> tls_exact(source, :tls_callback_input, Enum.take(arguments, 2), [
+            :wait_cv,
+            :no_record
+          ])
 
-      {state, %{parent.current | name: :wait_cv, data: next, origin: origin}}
-    else
+        {state, %{parent.current | name: :wait_cv, data: next, origin: origin}}
+
       {:error, rule} -> {tls_failure(state, source, rule), parent.current}
       _ -> {tls_failure(state, source, :tls_server_certificate_origin), parent.current}
     end
@@ -3436,6 +3524,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp server_hello_next_input(state, source, _arguments, parent),
     do: change_cipher_spec_next_input(state, source, parent)
 
+  defp encrypted_fragment_limit(:undefined), do: :undefined
+  defp encrypted_fragment_limit(512), do: {:max_frag_enum, 1}
+  defp encrypted_fragment_limit(1024), do: {:max_frag_enum, 2}
+  defp encrypted_fragment_limit(2048), do: {:max_frag_enum, 3}
+  defp encrypted_fragment_limit(4096), do: {:max_frag_enum, 4}
+
+  defp encrypted_early_data?(options, extensions) do
+    hd(Map.fetch!(options, :versions)) == {3, 4} and
+      Map.fetch!(options, :use_ticket) != [:undefined] and
+      Map.fetch!(options, :early_data) != :undefined and
+      Map.get(extensions, :early_data, :undefined) != :undefined
+  end
+
   defp tls_scoped_calls(state, first, last, mfa) do
     Enum.filter(Map.get(state.pair_index, {first.pid, mfa}, []), fn pair ->
       first.index < pair.source.index and pair.returned.index < last.index
@@ -3484,7 +3585,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
             is_binary(der) and map_size(extensions) == 0,
             do: der
 
-      if chain != [] and length(chain) == length(entries) and length(chain) - 1 <= options.depth,
+      depth = certificate_depth(options)
+
+      if chain != [] and length(chain) == length(entries) and length(chain) - 1 <= depth,
         do: {:ok, chain},
         else: {:error, :tls_certificate_chain}
     else
@@ -3520,9 +3623,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     end
   end
 
+  # ssl_config omits this entry when using OTP's default path depth.
+  defp certificate_depth(options), do: Map.get(options, :depth, 10)
+
   defp certificate_trust_input(state, first, last, root, path, options) do
     mfa = {:public_key, :pkix_path_validation, 3}
-    depth = options.depth
+    depth = certificate_depth(options)
     root_otp = :public_key.pkix_decode_cert(root, :otp)
 
     with [%{source: %{event: {_, :call, {_, _, [anchor, chain, path_options]}}}}] <-
@@ -4441,10 +4547,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp hello_shares(_state, _scope, _options), do: {:ok, :undefined}
 
   defp hello_nonce(state, scope, %{stapling: %{ocsp_nonce: true}}) do
-    with {:ok, nonce} when byte_size(nonce) == 32 <-
-           handshake_primitive(state, scope, {:crypto, :strong_rand_bytes, 1}, [32]) do
-      {:ok, <<4, 32, nonce::binary>>}
-    else
+    case handshake_primitive(state, scope, {:crypto, :strong_rand_bytes, 1}, [32]) do
+      {:ok, nonce} when byte_size(nonce) == 32 -> {:ok, <<4, 32, nonce::binary>>}
       _ -> :error
     end
   end
@@ -5289,24 +5393,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         decode_record_13_aead(state, source, fragment, states, handle, false)
 
       :error ->
-        cond do
-          elem(read.security_parameters, 4) == 2 and Map.has_key?(read, :early_data) ->
-            with {:ok, handle} <- record_aead_handle(state, source, read, false) do
-              decode_record_13_aead(state, source, fragment, states, handle, true)
-            end
-
-          elem(read.security_parameters, 1) == <<0, 0>> ->
-            {:ok, {{:ssl_tls, 23, {3, 4}, fragment, false}, states}}
-
-          true ->
-            {:ok,
-             record_alert(
-               {:tls_record_1_3, :decode_cipher_text, 2},
-               0,
-               20,
-               {:record_type_mismatch, 23}
-             )}
-        end
+        decode_record_13_new_handle(state, source, fragment, states, read)
     end
   end
 
@@ -5335,6 +5422,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          {:record_type_mismatch, type}
        )}
 
+  defp decode_record_13_new_handle(state, source, fragment, states, read) do
+    cond do
+      elem(read.security_parameters, 4) == 2 and Map.has_key?(read, :early_data) ->
+        with {:ok, handle} <- record_aead_handle(state, source, read, false) do
+          decode_record_13_aead(state, source, fragment, states, handle, true)
+        end
+
+      elem(read.security_parameters, 1) == <<0, 0>> ->
+        {:ok, {{:ssl_tls, 23, {3, 4}, fragment, false}, states}}
+
+      true ->
+        {:ok,
+         record_alert(
+           {:tls_record_1_3, :decode_cipher_text, 2},
+           0,
+           20,
+           {:record_type_mismatch, 23}
+         )}
+    end
+  end
+
   defp decode_record_13_aead(state, source, fragment, states, handle, early?) do
     read = states.current_read
     nonce = record_nonce(read.sequence_number, elem(read.cipher_state, 1))
@@ -5342,29 +5450,37 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     case record_primitive_event(state, source, {:crypto, :crypto_one_time_aead, 4}, arguments) do
       {:ok, {:return_from, plaintext}} when is_binary(plaintext) ->
-        if early? and read.early_data.early_data_accepted and
-             read.early_data.pending_early_data_size > 0 do
-          decode_early_record(plaintext, states, handle)
-        else
-          read = read |> Map.put(:sequence_number, read.sequence_number + 1)
-          read = Map.put(read, :aead_handle, handle)
-          {:ok, {decode_inner_record(plaintext), Map.put(states, :current_read, read)}}
-        end
+        accept_record_13(plaintext, states, handle, early?)
 
       {:ok, {tag, _reason}} when tag in [:return_from, :exception_from] ->
-        if early? and read.early_data.trial_decryption and
-             not read.early_data.early_data_accepted and
-             read.early_data.pending_early_data_size > 0 do
-          ignore_early_record(fragment, states, handle)
-        else
-          ordinal = if tag == :return_from, do: 0, else: 1
-
-          {:ok,
-           record_alert({:tls_record_1_3, :decipher_aead, 4}, ordinal, 20, :decryption_failed)}
-        end
+        refuse_record_13(tag, fragment, states, handle, early?)
 
       :error ->
         :error
+    end
+  end
+
+  defp accept_record_13(plaintext, states, handle, early?) do
+    read = states.current_read
+
+    if early? and read.early_data.early_data_accepted and
+         read.early_data.pending_early_data_size > 0 do
+      decode_early_record(plaintext, states, handle)
+    else
+      read = Map.merge(read, %{sequence_number: read.sequence_number + 1, aead_handle: handle})
+      {:ok, {decode_inner_record(plaintext), Map.put(states, :current_read, read)}}
+    end
+  end
+
+  defp refuse_record_13(tag, fragment, states, handle, early?) do
+    read = states.current_read
+
+    if early? and read.early_data.trial_decryption and not read.early_data.early_data_accepted and
+         read.early_data.pending_early_data_size > 0 do
+      ignore_early_record(fragment, states, handle)
+    else
+      ordinal = if tag == :return_from, do: 0, else: 1
+      {:ok, record_alert({:tls_record_1_3, :decipher_aead, 4}, ordinal, 20, :decryption_failed)}
     end
   end
 
@@ -5460,14 +5576,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          state,
          source,
          {:ssl_tls, type, {major, minor}, fragment, _} = record,
-         states
-       ) do
+         %{current_read: %{cipher_state: {:cipher_state, _, _, _, _, _, tag_length}}} = states
+       )
+       when is_integer(tag_length) do
     read = states.current_read
     cipher = read.cipher_state
     bulk = elem(read.security_parameters, 3)
     sequence = read.sequence_number
     cipher = if bulk == 9, do: put_elem(cipher, 5, <<sequence::64>>), else: cipher
-    tag_length = elem(cipher, 6)
     prefix = if bulk == 9, do: 0, else: 8
     length = byte_size(fragment) - prefix - tag_length
 
@@ -5499,17 +5615,24 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
                tag,
                false
              ]) do
-        if kind == :return_from and is_binary(plaintext) do
-          read = %{read | cipher_state: cipher, sequence_number: sequence + 1}
-          {:ok, {put_elem(record, 3, plaintext), Map.put(states, :current_read, read)}}
-        else
-          ordinal = if kind == :return_from, do: 0, else: 1
-          {:ok, record_alert({:ssl_record, :decipher_aead, 5}, ordinal, 20, :decryption_failed)}
-        end
+        record_aead_decode_result(kind, plaintext, record, states, cipher, sequence)
       else
         _ -> :error
       end
     end
+  end
+
+  defp decode_record_aead(_state, _source, _record, _states), do: :error
+
+  defp record_aead_decode_result(:return_from, plaintext, record, states, cipher, sequence)
+       when is_binary(plaintext) do
+    read = %{states.current_read | cipher_state: cipher, sequence_number: sequence + 1}
+    {:ok, {put_elem(record, 3, plaintext), Map.put(states, :current_read, read)}}
+  end
+
+  defp record_aead_decode_result(kind, _plaintext, _record, _states, _cipher, _sequence) do
+    ordinal = if kind == :return_from, do: 0, else: 1
+    {:ok, record_alert({:ssl_record, :decipher_aead, 5}, ordinal, 20, :decryption_failed)}
   end
 
   defp decode_record_cipher(
@@ -5523,14 +5646,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
 
     case decipher_record(state, source, fragment, version, read, padding) do
       {:ok, plaintext, mac, cipher} ->
-        with {:ok, expected} <- record_read_mac(state, source, type, plaintext, version, read) do
-          if mac === expected do
-            read = %{read | cipher_state: cipher, sequence_number: read.sequence_number + 1}
-            {:ok, {put_elem(record, 3, plaintext), Map.put(states, :current_read, read)}}
-          else
-            {:ok, record_alert({:tls_record, :decode_cipher_text, 4}, 0, 20, :undefined)}
-          end
-        end
+        expected = record_read_mac(state, source, type, plaintext, version, read)
+        record_cipher_decode_result(expected, mac, plaintext, record, states, cipher)
 
       {:alert, alert} ->
         {:ok, alert}
@@ -5539,6 +5656,17 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         :error
     end
   end
+
+  defp record_cipher_decode_result({:ok, mac}, mac, plaintext, record, states, cipher) do
+    read = states.current_read
+    read = %{read | cipher_state: cipher, sequence_number: read.sequence_number + 1}
+    {:ok, {put_elem(record, 3, plaintext), Map.put(states, :current_read, read)}}
+  end
+
+  defp record_cipher_decode_result({:ok, _}, _mac, _plaintext, _record, _states, _cipher),
+    do: {:ok, record_alert({:tls_record, :decode_cipher_text, 4}, 0, 20, :undefined)}
+
+  defp record_cipher_decode_result(other, _mac, _plaintext, _record, _states, _cipher), do: other
 
   defp record_read_mac(_state, _source, _type, _plaintext, _version, read)
        when elem(read.security_parameters, 7) == 0,
@@ -5649,21 +5777,28 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       <<explicit::binary-size(^explicit_size), content::binary-size(^length),
         mac::binary-size(^hash), padding::binary-size(^actual_pad), _pad>> = plaintext
 
-      next_iv =
-        if version == {3, 1},
-          do: binary_part(fragment, byte_size(fragment) - iv_size, iv_size),
-          else: explicit
-
-      valid? =
-        actual_pad == pad and
-          ((version == {3, 1} and not padding?) or padding == :binary.copy(<<pad>>, pad))
-
-      content = if valid?, do: content, else: <<240, content::binary>>
+      next_iv = chained_record_iv(version, fragment, explicit, iv_size)
+      exact_pad? = actual_pad == pad
+      content = checked_record_padding(content, exact_pad?, version, padding?, padding, pad)
       {:ok, content, mac, put_elem(read.cipher_state, 1, next_iv)}
     else
       {:alert, record_alert({:ssl_cipher, :block_decipher, 6}, 0, 20, :decryption_failed)}
     end
   end
+
+  defp chained_record_iv({3, 1}, fragment, _explicit, size),
+    do: binary_part(fragment, byte_size(fragment) - size, size)
+
+  defp chained_record_iv(_version, _fragment, explicit, _size), do: explicit
+
+  defp checked_record_padding(content, true, {3, 1}, false, _padding, _pad), do: content
+
+  defp checked_record_padding(content, true, _version, _check?, padding, pad) do
+    if padding == :binary.copy(<<pad>>, pad), do: content, else: <<240, content::binary>>
+  end
+
+  defp checked_record_padding(content, false, _version, _check?, _padding, _pad),
+    do: <<240, content::binary>>
 
   defp record_alert({module, function, arity}, ordinal, description, reason) do
     where = Compiled.alert_location(module, function, arity, ordinal)
@@ -5703,26 +5838,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         {:ssl_tls, :undefined, :undefined, :undefined, false}
       )
 
-  defp parse_record_queue(versions, {_, size, _} = queue, maximum, downgrade, records, header) do
-    {:ssl_tls, type, version, length, false} = header
+  defp parse_record_queue(versions, queue, maximum, downgrade, records, header) do
+    case header do
+      {:ssl_tls, :undefined, :undefined, :undefined, false} ->
+        record_type(versions, queue, maximum, downgrade, records)
 
-    cond do
-      type == :undefined and size >= 1 ->
-        {<<type>>, queue} = record_queue_take(1, queue)
+      {:ssl_tls, type, _, _, false} when type in 20..23 ->
+        record_header(versions, queue, maximum, downgrade, records, header)
 
-        parse_record_queue(
-          versions,
-          queue,
-          maximum,
-          downgrade,
-          records,
-          put_elem(header, 1, type)
-        )
-
-      type == :undefined ->
-        {:ok, {Enum.reverse(records), {:undefined, queue}}}
-
-      type not in 20..23 ->
+      {:ssl_tls, type, _, _, false} ->
         {:alert,
          record_alert(
            {:tls_record, :validate_tls_records_type, 8},
@@ -5730,48 +5854,87 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
            10,
            {:unsupported_record_type, type}
          )}
+    end
+  end
 
-      version == :undefined and size >= 2 ->
-        {<<major, minor>>, queue} = record_queue_take(2, queue)
+  defp record_type(_versions, {_, 0, _} = queue, _maximum, _downgrade, records),
+    do: {:ok, {Enum.reverse(records), {:undefined, queue}}}
 
-        parse_record_queue(
-          versions,
-          queue,
-          maximum,
-          downgrade,
-          records,
-          put_elem(header, 2, {major, minor})
-        )
+  defp record_type(versions, queue, maximum, downgrade, records) do
+    {<<type>>, queue} = record_queue_take(1, queue)
+    header = {:ssl_tls, type, :undefined, :undefined, false}
+    parse_record_queue(versions, queue, maximum, downgrade, records, header)
+  end
 
-      version == :undefined ->
-        {:ok, {Enum.reverse(records), {header, queue}}}
+  defp record_header(
+         versions,
+         {_, size, _} = queue,
+         maximum,
+         downgrade,
+         records,
+         {:ssl_tls, _, :undefined, _, false} = header
+       )
+       when size >= 2 do
+    {<<major, minor>>, queue} = record_queue_take(2, queue)
+    header = put_elem(header, 2, {major, minor})
+    record_header(versions, queue, maximum, downgrade, records, header)
+  end
 
-      not record_version?(version, versions) ->
-        ordinal = if is_list(versions), do: 0, else: 1
+  defp record_header(
+         _versions,
+         queue,
+         _maximum,
+         _downgrade,
+         records,
+         {:ssl_tls, _, :undefined, _, false} = header
+       ),
+    do: {:ok, {Enum.reverse(records), {header, queue}}}
 
-        {:alert,
-         record_alert(
-           {:tls_record, :validate_tls_record_version, 8},
-           ordinal,
-           20,
-           {:unsupported_version, version}
-         )}
+  defp record_header(versions, queue, maximum, downgrade, records, header) do
+    version = elem(header, 2)
 
-      length == :undefined and size >= 2 ->
-        {<<length::16>>, queue} = record_queue_take(2, queue)
+    if record_version?(version, versions) do
+      record_body(versions, queue, maximum, downgrade, records, header)
+    else
+      ordinal = if is_list(versions), do: 0, else: 1
 
-        parse_record_queue(
-          versions,
-          queue,
-          maximum,
-          downgrade,
-          records,
-          put_elem(header, 3, length)
-        )
+      {:alert,
+       record_alert(
+         {:tls_record, :validate_tls_record_version, 8},
+         ordinal,
+         20,
+         {:unsupported_version, version}
+       )}
+    end
+  end
 
-      length == :undefined ->
-        {:ok, {Enum.reverse(records), {header, queue}}}
+  defp record_body(
+         versions,
+         {_, size, _} = queue,
+         maximum,
+         downgrade,
+         records,
+         {:ssl_tls, _, _, :undefined, false} = header
+       )
+       when size >= 2 do
+    {<<length::16>>, queue} = record_queue_take(2, queue)
+    record_body(versions, queue, maximum, downgrade, records, put_elem(header, 3, length))
+  end
 
+  defp record_body(
+         _versions,
+         queue,
+         _maximum,
+         _downgrade,
+         records,
+         {:ssl_tls, _, _, :undefined, false} = header
+       ),
+    do: {:ok, {Enum.reverse(records), {header, queue}}}
+
+  defp record_body(versions, {_, size, _} = queue, maximum, downgrade, records, header) do
+    {:ssl_tls, type, version, length, false} = header
+
+    cond do
       length > record_maximum(versions, maximum) ->
         {:alert, record_alert({:tls_record, :validate_tls_record_length, 8}, 0, 22, :undefined)}
 
@@ -5781,20 +5944,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       true ->
         {fragment, queue} = record_queue_take(length, queue)
         record = {:ssl_tls, type, version, fragment, false}
-
-        if is_tuple(downgrade) and tuple_size(downgrade) == 2,
-          do: {:ok, {[record], {:undefined, queue}}},
-          else:
-            parse_record_queue(
-              versions,
-              queue,
-              maximum,
-              downgrade,
-              [record | records],
-              :undefined
-            )
+        record_continuation(versions, queue, maximum, downgrade, records, record)
     end
   end
+
+  defp record_continuation(_versions, queue, _maximum, {_, _}, _records, record),
+    do: {:ok, {[record], {:undefined, queue}}}
+
+  defp record_continuation(versions, queue, maximum, downgrade, records, record),
+    do: parse_record_queue(versions, queue, maximum, downgrade, [record | records], :undefined)
 
   defp record_version?({3, _} = version, versions) when is_list(versions),
     do: version in versions
@@ -6593,11 +6751,11 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        when kind in [:client_hello, :server_hello, :encrypted_extensions],
        do: {:alpn, {:alpn, bytes}}
 
-  defp handshake_extension(13172, bytes, _version, kind, _)
+  defp handshake_extension(13_172, bytes, _version, kind, _)
        when kind in [:client_hello, :server_hello],
        do: {:next_protocol_negotiation, {:next_protocol_negotiation, bytes}}
 
-  defp handshake_extension(65281, bytes, _version, kind, _)
+  defp handshake_extension(65_281, bytes, _version, kind, _)
        when kind in [:client_hello, :server_hello] do
     info = if byte_size(bytes) == 1, do: bytes, else: handshake_vector8(bytes)
     {:renegotiation_info, {:renegotiation_info, info}}
@@ -6985,32 +7143,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        when attribute in [3, 4, 7, 8, 10, 11, 12, 41, 42, 43, 44, 65] do
     limit =
       cond do
-        attribute in [4, 41, 42, 43, 44] -> 32768
+        attribute in [4, 41, 42, 43, 44] -> 32_768
         attribute in [7, 8, 65] -> 128
         true -> 64
       end
 
-    {type, value} =
-      case tag do
-        12 ->
-          {:utf8String, bytes}
-
-        19 ->
-          {:printableString, :binary.bin_to_list(bytes)}
-
-        20 ->
-          {:teletexString, :binary.bin_to_list(bytes)}
-
-        30 ->
-          true = rem(byte_size(bytes), 2) == 0
-          {:bmpString, for(<<a, b <- bytes>>, do: if(a == 0, do: b, else: {0, 0, a, b}))}
-
-        28 ->
-          true = rem(byte_size(bytes), 4) == 0
-
-          {:universalString,
-           for(<<a, b, c, d <- bytes>>, do: if({a, b, c} == {0, 0, 0}, do: d, else: {a, b, c, d}))}
-      end
+    {type, value} = handshake_name_text(tag, bytes)
 
     unless type == :utf8String or length(value) in 1..limit, do: throw(:invalid_handshake)
     {type, value}
@@ -7027,6 +7165,23 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
        do: throw(:invalid_handshake),
        else: {:asn1_OPENTYPE, encoded}
   end
+
+  defp handshake_name_text(12, bytes), do: {:utf8String, bytes}
+  defp handshake_name_text(19, bytes), do: {:printableString, :binary.bin_to_list(bytes)}
+  defp handshake_name_text(20, bytes), do: {:teletexString, :binary.bin_to_list(bytes)}
+
+  defp handshake_name_text(30, bytes) do
+    true = rem(byte_size(bytes), 2) == 0
+    {:bmpString, for(<<a, b <- bytes>>, do: handshake_name_character(0, 0, a, b))}
+  end
+
+  defp handshake_name_text(28, bytes) do
+    true = rem(byte_size(bytes), 4) == 0
+    {:universalString, for(<<a, b, c, d <- bytes>>, do: handshake_name_character(a, b, c, d))}
+  end
+
+  defp handshake_name_character(0, 0, 0, byte), do: byte
+  defp handshake_name_character(a, b, c, d), do: {a, b, c, d}
 
   defp handshake_events(packets, rest) do
     events = Enum.map(packets, &{:next_event, :internal, {:handshake, &1}})
@@ -7367,28 +7522,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         state = %{state | callback_results: results}
         state = put_in(state.frames[source.pid], rest)
 
-        state =
-          if rest == [] and is_nil(expected),
-            do: tls_failure(state, source, :tls_callback_origin),
-            else: state
-
-        state =
-          if rest == [],
-            do:
-              put_in(
-                state.machine_callbacks[source.pid],
-                callback_program(
-                  state,
-                  source,
-                  frame,
-                  if(Map.has_key?(frame, :callback_form),
-                    do: callback_source_form(frame.callback_form.value, version),
-                    else: expected
-                  )
-                )
-              ),
-            else: state
-
+        state = retain_worker_callback(state, source, frame, version, expected, rest)
         state = advance_worker(state, source, version, rest)
         forward_callback_form(state, source, result, expected, rest)
 
@@ -7396,6 +7530,21 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
         state
     end
   end
+
+  defp retain_worker_callback(state, source, frame, version, expected, []) do
+    state = if is_nil(expected), do: tls_failure(state, source, :tls_callback_origin), else: state
+
+    result =
+      case Map.fetch(frame, :callback_form) do
+        {:ok, form} -> callback_source_form(form.value, version)
+        :error -> expected
+      end
+
+    callback = callback_program(state, source, frame, result)
+    put_in(state.machine_callbacks[source.pid], callback)
+  end
+
+  defp retain_worker_callback(state, _source, _frame, _version, _expected, _parents), do: state
 
   # A tail-return is a copy of the earlier constructor's concrete source form.
   # Its state still comes from the independent worker model. The native action
@@ -7905,21 +8054,27 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       {actions, parsed} ->
         record = selected_record(parsed)
 
-        if record == :no_record do
-          tls_failure(state, source, :tls_callback_origin)
-        else
-          event =
-            case record do
-              {:ssl_tls, _, _, _, _} -> {:protocol_record, record}
-              {:alert, _, _, _, _, _} -> record
-            end
-
-          expected =
-            {:next_state, version.name, version.data, [{:next_event, :internal, event} | actions]}
-
-          callback_result_exact(state, source, actual, expected)
-        end
+        next_selected_record(state, source, version, actual, actions, record)
     end
+  end
+
+  defp next_selected_record(state, source, version, actual, actions, record) do
+    case record do
+      {:ssl_tls, _, _, _, _} ->
+        next_selected_event(state, source, version, actual, actions, {:protocol_record, record})
+
+      {:alert, _, _, _, _, _} ->
+        next_selected_event(state, source, version, actual, actions, record)
+
+      _ ->
+        tls_failure(state, source, :tls_callback_origin)
+    end
+  end
+
+  defp next_selected_event(state, source, version, actual, actions, event) do
+    actions = [{:next_event, :internal, event} | actions]
+    expected = {:next_state, version.name, version.data, actions}
+    callback_result_exact(state, source, actual, expected)
   end
 
   defp forwarded_callback_result(state, source, frame, version, actual) do
@@ -8755,17 +8910,18 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
           pair.source.index < write.source.index and write.returned.index < pair.returned.index
       end)
 
-    with [write] <- writes do
-      next = put_elem(data, 6, put_elem(handshake, 31, []))
+    case writes do
+      [write] ->
+        next = put_elem(data, 6, put_elem(handshake, 31, []))
 
-      state =
-        state
-        |> handshake_copy(pair.source, [2, 2], [data], origin)
-        |> handshake_copy(pair.returned, [3], {next, []}, origin)
-        |> tls_exact(write.source, :tls_legacy_handshake_write, write.bytes, bytes)
+        state =
+          state
+          |> handshake_copy(pair.source, [2, 2], [data], origin)
+          |> handshake_copy(pair.returned, [3], {next, []}, origin)
+          |> tls_exact(write.source, :tls_legacy_handshake_write, write.bytes, bytes)
 
-      {:ok, state, next}
-    else
+        {:ok, state, next}
+
       _ -> :error
     end
   end
@@ -9366,7 +9522,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp handshake_private_key({_public, private}), do: {:ok, private}
   defp handshake_private_key(_exchange), do: :error
 
-  defp handshake_curve(:secp256r1), do: {:secp256r1, {1, 2, 840, 10045, 3, 1, 7}}
+  defp handshake_curve(:secp256r1), do: {:secp256r1, {1, 2, 840, 10_045, 3, 1, 7}}
   defp handshake_curve(:secp384r1), do: {:secp384r1, {1, 3, 132, 0, 34}}
   defp handshake_curve(:secp521r1), do: {:secp521r1, {1, 3, 132, 0, 35}}
 
@@ -9499,39 +9655,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     if Map.fetch!(elem(data, 4), :session_tickets) == :disabled do
       {:ok, [data], :handshake_state, data}
     else
-      pending = Map.fetch!(elem(data, 10), :pending_read)
-      parameters = pending.security_parameters
-      {messages, _previous} = elem(elem(data, 6), 3)
-      scope = Map.fetch!(state.pairs, source.index)
-
-      with {:ok, profile} <- handshake_cipher(elem(parameters, 1)),
-           {:master_secret, master} <- elem(parameters, 10),
-           {:ok, transcript} <-
-             handshake_primitive(state, scope, {:crypto, :hash, 2}, [
-               profile.hash,
-               Enum.reverse(messages)
-             ]),
-           {:ok, secret} <-
-             handshake_expand(
-               state,
-               scope,
-               profile,
-               master,
-               "res master",
-               transcript,
-               profile.size
-             ) do
-        states =
-          Enum.reduce([:pending_read, :pending_write], elem(data, 10), fn direction, states ->
-            pending = Map.fetch!(states, direction)
-            parameters = put_elem(pending.security_parameters, 11, secret)
-            Map.put(states, direction, %{pending | security_parameters: parameters})
-          end)
-
-        {:ok, [data], :handshake_state, put_elem(data, 10, states)}
-      else
-        _ -> :error
-      end
+      resumption_master_secret(state, source, data)
     end
   end
 
@@ -9554,26 +9678,62 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       role = elem(elem(data, 2), 1)
       keep = role == :client and match?({:keylog_hs, _}, Map.get(elem(data, 4), :keep_secrets))
 
-      states =
-        if keep do
-          elem(data, 10)
-        else
-          Map.new(elem(data, 10), fn
-            {direction, connection}
-            when direction in [:pending_read, :pending_write, :current_read, :current_write] ->
-              parameters = put_elem(connection.security_parameters, 10, {:master_secret, <<0>>})
-              {direction, %{connection | security_parameters: parameters}}
-
-            entry ->
-              entry
-          end)
-        end
+      states = exported_connection_states(elem(data, 10), keep)
 
       {:ok, [data], :handshake_state, data |> put_elem(7, specific) |> put_elem(10, states)}
     else
       _ -> :error
     end
   end
+
+  defp resumption_master_secret(state, source, data) do
+    pending = Map.fetch!(elem(data, 10), :pending_read)
+    parameters = pending.security_parameters
+    {messages, _previous} = elem(elem(data, 6), 3)
+    scope = Map.fetch!(state.pairs, source.index)
+
+    with {:ok, profile} <- handshake_cipher(elem(parameters, 1)),
+         {:master_secret, master} <- elem(parameters, 10),
+         {:ok, transcript} <-
+           handshake_primitive(state, scope, {:crypto, :hash, 2}, [
+             profile.hash,
+             Enum.reverse(messages)
+           ]),
+         {:ok, secret} <-
+           handshake_expand(
+             state,
+             scope,
+             profile,
+             master,
+             "res master",
+             transcript,
+             profile.size
+           ) do
+      states =
+        Enum.reduce([:pending_read, :pending_write], elem(data, 10), fn direction, states ->
+          pending = Map.fetch!(states, direction)
+          parameters = put_elem(pending.security_parameters, 11, secret)
+          Map.put(states, direction, %{pending | security_parameters: parameters})
+        end)
+
+      {:ok, [data], :handshake_state, put_elem(data, 10, states)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp exported_connection_states(states, true), do: states
+
+  defp exported_connection_states(states, false),
+    do: Map.new(states, &clear_connection_master_secret/1)
+
+  defp clear_connection_master_secret({direction, connection})
+       when direction in [:pending_read, :pending_write, :current_read, :current_write] do
+    parameters = put_elem(connection.security_parameters, 10, {:master_secret, <<0>>})
+    {direction, %{connection | security_parameters: parameters}}
+  end
+
+  defp clear_connection_master_secret(entry), do: entry
 
   defp handshake_finished(state, source, data, direction, drop_peer?) do
     connection = Map.fetch!(elem(data, 10), direction)
@@ -9714,10 +9874,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
     do: handshake_primitive(state, scope, {:crypto, :mac, 4}, [:hmac, hash, key, bytes])
 
   defp handshake_primitive(state, scope, mfa, arguments) do
-    with {:ok, value} when is_binary(value) <-
-           handshake_crypto_origin(state, scope, mfa, arguments) do
-      {:ok, value}
-    else
+    case handshake_crypto_origin(state, scope, mfa, arguments) do
+      {:ok, value} when is_binary(value) -> {:ok, value}
       _ -> :error
     end
   end

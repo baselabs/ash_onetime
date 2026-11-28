@@ -109,12 +109,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
         path: "test/support/exit_boundary/permitted_trace.ex",
         original: "          state = exact(state, e, :dictionary_binding, value, expected)\n",
         mutated:
-          "          {state, expected} =\n            case {value, expected} do\n              {{:done, inv, :executed, envelope, {target, claim}},\n               {:done, expected_inv, :executed, expected_envelope, _}}\n              when inv === expected_inv and envelope === expected_envelope ->\n                state =\n                  state\n                  |> bind(:target, target)\n                  |> bind(:c_admit, claim)\n                  |> bind(:completion, {target, claim})\n\n                {state, value}\n\n              _ ->\n                {state, expected}\n            end\n\n          state = exact(state, e, :dictionary_binding, value, expected)\n"
-      },
-      %{
-        path: "test/support/exit_boundary/readback.ex",
-        original: "    prepared = Map.fetch!(side, :readback_reference)\n",
-        mutated: "    prepared = capture(side, bound)\n"
+          "          {state, expected} =\n            case {value, expected} do\n              {{:done, inv, :executed, envelope, completion},\n               {:done, expected_inv, :executed, expected_envelope, _}}\n              when inv === expected_inv and envelope === expected_envelope ->\n                {bind(state, :completion, completion), value}\n\n              _ ->\n                {state, expected}\n            end\n\n          state = exact(state, e, :dictionary_binding, value, expected)\n"
       }
     ]
   end

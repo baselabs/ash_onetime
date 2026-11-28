@@ -217,17 +217,20 @@ defmodule AshOnetime.Test.ExitBoundary.Origins do
     Enum.reduce(run, state, fn {{key, sql}, versions}, state ->
       case Map.fetch(twin, {rename_term(key), sql}) do
         {:ok, other} when length(versions) == length(other) ->
-          versions
-          |> Enum.zip(other)
-          |> Enum.with_index()
-          |> Enum.reduce(state, fn {{{id, ref}, {twin_id, twin_ref}}, ordinal}, state ->
-            origin = {:prepared_query, key, ordinal}
-            state |> bind(id, twin_id, origin) |> bind(ref, twin_ref, origin)
-          end)
+          bind_prepared_versions(state, key, Enum.zip(versions, other))
 
         _ ->
           state
       end
+    end)
+  end
+
+  defp bind_prepared_versions(state, key, versions) do
+    versions
+    |> Enum.with_index()
+    |> Enum.reduce(state, fn {{{id, ref}, {twin_id, twin_ref}}, ordinal}, state ->
+      origin = {:prepared_query, key, ordinal}
+      state |> bind(id, twin_id, origin) |> bind(ref, twin_ref, origin)
     end)
   end
 

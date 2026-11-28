@@ -728,12 +728,15 @@ defmodule AshOnetime.Test.ExitBoundary.PermittedTrace do
     )
   end
 
-  defp check_frame(state, e, {AshOnetime.Store, :committed_completion, 2}, args, _side),
-    do:
-      exact(state, e, :committed_readback_binding, args, [
-        state.bound[:target],
-        state.bound[:c_admit]
-      ])
+  defp check_frame(state, e, {AshOnetime.Store, :committed_completion, 2}, args, _side) do
+    expected =
+      case state.bound[:completion] do
+        {target, claim} -> [target, claim]
+        nil -> nil
+      end
+
+    exact(state, e, :committed_readback_binding, args, expected)
+  end
 
   defp check_frame(state, e, {Delivery, :seal, 2}, [handle, values], side) do
     state

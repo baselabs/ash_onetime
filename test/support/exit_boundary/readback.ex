@@ -1,13 +1,16 @@
 defmodule AshOnetime.Test.ExitBoundary.Readback do
   @moduledoc false
+  alias AshOnetime.Delivery
+  alias AshOnetime.Store.Claim
   alias AshOnetime.Test.ExitBoundary
   alias AshOnetime.Test.ExitBoundary.Capture
   alias AshOnetime.Test.ExitBoundary.{Comparator, Historical, Origins, Withheld}
   @root {AshOnetime.Store, :committed_completion, 2}
 
   # OPEN's read is checked against a second real, read-only execution with the
-  # already-bound target and admission row. It has no delivery dictionary, producer
-  # or delivered values. This is a reference computation over paired origins; its
+  # target and claim passed through the executed dictionary entry. The main trace
+  # independently grounds them in the original target and admission. The reference
+  # itself has no delivery dictionary, producer or delivered values. Its
   # complete trace is compared, including native calls and the SQL wire.
   def prepare(%{prior: prior} = side) when not is_nil(prior) do
     # A reference reads the same committed database through the main Repo.
@@ -22,8 +25,32 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
   def prepare(side), do: prepare_invocation(side)
 
   defp prepare_invocation(%{resource: Withheld, allocation_checkpoint?: true} = side) do
+    {target, admitted} = admission(side.run.events)
+    claim = done_claim(side.run.events, target) || admitted
+    Map.put(side, :readback_reference, capture(side, target, claim))
+  end
+
+  defp prepare_invocation(side), do: side
+
+  defp done_claim(events, target) do
+    Enum.find_value(events, fn
+      %{
+        stack: stack,
+        event:
+          {_, :call,
+           {:erlang, :put,
+            [{Delivery, _}, {:done, _, :executed, _, {^target, %Claim{} = claim}}]}}
+      } ->
+        if {Delivery, :complete_entry, 3} in stack, do: claim
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp admission(events) do
     target =
-      Enum.find_value(side.run.events, fn
+      Enum.find_value(events, fn
         %{event: {_, :call, {AshOnetime.Store, function, [target | _]}}}
         when function in [:complete, :complete_external] ->
           target
@@ -33,11 +60,11 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
       end)
 
     claim =
-      Enum.find_value(side.run.events, fn
+      Enum.find_value(events, fn
         %{
           event:
             {_, :return_from, {AshOnetime.Store, function, _},
-             %AshOnetime.Store.Result{claim: %AshOnetime.Store.Claim{} = claim}}
+             %AshOnetime.Store.Result{claim: %Claim{} = claim}}
         }
         when function in [:claim, :claim_committed] ->
           claim
@@ -47,24 +74,22 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
       end)
 
     unless target && claim, do: raise("the prescribed OPEN reference has no admission origins")
-    Map.put(side, :readback_reference, capture(side, %{target: target, c_admit: claim}))
+    {target, claim}
   end
 
-  defp prepare_invocation(side), do: side
-
-  defp capture(side, bound) do
+  defp capture(side, target, claim) do
     historical = Historical.capture(side.prefix)
 
     run =
       ExitBoundary.observe(
         fn ->
-          bound.target.repo_module.put_dynamic_repo(bound.target.dynamic_repo)
+          target.repo_module.put_dynamic_repo(target.dynamic_repo)
         end,
-        fn _ -> AshOnetime.Store.committed_completion(bound.target, bound.c_admit) end,
+        fn _ -> AshOnetime.Store.committed_completion(target, claim) end,
         %{host: [], callbacks: []}
       )
 
-    %{run: run, historical: historical}
+    %{run: run, historical: historical, claim: claim}
   end
 
   def check(%{allocation_checkpoint?: true} = side, indexed, bound) do
@@ -93,7 +118,7 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
       %{side | run: reference, delta: %{}, historical: historical}
       |> Map.put(:connection_history, proof)
       |> Map.put(:origin_phase_override, :open)
-      |> Map.put(:claim_origins, [bound.c_admit])
+      |> Map.put(:claim_origins, [prepared.claim])
 
     reference_events = Origins.build(reference_side).events |> interval(proof)
 
@@ -112,7 +137,7 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
     run_side =
       %{side | run: run, delta: %{}}
       |> Map.put(:origin_phase_override, :open)
-      |> Map.put(:claim_origins, [bound.c_admit])
+      |> Map.put(:claim_origins, [completion_claim(bound)])
 
     twin_side =
       %{reference_side | run: reference}
@@ -130,6 +155,9 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
 
     %{claimed: MapSet.new(observed, &Capture.address/1), errors: result.errors, sources: sources}
   end
+
+  defp completion_claim(%{completion: {_target, %Claim{} = claim}}), do: claim
+  defp completion_claim(%{c_admit: claim}), do: claim
 
   # The third execution is a read-only SQL/program witness. Its private origin
   # pairing has no authority over run -> twin allocation. Export a source only
@@ -162,14 +190,7 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
     caller = Enum.at(events, start).pid
     tail = Enum.drop(events, start)
 
-    stop =
-      Enum.find_index(tail, fn e ->
-        e.pid == caller and e.mfa == @root and elem(e.event, 1) == :return_from
-      end)
-
-    range = if stop == nil, do: tail, else: Enum.take(tail, stop + 1)
-    caller_events = Enum.filter(range, &(&1.pid == caller))
-    roots = MapSet.new(caller_events, & &1.index)
+    roots = readback_call_indexes(tail, caller)
 
     writes = Enum.filter(proof.native.writes, &MapSet.member?(roots, &1.source.index))
     commands = MapSet.new(writes, & &1.command.index)
@@ -215,6 +236,16 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
         do: MapSet.member?(addresses, Capture.address(event)),
         else: MapSet.member?(roots, event.index) or MapSet.member?(selected, event.index)
     end)
+  end
+
+  defp readback_call_indexes(tail, caller) do
+    stop =
+      Enum.find_index(tail, fn e ->
+        e.pid == caller and e.mfa == @root and elem(e.event, 1) == :return_from
+      end)
+
+    range = if is_nil(stop), do: tail, else: Enum.take(tail, stop + 1)
+    for event <- range, event.pid == caller, into: MapSet.new(), do: event.index
   end
 
   defp result(events) do

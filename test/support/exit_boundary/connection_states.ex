@@ -351,26 +351,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     callback_event(source, state)
   end
 
+  @owner_system_positions %{
+    {:sys, :handle_system_msg, 6} => 5,
+    {:sys, :handle_system_msg, 7} => 5,
+    {:sys, :handle_system_msg, 8} => 6,
+    {:sys, :do_cmd, 6} => 5,
+    {:sys, :suspend_loop, 6} => 4,
+    {:sys, :suspend_loop_hib, 6} => 4,
+    {:gen_statem, :system_continue, 3} => 2,
+    {:gen_statem, :system_terminate, 4} => 3,
+    {:gen_statem, :system_get_state, 1} => 0,
+    {:gen_statem, :system_replace_state, 2} => 1,
+    {:gen_statem, :system_code_change, 4} => 0
+  }
+
   # sys carries gen_statem's {Params, State} without replacing the owner's
   # callback data. Bind every nested Protocol to the current independently
   # modeled owner, including the command return and resume continuation.
   defp owner_system_event(%{event: {_, :call, {module, function, arguments}}} = source, state)
        when module in [:sys, :gen_statem] do
-    position =
-      case {module, function, length(arguments)} do
-        {:sys, :handle_system_msg, 6} -> 5
-        {:sys, :handle_system_msg, 7} -> 5
-        {:sys, :handle_system_msg, 8} -> 6
-        {:sys, :do_cmd, 6} -> 5
-        {:sys, :suspend_loop, 6} -> 4
-        {:sys, :suspend_loop_hib, 6} -> 4
-        {:gen_statem, :system_continue, 3} -> 2
-        {:gen_statem, :system_terminate, 4} -> 3
-        {:gen_statem, :system_get_state, 1} -> 0
-        {:gen_statem, :system_replace_state, 2} -> 1
-        {:gen_statem, :system_code_change, 4} -> 0
-        _ -> nil
-      end
+    position = Map.get(@owner_system_positions, {module, function, length(arguments)})
 
     owner_system_misc(state, source, position && [2, 2, position])
   end
@@ -1075,30 +1075,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_initial_backoff(options) do
-    case Keyword.get(options, :backoff_type, :rand_exp) do
-      :stop ->
-        {:ok, nil}
-
-      type when type in [:rand, :exp, :rand_exp] ->
-        {minimum, maximum} =
-          case {options[:backoff_min], options[:backoff_max]} do
-            {nil, nil} -> {1_000, 30_000}
-            {nil, maximum} -> {min(1_000, maximum), maximum}
-            {minimum, nil} -> {minimum, max(minimum, 30_000)}
-            bounds -> bounds
-          end
-
-        if is_integer(minimum) and is_integer(maximum) and minimum >= 0 and minimum <= maximum do
-          state = if type == :rand_exp, do: {minimum, max(minimum, div(maximum, 3))}, else: nil
-          {:ok, %DBConnection.Backoff{type: type, min: minimum, max: maximum, state: state}}
-        else
-          :error
-        end
-
-      _ ->
-        :error
-    end
+    type = Keyword.get(options, :backoff_type, :rand_exp)
+    {minimum, maximum} = owner_backoff_bounds(options[:backoff_min], options[:backoff_max])
+    owner_backoff(type, minimum, maximum)
   end
+
+  defp owner_backoff_bounds(nil, nil), do: {1_000, 30_000}
+  defp owner_backoff_bounds(nil, maximum), do: {min(1_000, maximum), maximum}
+  defp owner_backoff_bounds(minimum, nil), do: {minimum, max(minimum, 30_000)}
+  defp owner_backoff_bounds(minimum, maximum), do: {minimum, maximum}
+
+  defp owner_backoff(:stop, _minimum, _maximum), do: {:ok, nil}
+
+  defp owner_backoff(type, minimum, maximum)
+       when type in [:rand, :exp, :rand_exp] and is_integer(minimum) and is_integer(maximum) and
+              minimum >= 0 and minimum <= maximum do
+    initial = if type == :rand_exp, do: {minimum, max(minimum, div(maximum, 3))}, else: nil
+    {:ok, %DBConnection.Backoff{type: type, min: minimum, max: maximum, state: initial}}
+  end
+
+  defp owner_backoff(_type, _minimum, _maximum), do: :error
 
   defp owner_birth_event(source, state) do
     case Map.fetch(state.owner_births, source.index) do
@@ -1946,28 +1942,33 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
   end
 
   defp owner_connect_transition(state, call, returned, machine) do
-    with {:ok, configured} <- owner_connect_options(state, call, returned, machine.data.opts) do
-      case {configured,
-            native_type_calls(state, call, returned, {Postgrex.Protocol, :connect, 1})} do
-        {{:error, %{__exception__: true}}, []} ->
-          owner_failed_connection(state, call, returned, machine)
+    case owner_connect_options(state, call, returned, machine.data.opts) do
+      {:ok, configured} ->
+        connections = native_type_calls(state, call, returned, {Postgrex.Protocol, :connect, 1})
+        owner_configured_connection(state, call, returned, machine, configured, connections)
 
-        {expected_options, [connect]} when is_list(expected_options) ->
-          case connect.source.event do
-            {_, :call, {_, _, [^expected_options]}} ->
-              owner_connect_result(state, connect, returned, machine)
-
-            _ ->
-              :error
-          end
-
-        _ ->
-          :error
-      end
-    else
-      _ -> :error
+      :error ->
+        :error
     end
   end
+
+  defp owner_configured_connection(state, call, returned, machine, {:error, error}, [])
+       when is_exception(error),
+       do: owner_failed_connection(state, call, returned, machine)
+
+  defp owner_configured_connection(
+         state,
+         _call,
+         returned,
+         machine,
+         options,
+         [%{source: %{event: {_, :call, {_, _, [options]}}}} = connect]
+       )
+       when is_list(options),
+       do: owner_connect_result(state, connect, returned, machine)
+
+  defp owner_configured_connection(_state, _call, _returned, _machine, _options, _connections),
+    do: :error
 
   defp owner_connect_result(
          state,
@@ -2204,31 +2205,26 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
           owner == source.pid,
           do: {message, pair.source.index}
 
-    case starts do
-      [{message, started}] ->
-        # A zero-time timer can arrive before start_timer returns. Its own
-        # call, returned reference and exact expiry still establish ownership.
-        with [flush] <-
-               native_type_calls(
-                 state,
-                 cancel.returned,
-                 source,
-                 {DBConnection.Connection, :flush_timer, 1}
-               ),
-             {^owner, :call, {DBConnection.Connection, :flush_timer, [^timer]}} <-
-               flush.source.event,
-             {^owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok} <-
-               flush.returned.event do
-          Enum.count(state.events, fn event ->
-            started < event.index and event.index < flush.returned.index and
-              event.event === {owner, :receive, {:timeout, timer, message}}
-          end) == 1
-        else
-          _ -> false
-        end
-
-      _ ->
-        false
+    # A zero-time timer can arrive before start_timer returns. Its own
+    # call, returned reference and exact expiry still establish ownership.
+    with [{message, started}] <- starts,
+         [flush] <-
+           native_type_calls(
+             state,
+             cancel.returned,
+             source,
+             {DBConnection.Connection, :flush_timer, 1}
+           ),
+         {^owner, :call, {DBConnection.Connection, :flush_timer, [^timer]}} <-
+           flush.source.event,
+         {^owner, :return_from, {DBConnection.Connection, :flush_timer, 1}, :ok} <-
+           flush.returned.event do
+      Enum.count(state.events, fn event ->
+        started < event.index and event.index < flush.returned.index and
+          event.event === {owner, :receive, {:timeout, timer, message}}
+      end) == 1
+    else
+      _ -> false
     end
   end
 

@@ -63,7 +63,7 @@
       ]
     },
     {
-      "name": "external_issue_abc",
+      "name": "external_issue_abc_first",
       "action": "external_issue",
       "values": [
         "va",
@@ -79,7 +79,18 @@
         5,
         6,
         7,
-        8,
+        8
+      ]
+    },
+    {
+      "name": "external_issue_abc_last",
+      "action": "external_issue",
+      "values": [
+        "va",
+        "vb",
+        "vc"
+      ],
+      "path_indices": [
         9,
         10,
         11,
@@ -212,7 +223,7 @@
       ]
     },
     {
-      "name": "external_rotate_abc",
+      "name": "external_rotate_abc_first",
       "action": "external_rotate",
       "values": [
         "va",
@@ -228,7 +239,18 @@
         5,
         6,
         7,
-        8,
+        8
+      ]
+    },
+    {
+      "name": "external_rotate_abc_last",
+      "action": "external_rotate",
+      "values": [
+        "va",
+        "vb",
+        "vc"
+      ],
+      "path_indices": [
         9,
         10,
         11,
@@ -361,7 +383,7 @@
       ]
     },
     {
-      "name": "external_revoke_abc",
+      "name": "external_revoke_abc_first",
       "action": "external_revoke",
       "values": [
         "va",
@@ -377,7 +399,18 @@
         5,
         6,
         7,
-        8,
+        8
+      ]
+    },
+    {
+      "name": "external_revoke_abc_last",
+      "action": "external_revoke",
+      "values": [
+        "va",
+        "vb",
+        "vc"
+      ],
+      "path_indices": [
         9,
         10,
         11,
@@ -510,7 +543,7 @@
       ]
     },
     {
-      "name": "external_retire_abc",
+      "name": "external_retire_abc_first",
       "action": "external_retire",
       "values": [
         "va",
@@ -526,7 +559,18 @@
         5,
         6,
         7,
-        8,
+        8
+      ]
+    },
+    {
+      "name": "external_retire_abc_last",
+      "action": "external_retire",
+      "values": [
+        "va",
+        "vb",
+        "vc"
+      ],
+      "path_indices": [
         9,
         10,
         11,
@@ -659,7 +703,7 @@
       ]
     },
     {
-      "name": "external_mint_abc",
+      "name": "external_mint_abc_first",
       "action": "external_mint",
       "values": [
         "va",
@@ -675,7 +719,18 @@
         5,
         6,
         7,
-        8,
+        8
+      ]
+    },
+    {
+      "name": "external_mint_abc_last",
+      "action": "external_mint",
+      "values": [
+        "va",
+        "vb",
+        "vc"
+      ],
+      "path_indices": [
         9,
         10,
         11,

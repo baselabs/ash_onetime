@@ -106,19 +106,19 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionReads do
 
     for %{direction: :frontend, message_ordinal: ordinal, provenance: spans} <- messages,
         [_ | _] <- [spans],
-        owners =
-          Enum.map(spans, fn span ->
-            case Map.get(native, span.index) do
-              %{event: {^port, :receive, {owner, {:command, _}}}} -> owner
-              %{event: {owner, :call, {:ssl, :send, [_socket, _bytes]}}} -> owner
-              _ -> nil
-            end
-          end),
+        owners = Enum.map(spans, &frontend_owner(Map.get(native, &1.index), port)),
         [owner] <- [Enum.uniq(owners)],
         is_pid(owner),
         into: %{},
         do: {ordinal, owner}
   end
+
+  defp frontend_owner(%{event: {port, :receive, {owner, {:command, _}}}}, port), do: owner
+
+  defp frontend_owner(%{event: {owner, :call, {:ssl, :send, [_socket, _bytes]}}}, _port),
+    do: owner
+
+  defp frontend_owner(_event, _port), do: nil
 
   defp event({_index, :request, read}, state) do
     connection = connection(state, read.port)

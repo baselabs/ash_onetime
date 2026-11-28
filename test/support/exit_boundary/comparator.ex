@@ -2707,6 +2707,14 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
        ]),
        do: true
 
+  defp cache_key_slot?(%{at: %{mfa: {:gen, :call, 4}}, current: current}, [:event, 2, 2, 2, 1]) do
+    cache_put_call?(current.run) and cache_put_call?(current.twin)
+  end
+
+  defp cache_key_slot?(%{at: %{mfa: {:ets, :member, 2}}, current: current}, [:event, 2, 2, 1]) do
+    cache_membership_call?(current.run) and cache_membership_call?(current.twin)
+  end
+
   defp cache_key_slot?(%{at: %{mfa: {:ets, :insert, 2}, stack: stack}}, [:event, 2, 2, 1, 0]),
     do: {AshOnetime.Cache.Ets, :handle_call, 3} in stack
 
@@ -2716,6 +2724,26 @@ defmodule AshOnetime.Test.ExitBoundary.Comparator do
   end
 
   defp cache_key_slot?(_, _), do: false
+
+  defp cache_put_call?(%{
+         stack: stack,
+         event:
+           {_, :call,
+            {:gen, :call,
+             [recipient, :"$gen_call", {:put, _, %AshOnetime.Cache.Entry{}, _}, _]}}
+       })
+       when is_pid(recipient),
+       do: {AshOnetime.Cache.Ets, :put, 3} in stack
+
+  defp cache_put_call?(_event), do: false
+
+  defp cache_membership_call?(%{
+         stack: stack,
+         event: {_, :call, {:ets, :member, [AshOnetime.Cache.Ets, _]}}
+       }),
+       do: {AshOnetime.Cache.Ets, :handle_call, 3} in stack
+
+  defp cache_membership_call?(_event), do: false
 
   defp cache_message?(%{current: %{run: a}}),
     do:

@@ -21,13 +21,13 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
       # repeated execution on that prepared substrate; each observation still
       # captures its actual historical cache and compares every generated origin.
       warm = Scenarios.observe(row, values, context)
-      assert_comparison(Comparator.compare(warm), "U9 path preparation")
+      assert_comparison(Comparator.compare(warm), :warmup)
       started = System.monotonic_time(:millisecond)
 
       profiles =
         for repetition <- 1..20 do
           pair = Scenarios.observe(row, values, context)
-          assert_comparison(Comparator.compare(pair), "U9 repetition #{repetition}")
+          assert_comparison(Comparator.compare(pair), repetition)
 
           for side <- [:run, :twin],
               into: %{},
@@ -55,12 +55,14 @@ defmodule AshOnetime.Delivery.ComparatorSchedulingTest do
     end
   end
 
-  defp assert_comparison(result, label) do
-    locations =
-      result.errors
-      |> Enum.take(4)
-      |> Enum.map(&Map.take(&1, [:at, :rule, :path, :run_index, :twin_index]))
+  defp assert_comparison(result, repetition) do
+    failures =
+      for difference <- Enum.take(result.errors, 4) do
+        difference
+        |> Map.take([:at, :rule, :path])
+        |> Map.put(:index, repetition)
+      end
 
-    assert result.errors == [], "#{label}: #{Diagnostics.render(locations)}"
+    assert failures == []
   end
 end

@@ -4303,7 +4303,8 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
     assert negotiated?, "the native peer must actually negotiate TLS 1.2"
     side = observation_side(context, run, %{}, row!(:issue, :execute), historical)
     proof = ConnectionHistory.build(side)
-    assert proof.errors == [], "TLS 1.2 requires its complete native startup and retirement proof"
+    failures = Enum.map(Enum.take(proof.errors, 4), &Map.take(&1, [:index, :rule, :path]))
+    assert failures == []
   end
 
   @tag connection_streams: :tls

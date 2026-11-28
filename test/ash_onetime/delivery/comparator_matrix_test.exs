@@ -178,7 +178,7 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
                       count: 1,
                       tuple: label,
                       row: row,
-                      source: difference.at
+                      source: failure_source(difference)
                     })
                 end
               end)
@@ -192,11 +192,29 @@ defmodule AshOnetime.Delivery.ComparatorMatrixTest do
       IO.puts("C_POS_COUNTS" <> ": " <> Diagnostics.render(counts, pretty: true))
       assert counts.pairs == length(path_indices) * length(labels)
 
-      assert residuals == %{},
-             "C-pos residuals: #{map_size(residuals)} qualified locations. " <>
-               Diagnostics.render(Enum.take(Enum.sort(residuals), 4))
+      failures =
+        for {{_location, rule, path}, residual} <- Enum.take(Enum.sort(residuals), 4) do
+          %{
+            row: Map.take(residual.row, [:action, :branch, :fault]),
+            tuple: residual.tuple,
+            rule: rule,
+            path: path,
+            at: residual.source,
+            length: map_size(residuals)
+          }
+        end
+
+      assert failures == []
     end
   end
+
+  defp failure_source(%{rule: :unhandled_capture, run: {_kind, error, stack}}),
+    do: Diagnostics.exit_summary({error, Enum.take(stack, 4)})
+
+  defp failure_source(%{at: %{mfa: _} = at}),
+    do: Map.take(at, [:mfa, :role, :run_index, :twin_index])
+
+  defp failure_source(%{at: at}), do: at
 
   defp rule3_errors(side) do
     prior = if side.prior, do: rule3_errors(side.prior), else: []
