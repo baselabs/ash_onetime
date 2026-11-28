@@ -8,6 +8,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
   alias AshOnetime.Test.ExitBoundary.ConnectionTls
   alias AshOnetime.Test.ExitBoundary.ConnectionTypes
   alias AshOnetime.Test.ExitBoundary.NativeTransport
+  alias AshOnetime.Test.ExitBoundary.Wire
 
   import Postgrex.Messages,
     only: [msg_parameter_desc: 1, msg_row_desc: 1, msg_no_data: 0, row_field: 1]
@@ -226,7 +227,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
         Enum.reduce(Map.get(write, :indexes, []), indexes, &MapSet.delete(&2, &1))
       end)
 
-    copies = frontend_spans(proof, spans)
+    copies =
+      (frontend_spans(proof, spans) ++ backend_spans(proof, spans))
+      |> Enum.group_by(& &1.index)
+
     messages = ConnectionReads.messages(proof.reads, indexed)
 
     retained =
@@ -265,6 +269,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
 
     for write <- proof.native.writes,
         write.bytes != <<>>,
+        {:ok, origin} <- [Map.fetch(constructions, {write.source.index, [2, 2, 1]})],
         complete_span?(spans, write.command.index, byte_size(write.bytes)),
         Enum.all?(write.copies, fn copy ->
           copy.index == write.command.index or MapSet.member?(qualified, {copy.index, copy.path})
@@ -272,7 +277,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
         [%{port: port, span: first} | _] = Map.fetch!(spans, write.command.index),
         port == write.port,
         start = first.offset - first.source_offset + write.header_size,
-        copy <- frontend_copies(proof, write, constructions) do
+        copy <- frontend_copies(proof, write, constructions, origin) do
       %{
         index: copy.index,
         path: copy.path,
@@ -281,25 +286,107 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionHistory do
            if(Map.get(copy, :offset, 0) > 0, do: Map.fetch!(write, :reference), else: nil)}
       }
     end
-    |> Enum.group_by(& &1.index)
   end
 
-  defp frontend_copies(proof, write, constructions) do
-    origin = Map.fetch!(constructions, {write.source.index, [2, 2, 1]})
+  defp frontend_copies(proof, write, constructions, origin) do
+    message_path = [2, 2, 1]
+    {:frontend_encoding, owner, message_origin} = origin
 
     owners =
       Enum.count(proof.native.writes, fn candidate ->
-        Map.get(constructions, {candidate.source.index, [2, 2, 1]}) == origin
+        Map.get(constructions, {candidate.source.index, message_path}) == origin
       end)
 
     # An upstream IOdata construction can name this span only when its complete
     # native program issued exactly this write. Its helpers are byte copies,
     # not additional writes or an allowance to erase their call occurrences.
-    helpers =
-      if owners == 1, do: Enum.filter(proof.states.terms, &(&1.origin == origin)), else: []
+    copies =
+      if owners == 1 do
+        Enum.filter(proof.states.terms, fn
+          %{origin: ^origin} -> true
+          %{index: ^owner, path: ^message_path, origin: ^message_origin} -> true
+          _ -> false
+        end)
+      else
+        []
+      end
 
-    Enum.uniq_by(write.copies ++ helpers, &{&1.index, &1.path})
+    Enum.uniq_by(write.copies ++ copies, &{&1.index, &1.path})
   end
+
+  defp backend_spans(proof, spans) do
+    # A decoder indexes its native return. The wire ledger indexes the ingress
+    # receipt. Their physical offsets must agree for every projected byte.
+    deliveries =
+      for read <- proof.native.reads ++ proof.native.active,
+          is_binary(read.bytes),
+          size = byte_size(read.bytes),
+          size > 0,
+          complete_span?(spans, read.delivered.index, size),
+          [%{port: port, direction: :backend, span: first} | _] <-
+            [Map.get(spans, read.delivered.index, [])],
+          port == read.port,
+          into: %{} do
+        {read.returned.index, {port, first.offset - first.source_offset, size}}
+      end
+
+    versions = Map.new(proof.decoders.timeline, &{{&1.port, &1.index}, &1.cursor})
+
+    decoder_copies =
+      for instance <- proof.decoders.instances, copy <- instance.copies do
+        first = if copy.index == instance.source.index, do: instance.start, else: instance.stop
+        first = first + copy.offset
+        {copy, instance.port, first, first + copy.length, instance.provenance}
+      end
+
+    helper_copies =
+      for copy <- proof.states.buffers,
+          port = NativeTransport.physical_port(proof.native, copy.sock),
+          %{offset: first, buffer: bytes, spans: provenance} <-
+            [backend_cursor(copy.origin, port, versions)] do
+        {copy, port, first, first + byte_size(bytes), provenance}
+      end
+
+    for {copy, port, first, last, provenance} <- decoder_copies ++ helper_copies,
+        complete_backend_span?(deliveries, port, first, last, provenance) do
+      %{
+        index: copy.index,
+        path: copy.path,
+        value: {:connection_byte_span, port, :backend, first, last, nil}
+      }
+    end
+  end
+
+  defp backend_cursor({kind, origin_port, index}, port, versions)
+       when origin_port == port and kind in [:decoder_return_buffer, :decoder_cursor],
+       do: Map.get(versions, {port, index})
+
+  defp backend_cursor({:continuation_buffer, _parent, index}, port, versions),
+    do: Map.get(versions, {port, index})
+
+  defp backend_cursor(_origin, _port, _versions), do: nil
+
+  defp complete_backend_span?(deliveries, port, first, last, provenance) when last > first do
+    stop =
+      provenance
+      |> Wire.spans(first, last)
+      |> Enum.sort_by(& &1.offset)
+      |> Enum.reduce_while(first, fn span, cursor ->
+        case Map.get(deliveries, span.index) do
+          {^port, start, size}
+          when span.offset == cursor and start + span.source_offset == cursor and
+                 span.source_offset + span.length <= size ->
+            {:cont, cursor + span.length}
+
+          _ ->
+            {:halt, nil}
+        end
+      end)
+
+    stop == last
+  end
+
+  defp complete_backend_span?(_deliveries, _port, _first, _last, _provenance), do: false
 
   defp connection_spans(reads) do
     for {port, connection} <- reads.connections,

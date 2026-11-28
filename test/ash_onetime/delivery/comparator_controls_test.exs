@@ -5118,7 +5118,11 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
       kind = unquote(kind)
       rule = unquote(rule)
       callback = unquote(callback)
-      observe = fn -> ConnectionNative.observe_pool_startup({:backoff_success, :rand_exp, callback}) end
+
+      observe = fn ->
+        ConnectionNative.observe_pool_startup({:backoff_success, :rand_exp, callback})
+      end
+
       positive = observe.()
       side = observation_side(context, positive, %{}, row!(:issue, :execute), historical)
       assert ConnectionHistory.build(side).errors == []
@@ -5144,8 +5148,25 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
         end)
 
       assert coordinates != []
-      assert proof.native.errors == [] and proof.reads.errors == [] and proof.decoders.errors == []
-      assert Enum.map(proof.states.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) == coordinates
+
+      assert proof.native.errors == [] and proof.reads.errors == [] and
+               proof.decoders.errors == []
+
+      assert Enum.map(proof.states.errors, &{&1.rule, &1.index, Map.get(&1, :path)}) ==
+               coordinates
+
+      for catcher <- [
+            :state_owner_backoff_new_input,
+            :state_owner_backoff_new_result,
+            :state_owner_backoff_reset_input,
+            :state_owner_backoff_reset_result
+          ] do
+        errors =
+          ComparatorMutants.with_mutant(catcher, fn -> ConnectionHistory.build(side).errors end)
+
+        assert errors == if(catcher == rule, do: [], else: proof.errors)
+      end
+
       assert ConnectionHistory.build(side).errors == proof.errors
       restored = observe.()
       side = observation_side(context, restored, %{}, row!(:issue, :execute), historical)

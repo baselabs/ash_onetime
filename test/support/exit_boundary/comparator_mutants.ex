@@ -576,6 +576,27 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     ]
   end
 
+  def edits(rule)
+      when rule in [
+             :state_owner_backoff_new_input,
+             :state_owner_backoff_new_result,
+             :state_owner_backoff_reset_input,
+             :state_owner_backoff_reset_result
+           ] do
+    original =
+      "    state = exact(state, source, rule, actual, expected)\n" <>
+        "    state = copy_error_path(state, source, path, rule)\n" <>
+        "    owner_backoff_term(state, source, path, expected, origin)\n"
+
+    [
+      %{
+        path: "test/support/exit_boundary/connection_states.ex",
+        original: original,
+        mutated: "    actual = if rule == :#{rule}, do: expected, else: actual\n" <> original
+      }
+    ]
+  end
+
   def edits(:stream_owner_backoff_input) do
     [
       %{

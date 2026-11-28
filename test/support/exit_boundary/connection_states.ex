@@ -202,6 +202,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       holder_origins: Map.get(indexed, :connection_holder_origins, historical),
       owner_machines: machines,
       owner_births: births.entries,
+      owner_backoff_births: births.backoffs,
       owner_commits:
         Enum.map(machines, fn {owner, machine} ->
           %{owner: owner, index: -1, machine: machine}
@@ -264,6 +265,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     initial =
       initial
       |> Map.merge(Map.get(indexed, :connection_state_program, %{}))
+      |> Map.update!(:owner_backoff_births, &Map.merge(&1, births.backoffs))
       |> Map.put(:type_events, type_events)
 
     continuation = %{initial: initial, events: indexed.events}
@@ -944,10 +946,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     pairs
     |> Map.values()
     |> Enum.filter(&(&1.source.mfa == {DBConnection.Connection, :init, 1}))
-    |> Enum.reduce(%{entries: %{}, errors: []}, fn init, births ->
+    |> Enum.reduce(%{entries: %{}, backoffs: %{}, errors: []}, fn init, births ->
       case owner_birth(events, pairs, init) do
-        {:ok, index, machine} ->
-          put_in(births.entries[index], {init.source.pid, machine})
+        {:ok, index, machine, constructor} ->
+          backoff = {machine.data.opts, machine.data.backoff, machine.version.origin}
+
+          births
+          |> put_in([:entries, index], {init.source.pid, machine})
+          |> put_in([:backoffs, constructor], backoff)
 
         :error ->
           error = %{
@@ -1000,7 +1006,15 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          true <-
            init.source.event ===
              {pid, :call, {DBConnection.Connection, :init, [arguments]}},
-         data = owner_initial_data(options, pool, tag),
+         {:ok, backoff} <- owner_initial_backoff(options),
+         [constructor] <-
+           native_type_calls(
+             %{pairs: pairs},
+             init.source,
+             init.returned,
+             {DBConnection.Backoff, :new, 1}
+           ),
+         data = owner_initial_data(options, pool, tag, backoff),
          actions = {:next_event, :internal, {:connect, :init}},
          true <-
            init.returned.event ===
@@ -1038,13 +1052,13 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
         backoff_timer: nil
       }
 
-      {:ok, mode.returned.index, machine}
+      {:ok, mode.returned.index, machine, constructor.source.index}
     else
       _ -> :error
     end
   end
 
-  defp owner_initial_data(options, pool, tag) do
+  defp owner_initial_data(options, pool, tag, backoff) do
     %{
       mod: Postgrex.Protocol,
       opts: options,
@@ -1054,11 +1068,37 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
       tag: tag,
       timer: nil,
       connected_at: nil,
-      backoff: DBConnection.Backoff.new(options),
+      backoff: backoff,
       connection_listeners: Keyword.get(options, :connection_listeners, []),
       after_connect: Keyword.get(options, :after_connect),
       after_connect_timeout: Keyword.get(options, :after_connect_timeout, 15_000)
     }
+  end
+
+  defp owner_initial_backoff(options) do
+    case Keyword.get(options, :backoff_type, :rand_exp) do
+      :stop ->
+        {:ok, nil}
+
+      type when type in [:rand, :exp, :rand_exp] ->
+        {minimum, maximum} =
+          case {options[:backoff_min], options[:backoff_max]} do
+            {nil, nil} -> {1_000, 30_000}
+            {nil, maximum} -> {min(1_000, maximum), maximum}
+            {minimum, nil} -> {minimum, max(minimum, 30_000)}
+            bounds -> bounds
+          end
+
+        if is_integer(minimum) and is_integer(maximum) and minimum >= 0 and minimum <= maximum do
+          state = if type == :rand_exp, do: {minimum, max(minimum, div(maximum, 3))}, else: nil
+          {:ok, %DBConnection.Backoff{type: type, min: minimum, max: maximum, state: state}}
+        else
+          :error
+        end
+
+      _ ->
+        :error
+    end
   end
 
   defp owner_birth_event(source, state) do
@@ -1179,6 +1219,43 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     case Map.get(state.owner_machines, source.pid) do
       nil -> owner_message_program(state, source)
       machine -> owner_loop(state, source, function, machine)
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :call, {DBConnection.Backoff, function, [actual]}}} = source,
+         state
+       )
+       when function in [:new, :reset] do
+    case owner_backoff_constructor(state, source, function) do
+      {input, _result, origin} ->
+        rule =
+          if function == :new,
+            do: :state_owner_backoff_new_input,
+            else: :state_owner_backoff_reset_input
+
+        owner_backoff_constructor_copy(state, source, [2, 2, 0], actual, input, rule, origin)
+
+      nil ->
+        state
+    end
+  end
+
+  defp owner_event(
+         %{event: {_, :return_from, {DBConnection.Backoff, function, 1}, actual}} = source,
+         state
+       )
+       when function in [:new, :reset] do
+    with %{source: call} <- pair_returned(state, source),
+         {_input, result, origin} <- owner_backoff_constructor(state, call, function) do
+      rule =
+        if function == :new,
+          do: :state_owner_backoff_new_result,
+          else: :state_owner_backoff_reset_result
+
+      owner_backoff_constructor_copy(state, source, [3], actual, result, rule, origin)
+    else
+      _ -> state
     end
   end
 
@@ -1917,7 +1994,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          version when not is_nil(version) <- state.completed[returned.pid] do
       backoff =
         if is_nil(machine.data.after_connect),
-          do: machine.data.backoff && DBConnection.Backoff.reset(machine.data.backoff),
+          do: owner_reset_backoff(machine.data.backoff),
           else: machine.data.backoff
 
       data = %{
@@ -1975,6 +2052,43 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
     |> Map.update!(:terms, &[copy | &1])
     |> put_in([:term_values, {source.index, path}], %{value: expected, origin: origin})
   end
+
+  defp owner_backoff_constructor(state, source, :new),
+    do: Map.get(state.owner_backoff_births, source.index)
+
+  defp owner_backoff_constructor(state, source, :reset) do
+    with %{data: %{backoff: %DBConnection.Backoff{} = backoff} = data, version: version} <-
+           state.owner_machines[source.pid],
+         %{source: %{event: {_, :call, {_, _, [type, message, :no_state, _]}}}} <-
+           owner_callback(state, source) do
+      case {type, message} do
+        {:internal, {:connect, _}} when is_nil(data.after_connect) ->
+          {backoff, owner_reset_backoff(backoff), version.origin}
+
+        {:info, {:"ETS-TRANSFER", _, _, {:checkin, ref, _}}}
+        when data.client == {ref, :after_connect} ->
+          {backoff, owner_reset_backoff(backoff), version.origin}
+
+        _ ->
+          nil
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  defp owner_backoff_constructor_copy(state, source, path, actual, expected, rule, origin) do
+    state = exact(state, source, rule, actual, expected)
+    state = copy_error_path(state, source, path, rule)
+    owner_backoff_term(state, source, path, expected, origin)
+  end
+
+  defp owner_reset_backoff(nil), do: nil
+  defp owner_reset_backoff(%DBConnection.Backoff{type: :rand} = backoff), do: backoff
+  defp owner_reset_backoff(%DBConnection.Backoff{type: :exp} = backoff), do: %{backoff | state: nil}
+
+  defp owner_reset_backoff(%DBConnection.Backoff{type: :rand_exp, state: {_, lower}} = backoff),
+    do: %{backoff | state: {backoff.min, lower}}
 
   # Derive the retry from its original struct and its own native random return.
   # Calling Backoff.backoff/1 here would draw fresh entropy and prove nothing.
@@ -2041,7 +2155,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionStates do
          {^ref, :after_connect} <- machine.data.client,
          %{holder: ^holder} <- state.lookups[source.pid],
          true <- owner_task_timer_cancelled?(state, callback.source, source, machine.data.timer) do
-      backoff = machine.data.backoff && DBConnection.Backoff.reset(machine.data.backoff)
+      backoff = owner_reset_backoff(machine.data.backoff)
       data = %{machine.data | timer: nil, client: nil, backoff: backoff}
       {:ok, machine |> Map.put(:data, data) |> owner_task_clear()}
     else
