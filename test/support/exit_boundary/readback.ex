@@ -9,7 +9,19 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
   # already-bound target and admission row. It has no delivery dictionary, producer
   # or delivered values. This is a reference computation over paired origins; its
   # complete trace is compared, including native calls and the SQL wire.
-  def prepare(%{resource: Withheld, allocation_checkpoint?: true} = side) do
+  def prepare(%{prior: prior} = side) when not is_nil(prior) do
+    # A reference reads the same committed database through the main Repo.
+    # Its own checkouts must follow every observed lease on this side, including
+    # replay after a prior completion. Inserting the reference between those
+    # invocations would change which physical member a later call borrows.
+    side
+    |> Map.put(:prior, prepare(prior))
+    |> prepare_invocation()
+  end
+
+  def prepare(side), do: prepare_invocation(side)
+
+  defp prepare_invocation(%{resource: Withheld, allocation_checkpoint?: true} = side) do
     target =
       Enum.find_value(side.run.events, fn
         %{event: {_, :call, {AshOnetime.Store, function, [target | _]}}}
@@ -38,7 +50,7 @@ defmodule AshOnetime.Test.ExitBoundary.Readback do
     Map.put(side, :readback_reference, capture(side, %{target: target, c_admit: claim}))
   end
 
-  def prepare(side), do: side
+  defp prepare_invocation(side), do: side
 
   defp capture(side, bound) do
     historical = Historical.capture(side.prefix)

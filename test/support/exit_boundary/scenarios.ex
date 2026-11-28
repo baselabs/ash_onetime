@@ -96,13 +96,14 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
     # twin is non-delivery Ash plus the registry's declared allocation checkpoint.
     {run, twin} =
       if Map.get(context, :run_first?, false) do
-        run = side(row, values, Withheld, context, eligibility)
+        run = row |> side(values, Withheld, context, eligibility) |> Readback.prepare()
         between(context, run)
         {run, side(row, values, Returned, context, eligibility)}
       else
         twin = side(row, values, Returned, context, eligibility)
         between(context, twin)
-        {side(row, values, Withheld, context, eligibility), twin}
+        run = row |> side(values, Withheld, context, eligibility) |> Readback.prepare()
+        {run, twin}
       end
 
     %{run: run, twin: twin, row: row}
@@ -200,7 +201,6 @@ defmodule AshOnetime.Test.ExitBoundary.Scenarios do
         protection_reference: protection_reference,
         contract_reference: contract_reference
       }
-      |> Readback.prepare()
     after
       if row.fault == :store_completion, do: completion_fault!(context.prefix, :remove)
     end

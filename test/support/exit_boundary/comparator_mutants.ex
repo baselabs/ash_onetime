@@ -1466,8 +1466,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
   def assert_machine_reply(mode) do
     targets = %{{:reply, 2} => [0, 1]}
 
-    run =
-      machine_reply_phase(mode, :native_capture, fn -> capture_machine_reply(targets, mode) end)
+    run = capture_machine_reply(targets, mode)
 
     assert run.result == []
 
@@ -1496,10 +1495,7 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
     coordinates =
       for source <- corrupted, position <- [0, 1], do: {source.index, [2, 2, position]}
 
-    native =
-      machine_reply_phase(mode, :validation, fn ->
-        ConnectionTls.build(%{events: events}, run.tls_binding, %{mode: mode, phase: :validation})
-      end)
+    native = ConnectionTls.build(%{events: events}, run.tls_binding)
 
     assert Enum.map(native.errors, & &1.rule) ==
              List.duplicate(:tls_machine_program_copy, length(coordinates))
@@ -1511,51 +1507,31 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
           :stream_tls_machine_copy,
           :stream_tls_worker_state_copy
         ] do
-      checked = machine_reply_checked(mutant, events, run.tls_binding, mode)
+      checked =
+        with_mutant(mutant, fn ->
+          ConnectionTls.build(%{events: events}, run.tls_binding)
+        end)
 
       expected = if mutant == :stream_tls_machine_program, do: [], else: native.errors
       assert checked.errors == expected
     end
 
-    rechecked =
-      machine_reply_phase(mode, :restored_validation, fn ->
-        ConnectionTls.build(%{events: events}, run.tls_binding, %{
-          mode: mode,
-          phase: :restored_validation
-        })
-      end)
+    rechecked = ConnectionTls.build(%{events: events}, run.tls_binding)
 
     assert rechecked.errors == native.errors
 
-    restored =
-      machine_reply_phase(mode, :fresh_native, fn -> ConnectionNative.observe_tls(mode) end)
+    restored = ConnectionNative.observe_tls(mode)
 
     restored_events =
       restored.events
       |> Enum.with_index()
       |> Enum.map(fn {event, index} -> Map.put(event, :index, index) end)
 
-    fresh =
-      machine_reply_phase(mode, :fresh_validation, fn ->
-        ConnectionTls.build(%{events: restored_events}, restored.tls_binding, %{
-          mode: mode,
-          phase: :fresh_validation
-        })
-      end)
+    fresh = ConnectionTls.build(%{events: restored_events}, restored.tls_binding)
 
     assert fresh.errors == []
     IO.puts("CONNECTION_MACHINE_REPLY: owning RED; sole catcher; exact restore; fresh GREEN")
     :ok
-  end
-
-  # Temporary phase probe for the hosted fragmented-peer timeout. Native
-  # captures and every validation/restoration assertion remain unchanged.
-  defp machine_reply_checked(mutant, events, binding, mode) do
-    machine_reply_phase(mode, {:mutant, mutant}, fn ->
-      with_mutant(mutant, fn ->
-        ConnectionTls.build(%{events: events}, binding, %{mode: mode, phase: mutant})
-      end)
-    end)
   end
 
   defp capture_machine_reply(targets, mode) do
@@ -1574,24 +1550,6 @@ defmodule AshOnetime.Test.ExitBoundary.ComparatorMutants do
       &remote_reply_form/2,
       fn -> ConnectionNative.observe_tls(mode) end
     )
-  end
-
-  defp machine_reply_phase(mode, phase, callback) do
-    IO.puts(
-      "NATIVE_MACHINE_REPLY_PHASE: " <>
-        Diagnostics.render(%{mode: mode, phase: phase, status: :start})
-    )
-
-    started = System.monotonic_time(:millisecond)
-    value = callback.()
-    elapsed = System.monotonic_time(:millisecond) - started
-
-    IO.puts(
-      "NATIVE_MACHINE_REPLY_PHASE: " <>
-        Diagnostics.render(%{mode: mode, phase: phase, status: :done, length: elapsed})
-    )
-
-    value
   end
 
   def assert_machine_debug_log do

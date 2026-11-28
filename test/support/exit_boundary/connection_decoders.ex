@@ -661,6 +661,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
       }
 
       spans = if buffer == <<>>, do: [], else: [span]
+
       cursor = %{
         buffer: buffer,
         offset: 0,
@@ -1539,6 +1540,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
 
     offset = cursor.offset + consumed
     spans = Enum.filter(cursor.spans, &(&1.offset + &1.length > offset))
+
     cursor = %{
       cursor
       | offset: offset,
@@ -1547,6 +1549,7 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionDecoders do
         row_sources: row_sources || cursor.row_sources,
         spans: spans
     }
+
     # The paired return proves the result, but its cursor becomes available only
     # at that actual return event. Copies observed inside the decoder still see
     # the preceding version, even when another role interleaves there.

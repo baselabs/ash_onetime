@@ -8211,7 +8211,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   # client. No checked negotiation helper or state callback supplies this result.
   defp server_hello_selection(%{
          event: %{
-           value: {:internal, {:server_hello, {3, 3}, random, session, cipher, extensions} = hello}
+           value:
+             {:internal, {:server_hello, {3, 3}, random, session, cipher, extensions} = hello}
          },
          input: input
        }) do
@@ -8412,8 +8413,10 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
          master = legacy_prf(hash, shared, "master secret", [client_random, server_random], 48),
          {:ok, states} <- legacy_session_keys(state, first, last, states, master) do
       session = put_elem(session, 7, master)
+
       session =
         if elem(keys, 0) == :ECPrivateKey, do: put_elem(session, 12, elem(keys, 3)), else: session
+
       handshake = handshake |> put_elem(19, hash_sign) |> put_elem(22, keys)
       {:ok, data |> put_elem(6, handshake) |> put_elem(8, session) |> put_elem(10, states)}
     else
@@ -8520,9 +8523,9 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       size = 2 * (iv_size + key_size + mac_size)
       material = legacy_prf(hash, master, "key expansion", randoms, size)
 
-      <<client_mac::binary-size(mac_size), server_mac::binary-size(mac_size),
-        client_key::binary-size(key_size), server_key::binary-size(key_size),
-        client_iv::binary-size(iv_size), server_iv::binary-size(iv_size)>> = material
+      <<client_mac::binary-size(^mac_size), server_mac::binary-size(^mac_size),
+        client_key::binary-size(^key_size), server_key::binary-size(^key_size),
+        client_iv::binary-size(^iv_size), server_iv::binary-size(^iv_size)>> = material
 
       client = legacy_cipher_state(bulk, client_iv, client_key, client_nonce)
       server = legacy_cipher_state(bulk, server_iv, server_key, server_nonce)
@@ -8678,12 +8681,14 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   end
 
   defp legacy_client_key({:ECPrivateKey, _, _, _, public, _}) when is_binary(public),
-    do: {:ok, {:client_key_exchange, {:client_ec_diffie_hellman_public, public}},
-         <<byte_size(public), public::binary>>}
+    do:
+      {:ok, {:client_key_exchange, {:client_ec_diffie_hellman_public, public}},
+       <<byte_size(public), public::binary>>}
 
   defp legacy_client_key({public, _private}) when is_binary(public),
-    do: {:ok, {:client_key_exchange, {:client_diffie_hellman_public, public}},
-         <<byte_size(public)::16, public::binary>>}
+    do:
+      {:ok, {:client_key_exchange, {:client_diffie_hellman_public, public}},
+       <<byte_size(public)::16, public::binary>>}
 
   defp legacy_client_key(_key), do: :error
 
@@ -8777,10 +8782,12 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
   defp legacy_verify_data(states, directions, field, verify),
     do: Enum.reduce(directions, states, &put_in(&2, [&1, :reneg, field], verify))
 
-  defp legacy_finished_receiver(%{
-         source: %{mfa: {:tls_client_connection, :cipher, 3}},
-         event: %{value: {:internal, {:finished, verify}}}
-       } = frame) do
+  defp legacy_finished_receiver(
+         %{
+           source: %{mfa: {:tls_client_connection, :cipher, 3}},
+           event: %{value: {:internal, {:finished, verify}}}
+         } = frame
+       ) do
     data = frame.current.data
     handshake = elem(data, 6)
     session = elem(data, 8)
@@ -8797,8 +8804,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       session =
         if options.verify == :verify_peer and options.reuse_sessions != false and
              elem(session, 10) == false,
-          do: put_elem(session, 10, true),
-          else: session
+           do: put_elem(session, 10, true),
+           else: session
 
       origin = {:tls_legacy_finished, frame.source.index}
       data = data |> put_elem(8, session) |> put_elem(10, states)
@@ -9727,7 +9734,8 @@ defmodule AshOnetime.Test.ExitBoundary.ConnectionTls do
       [value] ->
         {:ok, value}
 
-      _ -> :error
+      _ ->
+        :error
     end
   end
 

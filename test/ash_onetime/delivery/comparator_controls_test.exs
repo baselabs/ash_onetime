@@ -555,7 +555,6 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
       assert historical.relations[oid] == "ash_onetime_boundary_records"
     end
-
   end
 
   @tag connection_streams: :tls
@@ -4290,7 +4289,10 @@ defmodule AshOnetime.Delivery.ComparatorControlsTest do
 
     negotiated? =
       Enum.any?(run.events, fn
-        %{event: {_, :call, {:tls_gen_connection, :next_event, [:connection, :no_record, data, _]}}}
+        %{
+          event:
+            {_, :call, {:tls_gen_connection, :next_event, [:connection, :no_record, data, _]}}
+        }
         when is_tuple(data) and tuple_size(data) == 13 ->
           elem(elem(data, 3), 5) == {3, 3}
 
